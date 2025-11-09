@@ -8,6 +8,7 @@
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
+#![allow(clippy::expect_used)] // Hashers use expect to enforce assumptions about serialized trie payloads during hashing.
 
 use crate::hashednode::{HasUpdate, Hashable, Preimage};
 use crate::{TrieHash, ValueDigest};

@@ -13,10 +13,7 @@
     clippy::cast_sign_loss,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::unwrap_used,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
+#![allow(clippy::unwrap_used)] // Benchmark unwraps deterministic fixture setup to surface regressions quickly.
 
 use crate::TestRunner;
 use firewood::db::{BatchOp, Db};

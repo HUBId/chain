@@ -214,7 +214,8 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used)] // Macro tests unwrap compile fixtures to assert generated code.
+    #![allow(clippy::expect_used)] // Macro tests call expect while exercising generated harnesses.
 
     use super::*;
 

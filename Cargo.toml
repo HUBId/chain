@@ -105,7 +105,9 @@ unsafe_code = "deny"
 missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
-unwrap_used = "warn"
+panic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
 indexing_slicing = "warn"
 explicit_deref_methods = "warn"
 missing_const_for_fn = "warn"

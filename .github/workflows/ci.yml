@@ -187,6 +187,23 @@ PY
           exit 1
         fi
 
+  clippy:
+    name: Clippy (all targets, all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+      - name: Run Clippy
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+
   cargo-audit:
     name: Dependency advisories
     runs-on: ubuntu-latest

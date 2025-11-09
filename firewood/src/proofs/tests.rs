@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used)] // Tests unwrap to emphasise serialization failures during refactors.
+#![allow(clippy::expect_used)] // Tests call expect when decoding fixtures to surface parser regressions.
+#![allow(clippy::indexing_slicing)] // Tests slice fixtures to mutate specific header bytes.
 
 use integer_encoding::VarInt;
 use test_case::test_case;

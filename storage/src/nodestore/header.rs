@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Header parsing expects invariants baked into on-disk formats and fails loudly otherwise.
+
 //! # Header Module
 //!
 //! This module defines the nodestore header structure and validation logic for ensuring
@@ -305,7 +307,8 @@ impl NodeStoreHeader {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to confirm header invariants and IO plumbing.
+#[allow(clippy::expect_used)] // Tests call expect when decoding fixture headers to expose regressions.
 mod tests {
     use super::*;
     use crate::linear::memory::MemStore;

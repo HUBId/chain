@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 #![warn(clippy::pedantic)]
+#![allow(clippy::expect_used)] // Range-set management asserts invariants via expect when corruption would be unrecoverable.
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
@@ -588,7 +589,8 @@ mod test_range_set {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to ensure allocator invariants are enforced when ranges corrupt.
+#[allow(clippy::expect_used)] // Tests call expect to validate range accounting invariants.
 mod test_linear_address_range_set {
 
     use crate::{area_index, FreeListParent, TrieNodeParent};

@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Checker flows expect invariants when encountering on-disk corruption to signal operator action.
+
 mod range_set;
 pub(crate) use range_set::LinearAddressRangeSet;
 
@@ -746,8 +748,9 @@ fn update_progress_bar(progress_bar: Option<&ProgressBar>, range_set: &LinearAdd
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
-    #![expect(clippy::indexing_slicing)]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to assert diagnostic tooling catches corruption scenarios.
+    #![allow(clippy::expect_used)] // Tests call expect when building synthetic nodestores to surface invariant violations.
+    #![allow(clippy::indexing_slicing)] // Tests index deterministic fixtures to craft storage topologies.
 
     use nonzero_ext::nonzero;
 

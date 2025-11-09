@@ -17,6 +17,7 @@
     clippy::missing_panics_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
+#![allow(clippy::expect_used)] // Node serialization relies on expect when detecting structurally invalid encodings.
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
@@ -447,7 +448,8 @@ fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to exercise encoding paths that intentionally violate invariants.
+    #![allow(clippy::expect_used)] // Tests call expect while mutating synthetic nodes to expose encoding regressions.
 
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::nodestore::AreaIndex;

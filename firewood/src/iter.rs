@@ -555,10 +555,7 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
-        let byte = hi
-            .checked_shl(4)
-            .and_then(|v| v.checked_add(lo))
-            .expect("Nibble overflow while constructing byte");
+        let byte = (hi << 4) | (lo & 0x0F);
         data.push(byte);
     }
 
@@ -566,7 +563,9 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 }
 
 #[cfg(test)]
-#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)] // Tests index byte fixtures to target edge cases precisely.
+#[allow(clippy::unwrap_used)] // Tests unwrap to expose logic regressions immediately.
+#[allow(clippy::expect_used)] // Tests call expect to fail fast when fixtures become inconsistent.
 mod tests {
     use super::*;
     use crate::merkle::Merkle;

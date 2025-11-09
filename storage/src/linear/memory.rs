@@ -34,7 +34,7 @@ impl MemStore {
 impl WritableStorage for MemStore {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
         let offset = offset as usize;
-        let mut guard = self.bytes.lock().expect("poisoned lock");
+        let mut guard = self.bytes.lock().unwrap_or_else(|err| err.into_inner());
         if offset + object.len() > guard.len() {
             guard.resize(offset + object.len(), 0);
         }
@@ -49,7 +49,7 @@ impl ReadableStorage for MemStore {
         let bytes = self
             .bytes
             .lock()
-            .expect("poisoned lock")
+            .unwrap_or_else(|err| err.into_inner())
             .get(addr as usize..)
             .unwrap_or_default()
             .to_owned();
@@ -58,11 +58,16 @@ impl ReadableStorage for MemStore {
     }
 
     fn size(&self) -> Result<u64, FileIoError> {
-        Ok(self.bytes.lock().expect("poisoned lock").len() as u64)
+        Ok(self
+            .bytes
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .len() as u64)
     }
 }
 
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to assert memstore utilities behave under deterministic fixtures.
+#[allow(clippy::expect_used)] // Tests call expect to ensure helper APIs flag misuse in debug builds.
 #[cfg(test)]
 mod test {
     use super::*;

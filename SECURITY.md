@@ -54,6 +54,17 @@ same pull request. If the advisory is a false positive or cannot be addressed
 immediately, follow the risk-acceptance process and document the justification
 in the corresponding issue or release notes before applying a temporary ignore.
 
+## Panic hygiene and invariants
+
+Production crates deny `panic!`, `.unwrap()`, and `.expect()` through Clippy. Any
+new code that needs to assume unreachable states must either return structured
+errors or document why a panic is unavoidable. When an invariant must be
+asserted, scope the exception narrowly with `#[allow(clippy::expect_used)]` or
+`#[allow(clippy::unwrap_used)]`, include a justification comment, and prefer to
+recover gracefully whenever possible. Test modules may continue to use the
+operations for brevity, but the allow must remain confined to the test scope so
+runtime paths stay panic-free.
+
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).
 

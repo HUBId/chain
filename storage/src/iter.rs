@@ -64,7 +64,7 @@ fn write_all_with_sep(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to focus on formatting behaviour rather than error plumbing.
 
     use super::*;
     use test_case::test_case;

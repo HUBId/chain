@@ -13,7 +13,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
@@ -95,6 +95,36 @@ pub(crate) enum RevisionManagerError {
 }
 
 impl RevisionManager {
+    fn historical_read(&self) -> RwLockReadGuard<'_, VecDeque<CommittedRevision>> {
+        self.historical
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn historical_write(&self) -> RwLockWriteGuard<'_, VecDeque<CommittedRevision>> {
+        self.historical
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn proposals(&self) -> MutexGuard<'_, Vec<ProposedRevision>> {
+        self.proposals
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn by_hash_read(&self) -> RwLockReadGuard<'_, HashMap<TrieHash, CommittedRevision>> {
+        self.by_hash
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn by_hash_write(&self) -> RwLockWriteGuard<'_, HashMap<TrieHash, CommittedRevision>> {
+        self.by_hash
+            .write()
+            .unwrap_or_else(|err| err.into_inner())
+    }
+
     pub fn new(
         filename: PathBuf,
         config: ConfigManager,
@@ -125,11 +155,7 @@ impl RevisionManager {
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager
-                .by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, nodestore.clone());
+            manager.by_hash_write().insert(hash, nodestore.clone());
         }
 
         if config.truncate {
@@ -140,15 +166,11 @@ impl RevisionManager {
     }
 
     pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
-            .read()
-            .expect("poisoned lock")
+        self.historical_read()
             .iter()
             .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
-                self.proposals
-                    .lock()
-                    .expect("poisoned lock")
+                self.proposals()
                     .iter()
                     .filter_map(|p| p.root_hash().or_default_root_hash()),
             )
@@ -190,18 +212,12 @@ impl RevisionManager {
         // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
-            let oldest = self
-                .historical
-                .write()
-                .expect("poisoned lock")
-                .pop_front()
-                .expect("must be present");
+        while self.historical_read().len() >= self.max_revisions {
+            let Some(oldest) = self.historical_write().pop_front() else {
+                break;
+            };
             if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
-                self.by_hash
-                    .write()
-                    .expect("poisoned lock")
-                    .remove(&oldest_hash);
+                self.by_hash_write().remove(&oldest_hash);
             }
 
             // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
@@ -213,15 +229,11 @@ impl RevisionManager {
                 Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
-                    self.historical
-                        .write()
-                        .expect("poisoned lock")
-                        .push_front(original);
+                    self.historical_write().push_front(original);
                     break;
                 }
             }
-            gauge!("firewood.active_revisions")
-                .set(self.historical.read().expect("poisoned lock").len() as f64);
+            gauge!("firewood.active_revisions").set(self.historical_read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
@@ -232,27 +244,19 @@ impl RevisionManager {
 
         // 5. Set last committed revision
         let committed: CommittedRevision = committed.into();
-        self.historical
-            .write()
-            .expect("poisoned lock")
-            .push_back(committed.clone());
+        self.historical_write().push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            self.by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, committed.clone());
+            self.by_hash_write().insert(hash, committed.clone());
         }
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
-        self.proposals
-            .lock()
-            .expect("poisoned lock")
+        self.proposals()
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
-        for p in &*self.proposals.lock().expect("poisoned lock") {
+        for p in &*self.proposals() {
             proposal.commit_reparent(p);
         }
 
@@ -269,7 +273,7 @@ impl RevisionManager {
 
 impl RevisionManager {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().expect("poisoned lock").push(proposal);
+        self.proposals().push(proposal);
     }
 
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
@@ -279,10 +283,8 @@ impl RevisionManager {
         }
 
         // If not found in committed revisions, try proposals
-        let proposal = self
-            .proposals
-            .lock()
-            .expect("poisoned lock")
+        let proposals = self.proposals();
+        let proposal = proposals
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
             .cloned()
@@ -290,13 +292,12 @@ impl RevisionManager {
                 provided: root_hash,
             })?;
 
+        drop(proposals);
         Ok(proposal)
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        self.by_hash
-            .read()
-            .expect("poisoned lock")
+        self.by_hash_read()
             .get(&root_hash)
             .cloned()
             .ok_or(RevisionManagerError::RevisionNotFound {
@@ -308,10 +309,9 @@ impl RevisionManager {
         Ok(self.current_revision().root_hash())
     }
 
+    #[allow(clippy::expect_used)] // The manager always seeds one committed revision during initialization.
     pub fn current_revision(&self) -> CommittedRevision {
-        self.historical
-            .read()
-            .expect("poisoned lock")
+        self.historical_read()
             .back()
             .expect("there is always one revision")
             .clone()
@@ -319,7 +319,7 @@ impl RevisionManager {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap expected error cases when coordinating background workers.
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;

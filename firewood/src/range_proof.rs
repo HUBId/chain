@@ -144,8 +144,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "Tests can use unwrap")]
-    #![expect(clippy::indexing_slicing, reason = "Tests can use indexing")]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to keep assertions focused on behaviour.
+    #![allow(clippy::expect_used)] // Tests call expect to highlight range proof invariants when fixtures break.
+    #![allow(clippy::indexing_slicing)] // Tests index fixtures directly for clarity.
 
     use super::*;
     use crate::v2::api::KeyValuePairIter;

@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // NodeStore operations treat expect as invariant enforcement when encountering impossible states.
+
 //! # `NodeStore` Module
 //!
 //! The main module for nodestore functionality, containing core types, traits, and operations
@@ -905,7 +907,8 @@ where
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to ensure storage invariants propagate IO errors predictably.
+#[allow(clippy::expect_used)] // Tests call expect to assert deterministic error handling paths.
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 

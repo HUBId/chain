@@ -9,6 +9,7 @@
     clippy::missing_panics_doc,
     reason = "Found 2 occurrences after enabling the lint."
 )]
+#![allow(clippy::expect_used)] // Branch node helpers rely on expect to assert persistence invariants for corrupted tries.
 
 use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};

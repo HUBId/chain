@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Persistence routines surface corrupt state via expect to force operator intervention.
+
 //! # Persist Module
 //!
 //! This module handles all persistence operations for the nodestore, including writing
@@ -424,7 +426,11 @@ impl NodeStore<Committed, FileBacked> {
         // Collect addresses and nodes for caching
         let mut cached_nodes = Vec::new();
 
-        let mut ring = self.storage.ring.lock().expect("poisoned lock");
+        let mut ring = self
+            .storage
+            .ring
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let mut saved_pinned_buffers = vec![
             PinnedBufferEntry {
                 pinned_buffer: Pin::new(Box::new([0; 0])),
@@ -543,7 +549,9 @@ impl NodeStore<Committed, FileBacked> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to surface persistence ordering bugs promptly.
+#[allow(clippy::expect_used)] // Tests call expect to validate WAL invariants during simulated flushes.
+#[allow(clippy::indexing_slicing)] // Tests index binary fixtures to craft WAL edge cases.
 mod tests {
     use super::*;
     use crate::{

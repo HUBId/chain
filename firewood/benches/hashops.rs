@@ -29,7 +29,7 @@ fn file_error_panic<T, U>(path: &Path) -> impl FnOnce(T) -> U {
 }
 
 impl Profiler for FlamegraphProfiler {
-    #[expect(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used)] // Bench profiler prefers crashing when sampling cannot start.
     fn start_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &Path) {
         if let Self::Init(frequency) = self {
             let guard = ProfilerGuard::new(*frequency).unwrap();
@@ -37,7 +37,7 @@ impl Profiler for FlamegraphProfiler {
         }
     }
 
-    #[expect(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used)] // Bench profiler prefers crashing when writing flamegraphs fails.
     fn stop_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &Path) {
         std::fs::create_dir_all(benchmark_dir).unwrap();
         let filename = "firewood-flamegraph.svg";
@@ -45,7 +45,7 @@ impl Profiler for FlamegraphProfiler {
         let flamegraph_file =
             File::create(&flamegraph_path).unwrap_or_else(file_error_panic(&flamegraph_path));
 
-        #[expect(clippy::unwrap_used)]
+        #[allow(clippy::unwrap_used)] // Flamegraph generation should fail loudly during benchmarking.
         if let Self::Active(profiler) = self {
             profiler
                 .report()
@@ -79,7 +79,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
 
                     (merkle, keys)
                 },
-                #[expect(clippy::unwrap_used)]
+                #[allow(clippy::unwrap_used)] // Benchmarks unwrap to surface data-structure regressions immediately.
                 |(mut merkle, keys)| {
                     for key in keys {
                         merkle.insert(&key, Box::new(*b"v")).unwrap();
@@ -91,7 +91,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         });
 }
 
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Benchmarks unwrap to propagate storage misconfiguration failures.
 fn bench_db<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
