@@ -1,5 +1,11 @@
 # Wöchentlicher Statusbericht
 
+## Automatischer Nightly-Status
+
+<!-- nightly-status:start -->
+Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../../nightly_status.md) wird vom Nightly-Workflow aktualisiert.
+<!-- nightly-status:end -->
+
 ## Phase 1 abgeschlossen (Kalenderwoche 37/2025)
 
 **Zusammenfassung:** Die Blueprint-Phase 1 ist abgeschlossen. Die Plonky3-Strecke ist vollständig dokumentiert, Root-Guards überwachen Firewood-Snapshots und die CI-Gates spiegeln die komplette Backend-Matrix wider.

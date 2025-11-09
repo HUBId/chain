@@ -527,3 +527,51 @@ jobs:
         with:
           name: simnet-regression-nightly
           path: simnet-regression.tar.gz
+
+  nightly-status:
+    name: Publish nightly CI status snapshot
+    needs:
+      - verify-smoke-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET_BRANCH: ${{ github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REPOSITORY: ${{ github.repository }}
+      STATUS_BRANCH: status/nightly
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate nightly status summary
+        run: |
+          set -euo pipefail
+          python3 scripts/update_nightly_status.py
+      - name: Stage nightly status changes
+        run: |
+          set -euo pipefail
+          git status --short
+          if git diff --quiet -- docs/status/weekly.md nightly_status.md; then
+            echo "Keine Änderungen an nightly_status.md oder docs/status/weekly.md"
+            exit 0
+          fi
+          git checkout "${DEFAULT_BRANCH:-main}"
+          git pull --ff-only
+          git checkout -B "$STATUS_BRANCH"
+          git add nightly_status.md docs/status/weekly.md
+      - name: Commit and push status snapshot
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if git diff --cached --quiet; then
+            echo "Keine Statusänderungen zum Commit vorhanden"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: refresh nightly status summary"
+          git push origin "${STATUS_BRANCH}"

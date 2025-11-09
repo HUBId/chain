@@ -52,6 +52,17 @@ milestone.
       `worm-export-smoke` vorhanden und nicht abgelaufen sind. Dokumentiere
       fehlende Artefakte inklusive Job-Name im Acceptance-Protokoll und leite
       die Eskalation über das Incident-Runbook ein.【F:.github/workflows/nightly.yml†L25-L69】【F:.github/workflows/ci.yml†L360-L397】
+- [ ] **Nightly-Statusübernahme geprüft.** Öffne den Branch `status/nightly`
+      (`git fetch origin status/nightly:status/nightly && git log -1 --stat status/nightly`) und
+      verifiziere, dass der jüngste Commit `chore: refresh nightly status summary`
+      sowohl `nightly_status.md` als auch den Markerblock in
+      `docs/status/weekly.md` aktualisiert hat. Für manuelle Aktualisierungen
+      kann der gleiche Workflow lokal ausgeführt werden:
+      `python3 scripts/update_nightly_status.py --repo <org>/<repo> --branch <branch>`
+      generiert die Markdown-Datei und ersetzt den Abschnitt zwischen den
+      Markern `<!-- nightly-status:start --> … <!-- nightly-status:end -->` im
+      Weekly-Report. Committe die Änderungen anschließend nach
+      `status/nightly` (`git checkout status/nightly && git commit -am "chore: refresh nightly status summary" && git push`).【F:.github/workflows/nightly.yml†L210-L272】【F:scripts/update_nightly_status.py†L1-L206】【F:docs/status/weekly.md†L1-L8】
 - [ ] **Telemetry-Gate überprüft.** Prüfe im Prometheus-/OTLP-Scrape, dass der
       Zähler `snapshot_verify_failures_total` nach dem Release-Lauf weiterhin
       `0` ist. Bei einem Anstieg muss der Alert
