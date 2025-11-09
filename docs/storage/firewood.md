@@ -71,6 +71,8 @@ The observability runbook points auditors to the corresponding Prometheus
 queries and log markers, while dedicated regression tests confirm the API
 response, telemetry increments, and safeguards against corrupted snapshot
 payloads.【F:docs/runbooks/observability.md†L1-L38】【F:tests/state_sync/proof_error_io.rs†L1-L111】【F:tests/state_sync/root_corruption.rs†L1-L53】
+The `root_corruption` safeguard now runs in the standard CI integration matrix,
+mirroring release gating so regressions are surfaced before packaging.
 
 Two new metrics aid incident response:
 
