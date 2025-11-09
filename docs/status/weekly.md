@@ -12,6 +12,12 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 Noch keine Phase‑C-Statusdaten verfügbar. Die Datei [`phaseC_status.md`](../../phaseC_status.md) wird vom Nightly-Workflow aktualisiert.
 <!-- phasec-status:end -->
 
+### Admission Reconciliation
+
+- **Letzte erfolgreiche Reconciliation:** 2026-08-21 00:07 UTC (`nightly-2026-08-21`).
+  Audit-Log `admission-reconciliation` bestätigt Status "success" und verweist
+  auf das evidenzierte Nightly-Report-Artefakt.【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+
 ### Snapshot/Timetoke SLO (14d)
 
 | Kennzahl | Wert | Status | Quelle |

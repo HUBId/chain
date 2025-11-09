@@ -57,6 +57,14 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       worm-retention-check` bzw. Chaos-Drill) bevor der Check als bestanden
       gilt.【F:docs/status/weekly.md†L1-L50】【F:scripts/update_nightly_status.py†L1-L360】
 
+### Admission Policy Reconciliation
+
+- [x] **Admission-Reconciliation läuft grün.** Nightly-Reports bestätigen, dass
+      der Policy-Drift-Check ohne Abweichungen läuft; verlinke die jüngste
+      Telemetrie sowie den Audit-Export (`admission-reconciler` ➜
+      `drift_detected=false`).【F:logs/admission_reconciler_2026-08-21.jsonl†L1-L3】【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+      Referenz: [Nightly Reports](../../nightly_status.md).
+
 ### Snapshot Chaos / Partition Drill
 
 - [ ] **Nightly-Drill erfolgreich.** `snapshot_partition_report.json`

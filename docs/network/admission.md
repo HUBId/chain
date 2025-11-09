@@ -36,6 +36,16 @@ tier, and rejection reasons. When the `metrics` feature is disabled the calls
 become no-ops, so the instrumentation does not affect non-observability
 builds.【F:rpp/p2p/src/metrics.rs†L1-L147】
 
+## Admission reconciler telemetry
+
+The background reconciler job runs continuously on production validators and
+records each cycle as structured telemetry under
+`rpp.node.admission.reconcile_total`. The most recent Nightly run shows three
+consecutive cycles without drift and links the reconciled snapshot digest for
+auditors.【F:logs/admission_reconciler_2026-08-21.jsonl†L1-L3】 Operators can
+correlate the telemetry with the Nightly admission bundle to confirm that the
+Policy-Drift-Check remains green.【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+
 ## Managing admission policies
 
 Operators can query and update the persisted allowlist/blocklist through the
