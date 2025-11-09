@@ -1,0 +1,104 @@
+version: "3.9"
+
+services:
+  rpp-node:
+    build:
+      context: .
+      dockerfile: rpp/node/Dockerfile
+    image: rpp-node:local
+    container_name: rpp-node
+    command:
+      - node
+      - --config
+      - ${RPP_NODE_CONFIG_PATH}
+      - --log-level
+      - ${RPP_NODE_LOG_LEVEL}
+    environment:
+      RPP_NODE_RPC_ADDR: ${RPP_NODE_RPC_ADDR}
+      RPP_NODE_RPC_PORT: ${RPP_NODE_RPC_PORT}
+    ports:
+      - "${RPP_NODE_RPC_PORT}:${RPP_NODE_RPC_PORT}"
+    volumes:
+      - ./config/node.toml:${RPP_NODE_CONFIG_PATH}:ro
+      - rpp-node-data:/app/data
+    restart: unless-stopped
+
+  fwdctl:
+    profiles:
+      - tooling
+    build:
+      context: .
+      dockerfile: fwdctl/Dockerfile
+    image: fwdctl:local
+    container_name: fwdctl
+    environment:
+      FWDCTL_HEALTH_PORT: ${FWDCTL_HEALTH_PORT}
+    command:
+      - sh
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p "${FWDCTL_DB_DIR}"
+        if [ ! -f "${FWDCTL_DB_PATH}" ]; then
+          fwdctl --log-level ${FWDCTL_LOG_LEVEL} create --db "${FWDCTL_DB_PATH}"
+        fi
+        while true; do
+          fwdctl --log-level ${FWDCTL_LOG_LEVEL} check --db "${FWDCTL_DB_PATH}" --hash-check
+        done
+    ports:
+      - "${FWDCTL_HEALTH_PORT}:${FWDCTL_HEALTH_PORT}"
+    volumes:
+      - fwdctl-data:${FWDCTL_DB_DIR}
+    depends_on:
+      rpp-node:
+        condition: service_healthy
+
+  simnet:
+    build:
+      context: .
+      dockerfile: tools/simnet/Dockerfile
+    image: simnet:local
+    container_name: simnet
+    environment:
+      RUST_LOG: ${SIMNET_LOG_LEVEL}
+      SIMNET_HEALTH_ADDR: ${SIMNET_HEALTH_ADDR}
+    command:
+      - sh
+      - -c
+      - |
+        set -euo pipefail
+        args="--scenario \"${SIMNET_SCENARIO}\" --artifacts-dir \"${SIMNET_ARTIFACTS_DIR}\""
+        if [ "${SIMNET_KEEP_ALIVE}" = "true" ]; then
+          args="$args --keep-alive"
+        fi
+        exec simnet $args
+    ports:
+      - "${SIMNET_HEALTH_PORT}:${SIMNET_HEALTH_PORT}"
+    volumes:
+      - simnet-artifacts:${SIMNET_ARTIFACTS_DIR}
+    depends_on:
+      rpp-node:
+        condition: service_healthy
+
+  validator-ui:
+    build:
+      context: .
+      dockerfile: validator-ui/Dockerfile
+      args:
+        ASSET_BASE_PATH: ${VALIDATOR_UI_ASSET_BASE_PATH}
+    image: validator-ui:local
+    container_name: validator-ui
+    environment:
+      VITE_API_BASE_URL: ${VALIDATOR_UI_API_BASE_URL}
+    ports:
+      - "${VALIDATOR_UI_PORT}:8080"
+    depends_on:
+      rpp-node:
+        condition: service_healthy
+      simnet:
+        condition: service_healthy
+
+volumes:
+  rpp-node-data:
+  fwdctl-data:
+  simnet-artifacts:
