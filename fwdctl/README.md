@@ -23,6 +23,18 @@ To use
 * `fwdctl root`: Get the root hash of the key/value trie.
 * `fwdctl dump`: Dump the contents of the key/value store.
 
+## Health service
+
+`fwdctl` starts a lightweight HTTP service alongside every invocation. The service exposes
+two endpoints:
+
+* `GET /health/live` – returns `200 OK` while the process is running.
+* `GET /health/ready` – returns `200 OK` when the CLI has initialised.
+
+The service listens on `0.0.0.0:8080` by default. Override the port by setting the
+`FWDCTL_HEALTH_PORT` environment variable. Assign the variable to `0` to disable the health
+service entirely.
+
 ## Examples
 
 * fwdctl create
@@ -54,3 +66,27 @@ fwdctl insert KEY VALUE
 # Delete a key from the database, along with the associated value.
 fwdctl delete KEY
 ```
+
+## Running in Docker
+
+A multi-stage `Dockerfile` is provided alongside the crate. Build the image with:
+
+```sh
+docker build -t fwdctl:local -f fwdctl/Dockerfile .
+```
+
+Run the CLI inside the container while exposing the health service (adjust ports as
+needed):
+
+```sh
+docker run --rm -p 8080:8080 fwdctl:local --help
+```
+
+Configure the health server port at runtime with `FWDCTL_HEALTH_PORT`:
+
+```sh
+docker run --rm -e FWDCTL_HEALTH_PORT=9090 -p 9090:9090 fwdctl:local create --db /data/firewood.db
+```
+
+The container runs the binary as a non-root user and includes a Docker `HEALTHCHECK` that
+targets the readiness endpoint.

@@ -14,6 +14,7 @@ pub mod delete;
 pub mod dump;
 pub mod get;
 pub mod graph;
+mod health;
 pub mod insert;
 pub mod root;
 
@@ -77,6 +78,8 @@ fn main() -> Result<(), api::Error> {
     env_logger::init_from_env(
         env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, cli.log_level.clone()),
     );
+
+    health::spawn_health_server();
 
     match &cli.command {
         Commands::Create(opts) => create::run(opts),
