@@ -351,8 +351,134 @@ jobs:
           echo "admission_ok=$admission_ok" >>"$GITHUB_OUTPUT"
           echo "overall_ok=$overall" >>"$GITHUB_OUTPUT"
 
+      - name: Verify staging soak SLO thresholds
+        id: verify_slo
+        env:
+          SUMMARY_PATH: ${{ steps.evaluate.outputs.summary_path }}
+          REPORT_OUTPUT: nightly-artifacts/staging_soak_report.json
+          SNAPSHOT_SLO_REFERENCE: docs/observability/pipeline.md#dashboard-blueprint
+          TIMETOKE_SLO_REFERENCE: docs/observability/timetoke.md#slo-thresholds
+        run: |
+          set -euo pipefail
+          summary_path="${SUMMARY_PATH:-}"
+          report_output="${REPORT_OUTPUT}"
+          if [[ -z "$summary_path" || ! -f "$summary_path" ]]; then
+            {
+              echo "report_path="
+              echo "slo_ok=false"
+              echo "failure_reason=Staging-Soak-Summary fehlt (erwartet nightly-artifacts/staging-soak/<datum>/<timestamp>/summary.json)."
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p "$(dirname "$report_output")"
+          python3 <<'PY'
+import json
+import os
+
+summary_path = os.environ["SUMMARY_PATH"]
+report_output = os.environ["REPORT_OUTPUT"]
+snapshot_ref = os.environ.get("SNAPSHOT_SLO_REFERENCE", "docs/observability/pipeline.md")
+timetoke_ref = os.environ.get("TIMETOKE_SLO_REFERENCE", "docs/observability/timetoke.md")
+
+with open(summary_path, "r", encoding="utf-8") as fh:
+    summary = json.load(fh)
+
+errors = []
+
+snapshot = summary.get("snapshot") or {}
+unhealthy = snapshot.get("unhealthy_sessions")
+total_sessions = snapshot.get("total_sessions")
+if unhealthy is None:
+    errors.append(
+        "Snapshot-Report enthält kein Feld 'snapshot.unhealthy_sessions' (siehe %s)." % snapshot_ref
+    )
+elif isinstance(unhealthy, (int, float)) and unhealthy > 0:
+    total_text = str(total_sessions) if total_sessions is not None else "unbekannt"
+    errors.append(
+        f"Snapshot-SLO verletzt: {unhealthy} von {total_text} Sessions melden Anomalien (Ziel: 0 laut {snapshot_ref})."
+    )
+
+timetoke = summary.get("timetoke") or {}
+success_rate = timetoke.get("success_rate")
+target_rate = timetoke.get("success_rate_target")
+if success_rate is None or target_rate is None:
+    errors.append(
+        "Timetoke-Report enthält keine Erfolgsquote oder Zielschwelle (siehe %s)." % timetoke_ref
+    )
+elif success_rate < target_rate:
+    errors.append(
+        f"Timetoke-Erfolgsquote {success_rate:.4%} unterschreitet das SLO {target_rate:.2%} ({timetoke_ref})."
+    )
+
+latency_targets = timetoke.get("latency_targets_ms") or {}
+for field, label, target_key in [
+    ("latency_p50_ms", "p50", "p50_ms"),
+    ("latency_p95_ms", "p95", "p95_ms"),
+    ("latency_p99_ms", "p99", "p99_ms"),
+]:
+    value = timetoke.get(field)
+    target_value = latency_targets.get(target_key)
+    if value is None or target_value is None:
+        errors.append(
+            f"Timetoke-Latenzfeld '{field}' oder Ziel '{target_key}' fehlt ({timetoke_ref})."
+        )
+        continue
+    if value > target_value:
+        errors.append(
+            f"Timetoke-Latenz {label} = {value:.0f} ms überschreitet das SLO {target_value:.0f} ms ({timetoke_ref})."
+        )
+
+report = {
+    "generated_at": summary.get("generated_at"),
+    "run_directory": summary.get("run_directory"),
+    "snapshot": {
+        "report_path": snapshot.get("report_path"),
+        "total_sessions": total_sessions,
+        "unhealthy_sessions": unhealthy,
+        "slo": {
+            "max_unhealthy_sessions": 0,
+            "reference": snapshot_ref,
+        },
+    },
+    "timetoke": {
+        "report_path": timetoke.get("report_path"),
+        "source": timetoke.get("source"),
+        "successes": timetoke.get("successes"),
+        "failures": timetoke.get("failures"),
+        "success_rate": success_rate,
+        "success_rate_target": target_rate,
+        "latency_p50_ms": timetoke.get("latency_p50_ms"),
+        "latency_p95_ms": timetoke.get("latency_p95_ms"),
+        "latency_p99_ms": timetoke.get("latency_p99_ms"),
+        "latency_targets_ms": latency_targets,
+        "slo_reference": timetoke_ref,
+    },
+}
+
+with open(report_output, "w", encoding="utf-8") as fh:
+    json.dump(report, fh, indent=2, ensure_ascii=False)
+
+gh_output = os.environ["GITHUB_OUTPUT"]
+with open(gh_output, "a", encoding="utf-8") as fh:
+    fh.write(f"report_path={report_output}\n")
+    fh.write(f"slo_ok={'false' if errors else 'true'}\n")
+    if errors:
+        fh.write("failure_reason<<EOF\n")
+        fh.write("\n".join(errors))
+        fh.write("\nEOF\n")
+PY
+
+          echo "SLO report stored at $report_output"
+
+      - name: Upload staging soak SLO report
+        if: ${{ steps.verify_slo.outputs.report_path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging_soak_report.json
+          path: ${{ steps.verify_slo.outputs.report_path }}
+
       - name: Create staging soak alert issue
-        if: ${{ steps.evaluate.outputs.overall_ok != 'true' }}
+        if: ${{ steps.evaluate.outputs.overall_ok != 'true' || steps.verify_slo.outputs.slo_ok != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -375,9 +501,15 @@ EOF
           gh issue create --title "Staging soak regression ${{ github.run_id }}" --body-file issue.md --label staging-soak
 
       - name: Fail on staging soak regression
-        if: ${{ steps.evaluate.outputs.overall_ok != 'true' }}
+        if: ${{ steps.evaluate.outputs.overall_ok != 'true' || steps.verify_slo.outputs.slo_ok != 'true' }}
         run: |
-          echo "Staging soak checks failed" >&2
+          set -euo pipefail
+          reason="${{ steps.verify_slo.outputs.failure_reason }}"
+          if [[ -n "$reason" ]]; then
+            printf '%s\n' "$reason" >&2
+          else
+            echo "Staging soak checks failed" >&2
+          fi
           exit 1
 
   phase3-evidence:
