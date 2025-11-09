@@ -16,6 +16,10 @@ Investigate a Timetoke failover when any of the following signals trigger:
 - **Latency regressions.** The `timetoke_replay_duration_ms` histogram widens
   (p95 or p99 crossing the 60 s / 120 s SLO) and the paired `cargo xtask
   report-timetoke-slo` summary flags the breach.【F:docs/observability/timetoke.md†L9-L52】【F:xtask/src/main.rs†L1197-L1423】
+- **Stalled replay gauges.** `timetoke_replay_stalled{threshold="warning"}` and
+  `{threshold="critical"}` flip to `1` after 60 s / 120 s without a successful
+  replay. Pair them with `rpp-node validator snapshot replay status` to capture
+  context before remediating.【F:docs/observability/timetoke.md†L9-L52】【F:rpp/node/src/main.rs†L720-L1015】
 - **Snapshot lag correlation.** `snapshot_stream_lag_seconds` climbs together
   with Timetoke latency, signalling that the consumer no longer ingests chunks
   fast enough to feed replay.【F:docs/observability/pipeline.md†L48-L96】
@@ -46,6 +50,15 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
      --output timetoke-slo-before.md
    ```
    Attach the report to the incident log for before/after evidence.【F:xtask/src/main.rs†L1197-L1423】
+   Supplement the Prometheus snapshot with the CLI view:
+   ```sh
+   rpp-node validator snapshot replay status \
+     --config /etc/rpp/validator.toml \
+     --rpc-url https://<consumer-host>:7070
+   ```
+   The command highlights the latest counters, latency percentiles, and whether
+   the stalled gauges breached the 60 s / 120 s thresholds. Include the terminal
+   output in the incident record.【F:rpp/node/src/main.rs†L720-L1015】
 2. Fetch the latest Timetoke snapshot from a healthy producer and persist it:
    ```sh
    curl -sS \
