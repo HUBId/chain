@@ -34,3 +34,9 @@
 ## Retention-Metadaten
 
 Alle drei WORM-Summaries referenzieren identische Retention-Metadaten-Dateien (`retention.meta`) mit `bucket=worm-audit-prod-eu`, `region=eu-central-1` und dem KMS-Key `arn:aws:kms:eu-central-1:123456789012:key/phasec-worm`. Die zugehörigen Retention-Logs (`retention.log`) listen jeweils 96 signierte Records bei `unsigned_records=0`.
+
+## `cargo xtask worm-retention-check` Ergebnis
+
+- **Letzte Ausführung:** Nightly 2026-08-21 (`cargo xtask worm-retention-check --output docs/status/artifacts/worm-retention-report-2026-08-21.json`).
+- **Prüfumfang:** 3 WORM-Summaries über die Roots `target/compliance/worm-export/nightly-2026-08-21` und `phase3-evidence/nightly-2026-08-21/worm-export`.
+- **Resultat:** Keine `stale_entries`, `orphaned_entries` oder `unsigned_records`; Retention-Metadaten gültig, 96 signierte Einträge pro `retention.log`, keine Warnungen.【F:docs/status/artifacts/worm-retention-report-2026-08-21.json†L1-L104】

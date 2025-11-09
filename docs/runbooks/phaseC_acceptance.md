@@ -14,7 +14,9 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       `stale_entries`, `unsigned_entries` oder `retention_violations`.
       Abweichungen sind im Incident-Log dokumentiert und durch Gegenproben via
       `cargo xtask worm-retention-check --report <pfad>` adressiert. Nachweis:
-      [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md).
+      [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md),
+      insbesondere Abschnitt
+      [`cargo xtask worm-retention-check Ergebnis`](../status/phaseC_retention_summary.md#cargo-xtask-worm-retention-check-ergebnis).
       Verweise auf das Incident-Playbook
       ([„WORM-Retention-Check schlägt fehl“](./incident_response.md#worm-retention-check-schlägt-fehl))
       müssen beigefügt sein.

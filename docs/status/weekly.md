@@ -39,11 +39,15 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
   [`docs/status/phaseC_retention_summary.md`](phaseC_retention_summary.md); Chaos-Status
   ist im Abschnitt „Phase‑C Kontrollen (Nightly)“ oben dokumentiert.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】【F:docs/status/phaseC_slo_summary.md†L1-L36】【F:docs/status/phaseC_retention_summary.md†L7-L33】【F:docs/status/weekly.md†L6-L21】
 
-### Admission Reconciliation
+## Admission & WORM Retention (Letzte Prüfung)
 
-- **Letzte erfolgreiche Reconciliation:** 2026-08-21 00:07 UTC (`nightly-2026-08-21`).
-  Audit-Log `admission-reconciliation` bestätigt Status "success" und verweist
-  auf das evidenzierte Nightly-Report-Artefakt.【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+- **Admission-Reconciler:** Nightly-Lauf `nightly-2026-08-21` meldet drei
+  Zyklen mit `drift_detected=false`; der Audit-Export bestätigt Status "success"
+  samt Evidenz-URI für Reviewer:innen.【F:logs/admission_reconciler_2026-08-21.jsonl†L1-L3】【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+- **WORM-Retention:** `cargo xtask worm-retention-check` (Nightly 2026-08-21)
+  prüfte drei Summaries über beide WORM-Roots ohne Abweichungen; Retention-
+  Metadaten und signierte `retention.log`-Einträge sind vollständig
+  dokumentiert.【F:docs/status/phaseC_retention_summary.md†L1-L47】【F:docs/status/phaseC_retention_summary.md†L49-L56】
 
 ### Snapshot & Timetoke SLO (14d)
 
