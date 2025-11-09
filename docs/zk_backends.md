@@ -61,6 +61,26 @@
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
 
+### Incident Runbook: rpp-stark verification failures
+
+#### Detection
+
+- Warnungen mit `proof_backend="rpp-stark"` und `valid=false` markieren fehlgeschlagene Prüfungen direkt im Logstream sowie im Telemetrie-Target und enthalten Stage-Flags bzw. Fehlermeldung für das On-Call-Playbook.【F:docs/zk_backends.md†L29-L43】
+- `/status/node` zeigt unter `backend_health.rpp-stark.verifier.rejected` den Zähler für verworfene Beweise; die Werte stammen aus dem `VerifierMetricsSnapshot` und steigen bei jedem Fehlversuch.【F:rpp/runtime/node.rs†L5416-L5460】【F:rpp/proofs/proof_system/mod.rs†L328-L392】
+- Die Prometheus-Metriken `rpp_stark_stage_checks_total{result="fail"}` und `rpp_stark_verify_duration_seconds` liefern Stage-spezifische Fehler- und Latenzsignale, die auch für Alerting-Regeln genutzt werden können.【F:rpp/runtime/telemetry/metrics.rs†L476-L520】
+
+#### Manual mitigation
+
+1. Hole das aktuelle Proof-Backlog über `GET /status/mempool`, ermittle Hash, Backend und Payload-Größe des betroffenen Artefakts und vergleiche sie mit den Logeinträgen – so lässt sich feststellen, ob der Fehler reproduzierbar ist oder bereits aus dem Mempool verschwunden ist.【F:rpp/rpc/api.rs†L1440-L2406】【F:rpp/runtime/node.rs†L5461-L5537】
+2. Prüfe die lokale Konfiguration auf ein zu niedriges `max_proof_size_bytes`. Der Parameter wird beim Start in den Verifier übertragen; sobald Beweise die Grenze überschreiten, blockiert `ensure_proof_size_consistency` den Start oder markiert eingehende Artefakte als zu groß. Passe den Wert in der Node-Konfiguration an (z. B. `config/node.toml`) und starte den Dienst neu, damit der Verifier das neue Limit übernimmt.【F:config/node.toml†L5-L25】【F:rpp/runtime/config.rs†L1529-L1964】【F:rpp/proofs/proof_system/mod.rs†L360-L412】【F:tests/node_lifecycle.rs†L120-L192】
+3. Dokumentiere den Vorfall im Incident-Log und beobachte `backend_health.rpp-stark.verifier.accepted` sowie die Stage-Counter, um zu bestätigen, dass nach der Anpassung wieder erfolgreiche Verifikationen eintreffen.【F:rpp/runtime/node.rs†L5416-L5460】【F:rpp/proofs/proof_system/mod.rs†L328-L392】【F:rpp/runtime/telemetry/metrics.rs†L476-L520】
+
+#### Fallback paths
+
+- **Switch to the vendor backend:** Baue oder deploye eine Binary mit `--features prod,backend-plonky3` (bzw. setze `RPP_RELEASE_BASE_FEATURES="prod,backend-plonky3"` für das Release-Skript), stoppe den Dienst und starte ihn mit dem neuen Artefakt. Der Operator-Guide beschreibt die Build-Schritte; dokumentiere den Wechsel im Change-Log und überwache anschließend `backend_health.plonky3.*` für die Erfolgsquoten.【F:docs/rpp_node_operator_guide.md†L1-L68】
+- **Temporarily disable proof enforcement:** Setze `rollout.feature_gates.consensus_enforcement = false` in der aktiven Konfiguration, speichere die Datei und führe einen kontrollierten Neustart durch. Dadurch überspringt die Runtime Sanktionen und Validierungen, bis der Fix bereitsteht. Nach Abschluss der Nacharbeiten muss der Schalter wieder auf `true` stehen, gefolgt von einem erneuten Neustart, um die Verifikation zu reaktivieren.【F:config/node.toml†L57-L71】【F:rpp/runtime/node.rs†L5043-L5164】【F:tests/node_lifecycle.rs†L120-L192】
+- **Escalate to release engineering:** Wenn weder Parameter-Anpassungen noch Backend-Wechsel helfen, eskaliere an das Release-Team und lass Hotfix-Builds mit aktualisierten Circuit-Vektoren signieren. Halte das Playbook gemeinsam mit `RELEASE.md` synchron, damit neue Proof-Versionen inklusive Artefakt-Hashes und Checksummen ausgerollt werden können.
+
 ## plonky3 (vendor backend)
 
 ### Aktivierung

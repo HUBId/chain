@@ -19,6 +19,7 @@ workflows exposed by the running node.
 > [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist) ·
 > [Phase‑2 Acceptance Checklist](./runbooks/phase2_acceptance.md)
 > · [Plonky3 runbook](./runbooks/plonky3.md)
+> · [Incident Runbook: rpp-stark verification failures](./zk_backends.md#incident-runbook-rpp-stark-verification-failures)
 
 ## Build and install the CLI
 
