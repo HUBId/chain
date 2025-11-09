@@ -44,6 +44,16 @@ steps, and update the `RELEASES.md` runbook with any temporary controls or
 rollbacks applied. Public advisories are published only after patched artifacts
 are available and validated.
 
+The main CI workflow includes a **Dependency advisories** job that executes
+`cargo audit --deny warnings` against `Cargo.lock`. The step installs
+[`cargo-audit`](https://github.com/rustsec/rustsec/tree/main/cargo-audit),
+primes the advisory database cache, and fails the run when RustSec advisories or
+warnings are detected. Operators who see this job fail should review the linked
+RustSec report, update or patch the affected dependency, and land the fix in the
+same pull request. If the advisory is a false positive or cannot be addressed
+immediately, follow the risk-acceptance process and document the justification
+in the corresponding issue or release notes before applying a temporary ignore.
+
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).
 
