@@ -38,6 +38,11 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
   `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total`.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
 - **Runbooks:** Operator Guide und Observability-Runbook beschreiben Simnet-Logs, RPC-Checks und
   Grafana-Screenshots für Phase‑2-Freigaben.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+- **Runbook-Refresh:** Das Timetoke-Failover-Runbook deckt jetzt Backlog-/SLO-Analysen,
+  den `rpp-node snapshot replay status` Drilldown sowie Eskalationsketten ab;
+  Admission- und Incident-Runbooks liefern First-Action-Checklisten für Pending-,
+  Freigabe-, Ablehnungs- und Restore-Szenarien, damit On-Call-Teams die neuen
+  Abläufe sofort anwenden können.【F:docs/runbooks/timetoke_failover.md†L12-L88】【F:docs/runbooks/admission.md†L17-L88】【F:docs/runbooks/incident_response.md†L74-L118】
 - **Regression-Orchestrierung:** Der neue Binary `tools/simnet/src/bin/regression.rs` fährt VRF-/Snapshot-/Gossip-Szenarien
   sequenziell, erzeugt JSON/HTML-Berichte und läuft in CI/Nightly als `simnet-regression`-Job.【F:tools/simnet/src/bin/regression.rs†L1-L240】【F:.github/workflows/ci.yml†L287-L303】【F:.github/workflows/nightly.yml†L186-L208】
 - **Alert-Playbook:** Prometheus-Regeln unter `docs/observability/alerts/consensus_vrf.yaml` decken p95-VRF-Latenzen,

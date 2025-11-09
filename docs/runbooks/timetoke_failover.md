@@ -40,9 +40,23 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
 4. Confirm the Timetoke replay peer is still allowlisted with the expected tier
    (for example `Tl3`) using the admission policy tools before making changes.【F:docs/runbooks/admission.md†L21-L59】
 
-## Step 1 – Capture the failing state
+## Step 1 – Capture and analyse the failing state
 
-1. Record the replay counters and latency SLO snapshot:
+1. Inspect the replay dashboard or run the following PromQL queries to confirm which SLO breached. Focus on the new helper gauges that back the replay drill-down panels:
+   - `timetoke_replay_seconds_since_success` and `timetoke_replay_last_success_timestamp`
+     highlight how long the consumer has been idle.
+   - `timetoke_replay_backlog_records` captures the number of ledger entries
+     waiting for replay; pair it with `snapshot_stream_lag_seconds` to
+     understand whether backlog growth is caused by slow ingest or slow
+     replay.
+   - `timetoke_replay_duration_ms_bucket` (p50/p95/p99) confirms whether the
+     latency SLO or the success-rate SLO triggered the alert. Use the
+     Timetoke observability snippets to chart the same percentiles locally
+     when Grafana is unavailable.【F:docs/observability/timetoke.md†L9-L58】
+   Capture a screenshot of the widened histogram buckets or rising backlog
+   counter in the incident log so the evidence trail covers the pre-mitigation
+   state.
+2. Record the replay counters and latency SLO snapshot:
    ```sh
    cargo xtask report-timetoke-slo \
      --prometheus-url "https://prom.example.net" \
@@ -59,7 +73,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
    The command highlights the latest counters, latency percentiles, and whether
    the stalled gauges breached the 60 s / 120 s thresholds. Include the terminal
    output in the incident record.【F:rpp/node/src/main.rs†L720-L1015】
-2. Fetch the latest Timetoke snapshot from a healthy producer and persist it:
+3. Fetch the latest Timetoke snapshot from a healthy producer and persist it:
    ```sh
    curl -sS \
      -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
@@ -68,12 +82,25 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
    ```
    The integration test `snapshot_timetoke_metrics.rs` exercises the same RPC to
    validate that providers serve complete snapshots.【F:tests/observability/snapshot_timetoke_metrics.rs†L187-L210】
-3. Inspect the consumer session for stalled chunk or update indices:
+4. Inspect the consumer session for stalled chunk or update indices:
    ```sh
    rpp-node validator snapshot status --session <session-id> --config /etc/rpp/validator.toml
    ```
    Record the `last_chunk_index`, `last_update_index`, `verified`, and any `error`
    values for correlation with the metrics dashboards.【F:docs/runbooks/network_snapshot_failover.md†L82-L118】
+
+5. If `timetoke_replay_backlog_records` continues to grow after the snapshot
+   capture or the CLI reports `warning: replay success rate below 99 %`,
+   escalate immediately:
+   - **Ops On-Call** (`#ops-oncall`, +49 30 555 1234) – Coordinate failover and
+     confirm whether multiple consumers are impacted.
+   - **Timetoke Reliability Owner** (Nina Weber, nina.weber@example.com) –
+     Reviews the backlog metrics, approves emergency replay throttling, and
+     signs off on cross-region snapshot pulls.
+   - **SRE Liaison** (`sre-standby@example.com`) – Tracks SLO impact and files
+     the breach report referenced in the Phase‑B acceptance log.
+   Continue with the reset steps below while the escalation is in flight and
+   document the hand-off in the incident record.【F:docs/runbooks/incident_response.md†L1-L52】
 
 ## Step 2 – Reset the replay state
 

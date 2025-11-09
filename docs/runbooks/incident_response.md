@@ -101,6 +101,23 @@ Rollback vorzubereiten.
       [`GET /p2p/admission/audit?offset=0&limit=50`](../runbooks/observability.md#admission-audit-abfragen)
       sowie das zugehörige Ticket/Change-Request-Protokoll.
 
+### Pending/Freigabe/Ablehnung/Wiederherstellung
+
+Stütze dich auf die vier Incident-Listen aus dem [Admission-Runbook](./admission.md#first-action-checklisten), wenn
+die Eskalation konkret eine Pending-Queue, Freigabe, Ablehnung oder einen
+Restore betrifft:
+
+- [ ] **Pending-Approval:** `rpp-node validator admission pending list/show`
+      laufen lassen, Diff/Screenshots ins Incident-Log legen und das Security-
+      Team aktiv informieren.
+- [ ] **Freigabe:** Vor der Approve-Entscheidung den Policy-Status prüfen
+      (`admission status`), die Freigabe dokumentieren und Policies erneut
+      exportieren.
+- [ ] **Ablehnung:** Ablehnungsgrund via CLI im JSON-Format sichern, Alerts
+      checken und Governance/Requester:innen informieren.
+- [ ] **Wiederherstellung:** Audit-Slice und Backup erheben, Restore via CLI
+      mit Dual-Approval durchführen, anschließend Signatur-Verify ausführen.
+
 ### Nächste Schritte
 
 1. Fordere die fehlende Rolle zur Freigabe auf oder veranlasse einen

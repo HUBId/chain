@@ -40,6 +40,73 @@ If either call rejects the payload—for example a duplicate peer or a missing
 approval—capture the HTTP response body in the incident log and re-submit after
 fixing the payload.
 
+## First-Action-Checklisten
+
+Nutze die folgenden Checklisten als erste Maßnahme bei Pending-Anträgen,
+Freigaben, Ablehnungen und Wiederherstellungen nach Fehlversuchen. Alle
+Checklisten setzen voraus, dass du das Incident-Log und die Ticket-Referenz
+öffnest, bevor du mit den Schritten beginnst.
+
+### Pending-Approval-Queue
+
+- [ ] **CLI:** `rpp-node validator admission pending list --format table`
+      ausführen und Pending-ID, Antragsteller:in, Grund sowie angefragte Peer-
+      Änderungen in das Incident-Log übernehmen.【F:rpp/node/src/main.rs†L937-L1022】
+- [ ] **Diff prüfen:** `rpp-node validator admission pending show --id <ID>
+      --format diff` nutzen, um Allow-/Blocklist-Deltas zu validieren und
+      Screenshots/Diffs an das Ticket zu hängen.
+- [ ] **Audit vorbereiten:** Sicherstellen, dass `GET /p2p/admission/audit`
+      erreichbar ist, und das jüngste Audit-Snippet an das Incident-Log anhängen
+      (wird für Phase‑B herangezogen).【F:rpp/rpc/src/routes/p2p.rs†L232-L379】
+- [ ] **Security benachrichtigen:** Pending-Link im Kanal `#sec-approvals`
+      teilen und um Freigabe innerhalb des vereinbarten SLA-Fensters bitten.
+
+### Freigabe (Approve)
+
+- [ ] **Payload validieren:** Pending-Details erneut mit `pending show`
+      abrufen und sicherstellen, dass Grund, Peer-Tier und Actor korrekt
+      dokumentiert sind.
+- [ ] **Policy-Gesundheit:** `rpp-node validator admission status` ausführen,
+      um Drift-Indikatoren (`policy_drift_detected_total`) vor der Freigabe zu
+      prüfen.【F:rpp/node/src/main.rs†L1145-L1254】
+- [ ] **Freigabe dokumentieren:** `rpp-node validator admission pending approve
+      --id <ID> --approver <rolle:person>` ausführen und CLI-Ausgabe im
+      Incident-Log speichern.
+- [ ] **Post-Check:** `rpp-node validator admission policies get` (oder
+      `GET /p2p/admission/policies`) ausführen und die aktualisierte Liste als
+      JSON im Ticket verlinken.
+
+### Ablehnung (Reject)
+
+- [ ] **Fehlerursache festhalten:** `pending show` mit `--format json`
+      ausführen und den Ablehnungsgrund dokumentieren (z. B. falsches Tier,
+      fehlende Peer-ID).
+- [ ] **Audit sichern:** Ablehnung mit
+      `rpp-node validator admission pending reject --id <ID> --approver
+      <rolle:person> --reason "<Begründung>"` durchführen und Output sichern.
+- [ ] **Monitor prüfen:** Admission-Alerts (`policy_drift_detected_total`,
+      `admission.approval_missing_total`) im Dashboard kontrollieren, um
+      Folgesignale zu erkennen.【F:docs/observability/pipeline.md†L67-L140】
+- [ ] **Kommunikation:** Antragsteller:in und Governance informieren, inkl.
+      Hinweis auf nötige Payload-Korrekturen oder Eskalation.
+
+### Wiederherstellung nach Fehlversuchen
+
+- [ ] **Audit-Trail sammeln:** Jüngste Einträge mit
+      `GET /p2p/admission/audit?limit=10` exportieren und im Incident-Log
+      ablegen.
+- [ ] **Backup prüfen:** `rpp-node validator admission backups list` und
+      `backups download` nutzen, um den letzten bekannten guten Snapshot zu
+      identifizieren.【F:rpp/node/src/main.rs†L1023-L1144】
+- [ ] **Restore vorbereiten:** `rpp-node validator admission restore --backup
+      <NAME> --actor <ops> --reason "Rollback nach Fehlversuch" --approval
+      operations:<ops> --approval security:<sec>` ausführen und Output sichern.
+- [ ] **Verifikation:** Direkt danach `rpp-node validator admission verify
+      --audit-limit 50` laufen lassen, um Signaturen und Audit-Kette zu prüfen
+      und Ergebnis dokumentieren.
+- [ ] **Lessons Learned:** Fehlversuch im Ticket nachverfolgen, SRE/Compliance
+      über erneute Risiken informieren und Follow-up-Aufgaben anstoßen.
+
 ## Audit expectations
 
 Every successful or rejected attempt is written to the admission audit log with
