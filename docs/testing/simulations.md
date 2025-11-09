@@ -155,6 +155,15 @@ Szenarioanforderungen bitte direkt dort eskalieren.
   täglich um 01:30 UTC mit Produktionsflaggen anstößt und die Ergebnisse als Tarball
   archiviert.【F:.github/workflows/nightly.yml†L1-L120】 Beide Workflows schlagen fehl,
   sobald ein Einzelszenario unerwartet scheitert.
+* **Snapshot-Partition-Drill:** Der Nightly-Job `snapshot-partition` ruft das
+  Szenario [`snapshot_partition.ron`](../../tools/simnet/scenarios/snapshot_partition.ron)
+  via `cargo run -p simnet` auf, lässt das Python-Skript
+  [`snapshot_partition_report.py`](../../scripts/snapshot_partition_report.py)
+  Latenz-/Recovery-Metriken aggregieren und veröffentlicht
+  `snapshot_partition_report.json` als Artefakt. Überschreitet die maximale
+  Resume-Latenz 2 Minuten oder die Chunk-Retries den Schwellwert 25, markiert das
+  Skript den Lauf als Fehler und beendet den Job mit einer aussagekräftigen
+  Fehlermeldung.【F:.github/workflows/nightly.yml†L777-L811】【F:scripts/snapshot_partition_report.py†L1-L84】
 
 Alle Artefakte stehen für 30 Tage im Actions-Tab bereit und sind im Weekly
 Status-Bericht verlinkt.
