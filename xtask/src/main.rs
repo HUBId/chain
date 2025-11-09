@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
@@ -22,8 +22,8 @@ use rand::rngs::OsRng;
 use reqwest::blocking::Client as HttpClient;
 use rpp_p2p::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
-    AdmissionPolicyLogOptions, CommandWormExporter, PolicySigner, PolicyTrustStore,
-    WormExportSettings, WormRetention, WormRetentionMode,
+    AdmissionPolicyLogOptions, CommandWormExporter, PolicySignatureVerifier, PolicySigner,
+    PolicyTrustStore, WormExportSettings, WormRetention, WormRetentionMode,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -489,7 +489,7 @@ fn discover_snapshot_report(root: &Path) -> Result<PathBuf> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct WormExportSummaryEntry {
     entry_id: u64,
     export_object: String,
@@ -500,7 +500,7 @@ struct WormExportSummaryEntry {
     signature_valid: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct WormExportSummary {
     generated_at: String,
     audit_log: String,
@@ -2066,6 +2066,196 @@ struct EvidenceManifest {
     warnings: Vec<String>,
 }
 
+fn verify_snapshot_verifier_checksums(workspace: &Path) -> Result<usize> {
+    let search_roots = [
+        workspace.join("target"),
+        workspace.join("dist"),
+        workspace.join("logs"),
+    ];
+    let mut verified = 0usize;
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name == "snapshot-verify-report.json.sha256")
+            {
+                verify_snapshot_sha256(entry.path())?;
+                verified += 1;
+            }
+        }
+    }
+    Ok(verified)
+}
+
+fn verify_snapshot_sha256(sha_path: &Path) -> Result<()> {
+    let contents = fs::read_to_string(sha_path)
+        .with_context(|| format!("read snapshot verifier checksum {}", sha_path.display()))?;
+    let line = contents
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| anyhow!("{} is empty", sha_path.display()))?;
+    let mut parts = line.split_whitespace();
+    let expected = parts
+        .next()
+        .ok_or_else(|| anyhow!("{} does not contain a hash", sha_path.display()))?;
+    let target = parts
+        .next()
+        .ok_or_else(|| anyhow!("{} does not reference a file", sha_path.display()))?
+        .trim_start_matches('*');
+    let parent = sha_path
+        .parent()
+        .ok_or_else(|| anyhow!("{} is missing a parent directory", sha_path.display()))?;
+    let report_path = parent.join(target);
+    let report_bytes = fs::read(&report_path).with_context(|| {
+        format!(
+            "read snapshot verifier report {} referenced by {}",
+            report_path.display(),
+            sha_path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(&report_bytes);
+    let computed = hex_encode(hasher.finalize());
+    if !computed.eq_ignore_ascii_case(expected.trim()) {
+        bail!(
+            "snapshot verifier report {} failed checksum validation against {}",
+            report_path.display(),
+            sha_path.display()
+        );
+    }
+    println!(
+        "verified snapshot verifier report checksum via {}",
+        report_path.display()
+    );
+    Ok(())
+}
+
+fn verify_worm_export_signatures(workspace: &Path) -> Result<usize> {
+    let search_roots = [
+        workspace.join("target/worm-export-smoke"),
+        workspace.join("logs"),
+    ];
+    let mut verified = 0usize;
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name == "worm-export-summary.json")
+            {
+                verify_worm_export_summary(entry.path(), workspace)?;
+                verified += 1;
+            }
+        }
+    }
+    Ok(verified)
+}
+
+fn verify_worm_export_summary(path: &Path, workspace: &Path) -> Result<()> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read WORM export summary {}", path.display()))?;
+    let summary: WormExportSummary = serde_json::from_str(&contents)
+        .with_context(|| format!("decode WORM export summary {}", path.display()))?;
+    if summary.entries.is_empty() {
+        bail!("WORM export summary {} does not contain any entries", path.display());
+    }
+    let mut trust = HashMap::new();
+    trust.insert(
+        summary.signer_key_id.clone(),
+        summary.signer_public_key_hex.clone(),
+    );
+    let trust_store = PolicyTrustStore::from_hex(trust).with_context(|| {
+        format!(
+            "construct trust store for WORM export summary {}",
+            path.display()
+        )
+    })?;
+    let verifier = PolicySignatureVerifier::new(trust_store);
+    for entry in &summary.entries {
+        if !entry.signature_valid {
+            bail!(
+                "WORM export summary {} flags entry {} as invalid",
+                path.display(),
+                entry.entry_id
+            );
+        }
+        let export_path = resolve_workspace_path(workspace, &entry.export_object);
+        let export_raw = fs::read_to_string(&export_path).with_context(|| {
+            format!(
+                "read WORM export object {} referenced by {}",
+                export_path.display(),
+                path.display()
+            )
+        })?;
+        let log_entry: AdmissionPolicyLogEntry = serde_json::from_str(&export_raw).with_context(|| {
+            format!(
+                "decode WORM export object {} referenced by {}",
+                export_path.display(),
+                path.display()
+            )
+        })?;
+        let signature = log_entry.signature.clone().ok_or_else(|| {
+            anyhow!(
+                "WORM export object {} referenced by {} is missing a signature",
+                export_path.display(),
+                path.display()
+            )
+        })?;
+        if signature.key_id != entry.signature_key {
+            bail!(
+                "WORM export entry {} expects signing key {} but object {} used {}",
+                entry.entry_id,
+                entry.signature_key,
+                export_path.display(),
+                signature.key_id
+            );
+        }
+        let canonical = log_entry.canonical_bytes().map_err(|err| {
+            anyhow!(
+                "compute canonical payload for WORM export object {} (entry {} referenced by {}): {err}",
+                export_path.display(),
+                entry.entry_id,
+                path.display()
+            )
+        })?;
+        verifier
+            .verify(&signature, &canonical)
+            .with_context(|| {
+                format!(
+                    "verify signature for WORM export entry {} referenced by {}",
+                    entry.entry_id,
+                    path.display()
+                )
+            })?;
+    }
+    println!(
+        "verified WORM export signatures via {} ({} entries)",
+        path.display(),
+        summary.entries.len()
+    );
+    Ok(())
+}
+
+fn resolve_workspace_path(workspace: &Path, recorded: &str) -> PathBuf {
+    let candidate = Path::new(recorded);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        workspace.join(candidate)
+    }
+}
+
 fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     let workspace = workspace_root();
     let mut output_root = workspace.join("target/compliance/phase3");
@@ -2099,6 +2289,19 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     ))?;
     let staging_dir = output_root.join(&timestamp);
     fs::create_dir_all(&staging_dir)?;
+
+    let snapshot_verified = verify_snapshot_verifier_checksums(&workspace)?;
+    if snapshot_verified == 0 {
+        println!(
+            "⚠️ no snapshot verifier reports with SHA256 found; skipping checksum validation"
+        );
+    }
+    let worm_verified = verify_worm_export_signatures(&workspace)?;
+    if worm_verified == 0 {
+        println!(
+            "⚠️ no WORM export summaries found; skipping signature verification"
+        );
+    }
 
     let mut categories = Vec::new();
     categories.push(bundle_snapshot_dashboards(&workspace, &staging_dir)?);

@@ -70,7 +70,9 @@ milestone.
       samt Signaturen ins Bundle kopiert, die Manifestdatei die Quellen
       aufführt und der [`Evidence Bundle Index`](../governance/evidence_bundle_index.md)
       die Pfade dokumentiert. Dokumentiere Speicherort und Prüfsumme im
-      Freigabeprotokoll.【F:xtask/src/main.rs†L1516-L1584】【F:xtask/src/main.rs†L1606-L1644】【F:docs/governance/evidence_bundle_index.md†L51-L85】
+      Freigabeprotokoll. Das Sammelskript validiert Hashes und Signaturen
+      vor dem Kopieren automatisch (siehe
+      [Compliance Overview](../governance/compliance_overview.md#phase-3-evidence-bundle)).【F:xtask/src/main.rs†L2306-L2313】【F:xtask/src/main.rs†L2546-L2589】【F:docs/governance/evidence_bundle_index.md†L51-L85】
 - ✅ **Bootstrap-Guard aktiv.** Produktions-Release-Channels (`canary`/`mainnet`)
   verweigern den Start, wenn `network.admission.worm_export` keinen S3-Endpoint,
   Zugangsdaten und ein Retention-Fenster setzt. Der Guard schreibt einen
