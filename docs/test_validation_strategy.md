@@ -17,6 +17,7 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
 - **Pipeline-/Sync-Orchestrierung**: Die Integration-Suite unter `tests/integration/` hält End-to-End-Blockproduktion, Snapshot-/Light-Client-Pläne, Manipulationsschutz (`manipulation_protection.rs`) und Operator-RPC-Steuerung als reproduzierbare Workflows fest. Die Tests dokumentieren zugleich Start-/Stop-Orchestrierung und überspringen sich selbst, falls Binärabhängigkeiten fehlen.【F:tests/integration/block_production.rs†L1-L38】【F:tests/integration/snapshot_light_client.rs†L1-L33】【F:tests/integration/manipulation_protection.rs†L1-L105】【F:tests/integration/operator_rpcs.rs†L1-L45】
+- **Admission-WORM-Failure**: `tests/compliance/worm_export_failure.rs` setzt den Stub-Speicher auf Read-only, triggert die Admission-RPC `/p2p/admission/policies`, überprüft den Logeintrag „failed to append admission audit log“ und verlangt, dass der Prometheus-Zähler `worm_export_failures_total` hochzählt. Die CI-Stufe `worm-export-smoke` ruft den Test neben `cargo xtask test-worm-export` auf; die Nightly-Stufe `worm-export` spiegelt das Verhalten.【F:tests/compliance/worm_export_failure.rs†L1-L226】【F:.github/workflows/ci.yml†L378-L386】【F:.github/workflows/nightly.yml†L21-L31】
 
 ### 1.3 System- und Szenariotests
 - **End-to-End**: Start eines lokalen Netzwerks (mindestens zwei Wallets + ein Node) mit VRF-basierter Leader-Selektion, Erzeugung von Blöcken und vollständiger Rekursionskette.
@@ -93,11 +94,13 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
     Die Stufen validieren die Snapshot-Backup-/Restore-Skripte (`cargo test --test storage_snapshot`),
     die Prometheus-basierten Observability-Scrapes (`cargo xtask test-observability`), das
     Admission-Szenario (`cargo run -p simnet -- --scenario tools/simnet/scenarios/gossip_backpressure.ron`)
-    und die klassischen xtask-/Smoke-Läufe. `runtime-smoke` baut `rpp-node`, startet die drei
+    und die klassischen xtask-/Smoke-Läufe. `worm-export-smoke` führt zusätzlich den
+    Compliance-Test `cargo test --test compliance --features integration -- worm_export_failure_emits_metric_and_log`
+    gegen den Nur-Lese-Stub aus, bevor `runtime-smoke` `rpp-node` baut, die drei
     Betriebsmodi seriell, prüft die Health-/Metrics-Endpunkte und archiviert Logs/Metriken je Modus.
     Die Jobs delegieren an `cargo xtask test-unit`, `cargo xtask test-integration`, `cargo xtask test-simnet`
     und die `scripts/run_*_mode.sh`-Wrapper, womit alle Testebenen (Unit, Workflow, Simulation,
-    Observability, Admission, Runtime-Smoke) automatisiert abgedeckt werden und Contributors dieselben
+    Observability, Admission, WORM-Compliance, Runtime-Smoke) automatisiert abgedeckt werden und Contributors dieselben
     Läufe lokal reproduzieren können.【F:.github/workflows/ci.yml†L185-L452】【F:xtask/src/main.rs†L68-L107】【F:tests/storage_snapshot.rs†L1-L73】【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】
   - [`nightly-simnet`](../.github/workflows/nightly.yml): Startet täglich `cargo xtask test-simnet` mit dem Production-
     Feature-Set (`prod,prover-stwo,backend-plonky3`), wertet alle JSON-Summaries über `scripts/analyze_simnet.py` aus und

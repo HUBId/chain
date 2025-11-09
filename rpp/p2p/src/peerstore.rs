@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::core::multihash::Multihash;
@@ -82,6 +82,7 @@ pub trait IdentityVerifier: Send + Sync {
 }
 
 const DEFAULT_POLICY_BACKUP_PREFIX: &str = "admission_policies";
+const WORM_EXPORT_FAILURE_METRIC: &str = "worm_export_failures_total";
 
 #[derive(Debug, Clone)]
 pub struct AdmissionPolicyBackup {
@@ -632,6 +633,17 @@ impl PeerstoreConfig {
     pub fn blocklist(&self) -> &[PeerId] {
         &self.blocklist
     }
+}
+
+fn record_worm_export_failure() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        metrics::describe_counter!(
+            WORM_EXPORT_FAILURE_METRIC,
+            "Total number of WORM export failures emitted by the admission audit log",
+        );
+    });
+    metrics::counter!(WORM_EXPORT_FAILURE_METRIC).increment(1);
 }
 
 pub struct Peerstore {
@@ -1509,6 +1521,7 @@ impl Peerstore {
                 change,
                 self.policy_signer.as_ref(),
             ) {
+                record_worm_export_failure();
                 let label = reason_ref.unwrap_or("n/a");
                 error!(
                     target: "telemetry.admission",
