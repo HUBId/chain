@@ -466,6 +466,10 @@ PY
             features: "prod,prover-stwo"
             no_default_features: "1"
             experimental: false
+          - name: prod-stwo-rpp-stark
+            features: "prod,prover-stwo,backend-rpp-stark"
+            no_default_features: "1"
+            experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
@@ -563,6 +567,10 @@ PY
             features: "prod,prover-stwo"
             no_default_features: "1"
             experimental: false
+          - name: prod-stwo-rpp-stark
+            features: "prod,prover-stwo,backend-rpp-stark"
+            no_default_features: "1"
+            experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
@@ -599,6 +607,10 @@ PY
             experimental: false
           - name: prod-stwo
             features: "prod,prover-stwo"
+            no_default_features: "1"
+            experimental: false
+          - name: prod-stwo-rpp-stark
+            features: "prod,prover-stwo,backend-rpp-stark"
             no_default_features: "1"
             experimental: false
           - name: prod-stwo-plonky3
