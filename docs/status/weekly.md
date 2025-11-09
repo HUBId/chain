@@ -199,6 +199,7 @@ abgeschlossen und inklusive Evidenzlinks im Register verankert.
 #### WORM Export Hardening (ENG-1052)
 - Object-Storage-Pipeline (Immutable Buckets) designiert; Compliance prüft Retention.
 - Integrationstests für unveränderliche Uploads sind in Planung.
+- Automatischer `worm-retention-check` läuft im Nightly-Job, prüft Audit-Logs, Retention-Metadaten sowie Signaturen und liefert den Report fürs Phase‑3-Bundle.【F:xtask/src/main.rs†L3527-L3879】【F:.github/workflows/nightly.yml†L19-L58】
 
 <a id="external-snapshot-verification-eng-1053"></a>
 #### External Snapshot Verification (ENG-1053)
