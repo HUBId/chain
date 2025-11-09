@@ -124,6 +124,7 @@ Die [Compliance Overview](../governance/compliance_overview.md) listet Phase‑3
 | Timetoke | Timetoke-SLO-Bericht und Replay-Validator-Artefakte vollständig anhängen. | Nightly-Artefakte annotieren, Replay-Failure-Cases sammeln. | [Phase‑3 Acceptance Checklist – Timetoke](../runbooks/phase3_acceptance.md#timetoke-snapshot-roundtrip)【F:docs/runbooks/phase3_acceptance.md†L34-L61】 |
 | Tier Admission | Allow-/Blocklist-Dumps versionieren, RPC-Roundtrip-Logs sichern. | Peerstore-Reload-Protokolle und RPC-Audit-Logs exportieren. | [Phase‑3 Acceptance Checklist – Tier-Admission Persistenz & Audit](../runbooks/phase3_acceptance.md#tier-admission-persistenz--audit)【F:docs/runbooks/phase3_acceptance.md†L36-L49】 |
 | Observability | Alert-Drills & Grafana-Exporte versionieren, Screenshots zu On-Call-Handbook hinzufügen. | Prometheus-Testläufe dokumentieren, Grafana-Screenshots verlinken. | [Phase‑3 Acceptance Checklist – Observability Dashboards & Alerts](../runbooks/phase3_acceptance.md#observability-dashboards--alerts)【F:docs/runbooks/phase3_acceptance.md†L62-L79】 |
+| Dual-Control Workflow | Ops/Sec-Schulungen terminieren und Evidence-Links (CI-Run + Audit-Export) für Abnahmen sammeln. | Trainingskalender finalisieren, Attendance protokollieren, Audit-Slice im Evidence-Log ablegen. | [Phase‑B Acceptance Checklist – Dual-Control-Workflow](../runbooks/phaseB_acceptance.md#dual-control-workflow)【F:docs/runbooks/phaseB_acceptance.md†L24-L30】 |
 
 ## Phase 3 Abschluss (Kalenderwoche 25/2026)
 
@@ -131,6 +132,7 @@ Die [Compliance Overview](../governance/compliance_overview.md) listet Phase‑3
 
 ### Highlights
 - **Persistente Policies & Audit:** `Peerstore::update_admission_policies` schreibt Allow-/Blocklisten auf Disk, hängt Audit-Events an das JSONL-Log an und Tests prüfen den Dual-Control-Pfad inklusive Reload.【F:rpp/p2p/src/peerstore.rs†L1180-L1299】【F:rpp/p2p/src/peerstore.rs†L1795-L1828】
+- **Dual-Control Workflow erneuert:** Compliance-Übersicht, Netzwerkdoku und Risk Register dokumentieren den Pending-Queue-Flow inklusive Zweitfreigabe, Audit-/WORM-Evidence und CI-Guard; Phase‑B-Checklist fordert Logs & Audit-Slices als Nachweis ein.【F:docs/governance/compliance_overview.md†L5-L10】【F:docs/network/admission.md†L61-L135】【F:docs/security/register.md†L11-L24】【F:docs/runbooks/phaseB_acceptance.md†L24-L30】
 - **RPC-Audit & Governance:** Die neuen `/p2p/admission/*`-Endpunkte erzwingen Rollen-Approvals, erlauben Policy-Reviews und liefern das Audit-Log für Operator:innen.【F:rpp/rpc/src/routes/p2p.rs†L232-L379】
 - **Stream-Metriken & Observability:** `SnapshotsBehaviour` exportiert `snapshot_bytes_sent_total` und `snapshot_stream_lag_seconds`, die durch die Observability-Test-Suite validiert und in Runbook, Dashboard und Alert-Regeln verankert sind.【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
 

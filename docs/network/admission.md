@@ -95,6 +95,12 @@ curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
      -d '{"approver": "sec.oncall"}'
 ```
 
+While the request is queued the peerstore keeps the live allowlist and blocklist
+unchanged. Only after security approves does the dual-control service persist
+the new snapshot, append the audit entry (including both approvals), export the
+JSONL line to the configured WORM target, and emit `telemetry.admission`
+markers so monitoring can trace the hand-off.【F:rpp/p2p/src/admission/dual_control.rs†L16-L188】【F:rpp/p2p/src/peerstore.rs†L1494-L1705】【F:rpp/p2p/src/policy_log.rs†L45-L194】
+
 If the payload is invalid—for example the same peer appears twice or the wrong
 approval role is provided—the service returns a `400` with a descriptive error
 string so auditors can capture the failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L470-L660】 The approval endpoint returns a `404` when the
@@ -121,6 +127,11 @@ the selected slice. Operators should size retention according to
 `network.admission.audit_retention_days` in the config bundle; the peerstore
 keeps writing to the JSONL file while external rotation jobs enforce the
 window.【F:rpp/runtime/config.rs†L942-L1004】【F:docs/configuration.md†L48-L50】
+
+Audit entries record the complete before/after state as well as all approvals,
+are signed with the active admission key, and are exported to the configured
+append-only target so pending-stage and commit-stage evidence survives
+compromise of the node.【F:rpp/p2p/src/peerstore.rs†L1494-L1705】【F:rpp/p2p/src/policy_log.rs†L45-L194】
 
 To guard against regressions, the test
 `dual_approval_update_records_audit_approvals` performs a full RPC update with
@@ -176,4 +187,6 @@ valid tier-two peer attempting to publish consensus votes hits the expected
 `TierInsufficient` error.【F:tests/network/admission_control.rs†L1-L92】 The
 companion suite `tests/network/admission_dual_control.rs` covers the pending
 workflow by ensuring changes stay queued until security approves them and that
-the audit log records both approvals.【F:tests/network/admission_dual_control.rs†L1-L56】
+the audit log records both approvals.【F:tests/network/admission_dual_control.rs†L1-L55】 The `rpc-admission-audit`
+CI job runs the regression on every push so repositories cannot merge without
+the dual-control guard passing.【F:.github/workflows/ci.yml†L367-L376】
