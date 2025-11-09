@@ -2,6 +2,16 @@
 
 Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Sequenz ein. Er verknüpft die bereits in `rpp/proofs/blueprint` katalogisierten Aufgaben mit konkreten Deliverables, Abhängigkeiten und Qualitätsnachweisen. Jeder Abschnitt endet mit klaren "Definition of Done"-Kriterien und Testanforderungen, damit der Fortschritt objektiv messbar bleibt.
 
+## Phase A Reporting & Evidenzlinks
+
+Phase A verfolgt die externe Härtung der Snapshot-Kette. Der wöchentliche Statusbericht referenziert jetzt die drei Kernnachweise direkt:
+
+- `snapshot-verify-report` (CI-Job `snapshot-verifier`) für aggregierte Manifest-Prüfungen samt Hash-Artefakten.
+- `worm-export-smoke` (Nightly-Job) für Export-Summaries und Checksummen der WORM-Streams.
+- `threat-model-review` (Security-Workflow) für das Review-Protokoll und aktualisierte Threat-Model-Einträge.
+
+Die entsprechende Vorlage (`docs/status/weekly_template.md`) enthält feste Platzhalterlinks auf die Actions-Runs, damit Phase‑A-Audits jede Woche denselben Nachweisumfang erhalten.
+
 ## Phase 1 abgeschlossen (Stand: 2025-09-12)
 
 Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arbeitspakete wurden geliefert und entsprechen der dokumentierten Definition of Done:

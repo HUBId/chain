@@ -62,6 +62,9 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - **CI-Artefakte:** Der `simnet-regression` Upload aus dem CI-Workflow bündelt JSON-/CSV-Summaries aller Simnet-Läufe zur Nachvollziehbarkeit.【F:.github/workflows/ci.yml†L287-L303】
 - **Nightly-Artefakte:** Das Paket `simnet-nightly` enthält vollständige Nightly-Summaries (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) inklusive Analyseresultaten.【F:.github/workflows/nightly.yml†L148-L183】
 - **Matrix-Protokolle:** Die Step-Logs in `unit-suites`, `integration-workflows` und `simnet-smoke` dokumentieren Laufzeiten (~12/18/22 Minuten) und werden für Reviews im Actions-Tab archiviert.【F:.github/workflows/ci.yml†L185-L285】
+- **Snapshot-Verifier:** [CI-Artefakt `snapshot-verifier`](https://github.com/<org>/<repo>/actions/runs/<run-id>#artifact) stellt `snapshot-verify-report.json` + `.sha256` für den Merge-Run bereit; die Hashes fließen in die Release-Freigaben ein.【F:.github/workflows/ci.yml†L360-L397】
+- **WORM-Export Smoke:** [CI-Protokoll `worm-export-smoke`](https://github.com/<org>/<repo>/actions/runs/<run-id>#summary-logs) dokumentiert die WORM-Export-Prüfung und enthält das Artefaktpaket `worm-export-smoke.zip` mit Export-Summary und Checksummen.【F:.github/workflows/nightly.yml†L1-L24】
+- **Threat-Model Review:** [Review-Artefakt `threat-model-review`](https://github.com/<org>/<repo>/actions/runs/<run-id>#artifact) bündelt die Protokolle aus dem Security-Workflow und verweist auf das aktualisierte Threat-Model-Addendum.【F:docs/security/threat_model.md†L1-L120】
 
 ## Phase 2 abgeschlossen (Kalenderwoche 15/2026)
 
