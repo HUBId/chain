@@ -192,7 +192,9 @@ Overrides liest der Befehl `<snapshot_dir>/manifest/chunks.json`, erwartet die
 Signatur nebenan als `chunks.json.sig`, prüft `<snapshot_dir>/chunks` und leitet
 den Ed25519-Schlüssel aus `timetoke_snapshot_key_path` ab. Optional kannst du
 `--manifest`, `--signature`, `--chunk-root`, `--output` und `--public-key`
-verwenden, um einzelne Pfade bzw. einen alternativen Public Key zu setzen.【F:rpp/node/src/main.rs†L140-L227】
+verwenden, um einzelne Pfade bzw. einen alternativen Public Key zu setzen.【F:rpp/node/src/main.rs†L140-L227】 Für eine praktische
+Übung inklusive Smoke-Fixtures und Artefakt-Checks folge dem
+[Phase‑A Operator Lab](training/phaseA_operator_lab.md).
 
 ```text
 $ rpp-node validator snapshot verify --config config/validator.toml

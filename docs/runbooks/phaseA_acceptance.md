@@ -27,7 +27,9 @@ milestone.
       Bundle. Der Report muss `signature_valid=true` und keine Chunk-Abweichungen
       melden; bei Fehlern liefert das CLI Exit-Code `2` (Signatur) oder `3`
       (Segmentabweichungen). Hänge den JSON-Output an die Übergabeunterlagen, damit
-      Reviewer:innen die lokale Prüfung nachverfolgen können.【F:rpp/node/src/main.rs†L140-L227】【F:rpp/node/tests/snapshot_verify.rs†L1-L123】
+      Reviewer:innen die lokale Prüfung nachverfolgen können. Für Trockenübungen
+      steht das [Phase‑A Operator Lab](../training/phaseA_operator_lab.md) mit
+      Smoke-Fixtures bereit.【F:rpp/node/src/main.rs†L140-L227】【F:rpp/node/tests/snapshot_verify.rs†L1-L123】
 - [ ] **SHA256 im Freigabeprotokoll festgehalten.** Die Release Notes enthalten
       den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
       `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via
