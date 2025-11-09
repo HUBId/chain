@@ -183,9 +183,42 @@ if error:
     sys.exit(1)
 PY
           if [[ ${missing} -ne 0 ]]; then
-            echo "One or more dashboard exports are missing."
-            exit 1
-          fi
+          echo "One or more dashboard exports are missing."
+          exit 1
+        fi
+
+  cargo-audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cargo-audit
+      - name: Restore advisory database cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/advisory-db
+          key: ${{ runner.os }}-cargo-advisory-db-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-advisory-db-
+      - name: Install cargo-audit
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-audit
+      - name: Update advisory database
+        run: |
+          set -euo pipefail
+          cargo audit fetch
+      - name: Check for advisories
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings
 
   alerts-lint:
     name: Alert manifest lint
