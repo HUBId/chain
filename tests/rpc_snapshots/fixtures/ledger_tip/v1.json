@@ -1,0 +1,22 @@
+{
+  "version": "v1",
+  "request": {
+    "method": "GET",
+    "path": "/ledger/2",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "height": 2,
+      "commitments": {
+        "state_root": "state-root-2",
+        "utxo_root": "utxo-root-2"
+      },
+      "snapshot": {
+        "accounts": 120,
+        "witnesses": 16
+      }
+    }
+  }
+}

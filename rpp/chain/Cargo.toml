@@ -213,5 +213,9 @@ required-features = ["backend-rpp-stark"]
 name = "admission"
 path = "rpp/rpc/tests/admission.rs"
 
+[[test]]
+name = "rpc_snapshots"
+path = "../../tests/rpc_snapshots/mod.rs"
+
 [lints]
 workspace = true

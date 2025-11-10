@@ -1,0 +1,28 @@
+{
+  "version": "v1",
+  "request": {
+    "method": "GET",
+    "path": "/consensus/validators",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": [
+      {
+        "address": "validator-1",
+        "stake": 500,
+        "voting_power": 50
+      },
+      {
+        "address": "validator-2",
+        "stake": 400,
+        "voting_power": 40
+      },
+      {
+        "address": "validator-3",
+        "stake": 350,
+        "voting_power": 35
+      }
+    ]
+  }
+}
