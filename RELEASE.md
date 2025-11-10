@@ -106,25 +106,33 @@ Before publishing release artifacts, double-check the following guardrails:
    Plonky3 prover backends reject tampered VRF and quorum inputs. The release
    workflow aborts with a dedicated error if these negative tests fail so local
    runs should be clean before tagging.【F:.github/workflows/release.yml†L92-L103】
-3. Build the workspace via `scripts/build_release.sh` with
+3. Run `cargo xtask proof-version-guard --base origin/main` whenever proof
+   adapters, vectors, or verifier logic changed in this release. The guard
+   walks the `rpp/zk/`, `rpp/proofs/`, `prover/`, and `vendor/rpp-stark/`
+   directories (including golden vectors and tests) and fails if the
+   corresponding `PROOF_VERSION` constants are unchanged. Pass `--base <ref>` to
+   align with your release branch if it diverged from `origin/main`, and bump
+   the version in `vendor/rpp-stark/src/proof/types.rs` (plus any other
+   consumers) before publishing.【F:xtask/src/release.rs†L1-L208】
+4. Build the workspace via `scripts/build_release.sh` with
    `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
    (append `,simd` if required) so the manual invocation matches CI. The script
    immediately exits if any `backend-plonky3` alias or the mock prover is
    requested via flags or environment variables.【F:scripts/build_release.sh†L80-L162】
-4. Let the script run its automatic post-build verification. The bundled
+5. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
    features.【F:scripts/build_release.sh†L160-L200】【F:scripts/verify_release_features.sh†L1-L115】
-5. If you are experimenting with non-default builds, rerun `cargo build` with the
+6. If you are experimenting with non-default builds, rerun `cargo build` with the
    intended feature list and confirm that production profiles still refuse to
    compile when `backend-plonky3` is paired with `prod` or `validator`. The
    compile-time guard keeps the experimental stub out of production releases even
    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-6. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
+7. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
    `rpp-node hybrid --dry-run`) to see the runtime guard in action—startup fails
    immediately if the STWO backend was omitted, ensuring the published artifacts
    activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
-7. Capture the Plonky3 graduation evidence bundle: archive the
+8. Capture the Plonky3 graduation evidence bundle: archive the
    `target/simnet/consensus-quorum` artefacts produced by the stress harness,
    export the Grafana dashboard JSON described in the Plonky3 runbook, and note
    the backout steps (feature guard, cache eviction, and incident checklist)

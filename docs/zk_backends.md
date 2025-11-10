@@ -25,6 +25,22 @@
 - Byte-Layout ist in `vendor/rpp-stark/docs/PUBLIC_INPUTS_ENCODING.md` dokumentiert.
 - Der Adapter `rpp/chain/src/zk/rpp_adapter/public_inputs.rs` nutzt dieselbe Little-Endian-Kodierung und Hashing-Strategie.
 
+### Proof-ABI-Versionierung & Guardrails
+
+- `PROOF_VERSION` ist in `vendor/rpp-stark/src/proof/types.rs` hinterlegt und steuert den Serialisierungsvertrag für Header,
+  Transcript-Labels und Merkle-Bundles. Jede Änderung an `rpp/chain/src/zk/`, `rpp/proofs/`, den Prover-Backends unter
+  `prover/` (inklusive `params/`-Artefakten) oder den Golden-Vectors in `vendor/rpp-stark/` erfordert einen Versionssprung.
+- Auch testgetriebene Layout-Änderungen – z. B. angepasste Snapshots (`tests/snapshots/proof_*`), Fail-Matrix-Fakes oder neue
+  Interop-Vektoren – müssen mit einem `PROOF_VERSION`-Bump und dokumentiertem Proof-Metadata-Update gekoppelt werden.
+- Der Befehl `cargo xtask proof-version-guard --base origin/main` prüft diese Pfade und bricht ab, wenn die Konstanten nicht
+  angepasst wurden. Nutze `--base <ref>`, wenn der Release-/Feature-Branch von einem anderen Stand als `origin/main` abzweigt.
+  Der Guard liest beide Stände aus Git und gleicht die Werte aus `vendor/rpp-stark/src/proof/types.rs` und `firewood/src/proofs.rs`
+  miteinander ab.【F:xtask/src/release.rs†L1-L208】
+- Pull-Requests, die Proof- oder ZK-Module anfassen, laufen automatisch durch den CI-Job `proof-version-policy`, der denselben
+  Guard via `cargo xtask proof-version-guard` ausführt und bei Verstößen das Review blockiert.【F:.github/workflows/ci.yml†L1-L80】
+- Dokumentiere jeden Bump in den Release Notes (`docs/release_notes.md`) und aktualisiere bei Bedarf zusätzliche Artefakte wie
+  Telemetrie-Mappings oder Operator-Guides, damit Auditor:innen den ABI-Wechsel nachvollziehen können.
+
 ### Size-Gate-Mapping
 
 - Proof-Header speichern die Obergrenze in KiB; der Node überträgt `max_proof_size_bytes` an den Verifier, der das Mapping mittels `ensure_proof_size_consistency` verifiziert.
