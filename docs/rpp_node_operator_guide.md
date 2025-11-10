@@ -74,6 +74,11 @@ are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` t
 validate configuration without starting long-running tasks; the CLI exits after
 bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
 
+> **Networking reminder:** Whenever a runtime mode changes the node profile,
+> re-apply the [gossip tuning checklist](./networking.md#gossip-tuning-checklist)
+> to confirm that gossip bandwidth, allowlists, and replay windows align with
+> the new configuration before promoting the change to staging or production.
+
 ### Plonky3 backend (Phase 2)
 
 `backend-plonky3` aktiviert jetzt den produktiven Plonky3-Prover und -Verifier.

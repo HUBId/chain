@@ -23,3 +23,13 @@ all previously reserved sockets and configuration directories. Any config change
 that updates feature flags or backend policies should be applied by writing the
 new values to the node configuration file and restarting the service, matching
 exactly what the automated lifecycle tests cover.
+
+## Networking safeguards for on-call rotations
+
+Before returning a node to service, on-call engineers should verify that gossip
+and connection limits match the active playbook. Follow the [gossip tuning
+checklist](./networking.md#gossip-tuning-checklist) to validate bandwidth caps,
+RPC token buckets, and replay protection thresholds after each configuration
+change or rollback. The same checklist also documents the alerts and dashboards
+expected to fire when a limit is exceeded, making it the first stop during
+gossip-related incidents.【F:docs/networking.md†L1-L178】
