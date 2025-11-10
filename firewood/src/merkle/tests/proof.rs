@@ -1,10 +1,54 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Proof verification regression tests.
+//!
+//! These tests exercise the different failure paths returned by [`Proof::verify`]
+//! to ensure we don't accidentally remap verification errors.  Real-world
+//! consumers distinguish between incomplete proofs (missing branches), corrupted
+//! branches (unexpected hashes) and malformed values, so we keep a lightweight
+//! classification layer in the tests and assert that the mapping stays stable.
+//! In particular, a truncated inclusion proof must always surface as an
+//! "incomplete proof" failure so the caller can retry with a fresh proof.
+
 use firewood_storage::logger::debug;
 use firewood_storage::Preimage;
 
 use super::*;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProofVerificationKind {
+    IncompleteProof,
+    MissingBranch,
+    InvalidHash,
+    InvalidValue,
+    Other,
+}
+
+impl From<&ProofError> for ProofVerificationKind {
+    fn from(err: &ProofError) -> Self {
+        match err {
+            ProofError::ExpectedValue => Self::IncompleteProof,
+            ProofError::NodeNotInTrie => Self::MissingBranch,
+            ProofError::UnexpectedHash => Self::InvalidHash,
+            ProofError::UnexpectedValue | ProofError::ValueMismatch => Self::InvalidValue,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl From<ProofError> for ProofVerificationKind {
+    fn from(err: ProofError) -> Self {
+        Self::from(&err)
+    }
+}
+
+fn matches_missing_branch(kind: ProofVerificationKind) -> bool {
+    matches!(
+        kind,
+        ProofVerificationKind::MissingBranch | ProofVerificationKind::InvalidHash
+    )
+}
 
 #[test]
 fn range_proof_invalid_bounds() {
@@ -186,6 +230,8 @@ fn test_bad_proof() {
     let merkle = init_merkle(items.clone());
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
+    let mut classified_errors = Vec::new();
+
     for (key, value) in items {
         let proof = merkle.prove(key).unwrap();
         assert!(!proof.is_empty());
@@ -194,9 +240,19 @@ fn test_bad_proof() {
         let mut new_proof = proof.into_mutable();
         new_proof.pop();
 
-        // TODO: verify error result matches expected error
-        assert!(new_proof.verify(key, Some(value), &root_hash).is_err());
+        let err = new_proof
+            .verify(key, Some(value), &root_hash)
+            .expect_err("truncated proofs must fail verification");
+        let kind = ProofVerificationKind::from(err);
+        assert_eq!(kind, ProofVerificationKind::IncompleteProof, "{kind:?}");
+        classified_errors.push(kind);
     }
+
+    let expected = vec![ProofVerificationKind::IncompleteProof; classified_errors.len()];
+    assert_eq!(
+        classified_errors, expected,
+        "incomplete proofs must map consistently"
+    );
 }
 
 #[test]
@@ -275,11 +331,11 @@ fn proof_path_construction_and_corruption() {
     let err = corrupt
         .verify(key, Some(val.as_slice()), &root_hash)
         .unwrap_err();
-    // Node traversal should fail
-    assert!(matches!(
-        err,
-        crate::proof::ProofError::NodeNotInTrie | crate::proof::ProofError::UnexpectedHash
-    ));
+    let kind = ProofVerificationKind::from(err);
+    assert!(
+        matches_missing_branch(kind),
+        "expected missing branch style error, got {kind:?}"
+    );
 }
 
 #[test]
