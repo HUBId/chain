@@ -6,7 +6,14 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bytemuck::bytes_of;
+use firewood_storage::{
+    AreaIndex, CacheReadStrategy, FileBacked, MaybePersistedNode, NodeAllocator, NodeStoreHeader,
+};
 use rand::RngCore;
+use std::io::Read;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use storage_firewood::{
     kv::FirewoodKv,
     wal::{FileWal, WalError},
@@ -47,9 +54,13 @@ fn wal_recovery_handles_partial_record() {
 
     {
         let wal = FileWal::open(temp_dir.path()).expect("open wal");
-        let first_seq = wal.append(&expected_records[0]).expect("append first record");
+        let first_seq = wal
+            .append(&expected_records[0])
+            .expect("append first record");
         assert_eq!(first_seq, 0);
-        let second_seq = wal.append(&expected_records[1]).expect("append second record");
+        let second_seq = wal
+            .append(&expected_records[1])
+            .expect("append second record");
         assert_eq!(second_seq, 1);
         wal.sync().expect("sync wal after initial appends");
     }
@@ -93,9 +104,7 @@ fn wal_recovery_handles_partial_record() {
     wal_file
         .set_len(original_len)
         .expect("truncate wal to original length");
-    wal_file
-        .sync_data()
-        .expect("sync wal after truncation");
+    wal_file.sync_data().expect("sync wal after truncation");
 
     let wal = FileWal::open(temp_dir.path()).expect("reopen wal after truncation");
     let recovered = wal.replay_from(0).expect("replay wal after recovery");
@@ -126,9 +135,7 @@ fn run_helper() -> ! {
         .write_all(&pending_len.to_le_bytes())
         .expect("write pending record length");
     wal_file.flush().expect("flush partial record length");
-    wal_file
-        .sync_data()
-        .expect("sync wal after partial write");
+    wal_file.sync_data().expect("sync wal after partial write");
 
     {
         let mut stdout = std::io::stdout();
@@ -223,6 +230,85 @@ fn wal_replay_applies_committed_transaction_after_pause() {
     let kv = FirewoodKv::open(&data_dir).expect("reopen kv after commit");
     assert_eq!(kv.get(BASELINE_KEY), None);
     assert_eq!(kv.get(TX_KEY), Some(TX_VALUE.to_vec()));
+}
+
+#[test]
+fn wal_persists_split_free_blocks() {
+    fn flush_header(storage: &FileBacked, header: &NodeStoreHeader) {
+        let mut bytes = vec![0u8; NodeStoreHeader::SIZE as usize];
+        let header_bytes = bytes_of(header);
+        bytes[..header_bytes.len()].copy_from_slice(header_bytes);
+        storage.write(0, &bytes).expect("flush header");
+    }
+
+    fn read_header(storage: &FileBacked) -> NodeStoreHeader {
+        let mut raw = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
+        let mut reader = storage.stream_from(0).expect("stream header");
+        reader.read_exact(&mut raw).expect("read header");
+        *NodeStoreHeader::from_bytes(&raw)
+    }
+
+    let temp_dir = TempDir::new().expect("create nodestore dir");
+    let nodestore_path = temp_dir.path().join("nodestore.db");
+    let storage = Arc::new(
+        FileBacked::new(
+            nodestore_path,
+            NonZeroUsize::new(16).expect("node cache size"),
+            NonZeroUsize::new(16).expect("freelist cache size"),
+            true,
+            true,
+            CacheReadStrategy::WritesOnly,
+        )
+        .expect("create file backed storage"),
+    );
+
+    let mut header = NodeStoreHeader::new();
+    flush_header(storage.as_ref(), &header);
+
+    let mut allocator = NodeAllocator::new(storage.as_ref(), &mut header);
+    let large_payload = vec![0u8; 1800];
+    let (large_addr, large_index) = allocator
+        .allocate_node(large_payload.as_slice())
+        .expect("allocate large node");
+    let mut stored_large = vec![0u8; large_index.size() as usize];
+    stored_large[0] = large_index.get();
+    storage
+        .write(large_addr.get(), &stored_large)
+        .expect("write large node");
+
+    allocator
+        .delete_node(MaybePersistedNode::from(large_addr))
+        .expect("free large node");
+    drop(allocator);
+    flush_header(storage.as_ref(), &header);
+
+    header = read_header(storage.as_ref());
+    let mut allocator = NodeAllocator::new(storage.as_ref(), &mut header);
+    let small_payload = vec![0u8; 120];
+    let target_index = AreaIndex::from_size(120).expect("target index");
+    let (first_addr, first_index) = allocator
+        .allocate_node(small_payload.as_slice())
+        .expect("reuse block");
+    assert_eq!(first_addr, large_addr);
+    assert_eq!(first_index, target_index);
+    let mut stored_small = vec![0u8; first_index.size() as usize];
+    stored_small[0] = first_index.get();
+    storage
+        .write(first_addr.get(), &stored_small)
+        .expect("write small node");
+    drop(allocator);
+    flush_header(storage.as_ref(), &header);
+
+    header = read_header(storage.as_ref());
+    let mut allocator = NodeAllocator::new(storage.as_ref(), &mut header);
+    let (second_addr, second_index) = allocator
+        .allocate_node(small_payload.as_slice())
+        .expect("reuse persisted remainder");
+    assert_eq!(second_index, target_index);
+    let expected_second_addr = large_addr
+        .advance(target_index.size())
+        .expect("remainder address");
+    assert_eq!(second_addr, expected_second_addr);
 }
 
 fn wait_for_pause_file(path: &std::path::Path, timeout: Duration) {
