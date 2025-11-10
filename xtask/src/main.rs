@@ -197,12 +197,15 @@ fn run_observability_suite() -> Result<()> {
 }
 
 fn run_simnet_smoke() -> Result<()> {
-    let scenarios = [
+    let mut scenarios = vec![
         "tools/simnet/scenarios/ci_block_pipeline.ron",
         "tools/simnet/scenarios/ci_state_sync_guard.ron",
         "tools/simnet/scenarios/consensus_quorum_stress.ron",
         "tools/simnet/scenarios/snapshot_partition.ron",
     ];
+    if has_feature_flag("backend-rpp-stark") {
+        scenarios.push("tools/simnet/scenarios/consensus_reorg_stark.ron");
+    }
     for scenario in scenarios {
         let scenario_path = workspace_root().join(scenario);
         let stem = Path::new(scenario)
@@ -229,6 +232,17 @@ fn run_simnet_smoke() -> Result<()> {
         run_command(command, &context)?;
     }
     Ok(())
+}
+
+fn has_feature_flag(flag: &str) -> bool {
+    env::var("XTASK_FEATURES")
+        .ok()
+        .map(|value| {
+            value
+                .split(|ch: char| ch == ',' || ch.is_whitespace())
+                .any(|segment| segment.trim() == flag)
+        })
+        .unwrap_or(false)
 }
 
 fn run_snapshot_verifier_smoke() -> Result<()> {

@@ -201,6 +201,11 @@ name = "wallet_ui_contract"
 path = "rpp/rpc/tests/wallet_ui_contract.rs"
 
 [[test]]
+name = "reorg_stark"
+path = "../../tests/reorg_stark.rs"
+required-features = ["backend-rpp-stark"]
+
+[[test]]
 name = "admission"
 path = "rpp/rpc/tests/admission.rs"
 

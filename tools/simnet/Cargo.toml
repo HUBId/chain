@@ -10,6 +10,7 @@ description = "Simulation network orchestrator for RPP nodes and wallets"
 default = ["backend-plonky3"]
 backend-plonky3 = ["rpp-chain/backend-plonky3"]
 backend-plonky3-gpu = ["backend-plonky3", "rpp-chain/backend-plonky3-gpu"]
+backend-rpp-stark = ["rpp-chain/backend-rpp-stark"]
 
 [dependencies]
 anyhow = "1.0"
