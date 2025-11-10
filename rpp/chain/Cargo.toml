@@ -133,6 +133,7 @@ rcgen = "=0.12.1"
 serde = { version = "=1.0.225", features = ["derive"] }
 toml = "=0.9.6"
 serde_yaml = "=0.9.34"
+metrics-exporter-prometheus = "=0.17.2"
 
 [build-dependencies]
 rustc_version = "=0.4.1"
@@ -156,6 +157,10 @@ path = "../../tests/state_sync/proof_error_io.rs"
 [[test]]
 name = "root_corruption"
 path = "../../tests/state_sync/root_corruption.rs"
+
+[[test]]
+name = "storage"
+path = "../../tests/storage/mod.rs"
 
 [[test]]
 name = "p2p"

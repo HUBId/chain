@@ -104,6 +104,28 @@ jobs:
           set -euo pipefail
           cargo test --test observability_otlp_failures --features integration
 
+  storage-chaos:
+    name: Firewood WAL crash chaos drill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Firewood WAL crash recovery test
+        run: |
+          set -euo pipefail
+          cargo test --test storage -- --ignored wal_crash_recovery_handles_abrupt_termination
+
+      - name: Upload Firewood WAL chaos artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firewood-wal-chaos
+          path: target/compliance/chaos/firewood-wal
+
   mempool-status-probe:
     name: Mempool status probe
     runs-on: ubuntu-latest
