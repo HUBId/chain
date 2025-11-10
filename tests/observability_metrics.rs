@@ -9,3 +9,6 @@ mod vrf_metrics;
 
 #[path = "observability/snapshot_timetoke_metrics.rs"]
 mod snapshot_timetoke_metrics;
+
+#[path = "observability/telemetry_schema.rs"]
+mod telemetry_schema;
