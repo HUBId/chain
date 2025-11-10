@@ -9,6 +9,26 @@ explains how to cut a release of that workspace. Review the companion
 CI/CD gates, signing requirements, and advisory coordination expectations that
 apply to every tagged release.
 
+## Documentation review checklist
+
+Every release must confirm the core documentation touchpoints are up to date
+before artifacts are published. At a minimum:
+
+1. Review the [`rpp-node` operator guide](docs/rpp_node_operator_guide.md) and
+   associated deployment notes to ensure CLI flags, runtime modes, and
+   operational caveats match the release contents.
+2. Walk through the security runbooks under [`docs/runbooks/`](docs/runbooks/)
+   (incident response, snapshot recovery, Plonky3 rollout, pruning, etc.) and
+   update mitigations, alert routing, and rollback procedures for any changes
+   introduced this cycle.
+3. Revalidate the admission and RPC policy reference
+   ([`docs/network/admission.md`](docs/network/admission.md)) to capture new
+   endpoints, authentication rules, rate limits, or privacy guarantees required
+   by the release. Coordinate with policy approvers when changes are needed.
+
+Capture the sign-off in the release tracking doc or PR description so the
+review history is discoverable when tags are audited.
+
 ## Automated release pipeline
 
 The release workflow defined in
