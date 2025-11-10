@@ -41,3 +41,7 @@ from the block state observed by the runtime. The regression tests in
 `rpp/proofs/plonky3/tests.rs` keep the metadata guarantees honest by mutating
 VRF bundles and quorum roots and asserting that the verifiers reject the forged
 payloads.
+
+> **Operations link:** Alert thresholds and on-call response guidance for the
+> RPP-STARK verifier are documented in
+> [operations/zk_backends.md](../operations/zk_backends.md).
