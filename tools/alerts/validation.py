@@ -1,0 +1,1013 @@
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import math
+import threading
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
+
+import socketserver
+
+
+@dataclass(frozen=True)
+class Sample:
+    """A single metric sample at a timestamp."""
+
+    timestamp: float
+    value: float
+
+
+class MetricSeries:
+    """Chronological series of metric samples."""
+
+    def __init__(self, samples: Sequence[Sample]):
+        self._samples: List[Sample] = sorted(samples, key=lambda sample: sample.timestamp)
+
+    @property
+    def samples(self) -> Sequence[Sample]:
+        return self._samples
+
+    def latest_at(self, timestamp: float) -> Optional[Sample]:
+        """Return the most recent sample at or before ``timestamp``."""
+
+        for sample in reversed(self._samples):
+            if sample.timestamp <= timestamp:
+                return sample
+        return None
+
+    def delta_over_window(self, timestamp: float, window: float) -> Optional[float]:
+        end = self.latest_at(timestamp)
+        if end is None:
+            return None
+        start = self.latest_at(timestamp - window)
+        if start is None:
+            return None
+        return end.value - start.value
+
+    def rate_over_window(self, timestamp: float, window: float) -> Optional[float]:
+        delta = self.delta_over_window(timestamp, window)
+        if delta is None:
+            return None
+        if window <= 0:
+            return None
+        return delta / window
+
+    def value_at(self, timestamp: float) -> Optional[float]:
+        sample = self.latest_at(timestamp)
+        if sample is None:
+            return None
+        return sample.value
+
+
+@dataclass(frozen=True)
+class MetricDefinition:
+    metric: str
+    labels: Dict[str, str]
+    samples: Sequence[Sample]
+
+
+def _series_key(metric: str, labels: Optional[Dict[str, str]]) -> str:
+    if not labels:
+        return metric
+    parts = [f"{key}={value}" for key, value in sorted(labels.items())]
+    return f"{metric}|" + ",".join(parts)
+
+
+class MetricStore:
+    """Collection of metric series keyed by metric name and labels."""
+
+    def __init__(self, series: Dict[str, MetricSeries]):
+        self._series = series
+
+    @classmethod
+    def from_definitions(cls, definitions: Sequence[MetricDefinition]) -> "MetricStore":
+        series = {
+            _series_key(defn.metric, defn.labels): MetricSeries(defn.samples)
+            for defn in definitions
+        }
+        return cls(series)
+
+    def series(self, metric: str, labels: Optional[Dict[str, str]] = None) -> Optional[MetricSeries]:
+        return self._series.get(_series_key(metric, labels))
+
+    def all_timestamps(self) -> Iterator[float]:
+        seen: Set[float] = set()
+        for metric_series in self._series.values():
+            for sample in metric_series.samples:
+                if sample.timestamp not in seen:
+                    seen.add(sample.timestamp)
+                    yield sample.timestamp
+
+
+@dataclass
+class AlertComputation:
+    starts_at: float
+    value: Optional[float] = None
+    details: Optional[str] = None
+
+
+@dataclass
+class AlertEvent:
+    name: str
+    severity: str
+    service: str
+    labels: Dict[str, str]
+    annotations: Dict[str, str]
+    starts_at: float
+    value: Optional[float] = None
+
+
+class AlertRule:
+    def __init__(
+        self,
+        name: str,
+        severity: str,
+        service: str,
+        summary: str,
+        description: str,
+        runbook_url: str,
+        evaluator: Callable[[MetricStore], Optional[AlertComputation]],
+    ) -> None:
+        self.name = name
+        self.severity = severity
+        self.service = service
+        self.summary = summary
+        self.description = description
+        self.runbook_url = runbook_url
+        self._evaluator = evaluator
+
+    def evaluate(self, metrics: MetricStore) -> Optional[AlertEvent]:
+        computation = self._evaluator(metrics)
+        if computation is None:
+            return None
+        labels = {
+            "alertname": self.name,
+            "severity": self.severity,
+            "service": self.service,
+        }
+        annotations = {
+            "summary": self.summary,
+            "description": self.description,
+            "runbook_url": self.runbook_url,
+        }
+        if computation.value is not None:
+            annotations["validation.value"] = f"{computation.value:.6f}"
+        if computation.details:
+            annotations["validation.details"] = computation.details
+        return AlertEvent(
+            name=self.name,
+            severity=self.severity,
+            service=self.service,
+            labels=labels,
+            annotations=annotations,
+            starts_at=computation.starts_at,
+            value=computation.value,
+        )
+
+
+@dataclass
+class ValidationCase:
+    name: str
+    store: MetricStore
+    expected_alerts: Set[str]
+
+
+@dataclass
+class ValidationResult:
+    case: ValidationCase
+    fired_events: List[AlertEvent]
+    webhook_payloads: List[Dict[str, object]]
+
+
+class AlertValidationError(RuntimeError):
+    def __init__(
+        self,
+        case_name: str,
+        missing: Sequence[str],
+        unexpected: Sequence[str],
+        webhook_alerts: Sequence[str],
+    ) -> None:
+        message_parts: List[str] = []
+        if missing:
+            message_parts.append(f"missing alerts: {', '.join(missing)}")
+        if unexpected:
+            message_parts.append(f"unexpected alerts: {', '.join(unexpected)}")
+        if webhook_alerts:
+            message_parts.append(f"webhook alerts observed: {', '.join(webhook_alerts)}")
+        message = f"validation case '{case_name}' failed"
+        if message_parts:
+            message = f"{message} ({'; '.join(message_parts)})"
+        super().__init__(message)
+        self.case_name = case_name
+        self.missing = list(missing)
+        self.unexpected = list(unexpected)
+        self.webhook_alerts = list(webhook_alerts)
+
+
+class AlertValidator:
+    def __init__(self, rules: Sequence[AlertRule]):
+        self._rules = list(rules)
+
+    def run(self, cases: Sequence[ValidationCase], webhook: "RecordedWebhookClient") -> List[ValidationResult]:
+        results: List[ValidationResult] = []
+        for case in cases:
+            fired_events: List[AlertEvent] = []
+            for rule in self._rules:
+                event = rule.evaluate(case.store)
+                if event is not None:
+                    webhook.send(event)
+                    fired_events.append(event)
+            payloads = webhook.consume_events()
+            payload_alerts: List[str] = []
+            for payload in payloads:
+                alerts = payload.get("alerts")
+                if not isinstance(alerts, list):
+                    continue
+                for alert in alerts:
+                    if isinstance(alert, dict):
+                        name = alert.get("labels", {}).get("alertname")
+                        if isinstance(name, str):
+                            payload_alerts.append(name)
+            fired_names = {event.name for event in fired_events}
+            expected_names = set(case.expected_alerts)
+            missing = sorted(expected_names - fired_names)
+            unexpected = sorted(fired_names - expected_names)
+            payload_set = set(payload_alerts)
+            if missing or unexpected or payload_set != fired_names or len(payload_alerts) != len(fired_events):
+                raise AlertValidationError(case.name, missing, unexpected, payload_alerts)
+            results.append(ValidationResult(case=case, fired_events=fired_events, webhook_payloads=payloads))
+        return results
+
+
+class _ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
+class AlertWebhookServer:
+    """Simple HTTP server that records webhook payloads."""
+
+    def __init__(self) -> None:
+        self._events: List[Dict[str, object]] = []
+        self._lock = threading.Lock()
+        self._server: Optional[_ThreadedHTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+        self.url: Optional[str] = None
+
+    def __enter__(self) -> "AlertWebhookServer":
+        handler = self._make_handler()
+        self._server = _ThreadedHTTPServer(("127.0.0.1", 0), handler)
+        host, port = self._server.server_address
+        self.url = f"http://{host}:{port}/"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def _make_handler(self) -> Callable[[BaseHTTPRequestHandler, bytes], None]:
+        server = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except json.JSONDecodeError:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                with server._lock:
+                    server._events.append(payload)
+                self.send_response(HTTPStatus.OK)
+                self.end_headers()
+
+            def log_message(self, format: str, *args) -> None:  # noqa: A003
+                return
+
+        return Handler
+
+    def consume_events(self) -> List[Dict[str, object]]:
+        with self._lock:
+            events = list(self._events)
+            self._events.clear()
+        return events
+
+
+class RecordedWebhookClient:
+    """HTTP webhook sender that can read back recorded payloads."""
+
+    def __init__(self, server: AlertWebhookServer):
+        if server.url is None:
+            raise RuntimeError("AlertWebhookServer must be entered before creating the client")
+        self._server = server
+        self._url = server.url
+
+    def send(self, event: AlertEvent) -> None:
+        payload = self._build_payload(event)
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self._url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                # Drain the response to ensure the connection is closed promptly.
+                response.read()
+        except urllib.error.URLError as exc:  # pragma: no cover - network issues raise URLError
+            raise RuntimeError(f"failed to deliver webhook payload to {self._url}: {exc}") from exc
+
+    def consume_events(self) -> List[Dict[str, object]]:
+        return self._server.consume_events()
+
+    @staticmethod
+    def _build_payload(event: AlertEvent) -> Dict[str, object]:
+        starts_at = _dt.datetime.utcfromtimestamp(event.starts_at).isoformat() + "Z"
+        payload = {
+            "receiver": "alert-validation",
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": event.labels,
+                    "annotations": event.annotations,
+                    "startsAt": starts_at,
+                    "endsAt": starts_at,
+                    "generatorURL": "http://localhost/alert-validation",
+                }
+            ],
+            "groupLabels": {"service": event.service},
+            "commonLabels": event.labels,
+            "commonAnnotations": event.annotations,
+            "externalURL": "http://localhost/alert-validation",
+        }
+        if event.value is not None:
+            payload["alerts"][0]["annotations"]["observed_value"] = f"{event.value:.6f}"
+        return payload
+
+
+def _histogram_quantile(quantile: float, buckets: Sequence[Tuple[str, float]]) -> float:
+    parsed: List[Tuple[float, float]] = []
+    for le, rate in buckets:
+        if le == "+Inf":
+            bound = math.inf
+        else:
+            bound = float(le)
+        parsed.append((bound, rate))
+    parsed.sort(key=lambda item: item[0])
+    if not parsed:
+        return 0.0
+    total = parsed[-1][1]
+    if total <= 0:
+        return 0.0
+    target = quantile * total
+    previous_bound = 0.0
+    previous_cumulative = 0.0
+    for bound, cumulative in parsed:
+        if cumulative >= target:
+            if math.isinf(bound):
+                return previous_bound
+            bucket_total = cumulative - previous_cumulative
+            if bucket_total <= 0:
+                return bound
+            fraction = (target - previous_cumulative) / bucket_total
+            fraction = max(0.0, min(1.0, fraction))
+            return previous_bound + (bound - previous_bound) * fraction
+        previous_bound = bound
+        previous_cumulative = cumulative
+    return parsed[-1][0]
+
+
+def _sustained(records: Sequence[Tuple[float, bool]], duration: float) -> Tuple[bool, Optional[float]]:
+    if duration <= 0:
+        for timestamp, flag in records:
+            if flag:
+                return True, timestamp
+        return False, None
+    start: Optional[float] = None
+    for timestamp, flag in records:
+        if flag:
+            if start is None:
+                start = timestamp
+            if timestamp - start >= duration:
+                return True, start
+        else:
+            start = None
+    return False, None
+
+
+def _evaluate_consensus_vrf_slow(store: MetricStore) -> Optional[AlertComputation]:
+    bounds = ["10", "20", "50", "100", "+Inf"]
+    bucket_series: List[Tuple[str, MetricSeries]] = []
+    for bound in bounds:
+        series = store.series("consensus_vrf_verification_time_ms_bucket", {"result": "success", "le": bound})
+        if series is None:
+            return None
+        bucket_series.append((bound, series))
+    timestamps: List[float] = sorted({sample.timestamp for _, series in bucket_series for sample in series.samples})
+    quantiles: List[Tuple[float, float]] = []
+    evaluations: List[Tuple[float, bool]] = []
+    for timestamp in timestamps:
+        rates: List[Tuple[str, float]] = []
+        valid = True
+        for bound, series in bucket_series:
+            rate = series.rate_over_window(timestamp, 300.0)
+            if rate is None:
+                valid = False
+                break
+            rates.append((bound, rate))
+        if not valid:
+            continue
+        quantile = _histogram_quantile(0.95, rates)
+        quantiles.append((timestamp, quantile))
+        evaluations.append((timestamp, quantile > 50.0))
+    fired, start_ts = _sustained(evaluations, 300.0)
+    if not fired or start_ts is None:
+        return None
+    observed = max((value for ts, value in quantiles if ts >= start_ts), default=None)
+    detail = None
+    if observed is not None:
+        detail = f"p95 latency {observed:.2f} ms"
+    return AlertComputation(starts_at=start_ts, value=observed, details=detail)
+
+
+def _evaluate_consensus_vrf_failure_burst(store: MetricStore) -> Optional[AlertComputation]:
+    series = store.series("consensus_vrf_verification_time_ms_count", {"result": "failure"})
+    if series is None:
+        return None
+    timestamps = [sample.timestamp for sample in series.samples]
+    observed_ts: Optional[float] = None
+    observed_delta: Optional[float] = None
+    for timestamp in timestamps:
+        delta = series.delta_over_window(timestamp, 300.0)
+        if delta is not None and delta > 2.0:
+            observed_ts = timestamp
+            observed_delta = delta
+    if observed_ts is None:
+        return None
+    detail = None
+    if observed_delta is not None:
+        detail = f"failures in 5m window: {observed_delta:.0f}"
+    return AlertComputation(starts_at=observed_ts, value=observed_delta, details=detail)
+
+
+def _evaluate_consensus_quorum_failure(store: MetricStore) -> Optional[AlertComputation]:
+    series = store.series("consensus_quorum_verifications_total", {"result": "failure"})
+    if series is None:
+        return None
+    timestamps = [sample.timestamp for sample in series.samples]
+    observed_ts: Optional[float] = None
+    for timestamp in timestamps:
+        delta = series.delta_over_window(timestamp, 120.0)
+        if delta is not None and delta > 0:
+            observed_ts = timestamp
+            break
+    if observed_ts is None:
+        return None
+    return AlertComputation(starts_at=observed_ts, value=1.0, details="quorum verification failure detected")
+
+
+def _evaluate_snapshot_lag(store: MetricStore, threshold: float, duration: float) -> Optional[AlertComputation]:
+    series = store.series("snapshot_stream_lag_seconds", {})
+    if series is None:
+        return None
+    evaluations: List[Tuple[float, bool]] = []
+    values: List[Tuple[float, float]] = []
+    for sample in series.samples:
+        evaluations.append((sample.timestamp, sample.value > threshold))
+        values.append((sample.timestamp, sample.value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    observed = max((value for ts, value in values if ts >= start_ts), default=None)
+    detail = None
+    if observed is not None:
+        detail = f"lag {observed:.2f} seconds"
+    return AlertComputation(starts_at=start_ts, value=observed, details=detail)
+
+
+def _evaluate_snapshot_zero_throughput(store: MetricStore, rate_window: float, duration: float) -> Optional[AlertComputation]:
+    series = store.series("snapshot_bytes_sent_total", {"kind": "chunk"})
+    if series is None:
+        return None
+    timestamps = [sample.timestamp for sample in series.samples]
+    evaluations: List[Tuple[float, bool]] = []
+    rates: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        activity = series.delta_over_window(timestamp, 1800.0)
+        rate = series.rate_over_window(timestamp, rate_window)
+        if activity is None or rate is None:
+            continue
+        condition = activity > 0 and rate < 1.0
+        evaluations.append((timestamp, condition))
+        rates.append((timestamp, rate))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    observed_rate = min((rate for ts, rate in rates if ts >= start_ts), default=None)
+    detail = None
+    if observed_rate is not None:
+        detail = f"throughput rate {observed_rate:.4f} bytes/s"
+    return AlertComputation(starts_at=start_ts, value=observed_rate, details=detail)
+
+
+def _evaluate_snapshot_chunk_failures(
+    store: MetricStore,
+    outbound_threshold: float,
+    inbound_threshold: float,
+    duration: float,
+) -> Optional[AlertComputation]:
+    outbound = store.series("light_client_chunk_failures_total", {"direction": "outbound", "kind": "chunk"})
+    inbound = store.series("light_client_chunk_failures_total", {"direction": "inbound", "kind": "chunk"})
+    if outbound is None and inbound is None:
+        return None
+    timestamps: Set[float] = set()
+    if outbound is not None:
+        timestamps.update(sample.timestamp for sample in outbound.samples)
+    if inbound is not None:
+        timestamps.update(sample.timestamp for sample in inbound.samples)
+    evaluations: List[Tuple[float, bool]] = []
+    observed_values: List[Tuple[float, float]] = []
+    for timestamp in sorted(timestamps):
+        outbound_delta = outbound.delta_over_window(timestamp, 600.0) if outbound is not None else None
+        inbound_delta = inbound.delta_over_window(timestamp, 600.0) if inbound is not None else None
+        triggered = False
+        value = 0.0
+        if outbound_delta is not None and outbound_delta > outbound_threshold:
+            triggered = True
+            value = max(value, outbound_delta)
+        if inbound_delta is not None and inbound_delta > inbound_threshold:
+            triggered = True
+            value = max(value, inbound_delta)
+        evaluations.append((timestamp, triggered))
+        if triggered:
+            observed_values.append((timestamp, value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    observed = max((value for ts, value in observed_values if ts >= start_ts), default=None)
+    detail = None
+    if observed is not None:
+        detail = f"chunk failures in 10m window: {observed:.0f}"
+    return AlertComputation(starts_at=start_ts, value=observed, details=detail)
+
+
+def default_alert_rules() -> List[AlertRule]:
+    return [
+        AlertRule(
+            name="ConsensusVRFSlow",
+            severity="warning",
+            service="consensus",
+            summary="VRF verification p95 latency exceeded 50 ms",
+            description=(
+                "VRF verification latency is above the documented 50 ms warning threshold for five "
+                "consecutive minutes. Investigate validator CPU saturation, GPU misconfiguration, "
+                "or unexpected workload spikes before the degradation impacts quorum formation."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook",
+            evaluator=_evaluate_consensus_vrf_slow,
+        ),
+        AlertRule(
+            name="ConsensusVRFFailureBurst",
+            severity="page",
+            service="consensus",
+            summary="Multiple VRF verification failures detected",
+            description=(
+                "More than two VRF verifications failed within the last five minutes. Review node logs "
+                "for `invalid VRF proof` markers, confirm the validator key material, and execute the "
+                "Simnet regression run to rule out regressions."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook",
+            evaluator=_evaluate_consensus_vrf_failure_burst,
+        ),
+        AlertRule(
+            name="ConsensusQuorumVerificationFailure",
+            severity="page",
+            service="consensus",
+            summary="Consensus quorum verification failed",
+            description=(
+                "A validator rejected a tampered or inconsistent consensus certificate. Capture the "
+                "failure reason label, inspect node logs for rejection details, and follow the Phase-2 "
+                "runbook before re-enabling block production."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook",
+            evaluator=_evaluate_consensus_quorum_failure,
+        ),
+        AlertRule(
+            name="SnapshotStreamLagWarning",
+            severity="warning",
+            service="snapshots",
+            summary="Snapshot stream lag exceeded 30 seconds",
+            description=(
+                "The snapshot stream lag has been above the 30 second warning threshold for five "
+                "minutes. Inspect producer bandwidth, consumer back-pressure, and gossip health to "
+                "keep snapshot replay within the target SLO."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_lag(store, threshold=30.0, duration=300.0),
+        ),
+        AlertRule(
+            name="SnapshotStreamLagCritical",
+            severity="critical",
+            service="snapshots",
+            summary="Snapshot stream lag exceeded 120 seconds",
+            description=(
+                "Snapshot lag has breached the 120 second critical threshold. Escalate to the on-call "
+                "snapshot engineer and execute the failover playbook to restore healthy consumers."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_lag(store, threshold=120.0, duration=120.0),
+        ),
+        AlertRule(
+            name="SnapshotStreamZeroThroughputWarning",
+            severity="warning",
+            service="snapshots",
+            summary="Snapshot chunk throughput dropped to zero",
+            description=(
+                "Snapshot chunk throughput has been effectively zero for ten minutes despite recent "
+                "activity. Verify active sessions via the /p2p/snapshots RPC and confirm outbound "
+                "bandwidth limits."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_zero_throughput(store, rate_window=300.0, duration=600.0),
+        ),
+        AlertRule(
+            name="SnapshotStreamZeroThroughputCritical",
+            severity="critical",
+            service="snapshots",
+            summary="Snapshot chunk throughput stalled for 20 minutes",
+            description=(
+                "Snapshot chunk throughput has remained at zero for twenty minutes while sessions were "
+                "recently active. Page the snapshot on-call and follow the failover runbook to restart "
+                "producers or redirect consumers."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_zero_throughput(store, rate_window=900.0, duration=1200.0),
+        ),
+        AlertRule(
+            name="SnapshotChunkFailureSpikeWarning",
+            severity="warning",
+            service="snapshots",
+            summary="Snapshot chunk failures exceeded warning threshold",
+            description=(
+                "Snapshot chunk retries or decode failures crossed the warning threshold. Inspect peer "
+                "logs for repeated `chunk transfer failed` entries and rebalance consumers if needed."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_chunk_failures(store, 3.0, 1.0, 0.0),
+        ),
+        AlertRule(
+            name="SnapshotChunkFailureSpikeCritical",
+            severity="critical",
+            service="snapshots",
+            summary="Snapshot chunk failures exceeded critical threshold",
+            description=(
+                "Snapshot chunk failure volume is spiking and breaching the critical ceiling. Escalate "
+                "to the on-call to investigate peer health, storage backing services, or snapshot "
+                "corruption before validators fall behind."
+            ),
+            runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md",
+            evaluator=lambda store: _evaluate_snapshot_chunk_failures(store, 6.0, 3.0, 300.0),
+        ),
+    ]
+
+
+def _build_samples(pairs: Sequence[Tuple[float, float]]) -> List[Sample]:
+    return [Sample(timestamp=ts, value=value) for ts, value in pairs]
+
+
+def _build_vrf_bucket_definitions(increment_per_minute: Dict[str, float], minutes: int) -> List[MetricDefinition]:
+    definitions: List[MetricDefinition] = []
+    for bound, increment in increment_per_minute.items():
+        samples = []
+        for minute in range(minutes + 1):
+            timestamp = minute * 60.0
+            samples.append(Sample(timestamp=timestamp, value=increment * minute))
+        definitions.append(
+            MetricDefinition(
+                metric="consensus_vrf_verification_time_ms_bucket",
+                labels={"result": "success", "le": bound},
+                samples=samples,
+            )
+        )
+    return definitions
+
+
+def build_consensus_anomaly_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.extend(
+        _build_vrf_bucket_definitions(
+            {
+                "10": 40.0,
+                "20": 80.0,
+                "50": 180.0,
+                "100": 198.0,
+                "+Inf": 200.0,
+            },
+            minutes=10,
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus_vrf_verification_time_ms_count",
+            labels={"result": "failure"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (60.0, 0.0),
+                    (120.0, 1.0),
+                    (180.0, 2.0),
+                    (240.0, 3.0),
+                    (300.0, 4.0),
+                    (360.0, 5.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus_quorum_verifications_total",
+            labels={"result": "failure"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (60.0, 0.0),
+                    (120.0, 0.0),
+                    (180.0, 1.0),
+                    (240.0, 1.0),
+                    (300.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_consensus_baseline_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.extend(
+        _build_vrf_bucket_definitions(
+            {
+                "10": 160.0,
+                "20": 190.0,
+                "50": 200.0,
+                "100": 200.0,
+                "+Inf": 200.0,
+            },
+            minutes=10,
+        )
+    )
+    zero_series = _build_samples(
+        [
+            (0.0, 0.0),
+            (60.0, 0.0),
+            (120.0, 0.0),
+            (180.0, 0.0),
+            (240.0, 0.0),
+            (300.0, 0.0),
+            (360.0, 0.0),
+        ]
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus_vrf_verification_time_ms_count",
+            labels={"result": "failure"},
+            samples=zero_series,
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus_quorum_verifications_total",
+            labels={"result": "failure"},
+            samples=zero_series,
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_snapshot_anomaly_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_stream_lag_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10.0),
+                    (60.0, 15.0),
+                    (120.0, 20.0),
+                    (180.0, 25.0),
+                    (240.0, 30.0),
+                    (300.0, 80.0),
+                    (360.0, 90.0),
+                    (420.0, 130.0),
+                    (480.0, 140.0),
+                    (540.0, 150.0),
+                    (600.0, 160.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_bytes_sent_total",
+            labels={"kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 1000.0),
+                    (300.0, 1100.0),
+                    (600.0, 1200.0),
+                    (900.0, 1400.0),
+                    (1200.0, 1600.0),
+                    (1500.0, 1601.0),
+                    (1800.0, 1602.0),
+                    (2100.0, 1602.0),
+                    (2400.0, 1602.0),
+                    (2700.0, 1602.0),
+                    (3000.0, 1602.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="light_client_chunk_failures_total",
+            labels={"direction": "outbound", "kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (300.0, 1.0),
+                    (600.0, 2.0),
+                    (900.0, 3.0),
+                    (1200.0, 4.0),
+                    (1500.0, 6.0),
+                    (1800.0, 8.0),
+                    (2100.0, 10.0),
+                    (2400.0, 13.0),
+                    (2700.0, 17.0),
+                    (3000.0, 21.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="light_client_chunk_failures_total",
+            labels={"direction": "inbound", "kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (300.0, 0.0),
+                    (600.0, 1.0),
+                    (900.0, 1.0),
+                    (1200.0, 1.0),
+                    (1500.0, 2.0),
+                    (1800.0, 3.0),
+                    (2100.0, 4.0),
+                    (2400.0, 4.0),
+                    (2700.0, 5.0),
+                    (3000.0, 6.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_snapshot_baseline_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_stream_lag_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 5.0),
+                    (60.0, 7.0),
+                    (120.0, 10.0),
+                    (180.0, 12.0),
+                    (240.0, 15.0),
+                    (300.0, 18.0),
+                    (360.0, 20.0),
+                    (420.0, 22.0),
+                    (480.0, 24.0),
+                    (540.0, 25.0),
+                    (600.0, 26.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_bytes_sent_total",
+            labels={"kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 1000.0),
+                    (300.0, 1360.0),
+                    (600.0, 1720.0),
+                    (900.0, 2080.0),
+                    (1200.0, 2440.0),
+                    (1500.0, 2800.0),
+                    (1800.0, 3160.0),
+                    (2100.0, 3520.0),
+                    (2400.0, 3880.0),
+                    (2700.0, 4240.0),
+                    (3000.0, 4600.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="light_client_chunk_failures_total",
+            labels={"direction": "outbound", "kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (300.0, 0.0),
+                    (600.0, 0.0),
+                    (900.0, 1.0),
+                    (1200.0, 1.0),
+                    (1500.0, 1.0),
+                    (1800.0, 1.0),
+                    (2100.0, 2.0),
+                    (2400.0, 2.0),
+                    (2700.0, 2.0),
+                    (3000.0, 3.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="light_client_chunk_failures_total",
+            labels={"direction": "inbound", "kind": "chunk"},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (300.0, 0.0),
+                    (600.0, 0.0),
+                    (900.0, 0.0),
+                    (1200.0, 0.0),
+                    (1500.0, 0.0),
+                    (1800.0, 0.0),
+                    (2100.0, 0.0),
+                    (2400.0, 0.0),
+                    (2700.0, 0.0),
+                    (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def default_validation_cases() -> List[ValidationCase]:
+    return [
+        ValidationCase(
+            name="consensus-anomaly",
+            store=build_consensus_anomaly_store(),
+            expected_alerts={
+                "ConsensusVRFSlow",
+                "ConsensusVRFFailureBurst",
+                "ConsensusQuorumVerificationFailure",
+            },
+        ),
+        ValidationCase(
+            name="snapshot-anomaly",
+            store=build_snapshot_anomaly_store(),
+            expected_alerts={
+                "SnapshotStreamLagWarning",
+                "SnapshotStreamLagCritical",
+                "SnapshotStreamZeroThroughputWarning",
+                "SnapshotStreamZeroThroughputCritical",
+                "SnapshotChunkFailureSpikeWarning",
+                "SnapshotChunkFailureSpikeCritical",
+            },
+        ),
+        ValidationCase(
+            name="baseline",
+            store=_merge_stores(build_consensus_baseline_store(), build_snapshot_baseline_store()),
+            expected_alerts=set(),
+        ),
+    ]
+
+
+def _merge_stores(*stores: MetricStore) -> MetricStore:
+    series: Dict[str, MetricSeries] = {}
+    for store in stores:
+        series.update(store._series)  # type: ignore[attr-defined]
+    return MetricStore(series)
