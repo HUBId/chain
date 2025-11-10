@@ -20,8 +20,9 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    noop_storage_metrics, Committed, FileIoError, LinearAddress, MaybePersistedNode, MemStore,
-    MutableProposal, NodeReader, NodeStore, RootReader, SharedNode, TrieHash,
+    noop_storage_metrics, BranchNode, Committed, FileIoError, LeafNode, LinearAddress,
+    MaybePersistedNode, MemStore, MutableProposal, NodeReader, NodeStore, PathIterItem, RootReader,
+    SharedNode, TrieHash, TrieReader,
 };
 
 // Returns n random key-value pairs.
@@ -197,6 +198,81 @@ fn increase_key(key: &[u8; 32]) -> [u8; 32] {
         }
     }
     new_key
+}
+
+fn key_nibbles(key: &[u8]) -> Vec<u8> {
+    match BranchNode::MAX_CHILDREN {
+        16 => key
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0x0F])
+            .collect(),
+        256 => key.to_vec(),
+        other => panic!("unsupported branch factor {other}"),
+    }
+}
+
+fn expect_branch(item: &PathIterItem) -> &BranchNode {
+    item.node
+        .as_branch()
+        .expect("expected path iterator item to reference a branch node")
+}
+
+fn expect_leaf(item: &PathIterItem) -> &LeafNode {
+    item.node
+        .as_leaf()
+        .expect("expected path iterator item to reference a leaf node")
+}
+
+fn assert_branch_child_is_leaf<T: TrieReader>(
+    merkle: &Merkle<T>,
+    parent_key: &[u8],
+    child_key: &[u8],
+) {
+    let parent_nibbles = key_nibbles(parent_key);
+    let child_nibbles = key_nibbles(child_key);
+
+    assert!(
+        child_nibbles.starts_with(&parent_nibbles),
+        "child key {child_key:?} does not extend parent key {parent_key:?}"
+    );
+
+    let expected_child_nibble = child_nibbles
+        .get(parent_nibbles.len())
+        .copied()
+        .expect("child key must extend parent key by at least one nibble");
+
+    let mut iter = merkle
+        .path_iter(child_key)
+        .expect("failed to iterate path for child key");
+
+    while let Some(item) = iter.next() {
+        let item = item.expect("failed to read node while iterating path");
+        if item.key_nibbles.as_ref() != parent_nibbles.as_slice() {
+            continue;
+        }
+
+        expect_branch(&item);
+        assert_eq!(
+            item.next_nibble,
+            Some(expected_child_nibble),
+            "branch should direct traversal to child nibble {expected_child_nibble:#x}"
+        );
+
+        let child_item = iter
+            .next()
+            .expect("branch child missing from path iterator")
+            .expect("failed to read child node while iterating path");
+
+        assert_eq!(
+            child_item.key_nibbles.as_ref(),
+            child_nibbles.as_slice(),
+            "child node key did not match expected key"
+        );
+        expect_leaf(&child_item);
+        return;
+    }
+
+    panic!("branch for key {parent_key:?} not encountered in path to child key {child_key:?}");
 }
 
 fn decrease_key(key: &[u8; 32]) -> [u8; 32] {
@@ -584,8 +660,6 @@ fn test_insert_leaf_prefix() {
 #[test]
 fn test_insert_sibling_leaf() {
     // The node at key is a branch node with children key_2 and key_3.
-    // TODO assert in this test that key is the parent of key_2 and key_3.
-    // i.e. the node types are branch, leaf, leaf respectively.
     let key = vec![0xff];
     let val = [1];
     let key_2 = vec![0xff, 0x00];
@@ -607,6 +681,36 @@ fn test_insert_sibling_leaf() {
 
     let got = merkle.get_value(&key_3).unwrap().unwrap();
     assert_eq!(*got, val_3);
+
+    let path: Vec<_> = merkle
+        .path_iter(&key)
+        .expect("failed to iterate path for branch key")
+        .map(|item| item.expect("failed to load node while iterating path"))
+        .collect();
+
+    assert!(!path.is_empty(), "path iterator did not yield branch node");
+
+    let branch_item = path.last().expect("branch node missing from path");
+    let expected_nibbles = key_nibbles(&key);
+    assert_eq!(
+        branch_item.key_nibbles.as_ref(),
+        expected_nibbles.as_slice(),
+        "branch node path did not match expected key"
+    );
+    assert!(
+        branch_item.next_nibble.is_none(),
+        "branch path should terminate at the requested key"
+    );
+
+    let branch = expect_branch(branch_item);
+    assert_eq!(
+        branch.value.as_deref(),
+        Some(val.as_slice()),
+        "branch node should retain original value"
+    );
+
+    assert_branch_child_is_leaf(&merkle, &key, &key_2);
+    assert_branch_child_is_leaf(&merkle, &key, &key_3);
 }
 
 #[test]
