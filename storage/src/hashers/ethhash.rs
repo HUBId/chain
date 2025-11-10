@@ -1,7 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// Ethereum compatible hashing algorithm.
+//! Ethereum-compatible hashing algorithm used when the `ethhash` feature is enabled.
+//!
+//! The [`EthNodeHasher`] helper collects RLP fragments for each node and captures the first
+//! [`TrieError`] emitted during serialization. Callers must check [`EthNodeHasher::finish`] to
+//! surface corruption encountered while traversing trie proofs instead of quietly hashing
+//! malformed payloads.
 
 #![cfg_attr(
     feature = "ethhash",
@@ -23,6 +28,73 @@ use rlp::{Rlp, RlpStream};
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
 use std::iter::once;
+use thiserror::Error;
+
+/// Errors that can occur while hashing nodes using the Ethereum-compatible hasher.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrieError {
+    /// The account payload embedded in a node could not be decoded into the expected shape.
+    #[error("corrupt proof: {0}")]
+    CorruptProof(String),
+}
+
+/// Collector used when hashing Ethereum trie nodes.
+///
+/// The hasher accumulates the RLP payload for a node and records the first
+/// [`TrieError`] reported by the serializer. Once an error is recorded, further
+/// updates are ignored to ensure we never hash malformed data.
+#[derive(Debug, Default, Clone)]
+pub struct EthNodeHasher {
+    buffer: SmallVec<[u8; 32]>,
+    error: Option<TrieError>,
+}
+
+impl EthNodeHasher {
+    /// Creates a new hasher without any accumulated state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the serialized payload collected so far.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    /// Consumes the hasher and returns the finalized [`HashType`].
+    pub fn finish(self) -> Result<HashType, TrieError> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+
+        if self.buffer.len() >= 32 {
+            Ok(HashType::Hash(Keccak256::digest(self.buffer).into()))
+        } else {
+            Ok(HashType::Rlp(self.buffer))
+        }
+    }
+
+    fn record_error(&mut self, error: TrieError) {
+        if self.error.is_none() {
+            self.error = Some(error);
+            self.buffer.clear();
+        }
+    }
+}
+
+impl HasUpdate for EthNodeHasher {
+    fn update<T: AsRef<[u8]>>(&mut self, data: T) {
+        if self.error.is_none() {
+            self.buffer.extend_from_slice(data.as_ref());
+        }
+    }
+
+    fn record_error(&mut self, error: TrieError) {
+        self.record_error(error);
+    }
+}
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
@@ -129,10 +201,14 @@ impl<T: Hashable> Preimage for T {
                     Some(ValueDigest::Value(bytes)) => {
                         let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
                         let bytes_mut = BytesMut::from(bytes);
-                        if let Some(result) = replace_hash(bytes_mut, new_hash) {
-                            rlp.append(&&*result);
-                        } else {
-                            rlp.append(&bytes);
+                        match replace_hash(bytes_mut, new_hash) {
+                            Ok(result) => {
+                                rlp.append(&&*result);
+                            }
+                            Err(err) => {
+                                buf.record_error(err);
+                                return;
+                            }
                         }
                     }
                     None => {
@@ -217,8 +293,13 @@ impl<T: Hashable> Preimage for T {
                     };
                     trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    let bytes = replace_hash(rlp_encoded_bytes, replacement_hash)
-                        .unwrap_or_else(|| BytesMut::from(rlp_encoded_bytes));
+                    let bytes = match replace_hash(rlp_encoded_bytes, replacement_hash) {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            buf.record_error(err);
+                            return;
+                        }
+                    };
                     trace!("updated encoded value {:02X?}", hex::encode(&bytes));
                     bytes
                 } else {
@@ -257,11 +338,25 @@ impl<T: Hashable> Preimage for T {
 }
 
 // TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
-fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option<BytesMut> {
-    // rlp_encoded_bytes needs to be decoded
+fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
+    bytes: T,
+    new_hash: U,
+) -> Result<BytesMut, TrieError> {
     let rlp = Rlp::new(bytes.as_ref());
-    let mut list = rlp.as_list().ok()?;
-    let replace = list.get_mut(2)?;
+    let mut list: Vec<Vec<u8>> = rlp.as_list().map_err(|err| {
+        TrieError::CorruptProof(format!("account value is not an RLP list: {err}"))
+    })?;
+
+    if list.len() <= 2 {
+        return Err(TrieError::CorruptProof(format!(
+            "account value missing storage root: expected at least 3 elements, got {}",
+            list.len()
+        )));
+    }
+
+    let replace = list
+        .get_mut(2)
+        .ok_or_else(|| TrieError::CorruptProof("account value missing storage root".into()))?;
     *replace = Vec::from(new_hash.as_ref());
 
     trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
@@ -274,7 +369,7 @@ fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option
     }
     let bytes = rlp.out();
     trace!("updated encoded value {:02X?}", hex::encode(&bytes));
-    Some(bytes)
+    Ok(BytesMut::from(&bytes[..]))
 }
 
 #[cfg(test)]

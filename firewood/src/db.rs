@@ -16,9 +16,8 @@ use crate::v2::api::{
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
-    noop_storage_metrics, CheckOpt, CheckerReport, Committed, FileBacked, FileIoError,
-    HashedNodeReader, ImmutableProposal, NodeStore, Parentable, ReadableStorage,
-    StorageMetricsHandle, TrieReader,
+    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, StorageMetricsHandle, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -331,7 +330,7 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
-    use firewood_storage::{CheckOpt, CheckerError};
+    use firewood_storage::{noop_storage_metrics, CheckOpt, CheckerError};
 
     use crate::db::{Db, Proposal};
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};

@@ -14,6 +14,8 @@ use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
     PathIterItem, Preimage, TrieHash, ValueDigest,
 };
+#[cfg(feature = "ethhash")]
+use firewood_storage::{EthNodeHasher, TrieError};
 use thiserror::Error;
 
 use crate::merkle::{Key, Value};
@@ -45,6 +47,11 @@ pub enum ProofError {
     /// Proof is empty
     #[error("proof can't be empty")]
     Empty,
+
+    /// Corrupt node payload encountered while hashing a proof node
+    #[cfg(feature = "ethhash")]
+    #[error(transparent)]
+    CorruptProof(#[from] TrieError),
 
     /// Each proof node key should be a prefix of the proven key
     #[error("each proof node key should be a prefix of the proven key")]
@@ -197,7 +204,16 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
+            #[cfg(feature = "ethhash")]
+            let computed_hash = {
+                let mut hasher = EthNodeHasher::new();
+                node.write(&mut hasher);
+                hasher.finish().map_err(ProofError::CorruptProof)?
+            };
+            #[cfg(not(feature = "ethhash"))]
+            let computed_hash = node.to_hash();
+
+            if computed_hash != expected_hash {
                 return Err(ProofError::UnexpectedHash);
             }
 

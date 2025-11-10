@@ -5,10 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use axum::body::{self, Body};
-use axum::http::{Method, Request as HttpRequest, header::CONTENT_TYPE};
+use axum::http::{header::CONTENT_TYPE, Method, Request as HttpRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use support::rpc::{Mode, build_app};
+use support::rpc::{build_app, Mode};
 use tower::ServiceExt;
 
 const STATUS_FIXTURE_VERSION: &str = "v1";

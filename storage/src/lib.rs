@@ -46,6 +46,8 @@ pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{hash_node, hash_preimage, Hashable, Preimage, ValueDigest};
+#[cfg(feature = "ethhash")]
+pub use hashers::ethhash::{EthNodeHasher, TrieError};
 pub use identity_tree::{
     IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
     IDENTITY_TREE_DEPTH,

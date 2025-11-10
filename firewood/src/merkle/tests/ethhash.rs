@@ -1,12 +1,15 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::proof::{Proof, ProofError, ProofNode};
 use crate::v2::api::OptionalHashKeyExt;
 
 use super::*;
 use ethereum_types::H256;
+use firewood_storage::{BranchNode, HashType, TrieHash, ValueDigest};
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
+use rlp::RlpStream;
 use sha3::{Digest, Keccak256};
 use test_case::test_case;
 
@@ -116,6 +119,67 @@ fn test_eth_compatible_accounts(
 /// helper method to convert a hex encoded string into a boxed slice
 fn make_key(hex_str: &str) -> Key {
     hex::decode(hex_str).unwrap().into_boxed_slice()
+}
+
+fn account_proof_with_children<F>(rlp_bytes: &[u8], configure_children: F) -> Proof<Vec<ProofNode>>
+where
+    F: FnOnce(&mut [Option<HashType>; BranchNode::MAX_CHILDREN]),
+{
+    let mut child_hashes = BranchNode::empty_children();
+    configure_children(&mut child_hashes);
+
+    let node = ProofNode {
+        key: vec![0; 64].into_boxed_slice(),
+        partial_len: 0,
+        value_digest: Some(ValueDigest::Value(rlp_bytes.to_vec().into_boxed_slice())),
+        child_hashes,
+    };
+
+    Proof::new(vec![node])
+}
+
+fn truncated_account_rlp() -> Vec<u8> {
+    let mut stream = RlpStream::new_list(2);
+    stream.append_empty_data();
+    stream.append_empty_data();
+    stream.out().to_vec()
+}
+
+fn invalid_account_rlp() -> Vec<u8> {
+    vec![0x01]
+}
+
+fn expect_corrupt_proof(proof: Proof<Vec<ProofNode>>) {
+    let err = proof
+        .value_digest([0u8; 32], &TrieHash::empty())
+        .expect_err("corrupt proof should fail");
+    assert!(matches!(err, ProofError::CorruptProof(_)));
+}
+
+#[test]
+fn proof_rejects_corrupt_account_leaf_rlp() {
+    expect_corrupt_proof(account_proof_with_children(&invalid_account_rlp(), |_| {}));
+}
+
+#[test]
+fn proof_rejects_corrupt_account_branch_single_child() {
+    expect_corrupt_proof(account_proof_with_children(
+        &truncated_account_rlp(),
+        |children| {
+            children[0] = Some(HashType::Hash(TrieHash::empty()));
+        },
+    ));
+}
+
+#[test]
+fn proof_rejects_corrupt_account_branch_multi_child() {
+    expect_corrupt_proof(account_proof_with_children(
+        &truncated_account_rlp(),
+        |children| {
+            children[0] = Some(HashType::Hash(TrieHash::empty()));
+            children[1] = Some(HashType::Hash(TrieHash::empty()));
+        },
+    ));
 }
 
 #[test]

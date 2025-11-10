@@ -11,7 +11,7 @@ use rpp_chain::runtime::node::{
 use rpp_chain::runtime::RuntimeMetrics;
 
 use super::helpers::{
-    sample_node_config, sample_transaction_bundle, drain_witness_channel, recv_witness_transaction,
+    drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
     witness_topic,
 };
 
@@ -162,9 +162,12 @@ async fn mempool_status_probe_flags_queue_saturation_alerts() -> Result<()> {
             .submit_transaction(bundle)
             .expect("transaction should be accepted until saturation");
         // ensure gossip has time to propagate to avoid lag affecting later drain
-        let _ = tokio::time::timeout(Duration::from_secs(1), recv_witness_transaction(&mut witness_rx))
-            .await
-            .expect("witness gossip event for accepted transaction");
+        let _ = tokio::time::timeout(
+            Duration::from_secs(1),
+            recv_witness_transaction(&mut witness_rx),
+        )
+        .await
+        .expect("witness gossip event for accepted transaction");
     }
 
     drain_witness_channel(&mut witness_rx);
@@ -208,25 +211,21 @@ async fn mempool_status_probe_flags_queue_saturation_alerts() -> Result<()> {
     );
 
     let mut multi_queue_snapshot = warning_snapshot.clone();
-    multi_queue_snapshot.identities = (0..mempool_limit)
-        .map(sample_identity)
-        .collect();
+    multi_queue_snapshot.identities = (0..mempool_limit).map(sample_identity).collect();
     multi_queue_snapshot.votes = (0..(mempool_limit - 1)).map(sample_vote).collect();
-    multi_queue_snapshot.uptime_proofs = (0..(mempool_limit / 2 + 1))
-        .map(sample_uptime)
-        .collect();
+    multi_queue_snapshot.uptime_proofs = (0..(mempool_limit / 2 + 1)).map(sample_uptime).collect();
 
     let multi_alerts = probe.evaluate(&multi_queue_snapshot, mempool_limit);
-    let identity_critical = multi_alerts.iter().find(|alert| {
-        alert.queue == "identities" && alert.severity == AlertSeverity::Critical
-    });
+    let identity_critical = multi_alerts
+        .iter()
+        .find(|alert| alert.queue == "identities" && alert.severity == AlertSeverity::Critical);
     assert!(
         identity_critical.is_some(),
         "identity queue saturation should raise a critical alert: {multi_alerts:?}"
     );
-    let transaction_warning = multi_alerts.iter().find(|alert| {
-        alert.queue == "transactions" && alert.severity == AlertSeverity::Warning
-    });
+    let transaction_warning = multi_alerts
+        .iter()
+        .find(|alert| alert.queue == "transactions" && alert.severity == AlertSeverity::Warning);
     assert!(
         transaction_warning.is_some(),
         "transaction warning alert should coexist with identity saturation"
