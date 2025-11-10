@@ -1,0 +1,21 @@
+# Firewood storage monitoring
+
+Firewood exposes dedicated metrics through the runtime and storage crates so operators can
+track write-ahead-log (WAL) health, snapshot ingestion, and recovery workflows. The
+following signals map the emitted telemetry to recommended alert thresholds. When a
+threshold references Prometheus syntax the metric name reflects the exported form (dots
+converted to underscores).
+
+| Metric | Source | Recommended alerting thresholds | Notes |
+| --- | --- | --- | --- |
+| `firewood_nodes_unwritten` (gauge) | Incremented when commits stage nodes for persistence and decremented once `io_uring` flushes complete, reflecting the WAL queue depth.【F:storage/src/nodestore/mod.rs†L622-L648】【F:storage/src/nodestore/persist.rs†L448-L536】 | • **Warning:** queue depth > 1 000 for 10 m<br>• **Critical:** queue depth > 5 000 for 5 m (mirrors the Grafana panel thresholds used by benchmarking rigs).【F:benchmark/Grafana-dashboard.json†L930-L948】 | Spikes indicate back-pressure between Firewood commits and disk. Verify disk latency and the IO budget gauges before throttling intake. |
+| `rpp_runtime_storage_wal_flush_total{outcome="failed"}` (counter) | Runtime telemetry tracks WAL flush attempts per outcome.【F:rpp/runtime/telemetry/metrics.rs†L74-L114】 | Page immediately when `increase(...[5m]) > 0`. Treat any failure as a critical write-path fault and inspect logs for matching errors. | Correlate with `...{outcome="retried"}` to distinguish transient retries from permanent failures; repeated retries for 15 m should raise a warning. |
+| `firewood_wal_transactions_total{result="rolled_back"}` (counter) | WAL replay increments the counter when incomplete transactions are discarded during recovery.【F:storage-firewood/src/kv.rs†L120-L165】 | Alert if `increase(...[15m]) > 0`. Rolled back transactions point to WAL corruption or abrupt shutdowns. | A sustained increase warrants invoking `firewood_recovery` to rebuild the log before resuming peers. |
+| `firewood_snapshot_ingest_failures_total{reason}` (counter) | Snapshot ingestion records failures for missing proofs, checksum mismatches, or rejected manifests.【F:storage-firewood/src/lifecycle.rs†L14-L248】 | Page on any non-zero increase over 15 m. Investigate by reviewing the recorded reason and snapshot manifest referenced in logs. | Combine with `firewood_nodestore_root_read_errors_total` to confirm persistent storage corruption. |
+| `firewood_nodestore_root_read_errors_total{state}` (counter) | Logged when Firewood fails to read committed or immutable roots from storage.【F:storage/src/nodestore/mod.rs†L687-L719】 | Warn when `sum by (state)(increase(...[5m])) > 0` and escalate if the trend persists for 30 m. | Signals read-path corruption; pause ingestion and audit the underlying block device. |
+| `firewood_recovery_active` (gauge) & `firewood_recovery_runs_total{phase}` (counter) | The recovery drill marks workflows active and increments start/complete phases around WAL rebuilds.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】 | • Warn when `firewood_recovery_active > 0` for 15 m.<br>• Page if starts minus completes within 30 m is > 0, indicating a stalled recovery. | Should return to zero once recovery completes; investigate logs and rerun the drill if it remains stuck. |
+| `snapshot_stream_lag_seconds` (gauge) | Snapshot behaviour exports stream lag via libp2p metrics registration.【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L499】 | • **Warning:** lag > 30 s for 5 m.<br>• **Critical:** lag > 120 s for 2 m, matching the documented pipeline SLOs.【F:docs/observability/pipeline.md†L32-L44】 | When triggered, follow the network snapshot failover runbook to re-route consumers. |
+
+Pair these thresholds with the sample Alertmanager rules under `ops/alerts/storage/` and the
+observability runbook sections referenced below. Alert annotations should link to the relevant
+runbook anchors (`docs/runbooks/observability.md`).
