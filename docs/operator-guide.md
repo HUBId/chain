@@ -35,6 +35,34 @@ exactly what the automated lifecycle tests cover.
 > policies while the process is running does not take effect. Plan for a full shutdown and restart
 > after configuration changes, just as the lifecycle tests demonstrate.
 
+## Startup validation failures
+
+Startup validation now has dedicated coverage in
+`tests/node_lifecycle/startup_errors.rs`. The suite exercises the three most
+common operator mistakes and asserts that the CLI exits with code 2, the
+configuration error bucket exposed by `BootstrapErrorKind` in the runtime.
+
+- **Malformed configuration files.** If TOML parsing fails, the process exits
+  with `configuration error: failed to load configuration …`. Re-copy the
+  template and reapply changes rather than editing the broken file in place.
+  This scenario catches stray brackets, truncated content, and merge conflicts
+  left inside the config.【F:tests/node_lifecycle/startup_errors.rs†L11-L39】
+- **Missing configuration paths.** When `RPP_CONFIG` points to a file that does
+  not exist, the CLI prints `node configuration not found … (resolved from
+  environment)` before exiting. Clear the environment variable or fix the path
+  before restarting automation; otherwise every rollout loops on the same
+  failure.【F:tests/node_lifecycle/startup_errors.rs†L41-L68】
+- **Invalid telemetry overrides.** Setting `RPP_NODE_OTLP_ENDPOINT` to a URI
+  that is not HTTP(S) is rejected with `telemetry.endpoint must use http or
+  https scheme`. Confirm the scheme and host in secrets management before
+  retrying; the runtime will not fall back to the configured endpoint when the
+  override is invalid.【F:tests/node_lifecycle/startup_errors.rs†L70-L101】
+
+In all three cases, the exit code remains `2`, matching the configuration error
+mapping in the runtime. Orchestrators that supervise the process should treat
+this exit code as a hard-stop requiring human intervention rather than a simple
+retry.【F:rpp/node/src/lib.rs†L152-L233】
+
 Storage-sensitive rollouts should also review the [Firewood WAL sizing and sync
 guidance](./storage/firewood.md#wal-sizing-and-sync-policy-guidance) before
 deploying new budgets or durability settings.

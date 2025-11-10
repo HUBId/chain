@@ -62,6 +62,43 @@ pub(crate) fn apply_feature_flags(command: &mut Command) {
     }
 }
 
+fn integration_feature_list() -> String {
+    let raw = env::var("XTASK_FEATURES").unwrap_or_default();
+    let mut features: Vec<String> = raw
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .filter_map(|segment| {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect();
+
+    if !features.iter().any(|feature| feature == "integration") {
+        features.insert(0, "integration".to_string());
+    }
+
+    if features.is_empty() {
+        "integration".to_string()
+    } else {
+        features.join(",")
+    }
+}
+
+fn apply_integration_feature_flags(command: &mut Command) {
+    let no_defaults = env::var("XTASK_NO_DEFAULT_FEATURES")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if no_defaults {
+        command.arg("--no-default-features");
+    }
+
+    let features = integration_feature_list();
+    command.arg("--features").arg(features);
+}
+
 fn run_command(mut command: Command, context: &str) -> Result<()> {
     let status = command.status()?;
     if status.success() {
@@ -155,7 +192,7 @@ fn run_integration_workflows() -> Result<()> {
         .arg("--locked")
         .arg("--test")
         .arg("integration");
-    apply_feature_flags(&mut command);
+    apply_integration_feature_flags(&mut command);
     run_command(command, "integration workflows")?;
 
     let mut lifecycle = Command::new("cargo");
@@ -167,7 +204,7 @@ fn run_integration_workflows() -> Result<()> {
         .arg("--locked")
         .arg("--test")
         .arg("node_lifecycle");
-    apply_feature_flags(&mut lifecycle);
+    apply_integration_feature_flags(&mut lifecycle);
     run_command(lifecycle, "node lifecycle workflows")?;
 
     let mut restart = Command::new("cargo");
@@ -179,7 +216,7 @@ fn run_integration_workflows() -> Result<()> {
         .arg("--locked")
         .arg("--test")
         .arg("snapshot_checksum_restart");
-    apply_feature_flags(&mut restart);
+    apply_integration_feature_flags(&mut restart);
     run_command(restart, "snapshot checksum restart")
 }
 
