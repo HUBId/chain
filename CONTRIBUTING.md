@@ -15,6 +15,7 @@ guidelines for contributing to ztate (the chain repository).
 
 * [Setting up docker](README.docker.md)
 * [Issue tracker](https://github.com/ava-labs/chain/issues)
+* [Release doc review checklist](RELEASE.md#documentation-review-checklist)
 
 ## [Testing]
 
@@ -85,6 +86,12 @@ those code paths so the new invariants see additional coverage.
 
 To create a PR, fork the ztate repository on GitHub and open the PR from your fork. We typically prioritize reviews in the middle of our next work day,
 so you should expect a response during the week within 24 hours.
+
+**Release owners:** when preparing a tagged release, follow the
+[`RELEASE.md`](RELEASE.md#documentation-review-checklist) documentation review
+checklist. Capture sign-off on the operator guide, security runbooks, and RPC
+policy updates in your release tracking issue or PR description so the audit
+trail stays visible to reviewers.
 
 ## [How to report a bug]
 

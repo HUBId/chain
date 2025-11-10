@@ -44,6 +44,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Documentation review reminder
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat <<'EOF'
+::notice::Confirm the documentation review checklist in RELEASE.md has been completed.
+- Operator guide: docs/rpp_node_operator_guide.md
+- Security runbooks: docs/runbooks/
+- Admission/RPC policy: docs/network/admission.md
+Record the sign-off in the release tracking issue or PR before publishing artifacts.
+EOF
       - name: Enforce pinned nightly toolchain
         shell: bash
         run: |
