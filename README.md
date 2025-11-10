@@ -28,10 +28,15 @@ the runtime reuses the same lifecycle APIs for verification.【F:rpp/proofs/stwo
 validator selection, leader bonuses, witness coordination, and evidence-driven
 slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/state.rs†L948-L1199】【F:docs/malachite_bft_architecture.md†L9-L116】
 - **Gossip backbone** – Canonical libp2p topics under `/rpp/gossip/*` deliver
-blocks, votes, proof bundles, VRF submissions, and snapshot sync to the runtime
-queues.【F:rpp/p2p/src/topics.rs†L6-L85】【F:rpp/runtime/node.rs†L2544-L2680】
+  blocks, votes, proof bundles, VRF submissions, and snapshot sync to the runtime
+  queues.【F:rpp/p2p/src/topics.rs†L6-L85】【F:rpp/runtime/node.rs†L2544-L2680】
 - **Operational documentation** – Operator guides, runbooks, and interface
-specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
+  specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
+- **Security, observability, and backend procedures** – Review the
+  [security policy](./SECURITY.md) for reporting channels, the
+  [observability guide and runbook](./docs/observability.md) for telemetry
+  hardening, and the [zero-knowledge backend procedures](./docs/zk_backends.md)
+  before promoting releases or rotating on-call shifts.
 
 ## Proof of Lottery (POL)
 

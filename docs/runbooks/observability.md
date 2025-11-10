@@ -1,5 +1,12 @@
 # Observability runbook
 
+> **Breadcrumbs:** [Operator documentation index](../README.md) › [Runbooks](../README.md#runbooks) › Observability runbook
+>
+> **See also:** [Observability overview](../observability.md),
+> [Node lifecycle expectations](../operator-guide.md),
+> [Security policy & reporting](../../SECURITY.md),
+> [Zero-knowledge backend procedures](../zk_backends.md)
+
 Use this runbook to diagnose gaps in telemetry, metrics, and health reporting. Pair it with the
 [startup](startup.md) and [configuration](../configuration.md) guides when remediation requires
 configuration changes.
