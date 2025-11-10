@@ -36,17 +36,18 @@ use time::macros::format_description;
 use time::{Duration as TimeDuration, OffsetDateTime};
 use walkdir::WalkDir;
 
+mod cli_smoke;
 mod telemetry;
 use telemetry::MetricsReporter;
 
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask lives in workspace root")
         .to_path_buf()
 }
 
-fn apply_feature_flags(command: &mut Command) {
+pub(crate) fn apply_feature_flags(command: &mut Command) {
     let no_defaults = env::var("XTASK_NO_DEFAULT_FEATURES")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
@@ -2877,7 +2878,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
     );
 }
 
@@ -4847,6 +4848,7 @@ fn main() -> Result<()> {
         "test-integration" => run_integration_workflows(),
         "test-observability" => run_observability_suite(),
         "test-simnet" => run_simnet_smoke(),
+        "test-cli" => cli_smoke::run_cli_smoke(&argv),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
         "test-worm-export" => run_worm_export_smoke(),
         "worm-retention-check" => worm_retention_check(&argv),
