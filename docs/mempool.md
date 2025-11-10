@@ -1,5 +1,8 @@
 # Mempool Operations
 
+> **Runbook:** See the [mempool cleanup remediation flow](./mempool_cleanup.md)
+> for the step-by-step incident response validated by the spam/DoS tests.
+
 The runtime exposes a single transaction mempool that enforces a fixed capacity and emits
 gossip events whenever submissions succeed. The integration test `high_volume_spam_triggers_rate_limits_and_recovers`
 demonstrates the happy-path behaviour that operators can rely on for incident response.
