@@ -52,3 +52,60 @@ change that introduces a new metric or label must update the schema file in the
 same pull request. Schema updates require review from the Observability/SRE
 owners to confirm the new telemetry surfaces align with the documented
 cardinality guarantees.
+
+## Telemetry alert response procedures
+
+On-call engineers manage production telemetry alerts through Alertmanager and
+PagerDuty. The steps below apply to every alert sourced from the
+`telemetry` namespace (including dashboards fed by
+`docs/observability/alerts/*.yaml`). Keep this runbook pinned in your
+PagerDuty service notes so the workflow stays front-of-mind during incident
+handoff.
+
+### Acknowledge (within 5 minutes)
+
+1. Respond to the PagerDuty notification and acknowledge the incident within
+   **five minutes** of the initial page. Acknowledgement pauses additional
+   notifications for the current assignee while signalling to the team that the
+   alert is being investigated.
+2. Open the linked Alertmanager event from the PagerDuty incident or navigate to
+   the `/#/alerts` view filtered by the firing alert name. Confirm that the
+   labels identify the correct cluster or workload before taking mitigation
+   steps.
+3. Document the acknowledgement time and initial hypothesis in the PagerDuty
+   incident timeline to maintain an audit trail for later review.
+
+### Silence (when suppression is warranted)
+
+Silences are coordinated through Alertmanager and must always include a PagerDuty
+note so secondary responders understand the blast radius.
+
+1. Validate that the alert is a known noisy condition (for example, during a
+   controlled maintenance window) and that telemetry health can be monitored via
+   alternate signals.
+2. From Alertmanager, create a silence scoped to the precise label set (cluster,
+   job, and alert name). Limit the duration to the smallest reasonable window—by
+   default no longer than **30 minutes**—and record the maintenance reference or
+   change ticket ID in the comment field.
+3. Post the silence summary, expiry time, and change reference in the PagerDuty
+   incident notes before closing or reassigning the incident.
+
+### Escalate (if unresolved after 15 minutes)
+
+If you have not identified a viable mitigation within **15 minutes** of the
+initial page, escalate to the next rotation in PagerDuty and notify the security
+liaison on-call:
+
+1. Use the PagerDuty "Escalate Incident" action to page the secondary SRE or
+   team lead. Include a brief status update covering hypotheses tested, graphs
+   reviewed, and any silences applied.
+2. Mention `@security-duty` in the incident Slack bridge (or follow the contact
+   instructions in [`SECURITY.md`](../SECURITY.md)) when telemetry signals could
+   indicate abuse, compromised secrets, or data exfiltration.
+3. Continue triage alongside the escalated responder until the alert clears or a
+   mitigation is in place, then schedule a follow-up in the shared incident log
+   for retrospective review.
+
+For additional operator context and security reporting flows, see the
+[operator guide](./operator-guide.md#telemetry-alert-handoff) and the
+[security policy](../SECURITY.md#incident-coordination-and-telemetry-escalation).

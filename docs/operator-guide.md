@@ -39,6 +39,17 @@ Storage-sensitive rollouts should also review the [Firewood WAL sizing and sync
 guidance](./storage/firewood.md#wal-sizing-and-sync-policy-guidance) before
 deploying new budgets or durability settings.
 
+## Telemetry alert handoff
+
+When the telemetry pipeline fires an alert, follow the
+[telemetry alert response procedures](./observability.md#telemetry-alert-response-procedures)
+to acknowledge it in PagerDuty within **five minutes**, scope any Alertmanager
+silence, and escalate after **15 minutes** if mitigation remains unclear. Keep
+the PagerDuty incident timeline updated with hypotheses, silences, and the
+current owner so incoming responders and security liaisons can pick up the
+investigation without repeating earlier steps. Link the incident postmortem to
+the shared operations log once the alert clears.
+
 ## Networking safeguards for on-call rotations
 
 Before returning a node to service, on-call engineers should verify that gossip

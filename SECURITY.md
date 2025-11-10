@@ -13,6 +13,19 @@ initial assessment within **five business days**. During the investigation we
 will keep you informed about remediation progress and coordinate public
 disclosure so downstream operators have enough time to patch.
 
+## Incident coordination and telemetry escalation
+
+Security liaisons participate in the production on-call rotation. When a
+telemetry alert suggests compromise, follow the
+[telemetry alert response procedures](docs/observability.md#telemetry-alert-response-procedures)
+and request a security consult within **15 minutes** if the signal implicates
+credential misuse, data exfiltration, or abusive traffic. Page the
+`security-duty` escalation path in PagerDuty, reference the active incident
+identifier, and capture investigative notes in the shared log. Security will
+assist with containment, initiate the incident-response checklist, and maintain
+communication with affected stakeholders until recovery and post-incident
+reviews are complete.
+
 ## Supply-Chain Verification
 
 Release artifacts are built exclusively through the
