@@ -77,3 +77,7 @@ path = "../bin/hybrid.rs"
 [[bin]]
 name = "validator"
 path = "../bin/validator.rs"
+
+[[bin]]
+name = "chain-cli"
+path = "src/bin/chain_cli.rs"

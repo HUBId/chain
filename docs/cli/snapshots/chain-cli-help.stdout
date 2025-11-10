@@ -1,0 +1,20 @@
+Run an rpp node
+
+Usage: chain-cli <COMMAND>
+
+Commands:
+  node      Run the node runtime
+  wallet    Run the wallet runtime
+  hybrid    Run the hybrid runtime (node + wallet)
+  validator Validator runtime and tooling
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+Exit codes:
+  0 - runtime exited cleanly
+  2 - configuration validation failed
+  3 - runtime startup failed
+  4 - unexpected runtime error

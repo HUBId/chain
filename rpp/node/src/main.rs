@@ -38,6 +38,7 @@ const DEFAULT_WALLET_CONFIG: &str = "config/wallet.toml";
 #[command(
     author,
     version,
+    propagate_version = true,
     about = "Run an rpp node",
     long_about = None,
     after_help = "Exit codes:\n  0 - runtime exited cleanly\n  2 - configuration validation failed\n  3 - runtime startup failed\n  4 - unexpected runtime error"
