@@ -68,6 +68,46 @@ runtime paths stay panic-free.
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).
 
+## Secret rotation and credential hygiene
+
+The project inventories every long-lived secret stored in source control, CI,
+or deployment environments and rotates them on a strict cadence. The table
+below summarises the baseline schedule, supporting tooling, and accountable
+roles:
+
+| Secret class | Storage/backing | Rotation cadence | Tooling / automation | Accountable role |
+| --- | --- | --- | --- | --- |
+| GitHub Actions environments (CI tokens, release PATs, registry passwords) | GitHub Actions encrypted secrets | Every 90 days, or immediately after team membership changes | GitHub CLI (`gh secret set`) with workflow validation via `.github/workflows/ci.yml` dispatch runs | Security Engineering duty officer |
+| Deployment keys for validator, wallet, and pipeline infrastructure | Vault KV backends or restricted filesystem stores | Every 60 days; additionally before major upgrades or cluster re-provisioning | `vault kv put` or OS key stores, with spot checks using `rpp-node` dry runs | Infrastructure/SRE rotation |
+| VRF and runtime secrets (telemetry tokens, admission credentials) | Runtime secrets backend configured per validator | Every 30 days, aligned with validator maintenance windows | `rpp-node validator vrf rotate` and REST helpers, also exercised in automation described in [`docs/validator_tooling.md`](docs/validator_tooling.md) | Validator operations rotation |
+
+### Emergency revocation
+
+1. Disable or delete the compromised secret in its upstream system (GitHub
+   environment, Vault path, or filesystem mount) and document the incident log.
+2. Trigger the relevant rotation tooling with freshly generated material. For
+   VRF and runtime secrets use the CLI flows captured in the operator checklists
+   (`validator vrf rotate` / `validator vrf inspect`).【F:docs/checklists/operator.md†L24-L34】【F:docs/validator_tooling.md†L5-L66】
+3. In GitHub, immediately invalidate active workflow runs that depended on the
+   revoked credential and re-run the `.github/workflows/ci.yml` smoke matrix to
+   ensure no pipeline still references the stale value.【F:.github/workflows/ci.yml†L1-L400】
+4. Notify the Security Engineering duty officer and affected service owners; if
+   deployment keys are impacted, coordinate with the Infrastructure/SRE rotation
+   to reprovision downstream hosts before returning them to service.
+
+### Post-rotation verification
+
+* **CI credentials:** Dispatch `ci.yml` and `release.yml` workflows to confirm
+  GitHub secrets decrypt correctly and downstream registries accept the new
+  tokens.【F:.github/workflows/ci.yml†L1-L400】【F:.github/workflows/release.yml†L1-L320】
+* **Deployment keys:** Run non-destructive dry runs (`rpp-node <mode> --dry-run`)
+  against each environment to ensure secrets resolve and permission checks pass
+  before opening traffic.【F:docs/checklists/operator.md†L8-L20】
+* **Runtime secrets:** Inspect the rotated material with
+  `rpp-node validator vrf inspect` or the `/validator/vrf` RPC endpoint to verify
+  that the correct backend and identifier are active, as documented in the
+  validator tooling guide.【F:docs/validator_tooling.md†L15-L64】
+
 ## Related security guidance
 
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) details the system assets,
