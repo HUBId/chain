@@ -10,6 +10,9 @@ use serde_json::Value;
 #[path = "../support/mod.rs"]
 mod support;
 
+#[path = "node_lifecycle/startup_errors.rs"]
+mod startup_errors;
+
 use rpp_chain::config::{FirewoodSyncPolicyConfig, NodeConfig};
 
 use support::{
