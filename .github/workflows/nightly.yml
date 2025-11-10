@@ -104,6 +104,21 @@ jobs:
           set -euo pipefail
           cargo test --test observability_otlp_failures --features integration
 
+  mempool-status-probe:
+    name: Mempool status probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Exercise /status/mempool alert probe
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --test mempool -- mempool_status_probe_flags_queue_saturation_alerts
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest

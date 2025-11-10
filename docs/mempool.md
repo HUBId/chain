@@ -15,6 +15,24 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
 * Subscribe to the internal `WitnessProofs` gossip channel to confirm that successful submissions
   emit events containing the transaction hash and fee, which is useful when correlating accepted
   transactions with rate limit tuning.【F:tests/mempool/spam_recovery.rs†L31-L40】【F:tests/mempool/spam_recovery.rs†L96-L105】
+* The `/status/mempool` probe in the integration suite explicitly saturates the queues, verifies that
+  warning- and critical-level alerts fire for transactions and identities, and ensures gossip stays
+  drained while the probe operates.【F:tests/mempool/status_probe.rs†L77-L163】 Use the same thresholds
+  (80% warning, 100% critical by default) when wiring dashboards so that operator alerts align with
+  the regression harness.【F:tests/mempool/status_probe.rs†L38-L74】
+
+### Interpreting probe alerts
+
+* **Warning alarms (≥80%).** Treat the warning as a heads-up that a queue is approaching saturation.
+  The probe expects transaction warnings to coexist with other queues, so investigate fee pressure or
+  round restarts before the backlog spills over.【F:tests/mempool/status_probe.rs†L117-L149】
+* **Critical alarms (≥100%).** The probe enqueues enough entries to trip critical alerts on
+  transactions and identities, ensuring the alerting pipeline is wired. When the runtime emits the
+  same signal in production, immediately pause bulk submissions and either raise `mempool_limit` or
+  drain stuck items before resuming traffic.【F:tests/mempool/status_probe.rs†L94-L163】
+* **Mixed severities.** The regression confirms that multiple alerts can fire simultaneously (for
+  example, identity saturation plus transaction warning). Treat them independently—clear the critical
+  queue first, then review any remaining warnings to keep the backlog healthy.【F:tests/mempool/status_probe.rs†L130-L163】
 
 ## Handling Spam and Rate Limiting
 
