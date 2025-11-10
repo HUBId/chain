@@ -14,7 +14,7 @@ use crate::{CheckerError, LinearAddress, StoredAreaParent};
 
 const MAX_AREAS_TO_DISPLAY: usize = 10;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 // BTreeMap: range end --> range start
 // To check if a value is in the range set, we will find the range with the smallest end that is greater than or equal to the given value
 pub struct RangeSet<T>(BTreeMap<T, T>);
@@ -228,7 +228,7 @@ impl<'a, T: Debug> IntoIterator for &'a RangeSet<T> {
 }
 
 /// A set of disjoint ranges of linear addresses in ascending order.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LinearAddressRangeSet {
     range_set: RangeSet<LinearAddress>,
     max_addr: LinearAddress,
