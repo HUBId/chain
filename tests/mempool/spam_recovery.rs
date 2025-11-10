@@ -39,10 +39,15 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
         let event = recv_witness_transaction(&mut witness_rx)
             .await
             .expect("witness gossip event for accepted transaction");
-        assert_eq!(event.hash, hash, "gossip event should include submitted hash");
+        assert_eq!(
+            event.hash, hash,
+            "gossip event should include submitted hash"
+        );
         assert_eq!(event.fee, fee, "gossip event should report transaction fee");
 
-        let status = handle.node_status().expect("poll node status after acceptance");
+        let status = handle
+            .node_status()
+            .expect("poll node status after acceptance");
         assert_eq!(
             status.pending_transactions,
             accepted_hashes.len(),
@@ -53,11 +58,7 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
     let mut rejected = 0usize;
     for index in 0..overflow {
         let fee = 100 + index as u64;
-        let bundle = sample_transaction_bundle(
-            &recipient,
-            (mempool_limit + index) as u64,
-            fee,
-        );
+        let bundle = sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee);
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
                 rejected += 1;
@@ -67,7 +68,10 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
             Ok(hash) => panic!("overflow transaction unexpectedly accepted: {hash}"),
         }
     }
-    assert_eq!(rejected, overflow, "all overflow submissions should be rejected");
+    assert_eq!(
+        rejected, overflow,
+        "all overflow submissions should be rejected"
+    );
 
     drain_witness_channel(&mut witness_rx);
 
@@ -106,19 +110,21 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
 
     for index in 0..overflow {
         let fee = 200 + index as u64;
-        let bundle = sample_transaction_bundle(
-            &recipient,
-            (mempool_limit * 2 + index) as u64,
-            fee,
-        );
+        let bundle = sample_transaction_bundle(&recipient, (mempool_limit * 2 + index) as u64, fee);
         let hash = handle
             .submit_transaction(bundle)
             .expect("transaction should be accepted after expanding mempool limit");
         let event = recv_witness_transaction(&mut witness_rx)
             .await
             .expect("witness event after mempool recovery");
-        assert_eq!(event.hash, hash, "recovery gossip should include transaction hash");
-        assert_eq!(event.fee, fee, "recovery gossip should report transaction fee");
+        assert_eq!(
+            event.hash, hash,
+            "recovery gossip should include transaction hash"
+        );
+        assert_eq!(
+            event.fee, fee,
+            "recovery gossip should report transaction fee"
+        );
     }
 
     let recovered_status = handle
@@ -138,7 +144,11 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
         mempool_limit + overflow,
         "mempool should accommodate expanded limit after recovery",
     );
-    let recovery_fees: Vec<_> = recovered_snapshot.transactions.iter().map(|tx| tx.fee).collect();
+    let recovery_fees: Vec<_> = recovered_snapshot
+        .transactions
+        .iter()
+        .map(|tx| tx.fee)
+        .collect();
     assert!(
         recovery_fees.iter().any(|fee| *fee >= 200),
         "recovered mempool should capture new high-fee submissions",

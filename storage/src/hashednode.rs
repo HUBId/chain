@@ -60,6 +60,9 @@ pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
 
 pub trait HasUpdate {
     fn update<T: AsRef<[u8]>>(&mut self, data: T);
+
+    #[cfg(feature = "ethhash")]
+    fn record_error(&mut self, _error: crate::TrieError) {}
 }
 
 impl HasUpdate for Vec<u8> {

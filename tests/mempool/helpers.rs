@@ -8,8 +8,8 @@ use rpp_chain::types::{
     ReputationWeights, SignedTransaction, Stake, StarkProof, Tier, Transaction,
     TransactionProofBundle, TransactionWitness,
 };
-use serde_json;
 use rpp_p2p::GossipTopic;
+use serde_json;
 use tokio::sync::broadcast;
 use tokio::time::{timeout, Duration};
 
@@ -66,12 +66,19 @@ pub(super) fn sample_transaction_bundle(to: &str, nonce: u64, fee: u64) -> Trans
         commitment: String::new(),
         public_inputs: Vec::new(),
         payload: payload.clone(),
-        trace: ExecutionTrace { segments: Vec::new() },
+        trace: ExecutionTrace {
+            segments: Vec::new(),
+        },
         commitment_proof: Default::default(),
         fri_proof: Default::default(),
     };
 
-    TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof), Some(witness), Some(payload))
+    TransactionProofBundle::new(
+        signed_tx,
+        ChainProof::Stwo(proof),
+        Some(witness),
+        Some(payload),
+    )
 }
 
 pub(super) async fn recv_witness_transaction(

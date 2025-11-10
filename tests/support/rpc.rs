@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
-    Json, Router,
     error_handling::HandleErrorLayer,
     extract::{Path, Request as AxumRequest, State},
-    http::{Method, Request as HttpRequest, StatusCode, header::AUTHORIZATION},
+    http::{header::AUTHORIZATION, Method, Request as HttpRequest, StatusCode},
     middleware::{self, Next},
     response::Response,
     routing::{get, post},
+    Json, Router,
 };
 use tower::limit::RateLimitLayer;
 use tower::{BoxError, ServiceBuilder};

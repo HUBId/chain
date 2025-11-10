@@ -7,15 +7,13 @@ use anyhow::{anyhow, Context, Result};
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
 use opentelemetry_sdk::metrics::data::{Data, Histogram, Sum};
-use opentelemetry_sdk::metrics::{
-    InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
-};
-use rpp_runtime::RuntimeMetrics;
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use rpp_runtime::runtime::telemetry::metrics::{
     ConsensusStage, ProofKind, ProofVerificationBackend, ProofVerificationKind,
     ProofVerificationOutcome, ProofVerificationStage, RpcMethod, RpcResult, WalFlushOutcome,
     WalletRpcMethod,
 };
+use rpp_runtime::RuntimeMetrics;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -59,10 +57,8 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     metrics.record_consensus_round_duration(9, 2, Duration::from_millis(23));
     metrics.record_consensus_quorum_latency(9, 2, Duration::from_millis(19));
     metrics.record_consensus_vrf_verification_success(Duration::from_millis(2));
-    metrics.record_consensus_vrf_verification_failure(
-        Duration::from_millis(4),
-        "invalid_vrf_proof",
-    );
+    metrics
+        .record_consensus_vrf_verification_failure(Duration::from_millis(4), "invalid_vrf_proof");
     metrics.record_consensus_quorum_verification_success();
     metrics.record_consensus_quorum_verification_failure("duplicate_precommit");
     metrics.record_consensus_leader_change(9, 2, "validator-A");
@@ -190,7 +186,10 @@ fn collect_sum_labels<T>(sum: &Sum<T>, sink: &mut BTreeSet<String>) {
     }
 }
 
-fn merge_attribute_keys(attributes: &opentelemetry_sdk::attributes::AttributeSet, sink: &mut BTreeSet<String>) {
+fn merge_attribute_keys(
+    attributes: &opentelemetry_sdk::attributes::AttributeSet,
+    sink: &mut BTreeSet<String>,
+) {
     for (key, _) in attributes.iter() {
         sink.insert(key.as_str().to_string());
     }
