@@ -12,7 +12,9 @@ use crate::TrieHash;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{Error, ErrorKind};
+use std::iter::FusedIterator;
 use std::num::NonZeroU64;
+use std::sync::OnceLock;
 
 /// [`super::NodeStore`] divides the linear store into blocks of different sizes.
 /// [`AREA_SIZES`] is every valid block size.
@@ -42,13 +44,71 @@ const AREA_SIZES: [u64; 23] = [
     1024 << 14,
 ];
 
+/// Iterator over all valid area sizes paired with their [`AreaIndex`].
+#[derive(Clone, Debug, Default)]
+pub struct AreaSizes {
+    start: u8,
+    end: u8,
+}
+
+impl AreaSizes {
+    /// Creates a new iterator that yields each area size in order.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            start: 0,
+            end: AreaIndex::NUM_AREA_SIZES as u8,
+        }
+    }
+}
+
+impl Iterator for AreaSizes {
+    type Item = (AreaIndex, u64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start >= self.end {
+            return None;
+        }
+
+        let index = self.start;
+        self.start += 1;
+        #[expect(clippy::indexing_slicing)]
+        let size = AREA_SIZES[index as usize];
+        Some((AreaIndex(index), size))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len();
+        (remaining, Some(remaining))
+    }
+}
+
+impl DoubleEndedIterator for AreaSizes {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.start >= self.end {
+            return None;
+        }
+
+        self.end -= 1;
+        let index = self.end;
+        #[expect(clippy::indexing_slicing)]
+        let size = AREA_SIZES[index as usize];
+        Some((AreaIndex(index), size))
+    }
+}
+
+impl ExactSizeIterator for AreaSizes {
+    fn len(&self) -> usize {
+        usize::from(self.end.saturating_sub(self.start))
+    }
+}
+
+impl FusedIterator for AreaSizes {}
+
 /// Returns an iterator over all valid area sizes.
-// TODO: return a named iterator
-pub fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
-    AREA_SIZES
-        .iter()
-        .enumerate()
-        .map(|(i, &size)| (AreaIndex(i as u8), size))
+#[must_use]
+pub fn area_size_iter() -> AreaSizes {
+    AreaSizes::new()
 }
 
 pub fn area_size_hash() -> TrieHash {
@@ -59,33 +119,71 @@ pub fn area_size_hash() -> TrieHash {
     hasher.finalize().into()
 }
 
-// TODO: automate this, must stay in sync with above
-pub const fn index_name(index: AreaIndex) -> &'static str {
-    match index.get() {
-        0 => "16",
-        1 => "32",
-        2 => "64",
-        3 => "96",
-        4 => "128",
-        5 => "256",
-        6 => "512",
-        7 => "768",
-        8 => "1024",
-        9 => "2048",
-        10 => "4096",
-        11 => "8192",
-        12 => "16384",
-        13 => "32768",
-        14 => "65536",
-        15 => "131072",
-        16 => "262144",
-        17 => "524288",
-        18 => "1048576",
-        19 => "2097152",
-        20 => "4194304",
-        21 => "8388608",
-        22 => "16777216",
-        _ => "unknown",
+fn area_size_names() -> &'static [&'static str] {
+    static NAMES: OnceLock<&'static [&'static str]> = OnceLock::new();
+
+    NAMES.get_or_init(|| {
+        let names: Vec<&'static str> = AREA_SIZES
+            .iter()
+            .map(|size| {
+                let s = size.to_string();
+                Box::leak(s.into_boxed_str()) as &'static str
+            })
+            .collect();
+        let boxed: Box<[&'static str]> = names.into_boxed_slice();
+        Box::leak(boxed)
+    })
+}
+
+/// Returns the decimal string representation of the area size at `index`.
+pub fn index_name(index: AreaIndex) -> &'static str {
+    area_size_names()
+        .get(index.as_usize())
+        .copied()
+        .unwrap_or("unknown")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{area_size_iter, index_name, AreaIndex, AreaSizes, AREA_SIZES};
+
+    #[test]
+    fn area_sizes_iterates_in_order() {
+        let collected: Vec<(AreaIndex, u64)> = area_size_iter().collect();
+        let expected: Vec<(AreaIndex, u64)> = AREA_SIZES
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| (AreaIndex::from_u8_unchecked(i as u8), size))
+            .collect();
+
+        assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn area_sizes_supports_double_ended_iteration() {
+        let mut iter = AreaSizes::new();
+
+        assert_eq!(
+            iter.next(),
+            Some((AreaIndex::from_u8_unchecked(0), AREA_SIZES[0]))
+        );
+        let last_index = AREA_SIZES.len() - 1;
+        assert_eq!(
+            iter.next_back(),
+            Some((
+                AreaIndex::from_u8_unchecked(last_index as u8),
+                AREA_SIZES[last_index],
+            ))
+        );
+        assert_eq!(iter.len(), AREA_SIZES.len().saturating_sub(2));
+    }
+
+    #[test]
+    fn index_names_match_area_sizes() {
+        for (i, size) in AREA_SIZES.iter().enumerate() {
+            let index = AreaIndex::from_u8_unchecked(i as u8);
+            assert_eq!(index_name(index), size.to_string());
+        }
     }
 }
 
