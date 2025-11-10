@@ -2128,6 +2128,7 @@ dependencies = [
  "pretty-duration",
  "rand 0.9.2",
  "rand_distr",
+ "serde",
  "serde_json",
  "sha2",
  "tikv-jemallocator",

@@ -7,9 +7,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use firewood::db::Db;
+use firewood::v2::api::{Db as _, Proposal as _};
 use log::info;
+use serde::Serialize;
 
-use crate::{Args, TestRunner};
+use crate::{baseline, Args, TestRunner};
 
 const MAX_BATCHES: u64 = 5;
 const MAX_BATCH_SIZE: u64 = 100;
@@ -17,6 +19,17 @@ const OUTPUT_ENV: &str = "FIREWOOD_SMOKE_OUTPUT";
 const DEFAULT_OUTPUT_FILE: &str = "smoke-metrics.json";
 
 pub struct Smoke;
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct SmokeRunMetrics {
+    pub(crate) batches: u64,
+    pub(crate) batch_size: u64,
+    pub(crate) total_operations: u64,
+    pub(crate) total_duration_ms: f64,
+    pub(crate) throughput_ops_per_sec: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) per_batch_ms: Vec<f64>,
+}
 
 impl Smoke {
     fn workload(args: &Args) -> (u64, u64) {
@@ -71,13 +84,25 @@ impl TestRunner for Smoke {
             "SMOKE_BENCHMARK throughput_ops_per_sec={throughput:.2} total_batches={batches} batch_size={batch_size}"
         );
 
+        let run_metrics = SmokeRunMetrics {
+            batches,
+            batch_size,
+            total_operations: total_ops,
+            total_duration_ms: total_duration.as_secs_f64() * 1_000.0,
+            throughput_ops_per_sec: throughput,
+            per_batch_ms,
+        };
+
+        let baseline_report = baseline::evaluate(&run_metrics)?;
+
         let metrics = serde_json::json!({
-            "batches": batches,
-            "batch_size": batch_size,
-            "total_operations": total_ops,
-            "total_duration_ms": total_duration.as_secs_f64() * 1_000.0,
-            "per_batch_ms": per_batch_ms,
-            "throughput_ops_per_sec": throughput,
+            "batches": run_metrics.batches,
+            "batch_size": run_metrics.batch_size,
+            "total_operations": run_metrics.total_operations,
+            "total_duration_ms": run_metrics.total_duration_ms,
+            "per_batch_ms": run_metrics.per_batch_ms,
+            "throughput_ops_per_sec": run_metrics.throughput_ops_per_sec,
+            "baseline": baseline_report,
         });
 
         let output_path = Self::output_path();

@@ -137,6 +137,7 @@ impl From<ArgCacheReadStrategy> for CacheReadStrategy {
     }
 }
 
+mod baseline;
 mod create;
 mod single;
 mod smoke;

@@ -35,6 +35,7 @@ rand.workspace = true
 rand_distr.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
+serde = { version = "=1.0.225", features = ["derive"] }
 # Regular dependencies
 fastrace-opentelemetry = { version = "=0.13.0" }
 metrics-exporter-prometheus = { version = "=0.17.2", optional = true }

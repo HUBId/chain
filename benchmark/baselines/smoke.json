@@ -1,0 +1,14 @@
+{
+  "throughput_ops_per_sec": {
+    "lower": 8500.0,
+    "upper": 12000.0
+  },
+  "total_duration_ms": {
+    "lower": 0.0,
+    "upper": 65.0
+  },
+  "per_batch_p95_ms": {
+    "lower": 0.0,
+    "upper": 15.0
+  }
+}

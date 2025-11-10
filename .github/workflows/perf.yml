@@ -30,13 +30,10 @@ jobs:
             | tee smoke-benchmark.log
 
       - name: Summarize metrics
-        env:
-          SMOKE_THROUGHPUT_THRESHOLD: 1.0
         run: |
           set -euo pipefail
           python3 - <<'PY'
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -46,24 +43,72 @@ if not metrics_path.exists():
     sys.exit(1)
 
 data = json.loads(metrics_path.read_text())
+baseline = data.get('baseline', {})
+summary_rows: list[str] = []
+failures: list[tuple[str, float, float | None, float | None]] = []
+
+def fmt_bounds(entry: dict[str, float | None]) -> str:
+    lower = entry.get('lower')
+    upper = entry.get('upper')
+    pieces = []
+    if lower is not None:
+        pieces.append(f">= {lower:.2f}")
+    if upper is not None:
+        pieces.append(f"<= {upper:.2f}")
+    return ', '.join(pieces) if pieces else 'no bounds configured'
+
+def record_metric(key: str, label: str) -> None:
+    entry = baseline.get(key)
+    if not isinstance(entry, dict):
+        print(f"::warning ::Baseline entry '{key}' missing from smoke-metrics.json", file=sys.stderr)
+        return
+    actual = entry.get('actual')
+    if actual is None:
+        print(f"::warning ::Baseline entry '{key}' missing actual value", file=sys.stderr)
+        return
+    bounds = fmt_bounds(entry)
+    within = bool(entry.get('within_range'))
+    status = '✅' if within else '❌'
+    summary_rows.append(f"* {label}: {actual:.2f} ({bounds}) {status}")
+    if not within:
+        failures.append((label, float(actual), entry.get('lower'), entry.get('upper')))
+
+record_metric('throughput_ops_per_sec', 'Throughput (ops/sec)')
+record_metric('per_batch_p95_ms', 'Batch P95 latency (ms)')
+record_metric('total_duration_ms', 'Total duration (ms)')
+
 throughput = float(data.get('throughput_ops_per_sec', 0))
-threshold = float(os.environ.get('SMOKE_THROUGHPUT_THRESHOLD', '1.0'))
 print(f"Recorded throughput_ops_per_sec={throughput:.2f}")
 summary = [
     '# Firewood smoke benchmark summary',
     '',
-    f'* Total batches: {int(data.get("batches", 0))}',
-    f'* Batch size: {int(data.get("batch_size", 0))}',
+    f"* Total batches: {int(data.get('batches', 0))}",
+    f"* Batch size: {int(data.get('batch_size', 0))}",
     f"* Throughput: {throughput:.2f} ops/sec",
     f"* Total duration: {data.get('total_duration_ms', 0):.2f} ms",
 ]
-Path('smoke-summary.md').write_text('\n'.join(summary) + '\n')
-if throughput < threshold:
-    print(
-        f"::error ::Throughput {throughput:.2f} ops/sec is below threshold {threshold:.2f}",
-        file=sys.stderr,
-    )
+if summary_rows:
+    summary.append('')
+    summary.append('## Baseline comparison')
+    summary.extend(summary_rows)
+
+if failures:
+    for label, actual, lower, upper in failures:
+        bounds = []
+        if lower is not None:
+            bounds.append(f'>= {lower:.2f}')
+        if upper is not None:
+            bounds.append(f'<= {upper:.2f}')
+        expected = ' and '.join(bounds) if bounds else 'within configured bounds'
+        print(f"::error ::{label} {actual:.2f} fell outside expected range ({expected})", file=sys.stderr)
     sys.exit(1)
+
+if not summary_rows:
+    print('::warning ::No baseline metrics were evaluated', file=sys.stderr)
+    summary.append('')
+    summary.append('⚠️ Baseline metrics were not evaluated. Review smoke-metrics.json for details.')
+
+Path('smoke-summary.md').write_text('\n'.join(summary) + '\n')
 PY
 
       - name: Upload artifacts
