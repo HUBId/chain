@@ -111,6 +111,14 @@ if not summary_rows:
 Path('smoke-summary.md').write_text('\n'.join(summary) + '\n')
 PY
 
+      - name: Validate performance Grafana dashboards
+        env:
+          PERF_GRAFANA_URL: ${{ secrets.PERF_GRAFANA_URL }}
+          PERF_GRAFANA_API_KEY: ${{ secrets.PERF_GRAFANA_API_KEY }}
+        run: |
+          set -euo pipefail
+          tools/perf_dashboard_check.sh --manifest docs/performance_dashboards.json
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
