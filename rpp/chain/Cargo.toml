@@ -202,6 +202,10 @@ name = "mempool"
 path = "../../tests/mempool/mod.rs"
 
 [[test]]
+name = "networking"
+path = "../../tests/networking/mod.rs"
+
+[[test]]
 name = "runtime_smoke"
 path = "../../tests/runtime_smoke.rs"
 required-features = ["integration"]

@@ -101,6 +101,30 @@ configuration files and verify the impact through Prometheus metrics.
 The following snippets capture common Prometheus and Grafana artefacts that tie
 directly into the gossip metrics exported by the runtime.
 
+### Replay guard alerts
+
+The replay protector exposes counters and gauges for duplicate drops and window
+utilisation on every validator. Operators should wire the following thresholds
+into their telemetry stack to catch regressions before the mesh ejects fresh
+payloads:
+
+* **Duplicate drops.** Alert when
+  `increase(network_replay_guard_drops_total[5m]) > 50` for five minutes and
+  escalate to critical once the five-minute increase exceeds 200. The warning
+  signal indicates sustained duplicate chatter, while the critical threshold
+  confirms the guard is actively discarding traffic.【F:ops/alerts/networking/replay_guard.yaml†L5-L34】
+* **Window saturation.** Raise a warning when
+  `max_over_time(network_replay_guard_window_fill_ratio[5m]) > 0.85` for ten
+  minutes and page at 0.95 for five minutes. These gauges report how full the
+  replay cache is and directly map to the risk of evicting legitimate digests
+  during churn.【F:ops/alerts/networking/replay_guard.yaml†L35-L64】
+
+Import the sample rules under
+`ops/alerts/networking/replay_guard.yaml` into Alertmanager/Prometheus and pair
+them with the Grafana panel template in
+`ops/alerts/networking/replay_guard_grafana.json` for a turnkey drill-down
+dashboard.【F:ops/alerts/networking/replay_guard.yaml†L1-L64】【F:ops/alerts/networking/replay_guard_grafana.json†L1-L63】
+
 ```yaml
 # prometheus/rules/gossip.yml
 groups:
@@ -156,3 +180,9 @@ that executes the scenario, runs the analyzer, and uploads a compressed artifact
 containing the summary directory. The job is marked as non-blocking but still
 runs on every schedule, providing continuous telemetry on partition recovery and
 backpressure heuristics.
+
+Replay protection coverage is exercised via the `networking` integration suite.
+The `replay_alert_probe_saturates_window_triggers_alerts` test loads the sample
+alert definitions, simulates replay saturation, and verifies that both the drop
+rate and window-fill alerts fire. The nightly networking workflow executes this
+probe to keep the Alertmanager snippets in sync with the documented thresholds.【F:tests/networking/replay_alert_probe.rs†L1-L153】【F:.github/workflows/nightly.yml†L120-L144】
