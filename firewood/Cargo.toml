@@ -57,6 +57,8 @@ pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true
 test-case.workspace = true
+serde = { version = "=1.0.225", features = ["derive"] }
+serde_json.workspace = true
 # Regular dependencies
 ctor = "=0.5.0"
 hash-db = "=0.16.0"

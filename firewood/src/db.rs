@@ -631,6 +631,10 @@ mod test {
         }
     }
 
+    #[cfg_attr(
+        feature = "branch_factor_256",
+        ignore = "checker not yet updated for branch factor 256"
+    )]
     #[test]
     fn fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();

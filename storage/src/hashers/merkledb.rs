@@ -17,7 +17,10 @@ use integer_encoding::VarInt;
 use sha2::{Digest, Sha256};
 
 const MAX_VARINT_SIZE: usize = 10;
-const BITS_PER_NIBBLE: u64 = 4;
+#[cfg(feature = "branch_factor_256")]
+const BITS_PER_STEP: u64 = 8;
+#[cfg(not(feature = "branch_factor_256"))]
+const BITS_PER_STEP: u64 = 4;
 
 impl HasUpdate for Sha256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
@@ -51,15 +54,26 @@ impl<T: Hashable> Preimage for T {
         add_value_digest_to_buf(buf, self.value_digest());
 
         // Add key length (in bits) to hash pre-image
-        let mut key = self.full_path();
-        let key_bit_len = BITS_PER_NIBBLE * key.clone().count() as u64;
+        let key_iter = self.full_path();
+        let key_bit_len = BITS_PER_STEP * key_iter.clone().count() as u64;
         add_varint_to_buf(buf, key_bit_len);
 
         // Add key to hash pre-image
-        while let Some(high_nibble) = key.next() {
-            let low_nibble = key.next().unwrap_or(0);
-            let byte = (high_nibble << 4) | low_nibble;
-            buf.update([byte]);
+        #[cfg(feature = "branch_factor_256")]
+        {
+            for byte in key_iter {
+                buf.update([byte]);
+            }
+        }
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        {
+            let mut key = key_iter;
+            while let Some(high_nibble) = key.next() {
+                let low_nibble = key.next().unwrap_or(0);
+                let byte = (high_nibble << 4) | low_nibble;
+                buf.update([byte]);
+            }
         }
     }
 }
