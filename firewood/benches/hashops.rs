@@ -45,7 +45,8 @@ impl Profiler for FlamegraphProfiler {
         let flamegraph_file =
             File::create(&flamegraph_path).unwrap_or_else(file_error_panic(&flamegraph_path));
 
-        #[allow(clippy::unwrap_used)] // Flamegraph generation should fail loudly during benchmarking.
+        #[allow(clippy::unwrap_used)]
+        // Flamegraph generation should fail loudly during benchmarking.
         if let Self::Active(profiler) = self {
             profiler
                 .report()
@@ -79,7 +80,8 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
 
                     (merkle, keys)
                 },
-                #[allow(clippy::unwrap_used)] // Benchmarks unwrap to surface data-structure regressions immediately.
+                #[allow(clippy::unwrap_used)]
+                // Benchmarks unwrap to surface data-structure regressions immediately.
                 |(mut merkle, keys)| {
                     for key in keys {
                         merkle.insert(&key, Box::new(*b"v")).unwrap();

@@ -1,0 +1,24 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: telemetry-exporters
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: telemetry-exporters
+      rules:
+        - alert: OtlpExporterFailure
+          expr: increase(telemetry_otlp_failures_total[15m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: observability
+          annotations:
+            summary: OTLP telemetry exporters are failing to initialise
+            description: |
+              At least one OTLP exporter failed to initialise within the last 15 minutes.
+              Inspect the node logs for `failed to initialise OTLP` warnings, verify
+              TLS material and collector reachability, and restart the node once the
+              exporter configuration is healthy.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/observability.md#otlp-exporter-failure-drill

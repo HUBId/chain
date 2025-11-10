@@ -26,9 +26,8 @@ impl DataSource {
 
     fn read_to_string(&self) -> Result<String, String> {
         match self {
-            DataSource::Path(path) => fs::read_to_string(path).map_err(|err| {
-                format!("failed to read {}: {err}", path.display())
-            }),
+            DataSource::Path(path) => fs::read_to_string(path)
+                .map_err(|err| format!("failed to read {}: {err}", path.display())),
             DataSource::Inline { data, .. } => Ok(data.clone()),
         }
     }
@@ -172,10 +171,7 @@ pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> E
         Err(err) => {
             return Execution::Fatal {
                 exit_code: ExitCode::Fatal,
-                error: format!(
-                    "failed to read manifest {}: {err}",
-                    args.manifest.display()
-                ),
+                error: format!("failed to read manifest {}: {err}", args.manifest.display()),
             }
         }
     };
@@ -285,29 +281,23 @@ fn verify_signature(
     })?;
 
     let signature_array: [u8; Signature::BYTE_SIZE] =
-        signature_bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                format!(
-                    "signature {} has invalid length {}; expected {} bytes",
-                    signature_path.display(),
-                    signature_bytes.len(),
-                    Signature::BYTE_SIZE
-                )
-            })?;
+        signature_bytes.as_slice().try_into().map_err(|_| {
+            format!(
+                "signature {} has invalid length {}; expected {} bytes",
+                signature_path.display(),
+                signature_bytes.len(),
+                Signature::BYTE_SIZE
+            )
+        })?;
     let public_key_array: [u8; PUBLIC_KEY_LENGTH] =
-        public_key_bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                let label = public_key.display();
-                format!(
-                    "public key {label} has invalid length {}; expected {} bytes",
-                    public_key_bytes.len(),
-                    PUBLIC_KEY_LENGTH
-                )
-            })?;
+        public_key_bytes.as_slice().try_into().map_err(|_| {
+            let label = public_key.display();
+            format!(
+                "public key {label} has invalid length {}; expected {} bytes",
+                public_key_bytes.len(),
+                PUBLIC_KEY_LENGTH
+            )
+        })?;
 
     let verifying_key = VerifyingKey::from_bytes(&public_key_array).map_err(|err| {
         let label = public_key.display();
@@ -376,22 +366,12 @@ fn verify_segments(
             Ok(metadata) => {
                 let size = metadata.len();
                 if size != expected_size.unwrap() {
-                    (
-                        SegmentStatus::SizeMismatch,
-                        Some(size),
-                        None,
-                        None,
-                    )
+                    (SegmentStatus::SizeMismatch, Some(size), None, None)
                 } else {
                     match compute_sha256(&path) {
                         Ok(actual_hash) => {
                             if actual_hash == expected_checksum.as_deref().unwrap() {
-                                (
-                                    SegmentStatus::Verified,
-                                    Some(size),
-                                    Some(actual_hash),
-                                    None,
-                                )
+                                (SegmentStatus::Verified, Some(size), Some(actual_hash), None)
                             } else {
                                 (
                                     SegmentStatus::ChecksumMismatch,
@@ -401,12 +381,7 @@ fn verify_segments(
                                 )
                             }
                         }
-                        Err(err) => (
-                            SegmentStatus::IoError,
-                            Some(size),
-                            None,
-                            Some(err),
-                        ),
+                        Err(err) => (SegmentStatus::IoError, Some(size), None, Some(err)),
                     }
                 }
             }
@@ -416,12 +391,7 @@ fn verify_segments(
                 None,
                 Some("file not found".to_string()),
             ),
-            Err(err) => (
-                SegmentStatus::IoError,
-                None,
-                None,
-                Some(err.to_string()),
-            ),
+            Err(err) => (SegmentStatus::IoError, None, None, Some(err.to_string())),
         };
 
         match status {
@@ -490,8 +460,7 @@ fn decode_data(value: &str) -> Result<Vec<u8>, DecodeError> {
 pub fn write_report(report: &VerificationReport, output: Option<&Path>) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(report)?;
     if let Some(path) = output {
-        fs::write(path, &json)
-            .with_context(|| format!("write report to {}", path.display()))?;
+        fs::write(path, &json).with_context(|| format!("write report to {}", path.display()))?;
     } else {
         io::stdout()
             .write_all(&json)

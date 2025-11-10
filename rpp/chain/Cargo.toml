@@ -193,6 +193,10 @@ name = "observability_metrics"
 path = "../../tests/observability_metrics.rs"
 
 [[test]]
+name = "observability_otlp_failures"
+path = "../../tests/observability_otlp_failures.rs"
+
+[[test]]
 name = "deployment_feature_gates"
 path = "../../tests/deployment/feature_gates.rs"
 

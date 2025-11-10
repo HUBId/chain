@@ -63,6 +63,21 @@ jobs:
           name: worm-export-smoke
           path: target/worm-export-smoke
 
+  telemetry-chaos:
+    name: Telemetry exporter chaos drill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run OTLP exporter chaos test
+        run: |
+          set -euo pipefail
+          cargo test --test observability_otlp_failures --features integration
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest

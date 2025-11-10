@@ -1,0 +1,42 @@
+# Observability Chaos Drills
+
+## OTLP exporter failure drill
+
+The `telemetry_otlp_exporter_failures_surface_alerts` integration test launches a
+validator node with telemetry enabled, forces both the OTLP/HTTP metric exporter
+and the OTLP/gRPC span exporter to fail during initialisation, and verifies that
+runtime behaviour degrades gracefully instead of aborting the process.
+
+### Failure injection
+
+The drill points both exporters at local endpoints and configures their TLS
+material to reference directories rather than readable files. The configuration
+passes validation but the exporters fail while loading their certificates. The
+runtime now detects this condition, switches the exporters into a local-only
+mode, and keeps the node running.【F:tests/observability_otlp_failures.rs†L24-L109】
+
+### Operator signals
+
+When the failure is detected the node emits structured telemetry warnings for
+both sinks and records a counter per exporter:
+
+- Logs: `failed to initialise OTLP metric exporter; metrics will only be logged
+  locally` and `failed to initialise OTLP span exporter; traces will not be
+  exported`. Both events carry the `telemetry` target alongside `sink` and
+  `phase` attributes.【F:rpp/node/src/lib.rs†L193-L207】【F:rpp/node/src/lib.rs†L256-L267】
+- Metric: `telemetry_otlp_failures_total{sink="metrics",phase="init"}` and
+  `telemetry_otlp_failures_total{sink="traces",phase="init"}` increment once per
+  exporter failure.【F:rpp/node/src/lib.rs†L88-L91】【F:tests/observability_otlp_failures.rs†L111-L132】
+
+The Prometheus scrape contains both series, allowing dashboards and automated
+checks to confirm that exporter failures have been observed.
+
+### Alerting and recovery
+
+The nightly workflow runs the chaos drill without blocking mainline merges and
+publishes a warning alert (`OtlpExporterFailure`) whenever the counter increases
+within a 15-minute window.【F:.github/workflows/nightly.yml†L1-L47】【F:docs/observability/alerts/telemetry.yaml†L1-L32】
+Operators should investigate the structured logs to determine whether TLS
+material, endpoint reachability, or collector availability triggered the issue.
+Once the exporter configuration is corrected and a successful initialisation
+occurs, the counter remains flat and the alert automatically clears.

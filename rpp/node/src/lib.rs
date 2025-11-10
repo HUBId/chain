@@ -81,6 +81,11 @@ pub use state_sync::light_client::{
 pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
 
 const WORM_EXPORT_MISCONFIGURED_METRIC: &str = "worm_export_misconfigured_total";
+const TELEMETRY_FAILURE_METRIC: &str = "telemetry_otlp_failures_total";
+
+fn record_otlp_failure(sink: &'static str, phase: &'static str) {
+    metrics::counter!(TELEMETRY_FAILURE_METRIC, "sink" => sink, "phase" => phase).increment(1);
+}
 
 #[derive(Debug, Clone)]
 pub struct ValidatorSetupOptions {
@@ -535,17 +540,16 @@ pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
     Ok(())
 }
 
-fn ensure_worm_export_configured(
-    mode: RuntimeMode,
-    config: &NodeConfig,
-) -> BootstrapResult<()> {
+fn ensure_worm_export_configured(mode: RuntimeMode, config: &NodeConfig) -> BootstrapResult<()> {
     if !mode.includes_node() {
         return Ok(());
     }
 
     let release_channel = config.rollout.release_channel;
-    let production_channel =
-        matches!(release_channel, ReleaseChannel::Canary | ReleaseChannel::Mainnet);
+    let production_channel = matches!(
+        release_channel,
+        ReleaseChannel::Canary | ReleaseChannel::Mainnet
+    );
 
     if !production_channel {
         return Ok(());
@@ -584,7 +588,9 @@ fn ensure_worm_export_configured(
             }
         }
         Some(WormExportTargetConfig::Command { .. }) => {
-            missing.push("network.admission.worm_export.target (s3 required for production)".to_string());
+            missing.push(
+                "network.admission.worm_export.target (s3 required for production)".to_string(),
+            );
         }
         None => {
             missing.push("network.admission.worm_export.target".to_string());
@@ -1935,18 +1941,35 @@ fn init_tracing(
     let prometheus_guard = install_prometheus_recorder(&telemetry_config)
         .context("failed to initialise Prometheus recorder")?;
     let resource = telemetry_resource(config, metadata, mode, config_source, &instance_id);
+    let mut metrics_config = telemetry_config.clone();
     let (runtime_metrics, metrics_guard) =
-        init_runtime_metrics(&telemetry_config, resource.clone())
-            .context("failed to initialise runtime metrics")?;
+        match init_runtime_metrics(&metrics_config, resource.clone()) {
+            Ok(metrics) => metrics,
+            Err(error) => {
+                record_otlp_failure("metrics", "init");
+                warn!(
+                    target = "telemetry",
+                    sink = "metrics",
+                    phase = "init",
+                    error = %error,
+                    "failed to initialise OTLP metric exporter; metrics will only be logged locally"
+                );
+                metrics_config.enabled = false;
+                metrics_config.endpoint = None;
+                metrics_config.http_endpoint = None;
+                init_runtime_metrics(&metrics_config, resource.clone())
+                    .context("failed to initialise runtime metrics fallback")?
+            }
+        };
     let mut guard = OtelGuard::new(metrics_guard);
     if let Some(prometheus_guard) = prometheus_guard {
         guard = guard.with_prometheus_guard(prometheus_guard);
     }
-    let metrics_endpoint = TelemetryExporterBuilder::new(&telemetry_config)
+    let metrics_endpoint = TelemetryExporterBuilder::new(&metrics_config)
         .http_endpoint()
         .map(str::to_string);
     let metrics_endpoint_field = metrics_endpoint.as_deref();
-    let metrics_enabled = telemetry_config.enabled;
+    let metrics_enabled = metrics_config.enabled;
 
     match build_otlp_layer(&telemetry_config, resource)? {
         Some(OtlpLayer { layer, endpoint }) => {
@@ -2563,11 +2586,25 @@ fn resolved_telemetry_config(config: &NodeConfig) -> Result<TelemetryConfig> {
 fn build_otlp_layer(telemetry: &TelemetryConfig, resource: Resource) -> Result<Option<OtlpLayer>> {
     let builder = TelemetryExporterBuilder::new(telemetry);
 
-    let Some(exporter) = builder.build_span_exporter()? else {
-        if telemetry.enabled {
-            anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+    let exporter = match builder.build_span_exporter() {
+        Ok(Some(exporter)) => exporter,
+        Ok(None) => {
+            if telemetry.enabled {
+                anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+            }
+            return Ok(None);
         }
-        return Ok(None);
+        Err(error) => {
+            record_otlp_failure("traces", "init");
+            warn!(
+                target = "telemetry",
+                sink = "traces",
+                phase = "init",
+                error = %error,
+                "failed to initialise OTLP span exporter; traces will not be exported"
+            );
+            return Ok(None);
+        }
     };
 
     let batch_config = builder.build_trace_batch_config();

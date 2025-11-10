@@ -18,7 +18,8 @@
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![allow(clippy::expect_used)] // File-backed storage asserts invariants via expect when recovery is impossible without corruption fixes.
+#![allow(clippy::expect_used)]
+// File-backed storage asserts invariants via expect when recovery is impossible without corruption fixes.
 #![expect(
     clippy::missing_fields_in_debug,
     reason = "Found 1 occurrences after enabling the lint."
