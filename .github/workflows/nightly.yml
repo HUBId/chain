@@ -762,6 +762,35 @@ EOF
           name: simnet-nightly
           path: simnet-artifacts.tar.gz
 
+  simnet-rpp-stark:
+    name: Simnet harness (prod, prover-stwo, rpp-stark)
+    runs-on: ubuntu-latest
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-rpp-stark"
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Execute simnet harness
+        run: |
+          set -euo pipefail
+          cargo xtask test-simnet
+
+      - name: Package artifacts
+        run: |
+          tar -czf simnet-rpp-stark-artifacts.tar.gz -C target simnet
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-rpp-stark-nightly
+          path: simnet-rpp-stark-artifacts.tar.gz
+
   simnet-regression:
     name: Simnet regression (prod, plonky3)
     runs-on: ubuntu-latest
