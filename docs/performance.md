@@ -48,6 +48,28 @@ The benchmark binary accepts an optional `FIREWOOD_SMOKE_BASELINE` environment
 variable that points to an alternate baseline file. This is useful when testing
 changes locally before updating the repository default.
 
+## Grafana dashboards
+
+The scheduled workflow also verifies that our performance dashboards remain in
+sync with the Grafana instance. The check uses
+[`tools/perf_dashboard_check.sh`](../tools/perf_dashboard_check.sh) together with
+the manifest in [`docs/performance_dashboards.json`](./performance_dashboards.json)
+to download each dashboard and compare the exported `schemaVersion` and
+`version` fields against the committed JSON. If Grafana is unreachable or a
+dashboard drifts, the workflow fails to surface the issue.
+
+To refresh the exports after editing a dashboard in Grafana:
+
+1. Create an API token with `dashboard:read` access and set the environment
+   variables `PERF_GRAFANA_URL` and `PERF_GRAFANA_API_KEY` to the Grafana base
+   URL and token, respectively.
+2. Run `tools/perf_dashboard_check.sh --verify` to confirm that credentials work
+   and to check for drift without writing to disk.
+3. Run `tools/perf_dashboard_check.sh --write` to download and overwrite the
+   exports listed in `docs/performance_dashboards.json`.
+4. Inspect the resulting diffs, commit the updated JSON files, and note the
+   Grafana change in the pull request description.
+
 ## Updating the baseline
 
 We keep the baseline intentionally tight (roughly ±15% from recent nightly

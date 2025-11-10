@@ -1,0 +1,40 @@
+{
+  "dashboards": [
+    {
+      "uid": "pipeline-overview",
+      "title": "Pipeline Overview",
+      "output": "docs/dashboards/pipeline_overview.json",
+      "min_schema": 39
+    },
+    {
+      "uid": "pipeline-wallet-intake",
+      "title": "Pipeline Wallet Intake",
+      "output": "docs/dashboards/pipeline_wallet_intake.json",
+      "min_schema": 39
+    },
+    {
+      "uid": "pipeline-proof-validation",
+      "title": "Pipeline Proof Validation",
+      "output": "docs/dashboards/pipeline_proof_validation.json",
+      "min_schema": 39
+    },
+    {
+      "uid": "pipeline-consensus-finality",
+      "title": "Pipeline Consensus Finality",
+      "output": "docs/dashboards/pipeline_consensus_finality.json",
+      "min_schema": 39
+    },
+    {
+      "uid": "pipeline-storage-commit",
+      "title": "Pipeline Storage Commit",
+      "output": "docs/dashboards/pipeline_storage_commit.json",
+      "min_schema": 39
+    },
+    {
+      "uid": "snapshot-resilience",
+      "title": "Snapshot Resilience",
+      "output": "docs/dashboards/snapshot_resilience.json",
+      "min_schema": 39
+    }
+  ]
+}
