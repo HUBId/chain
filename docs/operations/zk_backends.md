@@ -1,0 +1,58 @@
+# RPP-STARK Verifier Alert Operations
+
+> **Scope:** This runbook supplements the [general backend procedures](../zk_backends.md) with
+> Prometheus, Alertmanager, and Grafana guidance for the `backend-rpp-stark`
+> verifier.
+
+## Telemetry signals
+
+The runtime exposes per-stage counters and latency histograms every time the
+RPP-STARK verifier processes a proof. Successful checks emit `result="ok"`,
+while any failure records `result="fail"` together with the stage label, making
+persistent errors easy to isolate in queries such as
+`rpp_stark_stage_checks_total{stage="fri",result="fail"}`.【F:rpp/runtime/node.rs†L3770-L3850】【F:rpp/runtime/telemetry/metrics.rs†L473-L492】
+
+Additional context for paging decisions is available through the
+`VerifierMetricsSnapshot` that powers `/status/node`:
+`backend_health.rpp-stark.verifier.rejected` increments on every rejected proof,
+mirroring the per-stage counters and helping SREs confirm that the runtime is
+actively discarding payloads.【F:rpp/proofs/proof_system/mod.rs†L343-L405】【F:docs/zk_backends.md†L92-L101】
+
+Latency thresholds re-use the performance SLO established for the consensus
+verifier: the p95 must stay at or below 3.2 seconds to keep block finality inside
+the 12 second envelope.【F:docs/performance/consensus_proofs.md†L21-L38】
+
+## Recommended alert thresholds
+
+| Signal | Suggested query | Threshold | Purpose |
+| --- | --- | --- | --- |
+| Stage failures | `increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[10m])` | Warning: > 0 for 10 m<br>Critical: > 3 for 10 m | Escalate once any stage starts failing persistently and prioritise incidents that reject multiple proofs within one rotation.【F:rpp/runtime/node.rs†L3770-L3850】【F:docs/zk_backends.md†L69-L107】 |
+| Consensus verifier latency | `histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend="rpp-stark",proof_kind="consensus"}[5m])) by (le))` | Critical: > 3.2 s for 15 m | Protect the consensus finality envelope by paging when the verifier exceeds the accepted p95 latency budget.【F:rpp/runtime/telemetry/metrics.rs†L509-L518】【F:docs/performance/consensus_proofs.md†L21-L38】 |
+| Rejection counter confirmation | `increase(backend_health_rpp_stark_verifier_rejected[10m])` (via scraper or `/status/node`) | Investigate whenever > 0 while alerts fire | Validate that failed stage checks translate to runtime rejections before authorising a rollback or enforcement bypass.【F:rpp/proofs/proof_system/mod.rs†L343-L405】【F:docs/zk_backends.md†L92-L101】 |
+
+Sample Alertmanager groups and Grafana drilldowns that encode these thresholds
+are provided under `ops/alerts/zk/` and can be imported as a starting point for
+PagerDuty and dashboard configuration.【F:ops/alerts/zk/rpp_stark.yaml†L1-L36】【F:ops/alerts/zk/rpp_stark_grafana.json†L1-L48】
+
+## Alert triage and response
+
+1. **Identify the failing stage.** Inspect the `stage` label on
+   `rpp_stark_stage_checks_total{result="fail"}` to map the alert back to the
+   countermeasures table in the primary playbook. Stage-specific remediation
+   steps—including replay commands and configuration toggles—are maintained in
+   the `Verifier-Stage-Flags & Gegenmaßnahmen` section of the backend
+   guide.【F:docs/zk_backends.md†L69-L107】
+2. **Confirm runtime enforcement.** Query `/status/node` for
+   `backend_health.rpp-stark.verifier` and ensure `rejected` is increasing. The
+   same snapshot should show whether `accepted` recovers after mitigation. Use
+   the mempool status endpoint to capture the offending proofs before they are
+   reaped.【F:rpp/runtime/node.rs†L5416-L5460】【F:docs/zk_backends.md†L96-L101】
+3. **Escalate according to the playbook.** If mitigation fails, apply the
+   fallback paths documented for backend swaps or enforcement bypasses and loop
+   in release engineering. Every alert acknowledgement must be accompanied by an
+   incident log entry summarising the proof IDs inspected, configuration
+   overrides applied, and whether Stage flags returned to `true`.【F:docs/zk_backends.md†L102-L107】
+
+Following these steps keeps the on-call workflow aligned with the incident
+runbook while giving responders explicit telemetry cues to confirm that alerts
+represent real verifier regressions.

@@ -4,7 +4,8 @@
 >
 > **Related references:** [Security policy & reporting](../SECURITY.md),
 > [Observability overview](./observability.md) & [runbook](./runbooks/observability.md),
-> [Zero-knowledge backend procedures](./zk_backends.md)
+> [Zero-knowledge backend procedures](./zk_backends.md),
+> [RPP-STARK verifier alert operations](./operations/zk_backends.md)
 
 The validator process exposes `/health/live` and `/health/ready` probes on the
 configured RPC listener as soon as startup completes. Integration coverage in

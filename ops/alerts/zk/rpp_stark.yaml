@@ -1,0 +1,44 @@
+groups:
+  - name: zk-rpp-stark
+    interval: 1m
+    rules:
+      - alert: ZkRppStarkVerificationFailuresWarning
+        expr: increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: zk
+        annotations:
+          summary: RPP-STARK verifier observed repeated stage failures
+          description: >-
+            At least one RPP-STARK verification stage reported result="fail" for
+            ten minutes. Inspect the per-stage labels to identify whether params,
+            public inputs, Merkle, FRI, or composition checks are failing and
+            follow the on-call playbook.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkVerificationFailuresCritical
+        expr: increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[10m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+          team: zk
+        annotations:
+          summary: RPP-STARK verifier is rejecting multiple proofs
+          description: >-
+            More than three RPP-STARK verification stages have failed within ten
+            minutes. Expect the runtime to slash or bypass consensus proofs;
+            escalate to release engineering if mitigation fails.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkVerifierLatencyCritical
+        expr: histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend="rpp-stark",proof_kind="consensus"}[5m])) by (le)) > 3.2
+        for: 15m
+        labels:
+          severity: critical
+          team: zk
+        annotations:
+          summary: RPP-STARK verifier p95 latency above 3.2s
+          description: >-
+            The consensus verifier 95th percentile latency exceeded the 3.2 s SLO
+            for fifteen minutes. Review recent deployments, hardware saturation,
+            and proof sizes before slashing resumes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response

@@ -33,6 +33,11 @@
 
 ### Fehlerbehandlung & Telemetrie
 
+> **Alerting shortcut:** Der dedizierte Operations-Guide bündelt empfohlene
+> Prometheus-Queries, Alertmanager-Regeln und Grafana-Panels für das
+> `backend-rpp-stark`-Monitoring. Siehe
+> [RPP-STARK Verifier Alert Operations](operations/zk_backends.md).
+
 - `NodeInner::verify_rpp_stark_with_metrics` (implementiert in `rpp/runtime/node.rs`) ruft den Registry-Helper auf und emittiert strukturierte Logs (`valid`, `proof_bytes`, `verify_duration_ms`, Stage-Flags) mit Label `proof_backend="rpp-stark"` und `proof_kind` (z. B. `"transaction"`).
 - Zusätzlich landen die Kennzahlen auf dem `telemetry`-Target. Erfolgreiche Prüfungen loggen `params_ok`, `public_ok`, `merkle_ok`, `fri_ok`, `composition_ok` sowie `params_bytes`, `public_inputs_bytes` und `payload_bytes`.
 - Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt.
