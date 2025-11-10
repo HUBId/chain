@@ -47,6 +47,108 @@ The raw event stream is written to
 `target/simnet/partitioned-flood/summaries/partitioned_flood.json`, while the
 CSV export offers a condensed view suitable for dashboards.
 
+## Gossip Tuning Checklist
+
+Production incidents tied to gossip saturation generally fall into three
+categories: bandwidth ceilings, connection floods, and replay windows that are
+too narrow for the active mesh. Operators can tune all three via the standard
+configuration files and verify the impact through Prometheus metrics.
+
+### 1. Throttle gossip bandwidth explicitly
+
+1. Edit the profile that maps to the deployment tier (for example,
+   `config/node.toml`, `config/hybrid.toml`, or `config/validator.toml`) and
+   raise or lower `network.p2p.gossip_rate_limit_per_sec` under the `[network.p2p]`
+   table. The value caps accepted gossip publications from a single peer per
+   second; defaults range from 128 (standalone node) to 256 (validator).
+   【F:config/node.toml†L99-L115】【F:config/hybrid.toml†L120-L139】【F:config/validator.toml†L105-L124】
+2. Restart the runtime so the new rate limit propagates to the libp2p rate
+   limiter (`RateLimiter::new(Duration::from_secs(1), gossip_rate_limit_per_sec)`).
+   【F:rpp/p2p/src/swarm.rs†L830-L847】
+3. Confirm the change by scraping `pipeline_gossip_events_total` and computing a
+   per-second rate. A sustained rate near the limit indicates that upstream
+   peers need to be throttled or reshaped.
+
+### 2. Bound connection fan-out
+
+1. Apply per-host HTTP connection shaping to protect the RPC ingress path by
+   adjusting `network.limits.per_ip_token_bucket` (burst and replenish values) in
+   the node configuration. This governs how many simultaneous requests a single
+   IP may issue before throttling kicks in.【F:config/node.toml†L35-L52】
+2. For the gossip layer, restrict which peers may connect by seeding
+   `network.p2p.allowlist` with known peer IDs (and tiers) and enforcing
+   blocklist entries for untrusted senders. Admission control rejects peers that
+   fall outside these lists, ensuring the active mesh stays within the planned
+   fan-out envelope.【F:rpp/runtime/config.rs†L801-L848】【F:rpp/p2p/src/peerstore.rs†L503-L585】
+3. Monitor `rpp_gossip_peer_score` alongside `pipeline_gossip_events_total`; a
+   sudden increase in low-scoring peers or spikes in accepted gossip rates
+   signals that connection limits should be tightened further.
+
+### 3. Enlarge replay protection windows before upgrades
+
+1. Increase `network.p2p.replay_window_size` when rolling out large payloads or
+   longer partitions so the replay protector retains more digests. The guard
+   enforces a minimum of 128 entries and rejects zero-capacity windows during
+   configuration validation.【F:config/node.toml†L107-L115】【F:rpp/runtime/config.rs†L808-L856】
+2. Restart the node to rebuild the `ReplayProtector` with the new capacity.
+   `ReplayProtector::with_capacity(replay_window_size)` preloads persisted
+   digests and starts rejecting duplicates once the window fills.【F:rpp/p2p/src/swarm.rs†L1007-L1010】【F:rpp/p2p/src/security.rs†L7-L68】
+3. Watch the replay telemetry surfaced through admission metrics to ensure the
+   enlarged window no longer drops legitimate replays during catch-up.
+
+## Alerting and Dashboards
+
+The following snippets capture common Prometheus and Grafana artefacts that tie
+directly into the gossip metrics exported by the runtime.
+
+```yaml
+# prometheus/rules/gossip.yml
+groups:
+  - name: gossip-bandwidth
+    rules:
+      - alert: GossipRateSaturating
+        expr: rate(pipeline_gossip_events_total{outcome="success"}[5m])
+              > bool scalar(0.85 * 256)
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Gossip throughput at {{ $labels.instance }} is above 85% of the configured limit"
+          runbook: docs/networking.md#gossip-tuning-checklist
+          limit: "Update 256 to the active network.p2p.gossip_rate_limit_per_sec before deploying"
+```
+
+Pair the alert with a Grafana stat panel that highlights both inbound bandwidth
+and per-topic mesh pressure:
+
+```json
+{
+  "type": "stat",
+  "title": "Gossip bandwidth (5m rate)",
+  "targets": [
+    {
+      "expr": "sum by (direction) (rate(rpp_gossip_bytes[5m]))",
+      "legendFormat": "{{direction}}"
+    }
+  ],
+  "transformations": [
+    {
+      "id": "organize",
+      "options": {
+        "indexByName": "direction"
+      }
+    }
+  ]
+}
+```
+
+* `pipeline_gossip_events_total` is incremented inside the runtime orchestrator
+  whenever a gossip publish succeeds or fails, making it the canonical source
+  for message rates.【F:rpp/runtime/orchestration.rs†L358-L370】【F:rpp/runtime/orchestration.rs†L482-L486】
+* `rpp_gossip_bytes` exposes inbound/outbound byte totals per topic straight
+  from the libp2p registry, supporting both dashboards and alerting on mesh
+  saturation.【F:rpp/p2p/src/swarm.rs†L536-L603】
+
 ## Nightly Coverage
 
 The nightly workflow includes an optional job named `simnet-partitioned-flood`
