@@ -1,5 +1,11 @@
 # Node Lifecycle Expectations
 
+> **Breadcrumbs:** [Operator documentation index](./README.md) › [Checklists](./README.md#checklists) › Node lifecycle expectations
+>
+> **Related references:** [Security policy & reporting](../SECURITY.md),
+> [Observability overview](./observability.md) & [runbook](./runbooks/observability.md),
+> [Zero-knowledge backend procedures](./zk_backends.md)
+
 The validator process exposes `/health/live` and `/health/ready` probes on the
 configured RPC listener as soon as startup completes. Integration coverage in
 `tests/node_lifecycle.rs::node_process_handles_health_probes_and_ctrl_c` asserts that

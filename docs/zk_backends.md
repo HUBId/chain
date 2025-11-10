@@ -1,5 +1,10 @@
 # ZK-Backends
 
+> **Breadcrumbs:** [Operator documentation index](./README.md) › [Zero-knowledge backend procedures](./README.md#zero-knowledge-backend-procedures) › ZK-backends
+>
+> **Complementary guides:** [Observability runbook](./runbooks/observability.md),
+> [Security policy & reporting](../SECURITY.md)
+
 ## rpp-stark (stable)
 
 ### Aktivierung
