@@ -1,4 +1,5 @@
 # Default RPP Chain configuration
+# NOTE: The runtime only reads this file during startup. Restart the node after making changes.
 
 config_version = "1.0"
 

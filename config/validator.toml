@@ -1,4 +1,5 @@
 # Validator runtime configuration
+# NOTE: Restart the validator runtime after editing this file; live reload is not supported.
 #
 # This template derives from config/node.toml and documents the tighter limits
 # and telemetry defaults that apply to dedicated validator operators. Override

@@ -5,6 +5,11 @@ controls enforced by the loaders, and how to dry-run changes before deploying. S
 [modes](modes.md) for per-profile behaviour and the operator [checklist](checklists/operator.md) for
 rollout tasks.
 
+> **Warning:** Configuration files are only parsed during process startup. The runtime does not
+> watch for filesystem changes or respond to signals (for example, `SIGHUP`) to reload settings.
+> Always restart the node or wallet after editing `*.toml` profiles so that changes take effect.
+> See the [hot-reload evaluation](../MIGRATION.md#hot-reload-evaluation) for technical background.
+
 ## Precedence and discovery
 
 1. **Command-line overrides:** `--config` flags passed to the node or wallet CLI take priority and are

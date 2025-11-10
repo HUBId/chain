@@ -1,4 +1,5 @@
 # Hybrid runtime configuration
+# NOTE: Restart the hybrid runtime after editing this file; live reload is not supported.
 #
 # This template mirrors config/node.toml and highlights the fields that change
 # when running the combined node + wallet runtime. Inline comments mark the
