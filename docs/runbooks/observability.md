@@ -44,6 +44,31 @@ and runtime protections remain enforced alongside the CI gates.
       `gh run watch --exit-status --workflow ci.yml` or the pull-request status view before declaring
       telemetry healthy.【F:.github/workflows/ci.yml†L1-L80】【F:docs/test_validation_strategy.md†L41-L83】
 
+## Alert validation drills
+
+The nightly workflow runs the **Alert validation drill** immediately after the metric-export smoke
+tests to prove that Prometheus rules fire and reach the configured webhooks.【F:.github/workflows/nightly.yml†L1-L140】
+The job executes `python tools/alerts/validate_alerts.py` to replay consensus and snapshot
+anomalies, then runs the companion pytest suite to guarantee that missing or unexpected alerts fail
+the build.【F:tools/alerts/validate_alerts.py†L1-L48】【F:tools/alerts/tests/test_alert_validation.py†L1-L63】
+
+When the step fails it produces an `AlertValidationError` describing which alert names were missing or
+unexpected and whether the webhook payload differed from expectations. Use the following checklist
+before paging the on-call rotation:
+
+1. **Inspect the nightly log.** Open the `alert-validation` job in the
+   [`nightly-simnet` workflow](https://github.com/chainbound/chain/actions/workflows/nightly.yml) to
+   read the failure summary and confirm whether the HTTP webhook ran at all. The payload dump is
+   recorded in the step log if the simulated Alertmanager responded.【F:.github/workflows/nightly.yml†L1-L160】
+2. **Reproduce locally.** Run `python tools/alerts/validate_alerts.py` followed by
+   `python -m pytest tools/alerts/tests` from the repository root. The harness spins up a local
+   webhook server and stores the payloads under `ValidationResult.webhook_payloads` so you can inspect
+   the JSON directly.【F:tools/alerts/validation.py†L1-L522】 Update the anomaly fixtures or expected
+   alert names in `default_validation_cases()` if the Prometheus rules changed legitimately.【F:tools/alerts/validation.py†L524-L580】
+3. **Confirm runbook coverage.** If a real regression surfaced (for example the alert stopped firing),
+   follow the relevant playbook (`Consensus VRF-/Quorum` or `Snapshot failover`) and attach the
+   validation output to the incident log before re-enabling the nightly gate.【F:docs/runbooks/observability.md†L69-L123】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
+
 ## Phase-2 consensus proof audits
 
 - Orientiere dich an der [Plonky3 Production Validation Checklist](../testing/plonky3_experimental_testplan.md#4-production-sign-off-checklist),
