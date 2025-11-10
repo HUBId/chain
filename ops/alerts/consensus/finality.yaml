@@ -1,0 +1,56 @@
+groups:
+  - name: consensus-finality
+    interval: 30s
+    rules:
+      - alert: ConsensusFinalityLagWarning
+        expr: max_over_time(finality_lag_slots[5m]) > 12
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+        annotations:
+          summary: Finality lag exceeded 12 slots
+          description: >-
+            Validators have trailed the head by more than twelve slots for five
+            minutes. Inspect recent rounds and ensure the active proposer set is
+            healthy before the gap widens further.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+      - alert: ConsensusFinalityLagCritical
+        expr: max_over_time(finality_lag_slots[5m]) > 24
+        for: 2m
+        labels:
+          severity: critical
+          team: consensus
+        annotations:
+          summary: Finality lag exceeded 24 slots
+          description: >-
+            Finality has stalled for at least twenty-four slots. Trigger the
+            network snapshot failover procedures to route traffic away from the
+            degraded validators and restore a healthy proposer rotation.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+      - alert: ConsensusFinalizedHeightGapWarning
+        expr: max_over_time(finalized_height_gap[5m]) > 4
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+        annotations:
+          summary: Finalized height gap above warning budget
+          description: >-
+            The finalized height trails the best accepted block by more than four
+            heights for five minutes. Correlate with finality lag panels and
+            prepare failover runbooks.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+      - alert: ConsensusFinalizedHeightGapCritical
+        expr: max_over_time(finalized_height_gap[5m]) > 8
+        for: 2m
+        labels:
+          severity: critical
+          team: consensus
+        annotations:
+          summary: Finalized height gap beyond critical budget
+          description: >-
+            Finality height has lagged the accepted tip by more than eight blocks
+            for two minutes. Page the on-call and execute the documented
+            failover procedures to recover block production.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/network_snapshot_failover.md
