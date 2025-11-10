@@ -7,6 +7,8 @@ interpret the derived metrics.
 
 ## Partitioned Flood Scenario
 
+> **Runbook:** [Network partition response](./operations/network_partition.md)
+
 The [`tools/simnet/scenarios/partitioned_flood.ron`](../tools/simnet/scenarios/partitioned_flood.ron)
 wrapper executes the [`scenarios/partitioned_flood.toml`](../scenarios/partitioned_flood.toml)
 configuration in-process. The topology alternates two regions, introduces a

@@ -93,6 +93,7 @@ Before returning a node to service, on-call engineers should verify that gossip
 and connection limits match the active playbook. Follow the [gossip tuning
 checklist](./networking.md#gossip-tuning-checklist) to validate bandwidth caps,
 RPC token buckets, and replay protection thresholds after each configuration
-change or rollback. The same checklist also documents the alerts and dashboards
-expected to fire when a limit is exceeded, making it the first stop during
-gossip-related incidents.【F:docs/networking.md†L1-L178】
+change or rollback, and keep the [network partition response runbook](./operations/network_partition.md)
+handy for rapid mitigation when connectivity degrades. The same checklist also
+documents the alerts and dashboards expected to fire when a limit is exceeded,
+making it the first stop during gossip-related incidents.【F:docs/networking.md†L1-L178】
