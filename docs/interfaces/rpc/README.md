@@ -40,3 +40,23 @@ minor version bumps within the same major series.
 Contract tests in `tests/rpc/` validate that representative request and response
 examples remain compatible with the published JSON Schemas. CI executes these
 checks on every PR so any incompatible change is caught before landing.
+
+## Snapshot Regression Fixtures
+
+Critical request/response shapes for the public RPC are captured as JSON fixtures
+under `tests/rpc_snapshots/fixtures/`. The `rpc_snapshots` integration test sends
+representative requests through the in-process router and compares the
+serialization output against those snapshots.
+
+* Run `cargo test -p rpp-chain --test rpc_snapshots` (or `make test:stable`) to
+  confirm that local changes do not alter any canonical payloads.
+* When an intentional contract change is required, bump the appropriate version
+  constant in `tests/rpc_snapshots/mod.rs` and add a new `vN.json` fixture beside
+  the prior version. Leave earlier fixtures in place so downstream clients can
+  diff historical changes.
+* Regenerate the fixtures by copying the `Actual snapshot` block printed by the
+  failing test into the new `vN.json` file.
+
+Document the version bump in the release notes alongside any schema updates so
+consumers know to upgrade.
+

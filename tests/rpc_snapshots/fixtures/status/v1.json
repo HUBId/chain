@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "request": {
+    "method": "GET",
+    "path": "/status",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "role": "node",
+      "height": 2,
+      "latest_commitment": "state-root-2"
+    }
+  }
+}

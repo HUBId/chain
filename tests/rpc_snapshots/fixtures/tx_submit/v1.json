@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "request": {
+    "method": "POST",
+    "path": "/tx/submit",
+    "body": {
+      "from": "alice",
+      "to": "bob",
+      "amount": 25
+    }
+  },
+  "response": {
+    "status": 202,
+    "body": {
+      "hash": "5734951e686c072eadbb5e1eff42467f45f6547585033fcee85f85620bd60673"
+    }
+  }
+}
