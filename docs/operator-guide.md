@@ -35,6 +35,10 @@ exactly what the automated lifecycle tests cover.
 > policies while the process is running does not take effect. Plan for a full shutdown and restart
 > after configuration changes, just as the lifecycle tests demonstrate.
 
+Storage-sensitive rollouts should also review the [Firewood WAL sizing and sync
+guidance](./storage/firewood.md#wal-sizing-and-sync-policy-guidance) before
+deploying new budgets or durability settings.
+
 ## Networking safeguards for on-call rotations
 
 Before returning a node to service, on-call engineers should verify that gossip

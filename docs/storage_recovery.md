@@ -5,6 +5,10 @@ crash or snapshot restore. It covers write-ahead log (WAL) replay, snapshot
 restoration, and pruning checkpoint validation so recovered nodes rejoin the
 network with verified state commitments.
 
+Routine capacity planning for the WAL and sync policy trade-offs live in the
+[Firewood operations guide](storage/firewood.md#wal-sizing-and-sync-policy-guidance);
+reference it when adjusting durability settings prior to or after a recovery.
+
 ## 1. Validate the WAL
 
 1. **Stop the node and mount the data directory read-only.** Prevent new writes
