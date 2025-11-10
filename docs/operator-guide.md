@@ -78,6 +78,14 @@ current owner so incoming responders and security liaisons can pick up the
 investigation without repeating earlier steps. Link the incident postmortem to
 the shared operations log once the alert clears.
 
+## Mempool incident response
+
+High-volume spam or DoS incidents should follow the
+[mempool cleanup runbook](./mempool_cleanup.md). The playbook mirrors the
+integration coverage that validates limiter behaviour, gossip drains, and the
+RPC controls for adjusting queue limits and fee weights, giving on-call
+engineers a single reference when the mempool saturates.
+
 ## Networking safeguards for on-call rotations
 
 Before returning a node to service, on-call engineers should verify that gossip
