@@ -9,6 +9,7 @@ pub(crate) use range_set::LinearAddressRangeSet;
 use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{area_size_iter, AreaIndex};
+use crate::nodestore::NodeAllocator;
 use crate::{
     CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
@@ -610,29 +611,54 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
         let mut unfixable = Vec::new();
 
         for error in check_report.errors {
-            match error.parent() {
-                Some(StoredAreaParent::TrieNode(_)) => {
-                    warn!("Fix for trie node error not yet implemented");
-                    unfixable.push((error, None));
-                }
-                Some(StoredAreaParent::FreeList(free_list_parent)) => {
-                    if let Err(e) = self.truncate_free_list(free_list_parent) {
-                        unfixable.push((error, Some(e)));
-                    } else {
-                        fixed.push(error);
+            match error {
+                CheckerError::AreaLeaks(ranges) => {
+                    let leaked_areas: Vec<_> =
+                        self.split_all_leaked_ranges(&ranges, None).collect();
+                    if leaked_areas.is_empty() {
+                        // Nothing to enqueue; keep reporting the leak so operators can
+                        // investigate why the checker produced an empty range set.
+                        unfixable.push((CheckerError::AreaLeaks(ranges), None));
+                        continue;
                     }
-                }
-                None => {
-                    if let CheckerError::AreaLeaks(ranges) = &error {
-                        {
-                            let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
-                            // TODO: add _leaked_areas to the free list
+
+                    let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut self.header);
+                    let mut io_errors = Vec::new();
+
+                    for (address, area_index) in leaked_areas {
+                        if let Err(err) = allocator.add_free_block(address, area_index) {
+                            warn!(
+                                "Failed to enqueue leaked area at {address:?} (size {area_index:?}): {err}"
+                            );
+                            io_errors.push(err);
                         }
-                        unfixable.push((error, None));
+                    }
+
+                    if io_errors.is_empty() {
+                        fixed.push(CheckerError::AreaLeaks(ranges));
                     } else {
-                        unfixable.push((error, None));
+                        for io_error in io_errors {
+                            unfixable
+                                .push((CheckerError::AreaLeaks(ranges.clone()), Some(io_error)));
+                        }
                     }
                 }
+                other => match other.parent() {
+                    Some(StoredAreaParent::TrieNode(_)) => {
+                        warn!("Fix for trie node error not yet implemented");
+                        unfixable.push((other, None));
+                    }
+                    Some(StoredAreaParent::FreeList(free_list_parent)) => {
+                        if let Err(e) = self.truncate_free_list(free_list_parent) {
+                            unfixable.push((other, Some(e)));
+                        } else {
+                            fixed.push(other);
+                        }
+                    }
+                    None => {
+                        unfixable.push((other, None));
+                    }
+                },
             }
         }
 

@@ -598,7 +598,7 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
         Ok(())
     }
 
-    fn add_free_block(
+    pub(crate) fn add_free_block(
         &mut self,
         address: LinearAddress,
         area_index: AreaIndex,
