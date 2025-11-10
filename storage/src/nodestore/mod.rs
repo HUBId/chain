@@ -53,6 +53,7 @@ use crate::{firewood_counter, firewood_gauge, StorageMetricsHandle};
 use arc_swap::access::DynAccess;
 use arc_swap::ArcSwap;
 use smallvec::SmallVec;
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{Error, ErrorKind, Read};
 use std::sync::atomic::AtomicUsize;
@@ -63,6 +64,13 @@ pub use primitives::{AreaIndex, LinearAddress};
 
 // Re-export types from header module
 pub use header::NodeStoreHeader;
+
+/// Summary of the results when reaping deleted nodes from a revision.
+#[derive(Debug, Default)]
+pub struct ReapDeletedSummary {
+    /// Addresses that were encountered more than once while reaping and were therefore skipped.
+    pub reintroduced_addresses: Vec<LinearAddress>,
+}
 
 /// The [`NodeStore`] handles the serialization of nodes and
 /// free space management of nodes in the page store. It lays out the format
@@ -870,15 +878,24 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     pub fn reap_deleted(
         mut self,
         proposal: &mut NodeStore<Committed, S>,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<ReapDeletedSummary, FileIoError> {
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut proposal.header);
+        let mut seen_addresses = HashSet::new();
+        let mut duplicate_addresses = HashSet::new();
+        let mut summary = ReapDeletedSummary::default();
         for node in take(&mut self.kind.deleted) {
+            if let Some(addr) = node.as_linear_address() {
+                if !seen_addresses.insert(addr) && duplicate_addresses.insert(addr) {
+                    summary.reintroduced_addresses.push(addr);
+                    continue;
+                }
+            }
             allocator.delete_node(node)?;
         }
-        Ok(())
+        Ok(summary)
     }
 }
 

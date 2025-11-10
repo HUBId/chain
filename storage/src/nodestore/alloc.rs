@@ -25,7 +25,7 @@
 use super::area_index_and_size;
 use super::primitives::{index_name, AreaIndex, LinearAddress};
 use crate::linear::FileIoError;
-use crate::logger::trace;
+use crate::logger::{trace, warn};
 use crate::node::branch::{ReadSerializable, Serializable};
 use crate::nodestore::NodeStoreHeader;
 use integer_encoding::VarIntReader;
@@ -407,34 +407,56 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
         })?;
 
         let mut current_index_u8 = requested_index.get();
-        while current_index_u8 <= AreaIndex::MAX.get() {
+        'outer: while current_index_u8 <= AreaIndex::MAX.get() {
             let current_index = AreaIndex::try_from(current_index_u8)
                 .expect("current_index_u8 is less than AreaIndex::NUM_AREA_SIZES");
 
-            let maybe_address = {
+            let mut maybe_address = None;
+            {
                 let free_lists = self.header.free_lists_mut();
                 let free_stored_area_addr = free_lists
                     .get_mut(current_index.as_usize())
                     .expect("index is less than AreaIndex::NUM_AREA_SIZES");
 
                 if let Some(address) = *free_stored_area_addr {
-                    let next_free = if let Some(cached_head) = self.storage.free_list_cache(address)
-                    {
-                        trace!("free_head@{address}(cached): {cached_head:?} size:{current_index}");
-                        cached_head
-                    } else {
-                        let (free_head, read_index) =
-                            FreeArea::from_storage(self.storage, address)?;
-                        debug_assert_eq!(read_index, current_index);
-                        free_head.next_free_block
-                    };
+                    let cached_next = self.storage.free_list_cache(address).flatten();
+                    match FreeArea::from_storage(self.storage, address) {
+                        Ok((free_head, read_index)) => {
+                            debug_assert_eq!(read_index, current_index);
+                            let has_cached_next = cached_next.is_some();
+                            let next_free = cached_next.or(free_head.next_free_block);
 
-                    *free_stored_area_addr = next_free;
-                    Some(address)
-                } else {
-                    None
+                            *free_stored_area_addr = next_free;
+                            if !has_cached_next {
+                                self.storage.add_to_free_list_cache(address, next_free);
+                            }
+
+                            trace!("free_head@{address}: {next_free:?} size:{current_index}");
+                            maybe_address = Some(address);
+                        }
+                        Err(err) => {
+                            if matches!(
+                                err.kind(),
+                                ErrorKind::InvalidData | ErrorKind::UnexpectedEof
+                            ) {
+                                *free_stored_area_addr = cached_next;
+                                warn!(
+                                    "Corrupt free list entry at {address:?} (size {current_index}): {err}"
+                                );
+                                firewood_counter!(
+                                    "firewood.freelist.corrupt_header",
+                                    "Free list entries skipped due to invalid headers",
+                                    "index" => index_name(current_index)
+                                )
+                                .increment(1);
+                                continue 'outer;
+                            }
+
+                            return Err(err);
+                        }
+                    }
                 }
-            };
+            }
 
             if let Some(address) = maybe_address {
                 if current_index.get() > requested_index.get() {

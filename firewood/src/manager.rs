@@ -228,7 +228,25 @@ impl RevisionManager {
             // This guarantee is there because we have a `&mut self` reference to the manager, so
             // the compiler guarantees we are the only one using this manager.
             match Arc::try_unwrap(oldest) {
-                Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                Ok(oldest) => {
+                    let summary = oldest.reap_deleted(&mut committed)?;
+                    if !summary.reintroduced_addresses.is_empty() {
+                        let count = summary.reintroduced_addresses.len();
+                        let addresses: Vec<u64> = summary
+                            .reintroduced_addresses
+                            .iter()
+                            .map(|addr| addr.get())
+                            .collect();
+                        warn!(
+                            "Skipped reintroducing {count} free list addresses still in use: {addresses:?}"
+                        );
+                        firewood_storage::firewood_counter!(
+                            "firewood.freelist.reintroduced",
+                            "Addresses skipped during deletion because they were already freed"
+                        )
+                        .increment(count as u64);
+                    }
+                }
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
                     self.historical_write().push_front(original);

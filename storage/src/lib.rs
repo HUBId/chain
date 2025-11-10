@@ -63,7 +63,7 @@ pub use node::{
 };
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
+    NodeReader, NodeStore, NodeStoreHeader, Parentable, ReapDeletedSummary, RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;
