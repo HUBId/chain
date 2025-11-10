@@ -3,7 +3,8 @@
 > **Breadcrumbs:** [Operator documentation index](./README.md) › [Zero-knowledge backend procedures](./README.md#zero-knowledge-backend-procedures) › ZK-backends
 >
 > **Complementary guides:** [Observability runbook](./runbooks/observability.md),
-> [Security policy & reporting](../SECURITY.md)
+> [Security policy & reporting](../SECURITY.md),
+> [RPP vendor refresh procedure](./operations/rpp_vendor_update.md)
 
 ## rpp-stark (stable)
 

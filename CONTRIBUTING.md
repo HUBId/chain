@@ -16,6 +16,7 @@ guidelines for contributing to ztate (the chain repository).
 * [Setting up docker](README.docker.md)
 * [Issue tracker](https://github.com/ava-labs/chain/issues)
 * [Release doc review checklist](RELEASE.md#documentation-review-checklist)
+* [RPP vendor refresh procedure](docs/operations/rpp_vendor_update.md)
 
 ## [Testing]
 
