@@ -118,3 +118,4 @@ roles:
   practices, rate limits, and telemetry authentication hooks.
 - [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md) summarises change control, release
   approvals, and incident-response policies.
+- [`docs/zk_backends.md`](docs/zk_backends.md#incident-runbook-rpp-stark-verification-failures) liefert Stage-Flag-Gegenmaßnahmen, Proof-Replay-Befehle und Backend-Fallbacks für Verifier-Incidents, die Security während eines Hotfixes begleiten muss.【F:docs/zk_backends.md†L74-L207】
