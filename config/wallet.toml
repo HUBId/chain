@@ -1,3 +1,4 @@
+# NOTE: Restart the wallet runtime after editing this file; live reload is not supported.
 data_dir = "./data"
 
 [wallet.keys]

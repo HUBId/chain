@@ -244,11 +244,13 @@ impl std::error::Error for BootstrapError {
 /// Shared CLI arguments used across runtime entrypoints.
 #[derive(Debug, Clone, Args)]
 pub struct RuntimeOptions {
-    /// Optional path to a node configuration file loaded before starting the runtime
+    /// Optional path to a node configuration file loaded before starting the runtime.
+    /// The runtime does not watch for changes; restart after editing the file.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
-    /// Optional path to a wallet configuration file loaded before starting the runtime
+    /// Optional path to a wallet configuration file loaded before starting the runtime.
+    /// The runtime does not watch for changes; restart after editing the file.
     #[arg(long, value_name = "PATH")]
     pub wallet_config: Option<PathBuf>,
 

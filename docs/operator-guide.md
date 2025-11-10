@@ -24,6 +24,11 @@ that updates feature flags or backend policies should be applied by writing the
 new values to the node configuration file and restarting the service, matching
 exactly what the automated lifecycle tests cover.
 
+> **Warning:** The runtime only loads configuration files during startup. Signals such as
+> `SIGHUP` are ignored for reload purposes, and editing `node.toml`, `malachite.toml`, or admission
+> policies while the process is running does not take effect. Plan for a full shutdown and restart
+> after configuration changes, just as the lifecycle tests demonstrate.
+
 ## Networking safeguards for on-call rotations
 
 Before returning a node to service, on-call engineers should verify that gossip

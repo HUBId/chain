@@ -1,4 +1,5 @@
 # Example Malachite blueprint configuration
+# NOTE: Restart the node after editing this blueprint; the runtime does not hot-reload it.
 #
 # The values documented here mirror the defaults baked into the runtime. They
 # provide a self-contained reference that aligns with the parameter groups

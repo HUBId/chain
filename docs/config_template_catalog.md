@@ -1,5 +1,9 @@
 # Config template catalog
 
+> **Warning:** Templates are snapshots loaded at startup. The runtime does not support hot reloading
+> or signal-triggered refreshes, so apply edits by updating the files on disk and restarting the
+> affected service.
+
 ## Network admission
 
 | Template | Setting | Default | Description |
