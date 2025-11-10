@@ -187,6 +187,182 @@ impl FreeArea {
     }
 }
 
+/// A [`StoredArea`] represents the metadata header of an allocated area that
+/// stores a node in linear storage. Unlike [`FreeArea`], a stored area is
+/// identified by any marker other than `0xff` in the second byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoredArea {
+    area_index: AreaIndex,
+}
+
+impl StoredArea {
+    /// Returns the [`AreaIndex`] encoded in the stored area's header.
+    pub const fn area_index(self) -> AreaIndex {
+        self.area_index
+    }
+
+    /// Reads the stored area metadata from storage.
+    pub fn from_storage<S: ReadableStorage>(
+        storage: &S,
+        address: LinearAddress,
+    ) -> Result<Self, FileIoError> {
+        let stored_area_addr = address.get();
+        let mut stream = storage.stream_from(stored_area_addr)?;
+        Self::from_storage_reader(&mut stream).map_err(|e| {
+            storage.file_io_error(
+                e,
+                stored_area_addr,
+                Some("StoredArea::from_storage".to_string()),
+            )
+        })
+    }
+
+    fn from_storage_reader(mut reader: impl Read) -> std::io::Result<Self> {
+        let area_index = AreaIndex::try_from(reader.read_byte()?)?;
+        let area_size = area_index.size();
+
+        let mut payload_available =
+            usize::try_from(area_size.checked_sub(1).ok_or_else(|| {
+                Error::new(ErrorKind::InvalidData, "Stored area is missing payload")
+            })?)
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "Stored area size exceeds usize range",
+                )
+            })?;
+
+        if payload_available == 0 {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "Stored area missing node marker",
+            ));
+        }
+
+        let marker = reader.read_byte()?;
+        payload_available -= 1;
+
+        if marker == 0xff {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Stored area marker indicates a free area",
+            ));
+        }
+
+        let min_payload = Self::minimum_payload_size(marker, &mut reader)?;
+        if payload_available < min_payload {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Stored area payload too small: requires at least {min_payload} bytes, found {payload_available}"
+                ),
+            ));
+        }
+
+        Ok(Self { area_index })
+    }
+
+    fn minimum_payload_size(marker: u8, reader: &mut impl Read) -> std::io::Result<usize> {
+        if marker & 1 == 1 {
+            Self::minimum_leaf_payload(marker)
+        } else {
+            Self::minimum_branch_payload(marker, reader)
+        }
+    }
+
+    fn minimum_leaf_payload(marker: u8) -> std::io::Result<usize> {
+        const LEAF_PARTIAL_PATH_LEN_OVERFLOW: usize = (1 << 7) - 2;
+
+        let partial_path_nibbles = usize::from(marker >> 1);
+        let mut min_payload = 0usize;
+
+        if partial_path_nibbles == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
+            // Overflow encoding includes a varint length and the actual path bytes.
+            min_payload += 1; // minimum varint encoding for length 0
+        } else {
+            min_payload += (partial_path_nibbles + 1) / 2;
+        }
+
+        // Leaf values are encoded as <varint length><bytes>.
+        min_payload += 1; // minimum varint encoding for zero-length value
+
+        Ok(min_payload)
+    }
+
+    fn minimum_branch_payload(marker: u8, reader: &mut impl Read) -> std::io::Result<usize> {
+        const HASH_AND_ADDRESS_LEN: usize = size_of::<u64>() + size_of::<crate::HashType>();
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        const BRANCH_PARTIAL_PATH_LEN_OVERFLOW: usize = (1 << 2) - 1;
+        #[cfg(feature = "branch_factor_256")]
+        const BRANCH_PARTIAL_PATH_LEN_OVERFLOW: usize = (1 << 6) - 1;
+
+        let has_value = (marker >> 1) & 1 == 1;
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        let childcount = {
+            let encoded = ((marker >> 2) & 0x0f) as usize;
+            if encoded == 0 {
+                crate::node::BranchNode::MAX_CHILDREN
+            } else {
+                encoded
+            }
+        };
+
+        #[cfg(feature = "branch_factor_256")]
+        let childcount = {
+            let mut buf = [0u8; 1];
+            reader.read_exact(&mut buf)?;
+            if buf[0] == 0 {
+                crate::node::BranchNode::MAX_CHILDREN
+            } else {
+                usize::from(buf[0])
+            }
+        };
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        let partial_path_nibbles = usize::from(marker >> 6);
+        #[cfg(feature = "branch_factor_256")]
+        let partial_path_nibbles = usize::from((marker >> 2) & 0x3f);
+
+        let mut min_payload = 0usize;
+
+        #[cfg(feature = "branch_factor_256")]
+        {
+            // We consumed an explicit child count byte above.
+            min_payload += 1;
+        }
+
+        if partial_path_nibbles == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
+            min_payload += 1; // minimum varint encoding for overflow length
+        } else {
+            min_payload += (partial_path_nibbles + 1) / 2;
+        }
+
+        if has_value {
+            min_payload += 1; // minimum varint encoding for zero-length value
+        }
+
+        if childcount > crate::node::BranchNode::MAX_CHILDREN {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Branch child count {childcount} exceeds maximum {}",
+                    crate::node::BranchNode::MAX_CHILDREN
+                ),
+            ));
+        }
+
+        if childcount == crate::node::BranchNode::MAX_CHILDREN {
+            min_payload += crate::node::BranchNode::MAX_CHILDREN * HASH_AND_ADDRESS_LEN;
+        } else {
+            min_payload += childcount * (1 + HASH_AND_ADDRESS_LEN);
+        }
+
+        Ok(min_payload)
+    }
+}
+
 // Re-export the NodeStore types we need
 use super::NodeStore;
 

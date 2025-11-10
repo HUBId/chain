@@ -897,12 +897,51 @@ where
         &self,
         address: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
-        if alloc::FreeArea::from_storage(self.storage.as_ref(), address).is_err() {
-            self.read_node(address)?;
-        }
+        let is_structural_error = |error: &FileIoError| {
+            matches!(
+                error.kind(),
+                ErrorKind::InvalidData | ErrorKind::UnexpectedEof
+            )
+        };
 
-        let area_index_and_size = self.area_index_and_size(address)?;
-        Ok(area_index_and_size)
+        match alloc::FreeArea::from_storage(self.storage.as_ref(), address) {
+            Ok((_, area_index)) => {
+                let area_size = area_index.size();
+                Ok((area_index, area_size))
+            }
+            Err(free_err) => {
+                if !is_structural_error(&free_err) {
+                    return Err(free_err);
+                }
+
+                match alloc::StoredArea::from_storage(self.storage.as_ref(), address) {
+                    Ok(stored_area) => {
+                        let area_index = stored_area.area_index();
+                        Ok((area_index, area_index.size()))
+                    }
+                    Err(stored_err) => {
+                        if !is_structural_error(&stored_err) {
+                            return Err(stored_err);
+                        }
+
+                        let free_err_msg = free_err.to_string();
+                        let stored_err_msg = stored_err.to_string();
+                        let error = Error::new(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "invalid leaked area: no free area ({free_err_msg}); no stored area ({stored_err_msg})"
+                            ),
+                        );
+
+                        Err(self.storage.file_io_error(
+                            error,
+                            address.get(),
+                            Some("read_leaked_area".to_string()),
+                        ))
+                    }
+                }
+            }
+        }
     }
 }
 
