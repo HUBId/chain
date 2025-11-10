@@ -38,9 +38,33 @@ executes the smoke benchmark, and publishes three artifacts:
 - `smoke-metrics.json` contains the structured metrics.
 - `smoke-summary.md` summarizes the run for quick review.
 
-The workflow fails if the reported throughput falls below the
-`SMOKE_THROUGHPUT_THRESHOLD` environment variable (default `1.0` op/sec). Adjust
-this threshold when we establish a stable baseline on the target hardware.
+The workflow parses `smoke-metrics.json`, compares the recorded metrics against
+the JSON baseline embedded in `benchmark/baselines/smoke.json`, and fails if any
+value lands outside of the accepted range. The baseline tracks throughput,
+total runtime, and the 95th percentile batch latency so that we catch both
+throughput drops and stalls.
+
+The benchmark binary accepts an optional `FIREWOOD_SMOKE_BASELINE` environment
+variable that points to an alternate baseline file. This is useful when testing
+changes locally before updating the repository default.
+
+## Updating the baseline
+
+We keep the baseline intentionally tight (roughly ±15% from recent nightly
+runs) so that the job detects meaningful regressions while tolerating routine
+variance. To adjust the baseline:
+
+1. Run `cargo +nightly run -p firewood-benchmark -- smoke` and inspect the
+   generated `smoke-metrics.json`.
+2. Edit `benchmark/baselines/smoke.json`, updating the `lower`/`upper` bounds
+   for throughput, total duration, and `per_batch_p95_ms`.
+3. Re-run the benchmark to confirm the `baseline.within_range` flags stay
+   `true`.
+4. Commit the updated JSON and include a link to the validating benchmark run in
+   the pull request description.
+
+Baseline adjustments must be reviewed by the performance on-call engineer or a
+Firewood maintainer to ensure we are not masking a regression.
 
 ## Responding to alerts
 
