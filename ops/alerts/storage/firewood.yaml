@@ -1,0 +1,139 @@
+groups:
+  - name: firewood-storage
+    interval: 1m
+    rules:
+      - alert: FirewoodWalQueueDepthWarning
+        expr: max(firewood_nodes_unwritten) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: Firewood WAL queue depth is growing
+          description: >-
+            The number of unwritten Firewood nodes has been above 1k for ten minutes.
+            Check disk latency, IO budgets, and upstream submission rate.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-queue-depth
+      - alert: FirewoodWalQueueDepthCritical
+        expr: max(firewood_nodes_unwritten) > 5000
+        for: 5m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Firewood WAL queue depth is saturated
+          description: >-
+            The Firewood unwritten-node queue exceeded 5k entries for five minutes,
+            indicating sustained WAL back-pressure. Pause ingestion and inspect the
+            storage backend before resuming.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-queue-depth
+      - alert: FirewoodWalFlushFailed
+        expr: increase(rpp_runtime_storage_wal_flush_total{outcome="failed"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Firewood WAL flush failures detected
+          description: >-
+            One or more Firewood WAL flush attempts failed within the last five minutes.
+            Investigate disk errors and replay the firewood_recovery drill before
+            allowing new commits.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-flush-failures
+      - alert: FirewoodWalFlushRetries
+        expr: increase(rpp_runtime_storage_wal_flush_total{outcome="retried"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: Firewood WAL flush retries increasing
+          description: >-
+            Firewood needed to retry WAL flushes more than three times in the last 15 minutes.
+            Review IO latency and WAL sizing to avoid outright failures.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-flush-failures
+      - alert: FirewoodWalRolledBackTransactions
+        expr: increase(firewood_wal_transactions_total{result="rolled_back"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: Firewood rolled back WAL transactions during replay
+          description: >-
+            Recovery discarded one or more WAL transactions, signalling truncation or
+            corruption. Run the firewood_recovery drill and inspect recent shutdowns.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-corruption
+      - alert: FirewoodSnapshotIngestFailures
+        expr: increase(firewood_snapshot_ingest_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Firewood snapshot ingestion failures detected
+          description: >-
+            Snapshot ingestion recorded at least one failure in the last 15 minutes. Examine
+            the labelled reason and manifest logs to determine whether proofs or checksums
+            are corrupt.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-snapshot-ingest-failures
+      - alert: FirewoodRootReadErrors
+        expr: sum by (state) (increase(firewood_nodestore_root_read_errors_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Firewood root reads are failing
+          description: >-
+            Committed or immutable Firewood roots failed to load for fifteen minutes. Pause
+            ingestion and audit the storage device before continuing.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-root-read-errors
+      - alert: FirewoodRecoveryStuck
+        expr: firewood_recovery_active > 0
+        for: 15m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: Firewood recovery workflow is still active
+          description: >-
+            The recovery drill has been running for more than fifteen minutes. Review the
+            recovery logs and ensure the drill is progressing or restart with fresh inputs.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-recovery-stuck
+      - alert: FirewoodRecoveryIncomplete
+        expr: increase(firewood_recovery_runs_total{phase="start"}[30m]) > increase(firewood_recovery_runs_total{phase="complete"}[30m])
+        for: 30m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Firewood recovery did not complete
+          description: >-
+            A recovery workflow started within the last 30 minutes but no matching completion
+            was observed. Escalate after confirming the drill is stuck or failed.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-recovery-stuck
+      - alert: SnapshotStreamLagWarning
+        expr: snapshot_stream_lag_seconds > 30
+        for: 5m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: Snapshot stream lag exceeds 30 seconds
+          description: >-
+            Snapshot consumers have been lagging by more than 30 seconds for five minutes.
+            Investigate producers, network health, and downstream replay services.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-snapshot-lag
+      - alert: SnapshotStreamLagCritical
+        expr: snapshot_stream_lag_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Snapshot stream lag exceeds 120 seconds
+          description: >-
+            Snapshot replication is more than two minutes behind. Follow the snapshot failover
+            playbook to re-route or restart consumers before data gaps widen.
+          runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-snapshot-lag

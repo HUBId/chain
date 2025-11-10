@@ -134,9 +134,78 @@ mit dem [On-Call-Handbuch](./oncall.md#alert-reaction-quick-reference) synchroni
 | `/observability` dashboards lack pipeline data | Call `/wallet/pipeline/telemetry` or `/p2p/peers` on the RPC service to confirm the orchestrator is publishing snapshots (include the Authorization header when RPC auth is enabled[^rpc-auth]).【F:rpp/rpc/api.rs†L984-L1067】【F:rpp/runtime/orchestration.rs†L611-L615】 | If the summary is empty, ensure the node runtime is running (see startup runbook) and that the pipeline orchestrator logged `pipeline orchestrator started`. Restart after resolving config or network issues and review the [pipeline telemetry dashboards](../observability/pipeline.md) for stalled phases.【F:rpp/node/src/lib.rs†L494-L552】 |
 | Admission telemetry flags unknown peers or auditors request a policy dump | Run `curl -H "Authorization: Bearer ${RPP_RPC_TOKEN}" https://rpc.example.org/p2p/admission/policies` to inspect the persisted allowlist tiers and sorted blocklist snapshot.【F:rpp/rpc/src/routes/p2p.rs†L126-L157】 | Issue `POST /p2p/admission/policies` with an `actor` (and optional `reason`) to add or remove entries; duplicates or allowlist/blocklist conflicts return a `400` so failed attempts land in the incident log before retrying.【F:rpp/rpc/src/routes/p2p.rs†L158-L209】 Query `GET /p2p/admission/audit?offset=0&limit=50` (bearer token required) to review the append-only audit log and confirm who requested the change, the timestamp, and the previous/current state. Rotate the JSONL log in line with `network.admission.audit_retention_days` to keep the evidence trail manageable.【F:rpp/rpc/src/routes/p2p.rs†L110-L153】【F:rpp/p2p/src/policy_log.rs†L1-L112】【F:rpp/runtime/config.rs†L942-L1004】 |
 | Need to diff or restore previous admission policies | `rpp-node validator admission backups list` lists the archived snapshots and `download` fetches the selected archive to disk with the correct RPC URL/token from the validator profile.【F:rpp/node/src/main.rs†L151-L408】 | Use `rpp-node validator admission restore` (or `POST /p2p/admission/backups`) with the backup name, actor, optional reason, and approvals to roll back to a known-good snapshot; the peerstore prunes backups according to `network.admission.backup_retention_days` so copy out relevant archives before restoring.【F:rpp/rpc/src/routes/p2p.rs†L90-L225】【F:rpp/p2p/src/peerstore.rs†L1090-L1157】 |
-| Grafana shows `firewood.nodestore.root.read_errors` or `firewood.snapshot.ingest.failures` climbing | Confirm the spike is real by querying the labelled counters in Prometheus (`sum by (state)(increase(firewood_nodestore_root_read_errors_total[5m]))`, `sum by (reason)(increase(firewood_snapshot_ingest_failures_total[5m]))`). Inspect the Firewood lifecycle logs for `root read failed` or `snapshot manifest` errors and check the WAL recovery drill output.【F:storage/src/nodestore/mod.rs†L661-L701】【F:storage-firewood/src/lifecycle.rs†L18-L37】【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】 | Treat the incident as data loss: pause snapshot ingestion, run the `firewood_recovery` utility to rebuild state, and only resume once the counters flatten. Escalate if the recovery gauge `firewood.recovery.active` stays non-zero after the workflow finishes.【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】 |
+| Grafana shows `firewood.nodestore.root.read_errors` or `firewood.snapshot.ingest.failures` climbing | Confirm the spike is real by querying the labelled counters in Prometheus (`sum by (state)(increase(firewood_nodestore_root_read_errors_total[5m]))`, `sum by (reason)(increase(firewood_snapshot_ingest_failures_total[5m]))`). Inspect the Firewood lifecycle logs for `root read failed` or `snapshot manifest` errors and check the WAL recovery drill output.【F:storage/src/nodestore/mod.rs†L661-L701】【F:storage-firewood/src/lifecycle.rs†L14-L248】【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L171】 | Treat the incident as data loss: pause snapshot ingestion, run the `firewood_recovery` utility to rebuild state, and only resume once the counters flatten. Escalate if the recovery gauge `firewood.recovery.active` stays non-zero after the workflow finishes.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】 |
 | `pipeline_submissions_total` metrics report many `reason="tier_requirement"` rejections | Review the labelled counter from the metrics backend; the orchestrator records tier and gossip errors when rejecting workflows.【F:rpp/runtime/orchestration.rs†L623-L704】 | Investigate the submitting account’s reputation tier via `/wallet/reputation/:address` (include the Authorization header when RPC auth is enabled[^rpc-auth]) or adjust the workflow policy; see [modes](../modes.md) for role-specific submission expectations.【F:rpp/rpc/api.rs†L984-L1059】 |
 | Slashing dashboards show `kind=censorship` oder `kind=inactivity` Ausschläge | Prüfe `rpp.node.slashing.events_total` und `queue_segments` nach Validator-IDs mit gehäuften Meldungen; korreliere mit `consensus`-Logs für `registered censorship trigger` bzw. `registered inactivity trigger`.【F:rpp/node/src/telemetry/slashing.rs†L59-L93】【F:rpp/consensus/src/state.rs†L1000-L1199】 | Abgleich mit den in `consensus.config` gesetzten Grenzwerten (`censorship_vote_threshold`, `censorship_proof_threshold`, `inactivity_threshold`) und Validator-Runbooks; wiederholte Treffer deuten auf blockierte Votes/Proofs oder dauerhaftes Fernbleiben hin. Fordere betroffene Operatoren zur Netzwerkanalyse auf und evaluiere Slashing-/Ersatzmaßnahmen anhand der Testfälle.【F:tests/consensus/censorship_inactivity.rs†L1-L260】 |
+
+
+### Firewood storage alert reference
+
+Import the storage-focused Prometheus rules in [`ops/alerts/storage/firewood.yaml`](../../ops/alerts/storage/firewood.yaml)
+to match the thresholds summarised in [Firewood storage monitoring](../storage/monitoring.md).【F:ops/alerts/storage/firewood.yaml†L1-L139】【F:docs/storage/monitoring.md†L1-L21】 The
+subsections below expand on the linked runbook URLs referenced by the alert annotations.
+
+#### Firewood WAL queue depth
+
+1. **Confirm backlog.** Graph `max(firewood_nodes_unwritten)` over the last 15 minutes to verify the
+   warning (>1 000) or critical (>5 000) threshold that fired.【F:docs/storage/monitoring.md†L9-L11】 The
+   gauge reflects staged nodes waiting for persistence, so large values indicate WAL pressure.【F:storage/src/nodestore/mod.rs†L622-L648】【F:storage/src/nodestore/persist.rs†L448-L536】
+2. **Correlate with IO budgets.** Compare `firewood.storage.io_budget{stage="commit"|"compaction"}` with the
+   provisioned budgets to determine whether workloads outgrew the documented envelope.【F:storage-firewood/src/state.rs†L201-L210】【F:docs/storage/firewood.md†L60-L88】 Adjust `storage.commit_io_budget_bytes` only after identifying upstream causes for larger batches.
+3. **Mitigate sustained back-pressure.** Throttle intake (pause new submissions or snapshots) and review
+   disk latency. If the queue only drains after switching to `storage.sync_policy="deferred"`, plan to return
+   to `"always"` once the backlog clears and document the temporary change in the incident log.【F:docs/storage/firewood.md†L71-L93】
+
+#### Firewood WAL flush failures
+
+1. **Inspect failure counters.** Check `increase(rpp_runtime_storage_wal_flush_total{outcome="failed"}[5m])` and the retry
+   variant to confirm whether the alert was triggered by hard failures or repeated retries.【F:docs/storage/monitoring.md†L12-L12】
+2. **Audit the filesystem.** Review kernel logs and disk SMART data for IO errors, then evaluate whether temporarily relaxing
+   `storage.sync_policy` is required to flush pending writes while keeping crash consistency documented.【F:docs/storage/firewood.md†L78-L83】
+3. **Run the recovery drill.** Execute `firewood_recovery` to rebuild the WAL, verifying that the counter
+   `firewood.recovery_runs_total{phase="complete"}` increments when the workflow finishes.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】 Only resume new commits once flushes succeed without retries.
+
+#### Firewood WAL corruption
+
+1. **Validate rolled-back transactions.** Query `increase(firewood_wal_transactions_total{result="rolled_back"}[15m])` to
+   quantify how many incomplete transactions were discarded during replay.【F:docs/storage/monitoring.md†L13-L13】 Values > 0 imply a truncated WAL or abrupt shutdown.【F:storage-firewood/src/kv.rs†L120-L165】
+2. **Inspect recent shutdowns.** Review system logs for power loss or OOM kills that might have interrupted commits before
+   the matching `Commit` record was written. Document findings alongside the incident report.
+3. **Restore from known-good state.** Run the recovery workflow and, if repeated rollbacks occur, rebuild from the latest
+   snapshot bundle before re-enabling peer ingestion.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】
+
+#### Firewood snapshot ingest failures
+
+1. **Check labelled reasons.** Inspect `sum by (reason)(increase(firewood_snapshot_ingest_failures_total[15m]))` to pinpoint
+   whether manifests were missing, checksum mismatches occurred, or proofs were rejected.【F:docs/storage/monitoring.md†L14-L14】【F:storage-firewood/src/lifecycle.rs†L14-L248】
+2. **Validate artefacts.** Re-fetch the offending manifest and proof from the object store, verifying checksums before retrying
+   ingestion. If proofs repeatedly fail, escalate to engineering with the captured artefacts.
+3. **Coordinate with snapshot consumers.** Pause downstream replay while the bundle is rebuilt to prevent inconsistent state from propagating.
+
+#### Firewood root read errors
+
+1. **Quantify failures.** Use `sum by (state)(increase(firewood_nodestore_root_read_errors_total[5m]))` to determine whether
+   the committed or immutable trie is failing to load.【F:docs/storage/monitoring.md†L15-L15】【F:storage/src/nodestore/mod.rs†L687-L719】 Persistent growth points to on-disk corruption or hardware faults.
+2. **Triaging storage.** Audit the backing volume for IO errors and run `firewood_recovery` to verify roots before resuming
+   ingestion.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】 Document remediation steps in the incident record.
+
+#### Firewood recovery stuck
+
+1. **Confirm the stall.** Verify that `firewood_recovery_active` has remained > 0 and that starts exceed completes within the
+   alert window, matching the rule definitions.【F:docs/storage/monitoring.md†L16-L16】【F:ops/alerts/storage/firewood.yaml†L92-L115】
+2. **Review logs and output.** Inspect the recovery drill logs and generated report to understand the current phase; restart
+   the workflow with fresh directories if the process is wedged.【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L171】
+3. **Escalate if unable to complete.** Engage the storage on-call after one failed restart or if corruption prevents replaying the WAL.
+
+#### Firewood snapshot lag
+
+1. **Validate lag trends.** Plot `snapshot_stream_lag_seconds` to confirm the > 30 s (warning) or > 120 s (critical)
+   threshold sustained over the alert duration.【F:docs/storage/monitoring.md†L17-L17】 The metric is exported by the snapshot
+   behaviour and captures end-to-end delay across sessions.【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L499】
+2. **Correlate with pipeline metrics.** Check `snapshot_bytes_sent_total` and pipeline stage counters to determine whether
+   producers are stalled or consumers are slow.【F:docs/observability/pipeline.md†L32-L44】 Compare against network health and peer logs before failing over.
+3. **Follow snapshot failover procedures.** Use the [network snapshot failover runbook](network_snapshot_failover.md) to reroute
+   lagging consumers or restart stuck sessions, recording actions in the incident log.
 
 ## Admission-Audit-Abfragen
 
