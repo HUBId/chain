@@ -187,6 +187,27 @@ PY
           exit 1
         fi
 
+  proof-version-policy:
+    name: Proof version policy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: proof-version-guard
+      - name: Enforce PROOF_VERSION policy
+        env:
+          PROOF_VERSION_GUARD_BASE: origin/${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          cargo xtask proof-version-guard
+
   clippy:
     name: Clippy (all targets, all features)
     runs-on: ubuntu-latest
