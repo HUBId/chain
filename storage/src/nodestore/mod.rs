@@ -918,6 +918,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use alloc::FreeArea;
     use primitives::area_size_iter;
 
     #[derive(Debug)]
@@ -925,10 +926,10 @@ mod tests {
 
     impl ReadableStorage for FailingStorage {
         fn stream_from(&self, _addr: u64) -> Result<impl OffsetReader, FileIoError> {
-            Err(FileIoError::from_generic_no_file(
+            return Err::<std::io::Cursor<Vec<u8>>, _>(FileIoError::from_generic_no_file(
                 std::io::Error::new(std::io::ErrorKind::Other, "forced failure"),
                 "test failing root read",
-            ))
+            ));
         }
 
         fn size(&self) -> Result<u64, FileIoError> {
@@ -1045,5 +1046,69 @@ mod tests {
             err.to_string(),
             "forced failure at offset 0 of file '[unknown]' test failing root read"
         );
+    }
+
+    #[test]
+    fn reallocates_split_blocks() {
+        use crate::node::persist::MaybePersistedNode;
+
+        let memstore = MemStore::new(vec![]);
+        let mut node_store =
+            NodeStore::new_empty_committed(memstore.into(), crate::noop_storage_metrics()).unwrap();
+
+        let mut allocator = NodeAllocator::new(node_store.storage.as_ref(), &mut node_store.header);
+
+        let large_payload = vec![0u8; 1800];
+        let (large_addr, large_index) = allocator
+            .allocate_node(large_payload.as_slice())
+            .expect("allocate large node");
+        let mut stored_large = vec![0u8; large_index.size() as usize];
+        stored_large[0] = large_index.get();
+        node_store
+            .storage
+            .write(large_addr.get(), &stored_large)
+            .expect("write large node");
+
+        allocator
+            .delete_node(MaybePersistedNode::from(large_addr))
+            .expect("delete large node");
+        drop(allocator);
+
+        let mut allocator = NodeAllocator::new(node_store.storage.as_ref(), &mut node_store.header);
+        let small_payload = vec![0u8; 120];
+        let target_index = AreaIndex::from_size(120).expect("target index");
+        let (first_addr, first_index) = allocator
+            .allocate_node(small_payload.as_slice())
+            .expect("reuse block");
+        assert_eq!(first_addr, large_addr);
+        assert_eq!(first_index, target_index);
+        let mut stored_small = vec![0u8; first_index.size() as usize];
+        stored_small[0] = first_index.get();
+        node_store
+            .storage
+            .write(first_addr.get(), &stored_small)
+            .expect("write small node");
+
+        let remainder_addr = large_addr
+            .advance(first_index.size())
+            .expect("remainder address");
+        drop(allocator);
+
+        assert_eq!(
+            node_store.header.free_lists()[first_index.as_usize()],
+            Some(remainder_addr)
+        );
+        let (remainder_area, remainder_index) =
+            FreeArea::from_storage(node_store.storage.as_ref(), remainder_addr)
+                .expect("read remainder area");
+        assert_eq!(remainder_index, first_index);
+        assert_eq!(remainder_area.next_free_block(), None);
+
+        let mut allocator = NodeAllocator::new(node_store.storage.as_ref(), &mut node_store.header);
+        let (second_addr, second_index) = allocator
+            .allocate_node(small_payload.as_slice())
+            .expect("reuse remainder");
+        assert_eq!(second_index, target_index);
+        assert_eq!(second_addr, remainder_addr);
     }
 }

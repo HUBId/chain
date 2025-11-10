@@ -197,7 +197,7 @@ pub struct NodeAllocator<'a, S> {
     header: &'a mut NodeStoreHeader,
 }
 
-impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
+impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
     pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
         Self { storage, header }
     }
@@ -225,55 +225,75 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         n: u64,
     ) -> Result<Option<(LinearAddress, AreaIndex)>, FileIoError> {
         // Find the smallest free list that can fit this size.
-        let index = AreaIndex::from_size(n).map_err(|e| {
+        let requested_index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        let free_stored_area_addr = self
-            .header
-            .free_lists_mut()
-            .get_mut(index.as_usize())
-            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
-        if let Some(address) = free_stored_area_addr {
-            let address = *address;
-            // Get the first free block of sufficient size.
-            if let Some(free_head) = self.storage.free_list_cache(address) {
-                trace!("free_head@{address}(cached): {free_head:?} size:{index}");
-                *free_stored_area_addr = free_head;
-            } else {
-                let (free_head, read_index) = FreeArea::from_storage(self.storage, address)?;
-                debug_assert_eq!(read_index, index);
+        let mut current_index_u8 = requested_index.get();
+        while current_index_u8 <= AreaIndex::MAX.get() {
+            let current_index = AreaIndex::try_from(current_index_u8)
+                .expect("current_index_u8 is less than AreaIndex::NUM_AREA_SIZES");
 
-                // Update the free list to point to the next free block.
-                *free_stored_area_addr = free_head.next_free_block;
+            let maybe_address = {
+                let free_lists = self.header.free_lists_mut();
+                let free_stored_area_addr = free_lists
+                    .get_mut(current_index.as_usize())
+                    .expect("index is less than AreaIndex::NUM_AREA_SIZES");
+
+                if let Some(address) = *free_stored_area_addr {
+                    let next_free = if let Some(cached_head) = self.storage.free_list_cache(address)
+                    {
+                        trace!("free_head@{address}(cached): {cached_head:?} size:{current_index}");
+                        cached_head
+                    } else {
+                        let (free_head, read_index) =
+                            FreeArea::from_storage(self.storage, address)?;
+                        debug_assert_eq!(read_index, current_index);
+                        free_head.next_free_block
+                    };
+
+                    *free_stored_area_addr = next_free;
+                    Some(address)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(address) = maybe_address {
+                if current_index.get() > requested_index.get() {
+                    self.split_free_block(address, current_index, requested_index)?;
+                }
+
+                trace!("Allocating from free list: addr: {address:?}, size: {requested_index}");
+                firewood_counter!(
+                    "firewood.space.reused",
+                    "Bytes reused from free list by index",
+                    "index" => index_name(requested_index)
+                )
+                .increment(requested_index.size());
+                firewood_counter!(
+                    "firewood.space.wasted",
+                    "Bytes wasted from free list by index",
+                    "index" => index_name(requested_index)
+                )
+                .increment(requested_index.size().saturating_sub(n));
+
+                return Ok(Some((address, requested_index)));
             }
 
-            firewood_counter!(
-                "firewood.space.reused",
-                "Bytes reused from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(index.size());
-            firewood_counter!(
-                "firewood.space.wasted",
-                "Bytes wasted from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(index.size().saturating_sub(n));
-
-            // Return the address of the newly allocated block.
-            trace!("Allocating from free list: addr: {address:?}, size: {index}");
-            return Ok(Some((address, index)));
+            current_index_u8 = current_index_u8
+                .checked_add(1)
+                .expect("current_index_u8 never exceeds AreaIndex::MAX");
         }
 
-        trace!("No free blocks of sufficient size {index} found");
+        trace!("No free blocks of sufficient size {requested_index} found");
         firewood_counter!(
             "firewood.space.from_end",
             "Space allocated from end of nodestore",
-            "index" => index_name(index)
+            "index" => index_name(requested_index)
         )
-        .increment(index.size());
+        .increment(requested_index.size());
         Ok(None)
     }
 
@@ -345,19 +365,52 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         )
         .increment(area_size_index.size());
 
-        // The area that contained the node is now free.
+        self.add_free_block(addr, area_size_index)?;
+
+        Ok(())
+    }
+}
+
+impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
+    fn split_free_block(
+        &mut self,
+        address: LinearAddress,
+        mut current_index: AreaIndex,
+        target_index: AreaIndex,
+    ) -> Result<(), FileIoError> {
+        while current_index.get() > target_index.get() {
+            let prev_index = AreaIndex::try_from(current_index.get() - 1)
+                .expect("current_index is greater than AreaIndex::MIN");
+            let current_size = current_index.size();
+            let prev_size = prev_index.size();
+            let remainder_size = current_size - prev_size;
+            let remainder_index = AreaIndex::from_size(remainder_size).map_err(|e| {
+                self.storage
+                    .file_io_error(e, address.get(), Some("split_free_block".to_string()))
+            })?;
+
+            let remainder_addr = address
+                .advance(prev_size)
+                .expect("remainder address should be non-zero");
+            self.add_free_block(remainder_addr, remainder_index)?;
+
+            current_index = prev_index;
+        }
+
+        Ok(())
+    }
+
+    fn add_free_block(
+        &mut self,
+        address: LinearAddress,
+        area_index: AreaIndex,
+    ) -> Result<(), FileIoError> {
+        let next = self.header.free_lists()[area_index.as_usize()];
         let mut stored_area_bytes = Vec::new();
-        FreeArea::new(self.header.free_lists()[area_size_index.as_usize()])
-            .as_bytes(area_size_index, &mut stored_area_bytes);
-
-        self.storage.write(addr.into(), &stored_area_bytes)?;
-
-        self.storage
-            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index.as_usize()]);
-
-        // The newly freed block is now the head of the free list.
-        self.header.free_lists_mut()[area_size_index.as_usize()] = Some(addr);
-
+        FreeArea::new(next).as_bytes(area_index, &mut stored_area_bytes);
+        self.storage.write(address.get(), &stored_area_bytes)?;
+        self.storage.add_to_free_list_cache(address, next);
+        self.header.free_lists_mut()[area_index.as_usize()] = Some(address);
         Ok(())
     }
 }
