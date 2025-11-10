@@ -176,6 +176,10 @@ name = "plonky3_consensus"
 path = "../../tests/consensus/plonky3_consensus.rs"
 
 [[test]]
+name = "finality_alert_probe"
+path = "../../tests/consensus/finality_alert_probe.rs"
+
+[[test]]
 name = "feature_guard"
 path = "../../tests/feature_guard.rs"
 
