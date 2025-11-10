@@ -40,3 +40,15 @@ Operators should investigate the structured logs to determine whether TLS
 material, endpoint reachability, or collector availability triggered the issue.
 Once the exporter configuration is corrected and a successful initialisation
 occurs, the counter remains flat and the alert automatically clears.
+
+## Telemetry schema allowlist
+
+Runtime metrics exported by the node are validated against an allowlist stored
+at `telemetry/schema.yaml`. The schema enumerates every metric name and the set
+of labels it may emit. `cargo xtask test-observability` (and the
+`observability-metrics` CI workflow) run the `telemetry_schema` check to ensure
+that the recorded metrics continue to match the schema. Any instrumentation
+change that introduces a new metric or label must update the schema file in the
+same pull request. Schema updates require review from the Observability/SRE
+owners to confirm the new telemetry surfaces align with the documented
+cardinality guarantees.

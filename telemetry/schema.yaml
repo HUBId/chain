@@ -1,0 +1,106 @@
+metrics:
+  - name: consensus_quorum_verifications_total
+    labels:
+      - reason
+      - result
+  - name: consensus_vrf_verification_time_ms
+    labels:
+      - reason
+      - result
+  - name: consensus_vrf_verifications_total
+    labels:
+      - reason
+      - result
+  - name: rpp.runtime.chain.block_height
+    labels: []
+  - name: rpp.runtime.consensus.block_duration
+    labels:
+      - stage
+  - name: rpp.runtime.consensus.failed_votes
+    labels:
+      - reason
+  - name: rpp.runtime.consensus.round.duration
+    labels:
+      - height
+      - round
+  - name: rpp.runtime.consensus.round.leader_changes
+    labels:
+      - height
+      - leader
+      - round
+  - name: rpp.runtime.consensus.round.quorum_latency
+    labels:
+      - height
+      - round
+  - name: rpp.runtime.consensus.slashing.events
+    labels:
+      - reason
+  - name: rpp.runtime.consensus.witness.events
+    labels:
+      - topic
+  - name: rpp.runtime.network.peer_count
+    labels: []
+  - name: rpp.runtime.proof.generation.count
+    labels:
+      - backend
+  - name: rpp.runtime.proof.generation.duration
+    labels:
+      - backend
+  - name: rpp.runtime.proof.generation.size
+    labels:
+      - backend
+  - name: rpp.runtime.reputation.penalties
+    labels:
+      - label
+  - name: rpp.runtime.rpc.request.latency
+    labels:
+      - method
+      - result
+  - name: rpp.runtime.rpc.request.total
+    labels:
+      - method
+      - result
+  - name: rpp.runtime.storage.header_flush.bytes
+    labels: []
+  - name: rpp.runtime.storage.header_flush.duration
+    labels: []
+  - name: rpp.runtime.storage.header_flush.total
+    labels: []
+  - name: rpp.runtime.storage.wal_flush.bytes
+    labels:
+      - outcome
+  - name: rpp.runtime.storage.wal_flush.duration
+    labels:
+      - outcome
+  - name: rpp.runtime.storage.wal_flush.total
+    labels:
+      - outcome
+  - name: rpp.runtime.wallet.rpc_latency
+    labels:
+      - method
+  - name: rpp_stark_params_bytes
+    labels:
+      - proof_backend
+      - proof_kind
+  - name: rpp_stark_payload_bytes
+    labels:
+      - proof_backend
+      - proof_kind
+  - name: rpp_stark_proof_total_bytes
+    labels:
+      - proof_backend
+      - proof_kind
+  - name: rpp_stark_public_inputs_bytes
+    labels:
+      - proof_backend
+      - proof_kind
+  - name: rpp_stark_stage_checks_total
+    labels:
+      - proof_backend
+      - proof_kind
+      - result
+      - stage
+  - name: rpp_stark_verify_duration_seconds
+    labels:
+      - proof_backend
+      - proof_kind
