@@ -1,0 +1,23 @@
+# Firewood storage configuration template
+#
+# This file mirrors the `[storage]` section of `config/node.toml` so operators
+# can version Firewood overrides separately when tuning commit cadence or WAL
+# durability.
+#
+# Restart the node after editing these values. Runtime components only read
+# configuration at startup.
+
+[storage]
+# Directory for JSON manifests emitted alongside each pruning proof.
+snapshot_dir = "./data/snapshots"
+# Directory that stores the binary pruning proofs referenced by manifests.
+proof_dir = "./data/proofs"
+# Flush metadata updates with `fsync` on every commit ("always") or defer the
+# sync until the next compaction cycle ("deferred").
+sync_policy = "always"
+# Instrumentation budget advertised through `firewood.storage.io_budget{stage="commit"}`
+# to track how much WAL throughput a single block commit is expected to consume.
+commit_io_budget_bytes = 67108864
+# Instrumentation budget advertised through `firewood.storage.io_budget{stage="compaction"}`
+# to document how much I/O compaction should plan for during pruning.
+compaction_io_budget_bytes = 134217728

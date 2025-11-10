@@ -4,6 +4,10 @@ Use this runbook during routine monitoring of the pruning worker or when the
 service degrades. It complements the [pruning change runbook](pruning.md) by
 focusing on telemetry, dashboards, and failure-handling procedures.
 
+For Firewood durability knobs—WAL sizing, sync policy trade-offs, and recovery
+signals—consult the [Firewood storage operations notes](../storage/firewood.md#wal-sizing-and-sync-policy-guidance)
+before applying overrides.
+
 ## 1. Monitor the pruning service
 
 1. **Confirm the worker is active.** Right after startup the service logs the

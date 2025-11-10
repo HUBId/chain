@@ -45,6 +45,53 @@ The pruning runbooks document how to adjust cadence, inspect receipts, and
 monitor the status stream, rounding out the operational story for the automated
 worker.【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/pruning_operations.md†L1-L120】
 
+## WAL sizing and sync policy guidance
+
+Firewood retains the three most recent commit boundaries in the WAL, trimming
+older sequences after every fsync to keep the log bounded even on long-running
+validators.【F:storage-firewood/src/kv.rs†L26-L45】【F:storage-firewood/src/kv.rs†L236-L248】
+Each append is flushed immediately and the `FileWal::sync` path issues
+`sync_data` calls so committed transactions survive power loss.【F:storage-firewood/src/wal.rs†L100-L129】
+Operators therefore size the WAL by multiplying the expected per-block write
+footprint with the retention window (≈3× the commit payload) and allocating head
+room for compactions.
+
+Production deployments should keep the metadata sync policy at `always`, which
+mirrors the `StorageOptions` default and instructs Firewood to flush manifest,
+telemetry, and pruning updates durably on every commit.【F:storage-firewood/src/state.rs†L391-L420】
+The node configuration exposes the same default through
+`storage.sync_policy = "always"`, with commit and compaction budgets publishing
+the expected WAL and pruning write volume to telemetry.【F:rpp/runtime/config.rs†L1625-L1670】【F:config/storage.toml†L1-L20】
+Sticking to the shipped budgets (64 MiB for commits, 128 MiB for compactions)
+keeps alerts calibrated against the IO headroom provisioned for production
+hardware.【F:config/storage.toml†L1-L20】 The budgets do not hard-cap writes, but
+they document intended throughput and feed dashboards via the
+`firewood.storage.io_budget` gauges.【F:storage-firewood/src/state.rs†L202-L220】
+
+### Troubleshooting WAL pressure or latency
+
+- **Large WAL growth or constant truncations.** Check whether the actual commit
+  size (e.g. `firewood.wal.transactions` payloads) consistently overshoots the
+  documented budget. If so, raise `storage.commit_io_budget_bytes` in
+  `config/storage.toml` so alert thresholds reflect the higher steady-state load
+  and investigate upstream components that started emitting larger batches.【F:storage-firewood/src/kv.rs†L286-L305】【F:config/storage.toml†L1-L20】
+- **Sustained fsync latency spikes.** Inspect
+  `rpp.runtime.storage.wal_flush.*{outcome="failed"|"retry"}` to confirm flush
+  pressure and temporarily switch `storage.sync_policy` to `"deferred"` during
+  catch-up windows. The deferred mode skips immediate metadata fsyncs and can
+  shave milliseconds off each commit, but operators must revert to `"always"`
+  once the backlog clears so pruning manifests stay crash-safe.【F:rpp/runtime/telemetry/metrics.rs†L125-L142】【F:config/storage.toml†L1-L20】
+- **Slow compactions after pruning.** Compare the compaction budget recorded in
+  `cf_meta/telemetry.json` with observed wall-clock time. Raising
+  `storage.compaction_io_budget_bytes` increases the documented throughput and
+  aligns dashboards with the larger I/O envelope required for new retention
+  policies.【F:storage-firewood/src/state.rs†L202-L220】【F:tests/compaction_budget.rs†L1-L34】【F:config/storage.toml†L1-L20】
+
+When changes to sync policy or budgets are required, update the values, restart
+the node (configuration reloads only happen on startup), and document the new
+targets alongside telemetry dashboards so on-call staff understand the revised
+expectations.【F:rpp/runtime/config.rs†L1625-L1674】【F:config/storage.toml†L1-L20】
+
 ## Root integrity and failure handling
 
 NodeStore accessors now differentiate between an intentionally empty trie and a
