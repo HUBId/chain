@@ -52,7 +52,7 @@ PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
 SUITES_SELECTED=()
 BACKENDS=()
-INTEGRATION_FOCUSED_TESTS=(reorg_regressions)
+INTEGRATION_FOCUSED_TESTS=(reorg_regressions runtime_smoke)
 
 value_requests_plonky3() {
   local value="$1"

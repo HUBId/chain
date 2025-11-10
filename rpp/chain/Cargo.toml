@@ -197,6 +197,11 @@ name = "observability_otlp_failures"
 path = "../../tests/observability_otlp_failures.rs"
 
 [[test]]
+name = "runtime_smoke"
+path = "../../tests/runtime_smoke.rs"
+required-features = ["integration"]
+
+[[test]]
 name = "deployment_feature_gates"
 path = "../../tests/deployment/feature_gates.rs"
 
