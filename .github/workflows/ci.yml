@@ -521,6 +521,21 @@ PY
           name: runtime-smoke
           path: artifacts/runtime-smoke
 
+  firewood-unit:
+    name: Firewood unit feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: firewood-unit
+      - name: Run Firewood unit tests across branch factors
+        run: |
+          set -euo pipefail
+          cargo xtask test-firewood
+
   unit-suites:
     name: Unit suites (${{ matrix.name }})
     runs-on: ubuntu-latest

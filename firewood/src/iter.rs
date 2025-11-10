@@ -570,7 +570,7 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        noop_storage_metrics, ImmutableProposal, MemStore, MutableProposal, NodeStore,
+        noop_storage_metrics, BranchNode, ImmutableProposal, MemStore, MutableProposal, NodeStore,
     };
     use std::sync::Arc;
     use test_case::test_case;
@@ -685,6 +685,31 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    fn expected_nibble_path(hex_nibbles: &[u8]) -> Key {
+        match BranchNode::MAX_CHILDREN {
+            16 => hex_nibbles.to_vec().into_boxed_slice(),
+            256 => {
+                assert!(
+                    hex_nibbles.len() % 2 == 0,
+                    "branch_factor_256 paths must have an even number of nibbles"
+                );
+
+                hex_nibbles
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        let hi = pair[0];
+                        let lo = pair[1];
+                        assert!(hi <= 0x0F, "high nibble must fit within 4 bits");
+                        assert!(lo <= 0x0F, "low nibble must fit within 4 bits");
+                        (hi << 4) | (lo & 0x0F)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            }
+            other => panic!("unsupported branch factor {other}"),
+        }
+    }
+
     #[test_case(&[0x00, 0x00, 0x00]; "branch key")]
     #[test_case(&[0x00, 0x00, 0x00, 0x10]; "branch key suffix (but not a leaf key)")]
     fn path_iterate_non_singleton_merkle_seek_branch(key: &[u8]) {
@@ -697,9 +722,7 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        // TODO: make this branch factor 16 compatible
-        #[cfg(not(feature = "branch_factor_256"))]
-        assert_eq!(node.key_nibbles, vec![0x00, 0x00].into_boxed_slice());
+        assert_eq!(node.key_nibbles, expected_nibble_path(&[0x00, 0x00]));
 
         assert!(node.node.as_branch().unwrap().value.is_none());
         assert_eq!(node.next_nibble, Some(0));
@@ -709,10 +732,9 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(
             node.key_nibbles,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00].into_boxed_slice()
+            expected_nibble_path(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
         );
         assert_eq!(
             node.node.as_branch().unwrap().value,
