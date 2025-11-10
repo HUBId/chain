@@ -1,0 +1,55 @@
+groups:
+  - name: network-replay-guard
+    interval: 1m
+    rules:
+      - alert: NetworkReplayGuardDropsWarning
+        expr: increase(network_replay_guard_drops_total[5m]) > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: networking
+        annotations:
+          summary: Replay protector is dropping duplicates aggressively
+          description: >-
+            The replay protector discarded more than fifty duplicate gossip payloads
+            in five minutes. Investigate bootstrap peers and gossip load before the
+            window saturates completely.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
+      - alert: NetworkReplayGuardDropsCritical
+        expr: increase(network_replay_guard_drops_total[5m]) > 200
+        for: 2m
+        labels:
+          severity: critical
+          team: networking
+        annotations:
+          summary: Replay drops indicate mesh saturation
+          description: >-
+            More than two hundred duplicate gossip payloads were discarded in five
+            minutes. Roll back the most recent rollout or widen the replay window to
+            avoid ejecting legitimate traffic.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
+      - alert: NetworkReplayGuardWindowFillWarning
+        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: networking
+        annotations:
+          summary: Replay window occupancy above 85%
+          description: >-
+            The replay window stayed above 85% utilisation for ten minutes. Review
+            gossip churn and consider increasing network.p2p.replay_window_size.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
+      - alert: NetworkReplayGuardWindowFillCritical
+        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          team: networking
+        annotations:
+          summary: Replay window at capacity
+          description: >-
+            Replay protection remained above 95% utilisation for five minutes,
+            signalling imminent eviction of fresh digests. Increase the configured
+            window or throttle gossip before drops escalate.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts

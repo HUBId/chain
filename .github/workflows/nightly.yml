@@ -119,6 +119,21 @@ jobs:
           set -euo pipefail
           cargo test -p rpp-chain --test mempool -- mempool_status_probe_flags_queue_saturation_alerts
 
+  replay-guard-probe:
+    name: Replay guard alert probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Exercise replay guard saturation alerts
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --test networking -- replay_alert_probe_saturates_window_triggers_alerts
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest
