@@ -64,9 +64,7 @@ impl SnapshotFixture {
         config.key_path = base.join("keys/node.toml");
         config.p2p_key_path = base.join("keys/p2p.toml");
         config.vrf_key_path = base.join("keys/vrf.toml");
-        config.network.rpc.listen = "127.0.0.1:0"
-            .parse()
-            .context("parse RPC listen addr")?;
+        config.network.rpc.listen = "127.0.0.1:0".parse().context("parse RPC listen addr")?;
         config.network.p2p.peerstore_path = base.join("p2p/peerstore.json");
         config.network.p2p.gossip_path = Some(base.join("p2p/gossip.json"));
 
@@ -106,8 +104,7 @@ fn snapshot_verify_command_succeeds() -> Result<()> {
 fn snapshot_verify_command_detects_mismatch() -> Result<()> {
     let fixture = SnapshotFixture::new()?;
 
-    fs::write(&fixture.chunk_path, b"tampered payload")
-        .context("corrupt snapshot chunk")?;
+    fs::write(&fixture.chunk_path, b"tampered payload").context("corrupt snapshot chunk")?;
 
     AssertCommand::cargo_bin("rpp-node")?
         .arg("validator")
@@ -130,9 +127,7 @@ fn write_signing_key(path: &Path, signing_key: &SigningKey) -> Result<()> {
     }
     let secret_hex = hex::encode(signing_key.to_bytes());
     let public_hex = hex::encode(signing_key.verifying_key().to_bytes());
-    let payload = format!(
-        "secret_key = \"{secret_hex}\"\npublic_key = \"{public_hex}\"\n"
-    );
+    let payload = format!("secret_key = \"{secret_hex}\"\npublic_key = \"{public_hex}\"\n");
     fs::write(path, payload).context("write signing key")?;
     Ok(())
 }
