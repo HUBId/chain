@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::proof_backend::Blake2sHasher;
 use parking_lot::RwLock;
 
-use crate::rpp::ZsiRecord;
+use crate::rpp::{ConsensusApproval, ZsiRecord};
 use crate::state::merkle::compute_merkle_root;
 use crate::types::{Account, Address};
 
@@ -20,6 +20,17 @@ impl ZsiRegistry {
     }
 
     pub fn upsert_from_account(&self, account: &Account) {
+        let existing = {
+            let records = self.records.read();
+            records
+                .get(&account.address)
+                .map(|record| record.approvals.clone())
+        };
+        let approvals = existing.unwrap_or_default();
+        self.upsert_with_approvals(account, approvals);
+    }
+
+    pub fn upsert_with_approvals(&self, account: &Account, approvals: Vec<ConsensusApproval>) {
         let attestation = account
             .reputation
             .zsi
@@ -33,7 +44,7 @@ impl ZsiRegistry {
             identity: account.address.clone(),
             genesis_id: account.reputation.zsi.public_key_commitment.clone(),
             attestation_digest: attestation,
-            approvals: Vec::new(),
+            approvals,
         };
         self.records.write().insert(account.address.clone(), record);
     }

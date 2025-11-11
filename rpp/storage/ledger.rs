@@ -12,10 +12,10 @@ use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDEN
 use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TierRequirementError, TimetokeParams};
 use crate::rpp::{
-    AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
-    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
-    TimetokeWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint, UtxoRecord,
-    ZsiRecord, ZsiWitness,
+    AccountBalanceWitness, ConsensusApproval, ConsensusWitness, GlobalStateCommitments,
+    ModuleWitnessBundle, ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness,
+    TimetokeRecord, TimetokeWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint,
+    UtxoRecord, ZsiRecord, ZsiWitness,
 };
 use crate::state::{
     GlobalState, ProofRegistry, ReputationState, StoredUtxo, TimetokeState, UtxoState, ZsiRegistry,
@@ -525,7 +525,7 @@ impl Ledger {
         quorum_threshold: usize,
         min_gossip: usize,
     ) -> ChainResult<()> {
-        request.verify(expected_height, quorum_threshold, min_gossip)?;
+        let outcome = request.verify(expected_height, quorum_threshold, min_gossip)?;
         let declaration = &request.declaration;
         let genesis = &declaration.genesis;
         let key_commitment = genesis.public_key_commitment()?;
@@ -583,6 +583,28 @@ impl Ledger {
             }
         }
 
+        let timestamp = reputation::current_timestamp();
+        let approvals: ChainResult<Vec<ConsensusApproval>> = outcome
+            .approved_votes
+            .iter()
+            .map(|vote| {
+                let signature = hex::decode(&vote.signature).map_err(|err| {
+                    ChainError::Transaction(format!(
+                        "invalid consensus approval signature encoding: {err}"
+                    ))
+                })?;
+                Ok(ConsensusApproval {
+                    validator: vote.vote.voter.clone(),
+                    signature,
+                    timestamp,
+                })
+            })
+            .collect();
+        let approvals = approvals?;
+        for validator in &outcome.slashable_validators {
+            self.slash_validator(validator, SlashingReason::InvalidVote, None)?;
+        }
+
         let mut account = Account::new(genesis.wallet_addr.clone(), 0, Stake::default());
         account.reputation = crate::reputation::ReputationProfile::new(&genesis.wallet_pk);
         account.ensure_wallet_binding(&genesis.wallet_pk)?;
@@ -606,6 +628,8 @@ impl Ledger {
         }
         let module_before = self.module_records(&genesis.wallet_addr);
         self.upsert_account(account.clone())?;
+        self.zsi_registry
+            .upsert_with_approvals(&account, approvals.clone());
         let module_after = self.module_records(&genesis.wallet_addr);
         {
             let mut book = self.module_witnesses.write();

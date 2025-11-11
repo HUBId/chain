@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::proof_backend::Blake2sHasher;
 use serde::{Deserialize, Serialize};
@@ -283,6 +283,14 @@ pub struct AttestedIdentityRequest {
     pub gossip_confirmations: Vec<Address>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttestationOutcome {
+    pub identity_hash: String,
+    pub approved_votes: Vec<SignedBftVote>,
+    pub gossip_confirmations: Vec<Address>,
+    pub slashable_validators: Vec<Address>,
+}
+
 impl AttestedIdentityRequest {
     pub fn identity_hash(&self) -> ChainResult<String> {
         Ok(hex::encode(self.declaration.hash()?))
@@ -293,51 +301,58 @@ impl AttestedIdentityRequest {
         expected_height: u64,
         quorum_threshold: usize,
         min_gossip: usize,
-    ) -> ChainResult<()> {
+    ) -> ChainResult<AttestationOutcome> {
         self.declaration.verify()?;
         let identity_hash = self.identity_hash()?;
-        let mut voters = HashSet::new();
+        let mut slashable = HashSet::new();
+        let mut unique_votes: HashMap<Address, SignedBftVote> = HashMap::new();
         for vote in &self.attested_votes {
-            vote.verify()?;
+            let voter = vote.vote.voter.clone();
+            if vote.verify().is_err() {
+                slashable.insert(voter);
+                continue;
+            }
             if vote.vote.block_hash != identity_hash {
-                return Err(ChainError::Transaction(
-                    "identity attestation vote references mismatched request".into(),
-                ));
+                slashable.insert(voter);
+                continue;
             }
             if vote.vote.height != expected_height {
-                return Err(ChainError::Transaction(
-                    "identity attestation vote references unexpected height".into(),
-                ));
+                slashable.insert(voter);
+                continue;
             }
             if vote.vote.kind != BftVoteKind::PreCommit {
-                return Err(ChainError::Transaction(
-                    "identity attestation must be composed of pre-commit votes".into(),
-                ));
+                slashable.insert(voter);
+                continue;
             }
-            if !voters.insert(vote.vote.voter.clone()) {
-                return Err(ChainError::Transaction(
-                    "duplicate attestation vote detected for identity request".into(),
-                ));
-            }
+            unique_votes
+                .entry(vote.vote.voter.clone())
+                .or_insert_with(|| vote.clone());
         }
-        if voters.len() < quorum_threshold {
+        if unique_votes.len() < quorum_threshold {
             return Err(ChainError::Transaction(
                 "insufficient quorum power for identity attestation".into(),
             ));
         }
-        let mut gossip = HashSet::new();
+        let mut gossip = BTreeSet::new();
         for address in &self.gossip_confirmations {
-            if !gossip.insert(address.clone()) {
-                return Err(ChainError::Transaction(
-                    "duplicate gossip confirmation detected for identity attestation".into(),
-                ));
-            }
+            gossip.insert(address.clone());
         }
         if gossip.len() < min_gossip {
             return Err(ChainError::Transaction(
                 "insufficient gossip confirmations for identity attestation".into(),
             ));
         }
-        Ok(())
+        let mut approved_votes: Vec<SignedBftVote> = unique_votes.into_values().collect();
+        approved_votes.sort_by(|a, b| a.vote.voter.cmp(&b.vote.voter));
+        let mut gossip_confirmations: Vec<Address> = gossip.into_iter().collect();
+        gossip_confirmations.sort();
+        let mut slashable_validators: Vec<Address> = slashable.into_iter().collect();
+        slashable_validators.sort();
+        Ok(AttestationOutcome {
+            identity_hash,
+            approved_votes,
+            gossip_confirmations,
+            slashable_validators,
+        })
     }
 }
