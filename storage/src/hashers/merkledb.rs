@@ -97,9 +97,9 @@ fn add_value_digest_to_buf<H: HasUpdate, T: AsRef<[u8]>>(
 #[inline]
 /// Writes the length of `value` and `value` to `buf`.
 fn add_len_and_value_to_buf<H: HasUpdate, V: AsRef<[u8]>>(buf: &mut H, value: V) {
-    let value_len = value.as_ref().len();
-    buf.update([value_len as u8]);
-    buf.update(value);
+    let value_bytes = value.as_ref();
+    add_varint_to_buf(buf, value_bytes.len() as u64);
+    buf.update(value_bytes);
 }
 
 #[inline]

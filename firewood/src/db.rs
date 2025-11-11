@@ -429,8 +429,9 @@ mod test {
     use std::sync::{Arc, Mutex};
 
     use firewood_storage::{noop_storage_metrics, CheckOpt, CheckerError};
-    use metrics::handles::{CounterFn, HistogramFn};
-    use metrics::{with_local_recorder, Counter, Histogram, Key, Metadata, Recorder};
+    use metrics::{
+        with_local_recorder, Counter, CounterFn, Histogram, HistogramFn, Key, Metadata, Recorder,
+    };
 
     use crate::db::{Db, Proposal};
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};

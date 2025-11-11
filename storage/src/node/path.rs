@@ -251,6 +251,17 @@ impl<'a> NibblesIterator<'a> {
 }
 
 impl DoubleEndedIterator for NibblesIterator<'_> {
+    #[cfg(feature = "branch_factor_256")]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.is_empty() {
+            return None;
+        }
+
+        self.tail -= 1;
+        Some(self.data[self.tail])
+    }
+
+    #[cfg(not(feature = "branch_factor_256"))]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.is_empty() {
             return None;
@@ -282,6 +293,8 @@ mod test {
 
     #[cfg(not(feature = "branch_factor_256"))]
     static TEST_BYTES: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
+    #[cfg(feature = "branch_factor_256")]
+    static TEST_BYTES: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 
     #[test]
     #[cfg(not(feature = "branch_factor_256"))]
@@ -310,6 +323,14 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "branch_factor_256")]
+    fn backwards_branch_factor_256() {
+        let iter = NibblesIterator::new(&TEST_BYTES).rev();
+        let expected = [0xef, 0xbe, 0xad, 0xde];
+        assert!(iter.eq(expected));
+    }
+
+    #[test]
     #[cfg(not(feature = "branch_factor_256"))]
     fn nth_back() {
         let mut iter = NibblesIterator::new(&TEST_BYTES);
@@ -318,6 +339,16 @@ mod test {
         assert_eq!(iter.nth_back(1), Some(0xb));
         assert_eq!(iter.nth_back(2), Some(0xe));
         assert_eq!(iter.nth_back(0), Some(0xd));
+        assert_eq!(iter.nth_back(0), None);
+    }
+
+    #[test]
+    #[cfg(feature = "branch_factor_256")]
+    fn nth_back_branch_factor_256() {
+        let mut iter = NibblesIterator::new(&TEST_BYTES);
+        assert_eq!(iter.nth_back(0), Some(0xef));
+        assert_eq!(iter.nth_back(0), Some(0xbe));
+        assert_eq!(iter.nth_back(1), Some(0xde));
         assert_eq!(iter.nth_back(0), None);
     }
 

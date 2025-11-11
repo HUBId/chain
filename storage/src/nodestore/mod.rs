@@ -510,6 +510,18 @@ impl<T, S> NodeStore<T, S> {
     pub(crate) const fn freelists_mut(&mut self) -> &mut alloc::FreeLists {
         self.header.free_lists_mut()
     }
+
+    pub(crate) const fn header(&self) -> &NodeStoreHeader {
+        &self.header
+    }
+
+    pub(crate) fn header_mut(&mut self) -> &mut NodeStoreHeader {
+        &mut self.header
+    }
+
+    pub(crate) fn storage(&self) -> &Arc<S> {
+        &self.storage
+    }
 }
 
 /// Contains the state of a proposal that is still being modified.
