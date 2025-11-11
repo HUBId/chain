@@ -622,7 +622,9 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                         continue;
                     }
 
-                    let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut self.header);
+                    let storage = Arc::clone(self.storage());
+                    let header = self.header_mut();
+                    let mut allocator = NodeAllocator::new(storage.as_ref(), header);
                     let mut io_errors = Vec::new();
 
                     for (address, area_index) in leaked_areas {

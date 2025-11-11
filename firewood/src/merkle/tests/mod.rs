@@ -15,7 +15,7 @@ mod range;
 #[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
 mod triehash;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -26,8 +26,40 @@ use firewood_storage::{
     MaybePersistedNode, MemStore, MutableProposal, NodeReader, NodeStore, PathIterItem, RootReader,
     SharedNode, TrieHash, TrieReader,
 };
+use hash_db::Hasher;
+use plain_hasher::PlainHasher;
+use sha2::{Digest, Sha256};
 
 static DEBUG_ITERATION: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+struct MerkleDbSha256Hasher;
+
+impl Hasher for MerkleDbSha256Hasher {
+    type Out = [u8; 32];
+    type StdHasher = PlainHasher;
+    const LENGTH: usize = 32;
+
+    #[inline]
+    fn hash(x: &[u8]) -> Self::Out {
+        let mut hasher = Sha256::new();
+        hasher.update(x);
+        hasher.finalize().into()
+    }
+}
+
+fn compute_expected_root(items: &[(Vec<u8>, Vec<u8>)]) -> TrieHash {
+    let mut deduped: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    for (key, value) in items {
+        deduped.insert(key.clone(), value.clone());
+    }
+
+    let merkle = init_merkle(deduped);
+    merkle
+        .nodestore()
+        .root_hash()
+        .unwrap_or_else(TrieHash::empty)
+}
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -75,7 +107,7 @@ where
     let debug_prefix = debug_iteration
         .map(|iter| format!("debug(iter={iter})"))
         .unwrap_or_else(|| "debug".to_string());
-    let mut debug_log = |message: &str| {
+    let debug_log = |message: &str| {
         if debug_enabled {
             println!("{debug_prefix}: {message}");
         }
@@ -95,6 +127,8 @@ where
         }
         output
     };
+
+    let format_hash = |hash: &TrieHash| format_bytes(hash.as_ref());
 
     let mut expected_values: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
@@ -191,11 +225,9 @@ where
     let merkle = merkle.hash();
     debug_log("hashing complete");
     if debug_enabled {
-        if let Some(metrics) = firewood_storage::take_hash_debug_metrics() {
-            debug_log(&format!(
-                "hash metrics: max_recursion_depth={}",
-                metrics.max_recursion_depth
-            ));
+        match merkle.nodestore.root_hash() {
+            Some(root) => debug_log(&format!("hash root={}", format_hash(&root))),
+            None => debug_log("hash root=<empty>"),
         }
     }
 
@@ -221,6 +253,13 @@ where
 
     debug_log("committing");
     let merkle = into_committed(merkle, base.nodestore());
+
+    if debug_enabled {
+        match merkle.nodestore().root_hash() {
+            Some(root) => debug_log(&format!("committed root={}", format_hash(&root))),
+            None => debug_log("committed root=<empty>"),
+        }
+    }
 
     for (index, key) in expected_keys.iter().enumerate() {
         let key_bytes = key.as_slice();
@@ -925,16 +964,22 @@ fn test_delete_one_child_with_branch_value() {
 
 #[test]
 fn test_root_hash_simple_insertions() -> Result<(), Error> {
-    init_merkle([
-        ("do", "verb"),
-        ("doe", "reindeer"),
-        ("dog", "puppy"),
-        ("doge", "coin"),
-        ("horse", "stallion"),
-        ("ddd", "ok"),
-    ])
-    .dump_to_string()
-    .unwrap();
+    let kvs = vec![
+        (b"do".to_vec(), b"verb".to_vec()),
+        (b"doe".to_vec(), b"reindeer".to_vec()),
+        (b"dog".to_vec(), b"puppy".to_vec()),
+        (b"doge".to_vec(), b"coin".to_vec()),
+        (b"horse".to_vec(), b"stallion".to_vec()),
+        (b"ddd".to_vec(), b"ok".to_vec()),
+    ];
+
+    let merkle = init_merkle(kvs.clone());
+    let firewood_hash = merkle
+        .nodestore()
+        .root_hash()
+        .unwrap_or_else(TrieHash::empty);
+    let expected_hash = compute_expected_root(&kvs);
+    assert_eq!(firewood_hash, expected_hash);
     Ok(())
 }
 
@@ -969,7 +1014,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok());
 
-            for iter in 0..100 {
+            for iter in 0..200 {
                 if debug_env {
                     println!("debug: fuzz iteration {iter} start");
                 }
@@ -987,7 +1032,16 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
                         DEBUG_ITERATION.store(usize::MAX, Ordering::Relaxed);
                     }
                 }
-                init_merkle(items);
+                let expected_root = compute_expected_root(&items);
+                let merkle = init_merkle(items.clone());
+                let actual_root = merkle
+                    .nodestore()
+                    .root_hash()
+                    .unwrap_or_else(TrieHash::empty);
+                assert_eq!(
+                    actual_root, expected_root,
+                    "root hash mismatch at iteration {iter}"
+                );
             }
 
             if debug_target.is_some() {
@@ -999,6 +1053,190 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         .expect("failed to spawn merkle fuzz thread")
         .join()
         .expect("merkle fuzz thread panicked")
+}
+
+#[test]
+#[ignore]
+fn dump_iteration_106_dataset() {
+    use hex::encode;
+
+    let rng = firewood_storage::SeededRng::from_option(Some(42));
+    let max_len0 = 8;
+    let max_len1 = 4;
+    let keygen = || {
+        let (len0, len1): (usize, usize) = {
+            (
+                rng.random_range(1..=max_len0),
+                rng.random_range(1..=max_len1),
+            )
+        };
+        (0..len0)
+            .map(|_| rng.random_range(0..2))
+            .chain((0..len1).map(|_| rng.random()))
+            .collect::<Vec<u8>>()
+    };
+
+    for iter in 0..=106 {
+        let mut items = Vec::new();
+        for _ in 0..100 {
+            let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
+            items.push((keygen(), val));
+        }
+        if iter == 106 {
+            println!("ITER {iter}");
+            for (index, (key, value)) in items.iter().enumerate() {
+                println!("{}:{}:{}", index, encode(key), encode(value));
+            }
+            break;
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn inspect_iteration_106_roots() {
+    use firewood_storage::{hash_preimage, Child, Node, Path, SharedNode};
+    use hex::encode;
+    use std::ops::Deref;
+
+    fn describe_node(
+        store: &NodeStore<Committed, MemStore>,
+        node: SharedNode,
+        prefix: &Path,
+        lines: &mut Vec<String>,
+    ) {
+        match node.deref() {
+            Node::Branch(branch) => {
+                let mut full_path = prefix.clone();
+                full_path.extend(branch.partial_path.0.iter().copied());
+                let mut child_summaries = Vec::new();
+                for (idx, child) in branch.children.iter().enumerate() {
+                    let Some(child) = child else { continue };
+                    let hash = match child {
+                        Child::Node(_) => None,
+                        Child::AddressWithHash(_, hash) => Some(hash),
+                        Child::MaybePersisted(_, hash) => Some(hash),
+                    };
+                    let summary = if let Some(hash) = hash {
+                        format!("{idx}:{}", encode(&hash.as_ref()[..4]))
+                    } else {
+                        format!("{idx}:<pending>")
+                    };
+                    child_summaries.push(summary);
+                }
+                lines.push(format!(
+                    "branch path={} value={} children=[{}]",
+                    encode(full_path.as_ref()),
+                    branch.value.as_ref().map(|v| v.len()).unwrap_or(0),
+                    child_summaries.join(", "),
+                ));
+
+                for (idx, child) in branch.children.iter().enumerate() {
+                    let Some(child) = child else { continue };
+                    let child_node = match child {
+                        Child::Node(inner) => SharedNode::new(inner.clone()),
+                        Child::AddressWithHash(address, _) => {
+                            store.read_node((*address).into()).expect("read child")
+                        }
+                        Child::MaybePersisted(maybe, _) => {
+                            maybe.as_shared_node(store).expect("load persisted child")
+                        }
+                    };
+                    let mut child_prefix = full_path.clone();
+                    child_prefix.0.push(idx as u8);
+                    describe_node(store, child_node, &child_prefix, lines);
+                }
+            }
+            Node::Leaf(leaf) => {
+                let mut full_path = prefix.clone();
+                full_path.extend(leaf.partial_path.0.iter().copied());
+                lines.push(format!(
+                    "leaf path={} value_len={}",
+                    encode(full_path.as_ref()),
+                    leaf.value.len(),
+                ));
+            }
+        }
+    }
+
+    let rng = firewood_storage::SeededRng::from_option(Some(42));
+    let max_len0 = 8;
+    let max_len1 = 4;
+    let keygen = || {
+        let (len0, len1): (usize, usize) = {
+            (
+                rng.random_range(1..=max_len0),
+                rng.random_range(1..=max_len1),
+            )
+        };
+        (0..len0)
+            .map(|_| rng.random_range(0..2))
+            .chain((0..len1).map(|_| rng.random()))
+            .collect::<Vec<u8>>()
+    };
+
+    let mut items = Vec::new();
+    for iter in 0..=106 {
+        items.clear();
+        for _ in 0..100 {
+            let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
+            items.push((keygen(), val));
+        }
+        if iter == 106 {
+            break;
+        }
+    }
+
+    let actual_merkle = init_merkle(items.clone());
+    let mut deduped: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    for (key, value) in &items {
+        deduped.insert(key.clone(), value.clone());
+    }
+    let expected_merkle = init_merkle(deduped);
+
+    let actual_root = actual_merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(actual_merkle.nodestore()).ok())
+        .expect("actual root node");
+    let expected_root = expected_merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(expected_merkle.nodestore()).ok())
+        .expect("expected root node");
+
+    let actual_preimage = hash_preimage(actual_root.deref(), &Path::new());
+    println!("actual root preimage={}", encode(actual_preimage.as_ref()));
+
+    let mut actual_lines = Vec::new();
+    describe_node(
+        actual_merkle.nodestore(),
+        actual_root,
+        &Path::new(),
+        &mut actual_lines,
+    );
+    println!("actual trie:");
+    for line in &actual_lines {
+        println!("  {line}");
+    }
+
+    let expected_preimage = hash_preimage(expected_root.deref(), &Path::new());
+    println!(
+        "expected root preimage={}",
+        encode(expected_preimage.as_ref())
+    );
+
+    let mut expected_lines = Vec::new();
+    describe_node(
+        expected_merkle.nodestore(),
+        expected_root,
+        &Path::new(),
+        &mut expected_lines,
+    );
+    println!("expected trie:");
+    for line in &expected_lines {
+        println!("  {line}");
+    }
 }
 
 #[test]
