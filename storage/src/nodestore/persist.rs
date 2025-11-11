@@ -296,6 +296,12 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             let mut serialized = Vec::new();
             shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
 
+            let serialized_len = serialized.len() as u64;
+            AreaIndex::from_size(serialized_len).map_err(|e| {
+                self.storage
+                    .file_io_error(e, 0, Some("flush_nodes_generic".to_string()))
+            })?;
+
             let (persisted_address, area_size_index) =
                 allocator.allocate_node(serialized.as_slice())?;
             *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();

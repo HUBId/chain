@@ -14,7 +14,9 @@ use crate::logger::trace;
 use crate::node::Node;
 #[cfg(feature = "ethhash")]
 use crate::Children;
-use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
+use crate::{
+    AreaIndex, Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
+};
 
 use super::NodeReader;
 
@@ -254,6 +256,10 @@ where
 
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, &path_prefix);
+
+        let serialized_len = node.serialized_length() as u64;
+        AreaIndex::from_size(serialized_len)
+            .map_err(|e| FileIoError::from_generic_no_file(e, "hash_helper_inner"))?;
 
         Ok((SharedNode::new(node).into(), hash, nodes_processed))
     }
