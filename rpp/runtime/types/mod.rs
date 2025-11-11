@@ -23,8 +23,8 @@ pub use block::{
     RecursiveProof, ReputationUpdate, TimetokeUpdate, ValidatedPruningEnvelope,
 };
 pub use identity::{
-    AttestedIdentityRequest, IdentityDeclaration, IdentityGenesis, IdentityProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    AttestationOutcome, AttestedIdentityRequest, IdentityDeclaration, IdentityGenesis,
+    IdentityProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 #[cfg(feature = "backend-rpp-stark")]
 pub use proofs::RppStarkProof;
