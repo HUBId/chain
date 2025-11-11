@@ -536,6 +536,33 @@ PY
           set -euo pipefail
           cargo xtask test-firewood
 
+  firewood-giant-node:
+    name: Firewood giant node (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: backend-rpp-stark
+            features: "backend-rpp-stark"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: firewood-giant-node-${{ matrix.name }}
+      - name: Run giant node regression
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo test -p firewood-storage --locked --features "${{ matrix.features }}" nodestore::tests::giant_node -- --exact
+          else
+            cargo test -p firewood-storage --locked nodestore::tests::giant_node -- --exact
+          fi
+
   unit-suites:
     name: Unit suites (${{ matrix.name }})
     runs-on: ubuntu-latest

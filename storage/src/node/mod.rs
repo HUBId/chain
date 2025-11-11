@@ -30,6 +30,7 @@ use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
 use std::fmt::Debug;
 use std::io::{Error, Read, Write};
+use std::mem::size_of;
 
 pub mod branch;
 mod leaf;
@@ -186,6 +187,110 @@ impl Node {
             Node::Branch(b) => b.value.as_deref(),
             Node::Leaf(l) => Some(&l.value),
         }
+    }
+
+    /// Returns the length in bytes of the serialized representation of this node,
+    /// including the leading area-size prefix byte.
+    #[must_use]
+    pub fn serialized_length(&self) -> usize {
+        match self {
+            Node::Branch(branch) => Self::branch_serialized_length(branch),
+            Node::Leaf(leaf) => Self::leaf_serialized_length(leaf),
+        }
+    }
+
+    fn branch_serialized_length(branch: &BranchNode) -> usize {
+        let mut length = 1; // area index prefix
+        length += 1; // branch marker byte
+
+        #[cfg(feature = "branch_factor_256")]
+        {
+            length += 1; // child count byte for branch_factor_256 encoding
+        }
+
+        let partial_path_len = branch.partial_path.len();
+        if partial_path_len >= BRANCH_PARTIAL_PATH_LEN_OVERFLOW as usize {
+            length += Self::varint_length(partial_path_len);
+        }
+        length += partial_path_len;
+
+        if let Some(value) = &branch.value {
+            length += Self::varint_length(value.len());
+            length += value.len();
+        }
+
+        let childcount = branch
+            .children
+            .iter()
+            .filter(|child| child.is_some())
+            .count();
+
+        if childcount == BranchNode::MAX_CHILDREN {
+            for child in branch.children.iter().filter_map(|child| child.as_ref()) {
+                length += Self::child_serialized_length(child);
+            }
+        } else {
+            for (position, child) in branch.children.iter().enumerate() {
+                if let Some(child) = child.as_ref() {
+                    length += Self::varint_length(position);
+                    length += Self::child_serialized_length(child);
+                }
+            }
+        }
+
+        length
+    }
+
+    fn leaf_serialized_length(leaf: &LeafNode) -> usize {
+        let mut length = 1; // area index prefix
+        length += 1; // leaf marker byte
+
+        let partial_path_len = leaf.partial_path.len();
+        if partial_path_len >= LEAF_PARTIAL_PATH_LEN_OVERFLOW as usize {
+            length += Self::varint_length(partial_path_len);
+        }
+        length += partial_path_len;
+
+        length += Self::varint_length(leaf.value.len());
+        length += leaf.value.len();
+
+        length
+    }
+
+    fn child_serialized_length(child: &Child) -> usize {
+        let hash_len = match child {
+            Child::AddressWithHash(_, hash) => Self::hash_serialized_len(hash),
+            Child::MaybePersisted(_, hash) => Self::hash_serialized_len(hash),
+            Child::Node(_) => {
+                debug_assert!(false, "unhashed child when computing serialized length");
+                0
+            }
+        };
+
+        size_of::<u64>() + hash_len
+    }
+
+    #[cfg(feature = "ethhash")]
+    fn hash_serialized_len(hash: &HashType) -> usize {
+        match hash {
+            crate::node::branch::ethhash::HashOrRlp::Hash(h) => 1 + h.as_ref().len(),
+            crate::node::branch::ethhash::HashOrRlp::Rlp(r) => 1 + r.len(),
+        }
+    }
+
+    #[cfg(not(feature = "ethhash"))]
+    fn hash_serialized_len(hash: &HashType) -> usize {
+        hash.as_ref().len()
+    }
+
+    fn varint_length(value: usize) -> usize {
+        let mut length = 1;
+        let mut value = value as u64;
+        while value >= 0x80 {
+            value >>= 7;
+            length += 1;
+        }
+        length
     }
 
     /// Given a [Node], returns a set of bytes to write to storage

@@ -522,6 +522,16 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
     ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
         let stored_area_size = node.len() as u64;
 
+        if stored_area_size > AreaIndex::MAX_AREA_SIZE {
+            let error = Error::new(
+                ErrorKind::InvalidData,
+                format!("Node size {stored_area_size} is too large"),
+            );
+            return Err(self
+                .storage
+                .file_io_error(error, 0, Some("allocate_node".to_string())));
+        }
+
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
         // of the ReadableStorage.
