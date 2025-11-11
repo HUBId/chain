@@ -9506,3 +9506,15 @@ dependencies = [
  "quote",
  "syn 2.0.107",
 ]
+
+[[package]]
+name = "zsi-fixtures"
+version = "0.0.12"
+dependencies = [
+ "anyhow",
+ "ed25519-dalek",
+ "hex",
+ "rpp-chain",
+ "serde",
+ "serde_json",
+]

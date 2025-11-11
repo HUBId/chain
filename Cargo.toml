@@ -16,7 +16,7 @@ members = [
   "rpp/pruning",
   "rpp/node",
   "xtask",
-  "tools/simnet", "tools/snapshot-verify", "tools/worm-export-stub",
+  "tools/simnet", "tools/snapshot-verify", "tools/worm-export-stub", "tools/zsi-fixtures",
 ]
 exclude = ["scripts/vendor_plonky3"]
 default-members = [
