@@ -6,6 +6,7 @@ pub mod random;
 pub mod rpc;
 pub mod sync;
 pub mod transactions;
+pub mod zsi;
 
 pub use cluster::{
     HarnessPipelineDashboardSnapshot, HarnessPipelineError, HarnessPipelineEvent,
@@ -27,3 +28,4 @@ pub use sync::{
     install_pruned_chain, make_dummy_block, mutate_base64, mutate_hex, snapshot_from_block,
     InMemoryPayloadProvider, StateSyncArtifacts,
 };
+pub use zsi::attested_identity_renewal_fixture;

@@ -1,13 +1,10 @@
 use rpp_chain::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
 use rpp_chain::types::{
-    AttestedIdentityRequest, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
-use serde_json::from_str;
+mod support;
 
-fn renewal_fixture_request() -> AttestedIdentityRequest {
-    from_str(include_str!("../tests/vectors/zsi/renewal_request.json"))
-        .expect("failed to parse attested identity request fixture")
-}
+use support::attested_identity_renewal_fixture;
 
 #[test]
 #[ignore]
@@ -15,7 +12,7 @@ fn zsi_identity_submission_requires_bft_attestation() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
     let height = ledger.current_epoch() + 1;
     ledger.sync_epoch_for_height(height);
-    let request = renewal_fixture_request();
+    let request = attested_identity_renewal_fixture();
 
     request
         .verify(
@@ -40,7 +37,7 @@ fn zsi_identity_submission_slashes_on_invalid_vote() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
     let height = ledger.current_epoch() + 1;
     ledger.sync_epoch_for_height(height);
-    let mut request = renewal_fixture_request();
+    let mut request = attested_identity_renewal_fixture();
     request.attested_votes[2].vote.height = height + 1;
 
     let err = request
