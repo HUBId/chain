@@ -10,11 +10,12 @@ use support::attested_identity_renewal_fixture;
 #[ignore]
 fn zsi_identity_submission_requires_bft_attestation() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
-    let height = ledger.current_epoch() + 1;
+    let fixture = attested_identity_renewal_fixture();
+    let height = fixture.attestation_height();
     ledger.sync_epoch_for_height(height);
-    let request = attested_identity_renewal_fixture();
 
-    request
+    fixture
+        .request
         .verify(
             height,
             IDENTITY_ATTESTATION_QUORUM,
@@ -23,7 +24,7 @@ fn zsi_identity_submission_requires_bft_attestation() {
         .expect("attestation should satisfy quorum");
     ledger
         .register_identity(
-            &request,
+            &fixture.request,
             height,
             IDENTITY_ATTESTATION_QUORUM,
             IDENTITY_ATTESTATION_GOSSIP_MIN,
@@ -35,12 +36,13 @@ fn zsi_identity_submission_requires_bft_attestation() {
 #[ignore]
 fn zsi_identity_submission_slashes_on_invalid_vote() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
-    let height = ledger.current_epoch() + 1;
+    let fixture = attested_identity_renewal_fixture();
+    let height = fixture.attestation_height();
     ledger.sync_epoch_for_height(height);
-    let mut request = attested_identity_renewal_fixture();
-    request.attested_votes[2].vote.height = height + 1;
+    let mut invalid_request = fixture.request.clone();
+    invalid_request.attested_votes[2].vote.height = height + 1;
 
-    let err = request
+    let err = invalid_request
         .verify(
             height,
             IDENTITY_ATTESTATION_QUORUM,
@@ -52,6 +54,6 @@ fn zsi_identity_submission_slashes_on_invalid_vote() {
     assert!(ledger.slashing_events(10).is_empty());
     // Ensure ledger state unaffected.
     assert!(ledger
-        .get_account(&request.declaration.genesis.wallet_addr)
+        .get_account(&fixture.request.declaration.genesis.wallet_addr)
         .is_none());
 }
