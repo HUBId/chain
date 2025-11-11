@@ -19,11 +19,12 @@ use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeStore, Parentable, ReadableStorage, StorageMetricsHandle, TrieReader,
 };
-use metrics::{counter, describe_counter};
+use metrics::{counter, describe_counter, describe_histogram, histogram};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -36,10 +37,56 @@ pub enum DbError {
     FileIo(#[from] FileIoError),
 }
 
+#[derive(Debug)]
+struct RequestMetrics {
+    success_counter: metrics::Counter,
+    failure_counter: metrics::Counter,
+    success_latency: metrics::Histogram,
+    failure_latency: metrics::Histogram,
+}
+
+impl RequestMetrics {
+    const BACKEND: &'static str = "firewood";
+    const METRIC_COUNT: &'static str = "firewood.db.requests_total";
+    const METRIC_LATENCY: &'static str = "firewood.db.request.latency";
+
+    fn new(operation: &'static str) -> Self {
+        let success_labels = [
+            ("backend", Self::BACKEND),
+            ("operation", operation),
+            ("result", "success"),
+        ];
+        let failure_labels = [
+            ("backend", Self::BACKEND),
+            ("operation", operation),
+            ("result", "failure"),
+        ];
+
+        Self {
+            success_counter: counter!(Self::METRIC_COUNT, &success_labels),
+            failure_counter: counter!(Self::METRIC_COUNT, &failure_labels),
+            success_latency: histogram!(Self::METRIC_LATENCY, &success_labels),
+            failure_latency: histogram!(Self::METRIC_LATENCY, &failure_labels),
+        }
+    }
+
+    fn record_success(&self, elapsed: std::time::Duration) {
+        self.success_counter.increment(1);
+        self.success_latency.record(elapsed.as_secs_f64());
+    }
+
+    fn record_failure(&self, elapsed: std::time::Duration) {
+        self.failure_counter.increment(1);
+        self.failure_latency.record(elapsed.as_secs_f64());
+    }
+}
+
 /// Metrics for the database.
-/// TODO: Add more metrics
 pub struct DbMetrics {
     proposals: metrics::Counter,
+    propose_metrics: RequestMetrics,
+    commit_metrics: RequestMetrics,
+    revision_metrics: RequestMetrics,
 }
 
 impl std::fmt::Debug for DbMetrics {
@@ -124,8 +171,19 @@ impl api::Db for Db {
         Self: 'db;
 
     fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
-        let nodestore = self.manager.revision(root_hash)?;
-        Ok(nodestore)
+        let start = Instant::now();
+        let result = self.manager.revision(root_hash).map_err(api::Error::from);
+        match &result {
+            Ok(_) => self
+                .metrics
+                .revision_metrics
+                .record_success(start.elapsed()),
+            Err(_) => self
+                .metrics
+                .revision_metrics
+                .record_failure(start.elapsed()),
+        }
+        result
     }
 
     fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
@@ -141,40 +199,51 @@ impl api::Db for Db {
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self::Proposal<'_>, api::Error> {
-        let parent = self.manager.current_revision();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        let span = fastrace::Span::enter_with_local_parent("merkleops");
-        for op in batch.into_iter().map_into_batch() {
-            match op {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
+        let start = Instant::now();
+        let result = (|| {
+            let parent = self.manager.current_revision();
+            let proposal = NodeStore::new(&parent)?;
+            let mut merkle = Merkle::from(proposal);
+            let span = fastrace::Span::enter_with_local_parent("merkleops");
+            for op in batch.into_iter().map_into_batch() {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        merkle.insert(key.as_ref(), value.as_ref().into())?;
+                    }
+                    BatchOp::Delete { key } => {
+                        merkle.remove(key.as_ref())?;
+                    }
+                    BatchOp::DeleteRange { prefix } => {
+                        merkle.remove_prefix(prefix.as_ref())?;
+                    }
                 }
             }
+
+            drop(span);
+            let span = fastrace::Span::enter_with_local_parent("freeze");
+
+            let nodestore = merkle.into_inner();
+            let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+                Arc::new(nodestore.try_into()?);
+
+            drop(span);
+            self.manager.add_proposal(immutable.clone());
+
+            Ok(Self::Proposal {
+                nodestore: immutable,
+                db: self,
+            })
+        })();
+
+        match &result {
+            Ok(_) => {
+                self.metrics.proposals.increment(1);
+                self.metrics.propose_metrics.record_success(start.elapsed());
+            }
+            Err(_) => self.metrics.propose_metrics.record_failure(start.elapsed()),
         }
 
-        drop(span);
-        let span = fastrace::Span::enter_with_local_parent("freeze");
-
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-
-        drop(span);
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Self::Proposal {
-            nodestore: immutable,
-            db: self,
-        })
+        result
     }
 }
 
@@ -185,8 +254,20 @@ impl Db {
         cfg: DbConfig,
         storage_metrics: StorageMetricsHandle,
     ) -> Result<Self, api::Error> {
+        describe_counter!(
+            RequestMetrics::METRIC_COUNT,
+            "Firewood database request totals grouped by operation and result"
+        );
+        describe_histogram!(
+            RequestMetrics::METRIC_LATENCY,
+            "Firewood database request latencies grouped by operation and result"
+        );
+
         let db_metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
+            propose_metrics: RequestMetrics::new("propose"),
+            commit_metrics: RequestMetrics::new("commit"),
+            revision_metrics: RequestMetrics::new("revision"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
         let config_manager = ConfigManager::builder()
@@ -281,7 +362,8 @@ impl<'db> api::Proposal for Proposal<'db> {
     }
 
     fn commit(self) -> Result<(), api::Error> {
-        Ok(self.db.manager.commit(self.nodestore)?)
+        let Proposal { nodestore, db } = self;
+        db.commit(nodestore)
     }
 }
 
@@ -319,6 +401,21 @@ impl Proposal<'_> {
     }
 }
 
+impl Db {
+    fn commit(
+        &self,
+        proposal: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
+    ) -> Result<(), api::Error> {
+        let start = Instant::now();
+        let result = self.manager.commit(proposal).map_err(api::Error::from);
+        match &result {
+            Ok(_) => self.metrics.commit_metrics.record_success(start.elapsed()),
+            Err(_) => self.metrics.commit_metrics.record_failure(start.elapsed()),
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![allow(clippy::unwrap_used)] // Tests unwrap to keep fixtures compact and assertions readable.
@@ -329,8 +426,11 @@ mod test {
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
     use firewood_storage::{noop_storage_metrics, CheckOpt, CheckerError};
+    use metrics::handles::{CounterFn, HistogramFn};
+    use metrics::{with_local_recorder, Counter, Histogram, Key, Metadata, Recorder};
 
     use crate::db::{Db, Proposal};
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
@@ -396,6 +496,37 @@ mod test {
         let committed = db.root_hash().unwrap().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+    }
+
+    #[test]
+    fn metrics_propose_commit_cycle_records_counts() {
+        let recorder = TestRecorder::default();
+        with_local_recorder(&recorder, || {
+            let db = testdb();
+            let batch = vec![BatchOp::Put {
+                key: b"k",
+                value: b"v",
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+        });
+
+        let propose_success =
+            "firewood.db.requests_total{backend=firewood,operation=propose,result=success}";
+        let commit_success =
+            "firewood.db.requests_total{backend=firewood,operation=commit,result=success}";
+        let commit_failure =
+            "firewood.db.requests_total{backend=firewood,operation=commit,result=failure}";
+        let propose_latency =
+            "firewood.db.request.latency{backend=firewood,operation=propose,result=success}";
+        let commit_latency =
+            "firewood.db.request.latency{backend=firewood,operation=commit,result=success}";
+
+        assert_eq!(recorder.counter_value(propose_success), Some(1));
+        assert_eq!(recorder.counter_value(commit_success), Some(1));
+        assert_eq!(recorder.counter_value(commit_failure), Some(0));
+        assert!(!recorder.histogram_values(propose_latency).is_empty());
+        assert!(!recorder.histogram_values(commit_latency).is_empty());
     }
 
     #[test]
@@ -836,6 +967,132 @@ mod test {
                 db,
                 tmpdir: self.tmpdir,
             }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestRecorder {
+        inner: Arc<TestRecorderInner>,
+    }
+
+    #[derive(Default)]
+    struct TestRecorderInner {
+        counters: Mutex<std::collections::HashMap<String, u64>>,
+        histograms: Mutex<std::collections::HashMap<String, Vec<f64>>>,
+    }
+
+    impl TestRecorder {
+        fn counter_value(&self, key: &str) -> Option<u64> {
+            self.inner.counters.lock().unwrap().get(key).copied()
+        }
+
+        fn histogram_values(&self, key: &str) -> Vec<f64> {
+            self.inner
+                .histograms
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn format_key(key: &Key) -> String {
+            let mut labels: Vec<_> = key
+                .labels()
+                .map(|label| (label.key().to_owned(), label.value().to_owned()))
+                .collect();
+            labels.sort();
+            if labels.is_empty() {
+                key.name().to_owned()
+            } else {
+                let labels = labels
+                    .into_iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{}{{{labels}}}", key.name())
+            }
+        }
+    }
+
+    struct TestCounterHandle {
+        key: String,
+        inner: Arc<TestRecorderInner>,
+    }
+
+    impl CounterFn for TestCounterHandle {
+        fn increment(&self, value: u64) {
+            let mut counters = self.inner.counters.lock().unwrap();
+            let entry = counters.entry(self.key.clone()).or_default();
+            *entry += value;
+        }
+
+        fn absolute(&self, value: u64) {
+            let mut counters = self.inner.counters.lock().unwrap();
+            let entry = counters.entry(self.key.clone()).or_default();
+            *entry = (*entry).max(value);
+        }
+    }
+
+    struct TestHistogramHandle {
+        key: String,
+        inner: Arc<TestRecorderInner>,
+    }
+
+    impl HistogramFn for TestHistogramHandle {
+        fn record(&self, value: f64) {
+            let mut histograms = self.inner.histograms.lock().unwrap();
+            histograms.entry(self.key.clone()).or_default().push(value);
+        }
+    }
+
+    impl Recorder for TestRecorder {
+        fn describe_counter(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _desc: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_gauge(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _desc: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_histogram(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _desc: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(&self, key: &Key, _metadata: &Metadata<'_>) -> Counter {
+            let key = Self::format_key(key);
+            {
+                let mut counters = self.inner.counters.lock().unwrap();
+                counters.entry(key.clone()).or_insert(0);
+            }
+            Counter::from_arc(Arc::new(TestCounterHandle {
+                key,
+                inner: Arc::clone(&self.inner),
+            }))
+        }
+
+        fn register_gauge(&self, _key: &Key, _metadata: &Metadata<'_>) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(&self, key: &Key, _metadata: &Metadata<'_>) -> Histogram {
+            let key = Self::format_key(key);
+            Histogram::from_arc(Arc::new(TestHistogramHandle {
+                key,
+                inner: Arc::clone(&self.inner),
+            }))
         }
     }
 }
