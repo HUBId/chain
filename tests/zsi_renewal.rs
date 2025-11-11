@@ -7,7 +7,6 @@ mod support;
 use support::attested_identity_renewal_fixture;
 
 #[test]
-#[ignore]
 fn zsi_identity_submission_requires_bft_attestation() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
     let fixture = attested_identity_renewal_fixture();
@@ -33,7 +32,6 @@ fn zsi_identity_submission_requires_bft_attestation() {
 }
 
 #[test]
-#[ignore]
 fn zsi_identity_submission_slashes_on_invalid_vote() {
     let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
     let fixture = attested_identity_renewal_fixture();
