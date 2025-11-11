@@ -17,6 +17,8 @@ mod triehash;
 
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 
 use super::*;
 use firewood_storage::{
@@ -24,6 +26,8 @@ use firewood_storage::{
     MaybePersistedNode, MemStore, MutableProposal, NodeReader, NodeStore, PathIterItem, RootReader,
     SharedNode, TrieHash, TrieReader,
 };
+
+static DEBUG_ITERATION: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -59,62 +63,186 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
+    let debug_iteration = match DEBUG_ITERATION.load(Ordering::Relaxed) {
+        usize::MAX => None,
+        value => Some(value),
+    };
+    let env_debug = std::env::var("FIREWOOD_MERKLE_DEBUG")
+        .ok()
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    let debug_enabled = env_debug || debug_iteration.is_some();
+    let debug_prefix = debug_iteration
+        .map(|iter| format!("debug(iter={iter})"))
+        .unwrap_or_else(|| "debug".to_string());
+    let mut debug_log = |message: &str| {
+        if debug_enabled {
+            println!("{debug_prefix}: {message}");
+        }
+    };
+
+    let format_bytes = |bytes: &[u8]| {
+        const LIMIT: usize = 16;
+        let mut output = String::new();
+        for (index, byte) in bytes.iter().take(LIMIT).enumerate() {
+            let _ = write!(output, "{byte:02x}");
+            if index % 2 == 1 {
+                output.push(' ');
+            }
+        }
+        if bytes.len() > LIMIT {
+            output.push_str("...");
+        }
+        output
+    };
+
+    let mut expected_values: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+    debug_log("init_merkle start");
+
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let base = Merkle::from(
         NodeStore::new_empty_committed(memstore.clone(), noop_storage_metrics()).unwrap(),
     );
     let mut merkle = base.fork().unwrap();
 
-    for (k, v) in iter.clone() {
+    for (index, (k, v)) in iter.clone().into_iter().enumerate() {
         let key = k.as_ref();
         let value = v.as_ref();
+
+        let previous = expected_values.insert(key.to_vec(), value.to_vec());
+        if debug_iteration.is_some() {
+            if let Some(prev) = previous.as_ref() {
+                debug_log(&format!(
+                    "insert[{index}] duplicate key={} new_len={} prev_len={} prev_head={} new_head={}",
+                    format_bytes(key),
+                    value.len(),
+                    prev.len(),
+                    format_bytes(prev),
+                    format_bytes(value),
+                ));
+            } else {
+                debug_log(&format!(
+                    "insert[{index}] key={} value_len={} head={}",
+                    format_bytes(key),
+                    value.len(),
+                    format_bytes(value),
+                ));
+            }
+        }
 
         merkle.insert(key, value.into()).unwrap();
 
+        let stored = merkle.get_value(key).unwrap();
+        if debug_iteration.is_some() {
+            if let Some(stored) = stored.as_deref() {
+                if stored != value {
+                    debug_log(&format!(
+                        "insert[{index}] mismatch key={} expected_head={} actual_head={} expected_len={} actual_len={}",
+                        format_bytes(key),
+                        format_bytes(value),
+                        format_bytes(stored),
+                        value.len(),
+                        stored.len(),
+                    ));
+                    if let Some(recorded) = expected_values.get(key) {
+                        debug_log(&format!(
+                            "insert[{index}] recorded_value_head={} recorded_len={}",
+                            format_bytes(recorded),
+                            recorded.len(),
+                        ));
+                    }
+                }
+            }
+        }
+
         assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
+            stored.as_deref(),
             Some(value),
-            "Failed to insert key: {key:?}",
+            "Failed to insert key: {key:?}"
+        );
+    }
+    debug_log("inserts complete");
+
+    let mut expected_keys: Vec<&Vec<u8>> = expected_values.keys().collect();
+    expected_keys.sort();
+
+    for (index, key) in expected_keys.iter().enumerate() {
+        let key_bytes = key.as_slice();
+        let value = expected_values
+            .get(*key)
+            .expect("expected value for inserted key");
+
+        if debug_iteration.is_some() {
+            debug_log(&format!(
+                "verify-pre-hash[{index}] key={}",
+                format_bytes(key_bytes),
+            ));
+        }
+        assert_eq!(
+            merkle.get_value(key_bytes).unwrap().as_deref(),
+            Some(value.as_slice()),
+            "Failed to get key after insert: {:?}",
+            key_bytes,
         );
     }
 
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after insert: {key:?}",
-        );
-    }
-
+    debug_log("hashing start");
     let merkle = merkle.hash();
+    debug_log("hashing complete");
+    if debug_enabled {
+        if let Some(metrics) = firewood_storage::take_hash_debug_metrics() {
+            debug_log(&format!(
+                "hash metrics: max_recursion_depth={}",
+                metrics.max_recursion_depth
+            ));
+        }
+    }
 
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
+    for (index, key) in expected_keys.iter().enumerate() {
+        let key_bytes = key.as_slice();
+        let value = expected_values
+            .get(*key)
+            .expect("expected value for inserted key");
 
+        if debug_iteration.is_some() {
+            debug_log(&format!(
+                "verify-post-hash[{index}] key={}",
+                format_bytes(key_bytes),
+            ));
+        }
         assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after hashing: {key:?}"
+            merkle.get_value(key_bytes).unwrap().as_deref(),
+            Some(value.as_slice()),
+            "Failed to get key after hashing: {:?}",
+            key_bytes,
         );
     }
 
+    debug_log("committing");
     let merkle = into_committed(merkle, base.nodestore());
 
-    for (k, v) in iter {
-        let key = k.as_ref();
-        let value = v.as_ref();
+    for (index, key) in expected_keys.iter().enumerate() {
+        let key_bytes = key.as_slice();
+        let value = expected_values
+            .get(*key)
+            .expect("expected value for inserted key");
 
+        if debug_iteration.is_some() {
+            debug_log(&format!(
+                "verify-committed[{index}] key={}",
+                format_bytes(key_bytes),
+            ));
+        }
         assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after committing: {key:?}"
+            merkle.get_value(key_bytes).unwrap().as_deref(),
+            Some(value.as_slice()),
+            "Failed to get key after committing: {:?}",
+            key_bytes,
         );
     }
 
+    debug_log("init_merkle done");
     merkle
 }
 
@@ -812,36 +940,65 @@ fn test_root_hash_simple_insertions() -> Result<(), Error> {
 
 #[test]
 fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
-    let rng = firewood_storage::SeededRng::from_option(Some(42));
-    let max_len0 = 8;
-    let max_len1 = 4;
-    let keygen = || {
-        let (len0, len1): (usize, usize) = {
-            (
-                rng.random_range(1..=max_len0),
-                rng.random_range(1..=max_len1),
-            )
-        };
-        let key: Vec<u8> = (0..len0)
-            .map(|_| rng.random_range(0..2))
-            .chain((0..len1).map(|_| rng.random()))
-            .collect();
-        key
-    };
+    thread::Builder::new()
+        .name("merkle-fuzz-insertions".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| -> Result<(), FileIoError> {
+            let rng = firewood_storage::SeededRng::from_option(Some(42));
+            let max_len0 = 8;
+            let max_len1 = 4;
+            let keygen = || {
+                let (len0, len1): (usize, usize) = {
+                    (
+                        rng.random_range(1..=max_len0),
+                        rng.random_range(1..=max_len1),
+                    )
+                };
+                let key: Vec<u8> = (0..len0)
+                    .map(|_| rng.random_range(0..2))
+                    .chain((0..len1).map(|_| rng.random()))
+                    .collect();
+                key
+            };
 
-    // TODO: figure out why this fails if we use more than 27 iterations with branch_factor_256
-    for _ in 0..27 {
-        let mut items = Vec::new();
+            let debug_env = std::env::var("FIREWOOD_MERKLE_DEBUG")
+                .ok()
+                .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false);
+            let debug_target = std::env::var("FIREWOOD_MERKLE_DEBUG_ITER")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok());
 
-        for _ in 0..100 {
-            let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
-            items.push((keygen(), val));
-        }
+            for iter in 0..100 {
+                if debug_env {
+                    println!("debug: fuzz iteration {iter} start");
+                }
+                let mut items = Vec::new();
 
-        init_merkle(items);
-    }
+                for _ in 0..100 {
+                    let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
+                    items.push((keygen(), val));
+                }
 
-    Ok(())
+                if let Some(target) = debug_target {
+                    if target == iter {
+                        DEBUG_ITERATION.store(iter, Ordering::Relaxed);
+                    } else {
+                        DEBUG_ITERATION.store(usize::MAX, Ordering::Relaxed);
+                    }
+                }
+                init_merkle(items);
+            }
+
+            if debug_target.is_some() {
+                DEBUG_ITERATION.store(usize::MAX, Ordering::Relaxed);
+            }
+
+            Ok(())
+        })
+        .expect("failed to spawn merkle fuzz thread")
+        .join()
+        .expect("merkle fuzz thread panicked")
 }
 
 #[test]
