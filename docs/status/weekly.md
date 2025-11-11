@@ -171,7 +171,7 @@ ist abgestimmt und in On-Call-Dokumentationen verlinkt. Die aktualisierte
 **Zusammenfassung:** Die drei verpflichtenden Test-Suites (`unit-suites`, `integration-workflows`, `simnet-smoke`) sind in CI grün und als Branch-Protection-Checks aktiviert. Nightly-Läufe bestätigen die Stabilität und stellen vollständige Simnet-Artefakte bereit.
 
 ### Highlights
-- **Unit-Suites:** Die Matrix aus Default-, Produktions- und Plonky3-Läufen (`cargo xtask test-unit`) deckt deterministische Witness-/VRF-Checks ab und bildet den Statuscheck `unit-suites` für alle Branches.【F:.github/workflows/ci.yml†L185-L217】
+- **Unit-Suites:** Die Matrix aus Default-, Produktions- und Plonky3-Läufen (`cargo xtask test-unit`) deckt deterministische Witness-/VRF-Checks ab, prüft die ZSI-Renewal-Regression sowohl mit dem Standard- als auch dem `backend-rpp-stark`-Feature-Set und bildet den Statuscheck `unit-suites` für alle Branches.【F:.github/workflows/ci.yml†L185-L217】【F:xtask/src/main.rs†L102-L157】【F:tests/zsi_renewal.rs†L1-L165】
 - **Integrations-Workflows:** `cargo xtask test-integration` prüft Blockproduktion, Snapshot-/Light-Client-Sync und Manipulationsschutz als verpflichtenden Check `integration-workflows` auf denselben Feature-Kombinationen.【F:.github/workflows/ci.yml†L219-L251】
 - **Simnet-Smoke:** `cargo xtask test-simnet` läuft als Pflichtgate `simnet-smoke`, deckt alle Szenarien ab und liefert Summaries für VRF-/Quorum-Stressfälle.【F:.github/workflows/ci.yml†L253-L285】
 - **Nightly-Nachweis:** Der Workflow `nightly-simnet` fährt `cargo xtask test-all` sowie das dedizierte Simnet-Harness und lädt die Artefakte (`simnet-nightly`) für Auditor:innen hoch.【F:.github/workflows/nightly.yml†L88-L124】【F:.github/workflows/nightly.yml†L148-L183】

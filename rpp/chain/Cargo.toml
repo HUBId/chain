@@ -188,6 +188,10 @@ name = "rpp_fail_matrix"
 path = "../../tests/rpp_fail_matrix.rs"
 
 [[test]]
+name = "zsi_renewal"
+path = "../../tests/zsi_renewal.rs"
+
+[[test]]
 name = "unit"
 path = "../../tests/unit/mod.rs"
 

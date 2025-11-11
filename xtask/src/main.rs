@@ -149,6 +149,7 @@ fn run_unit_suites() -> Result<()> {
     apply_feature_flags(&mut command);
     run_command(command, "unit test suite")?;
 
+    run_zsi_renewal_tests()?;
     run_rpp_fail_matrix_tests()
 }
 
@@ -179,6 +180,35 @@ fn run_rpp_fail_matrix_tests() -> Result<()> {
     apply_feature_flags(&mut backend);
     backend.arg("--features").arg("backend-rpp-stark");
     run_command(backend, "rpp-stark fail-matrix (backend)")
+}
+
+fn run_zsi_renewal_tests() -> Result<()> {
+    let root = workspace_root();
+
+    let mut default = Command::new("cargo");
+    default
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("zsi_renewal");
+    apply_feature_flags(&mut default);
+    run_command(default, "zsi renewal tests (default)")?;
+
+    let mut backend = Command::new("cargo");
+    backend
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("zsi_renewal");
+    apply_feature_flags(&mut backend);
+    backend.arg("--features").arg("backend-rpp-stark");
+    run_command(backend, "zsi renewal tests (backend-rpp-stark)")
 }
 
 fn run_firewood_feature_matrix() -> Result<()> {
