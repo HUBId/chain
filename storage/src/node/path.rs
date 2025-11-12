@@ -79,6 +79,14 @@ bitflags! {
 }
 
 impl Path {
+    /// Creates a [`Path`] from an iterator over nibbles.
+    pub fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        Path(SmallVec::from_iter(iter))
+    }
+
     /// Return an iterator over the encoded bytes
     pub fn iter_encoded(&self) -> impl Iterator<Item = u8> + '_ {
         let mut flags = Flags::empty();
@@ -128,6 +136,30 @@ impl Path {
     /// Add nibbles to the end of a path
     pub fn extend<T: IntoIterator<Item = u8>>(&mut self, iter: T) {
         self.0.extend(iter);
+    }
+
+    /// Returns a copy of this path with the provided `nibble` appended.
+    #[must_use]
+    pub fn with_appended_nibble(&self, nibble: u8) -> Self {
+        let mut data = SmallVec::with_capacity(self.0.len().saturating_add(1));
+        data.extend_from_slice(&self.0);
+        data.push(nibble);
+        Path(data)
+    }
+
+    /// Returns a copy of this path with the values produced by `iter` appended.
+    #[must_use]
+    pub fn with_appended_iter<I>(&self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        let mut iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let additional = upper.unwrap_or(lower);
+        let mut data = SmallVec::with_capacity(self.0.len().saturating_add(additional));
+        data.extend_from_slice(&self.0);
+        data.extend(&mut iter);
+        Path(data)
     }
 
     /// Create an iterator that returns the bytes from the underlying nibbles

@@ -17,14 +17,15 @@ mod triehash;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use super::*;
 use firewood_storage::{
-    noop_storage_metrics, BranchNode, Committed, FileIoError, LeafNode, LinearAddress,
-    MaybePersistedNode, MemStore, MutableProposal, NodeReader, NodeStore, PathIterItem, RootReader,
-    SharedNode, TrieHash, TrieReader,
+    noop_storage_metrics, BranchNode, Child, Committed, FileIoError, LeafNode, LinearAddress,
+    MaybePersistedNode, MemStore, MutableProposal, NodeReader, NodeStore, Path, PathIterItem,
+    RootReader, SharedNode, TrieHash, TrieReader,
 };
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
@@ -59,6 +60,40 @@ fn compute_expected_root(items: &[(Vec<u8>, Vec<u8>)]) -> TrieHash {
         .nodestore()
         .root_hash()
         .unwrap_or_else(TrieHash::empty)
+}
+
+fn nibbles_to_key(nibbles: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity((nibbles.len() + 1) / 2);
+    for chunk in nibbles.chunks(2) {
+        let hi = chunk[0] & 0x0f;
+        let lo = chunk.get(1).copied().unwrap_or(0) & 0x0f;
+        bytes.push((hi << 4) | lo);
+    }
+    bytes
+}
+
+fn child_partial_path(store: &NodeStore<MutableProposal, MemStore>, child: &Child) -> Path {
+    match child {
+        Child::Node(node) => Path::from_iter(node.partial_path().iter().copied()),
+        Child::AddressWithHash(addr, _) => {
+            let shared = store
+                .read_node((*addr).into())
+                .expect("read persisted child");
+            match shared.deref() {
+                Node::Branch(branch) => Path::from_iter(branch.partial_path.iter().copied()),
+                Node::Leaf(leaf) => Path::from_iter(leaf.partial_path.iter().copied()),
+            }
+        }
+        Child::MaybePersisted(maybe, _) => {
+            let shared = maybe
+                .as_shared_node(store)
+                .expect("load maybe persisted child");
+            match shared.deref() {
+                Node::Branch(branch) => Path::from_iter(branch.partial_path.iter().copied()),
+                Node::Leaf(leaf) => Path::from_iter(leaf.partial_path.iter().copied()),
+            }
+        }
+    }
 }
 
 // Returns n random key-value pairs.
@@ -1236,6 +1271,108 @@ fn inspect_iteration_106_roots() {
     println!("expected trie:");
     for line in &expected_lines {
         println!("  {line}");
+    }
+}
+
+#[test]
+fn remove_branch_with_value_promotes_partial_path() {
+    let branch_key = nibbles_to_key(&[0x1, 0x0]);
+    let child_key = nibbles_to_key(&[0x1, 0x0, 0x2, 0x0]);
+    let items = vec![
+        (branch_key.clone(), b"root".to_vec()),
+        (child_key.clone(), b"child".to_vec()),
+    ];
+
+    let mut merkle = init_merkle(items).fork().unwrap();
+
+    let root_before = merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(merkle.nodestore()).ok())
+        .expect("root before removal");
+
+    let expected_partial_path = match root_before.deref() {
+        Node::Branch(branch) => {
+            assert!(branch.value.is_some(), "branch must store root value");
+            Path::from_iter(branch.partial_path.iter().copied())
+        }
+        other => panic!("expected branch before removal, got {other:?}"),
+    };
+
+    assert_eq!(
+        merkle.remove(&child_key).unwrap().as_deref(),
+        Some(&b"child"[..])
+    );
+
+    let root_after = merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(merkle.nodestore()).ok())
+        .expect("root after removal");
+
+    match root_after.deref() {
+        Node::Leaf(leaf) => {
+            assert_eq!(leaf.partial_path.as_ref(), expected_partial_path.as_ref());
+            assert_eq!(leaf.value.as_ref(), b"root");
+        }
+        other => panic!("expected leaf after removal, got {other:?}"),
+    }
+}
+
+#[test]
+fn remove_branch_with_single_child_merges_partial_paths() {
+    let kept_nibbles = [0x1, 0x0, 0x2, 0x0];
+    let removed_nibbles = [0x1, 0x0, 0x3, 0x0];
+    let kept_key = nibbles_to_key(&kept_nibbles);
+    let removed_key = nibbles_to_key(&removed_nibbles);
+
+    let mut merkle = init_merkle(vec![
+        (kept_key.clone(), b"keep".to_vec()),
+        (removed_key.clone(), b"discard".to_vec()),
+    ])
+    .fork()
+    .unwrap();
+
+    let root_before = merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(merkle.nodestore()).ok())
+        .expect("root before removal");
+
+    let expected_partial_path = match root_before.deref() {
+        Node::Branch(branch) => {
+            assert!(branch.value.is_none(), "branch should not store a value");
+            let branch_partial = Path::from_iter(branch.partial_path.iter().copied());
+            let surviving_child_index = kept_nibbles[branch_partial.len()];
+            let surviving_child = branch
+                .child(surviving_child_index as u8)
+                .as_ref()
+                .expect("branch must contain surviving child");
+            let surviving_suffix = child_partial_path(merkle.nodestore(), surviving_child);
+
+            branch
+                .partial_path
+                .with_appended_nibble(surviving_child_index as u8)
+                .with_appended_iter(surviving_suffix.iter().copied())
+        }
+        other => panic!("expected branch before removal, got {other:?}"),
+    };
+
+    merkle.remove(&removed_key).unwrap();
+
+    let root_after = merkle
+        .nodestore()
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(merkle.nodestore()).ok())
+        .expect("root after removal");
+
+    match root_after.deref() {
+        Node::Leaf(leaf) => {
+            let expected_key_path = Path::from_iter(kept_nibbles.iter().copied());
+            assert_eq!(leaf.partial_path.as_ref(), expected_partial_path.as_ref());
+            assert_eq!(leaf.partial_path.as_ref(), expected_key_path.as_ref());
+        }
+        other => panic!("expected promoted leaf, got {other:?}"),
     }
 }
 
