@@ -27,13 +27,13 @@ use super::primitives::{index_name, AreaIndex, LinearAddress};
 use crate::linear::FileIoError;
 use crate::logger::{trace, warn};
 use crate::node::branch::{ReadSerializable, Serializable};
+use crate::node::extend_vec_with_varint;
 use crate::nodestore::NodeStoreHeader;
 use integer_encoding::VarIntReader;
 
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 
-use crate::node::ExtendableBytes;
 use crate::{
     firewood_counter, FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage,
 };
@@ -54,9 +54,9 @@ pub struct FreeArea {
 }
 
 impl Serializable for FreeArea {
-    fn write_to<W: crate::node::ExtendableBytes>(&self, vec: &mut W) {
+    fn write_to_vec(&self, vec: &mut Vec<u8>) {
         vec.push(0xff); // 0xff indicates a free area
-        vec.extend_var_int(self.next_free_block.map_or(0, LinearAddress::get));
+        extend_vec_with_varint(vec, self.next_free_block.map_or(0, LinearAddress::get));
     }
 
     /// Parse a [`FreeArea`].
@@ -172,12 +172,12 @@ impl FreeArea {
         })
     }
 
-    pub fn as_bytes<T: ExtendableBytes>(self, area_index: AreaIndex, encoded: &mut T) {
+    pub fn as_bytes(self, area_index: AreaIndex, encoded: &mut Vec<u8>) {
         const RESERVE_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
 
         encoded.reserve(RESERVE_SIZE);
         encoded.push(area_index.get());
-        self.write_to(encoded);
+        self.write_to_vec(encoded);
     }
 
     fn from_storage_reader(mut reader: impl Read) -> std::io::Result<(Self, AreaIndex)> {

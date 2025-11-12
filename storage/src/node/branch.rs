@@ -11,7 +11,6 @@
 )]
 #![allow(clippy::expect_used)] // Branch node helpers rely on expect to assert persistence invariants for corrupted tries.
 
-use crate::node::ExtendableBytes;
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
@@ -54,7 +53,7 @@ impl IntoHashType for crate::TrieHash {
 }
 
 pub(crate) trait Serializable {
-    fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
+    fn write_to_vec(&self, vec: &mut Vec<u8>);
 
     fn from_reader<R: Read>(reader: R) -> Result<Self, std::io::Error>
     where
@@ -193,7 +192,6 @@ mod ethhash {
         io::Read,
     };
 
-    use crate::node::ExtendableBytes;
     use crate::TrieHash;
 
     use super::Serializable;
@@ -263,7 +261,7 @@ mod ethhash {
     impl Eq for HashOrRlp {}
 
     impl Serializable for HashOrRlp {
-        fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
+        fn write_to_vec(&self, vec: &mut Vec<u8>) {
             match self {
                 HashOrRlp::Hash(h) => {
                     vec.push(0);
