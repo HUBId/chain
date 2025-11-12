@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(feature = "ethhash")]
+use firewood_storage::node::branch::ethhash::RlpBytes;
 use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
@@ -173,6 +175,13 @@ impl WriteItem for firewood_storage::HashType {
                 h.write_item(out);
             }
         }
+    }
+}
+
+#[cfg(feature = "ethhash")]
+impl WriteItem for RlpBytes {
+    fn write_item(&self, out: &mut Vec<u8>) {
+        self.as_ref().write_item(out);
     }
 }
 

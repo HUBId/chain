@@ -19,8 +19,8 @@
 
 use crate::logger::warn;
 use crate::{
-    hashednode::HasUpdate, logger::trace, BranchNode, HashType, Hashable, Preimage, TrieHash,
-    ValueDigest,
+    hashednode::HasUpdate, logger::trace, node::branch::ethhash::RlpBytes, BranchNode, HashType,
+    Hashable, Preimage, TrieHash, ValueDigest,
 };
 use bitfield::bitfield;
 use bytes::BytesMut;
@@ -72,7 +72,7 @@ impl EthNodeHasher {
         if self.buffer.len() >= 32 {
             Ok(HashType::Hash(Keccak256::digest(self.buffer).into()))
         } else {
-            Ok(HashType::Rlp(self.buffer))
+            Ok(HashType::Rlp(RlpBytes::from(self.buffer)))
         }
     }
 
@@ -170,7 +170,7 @@ impl<T: Hashable> Preimage for T {
         if collector.len() >= 32 {
             HashType::Hash(Keccak256::digest(collector).into())
         } else {
-            HashType::Rlp(collector)
+            HashType::Rlp(RlpBytes::from(collector))
         }
     }
 
@@ -374,6 +374,15 @@ fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use crate::{
+        hashednode::{hash_node, HashedBranchChildren, HashedNodeRef},
+        node::{branch::ethhash::RlpBytes, branch::Child, path::Path},
+        nodestore::primitives::LinearAddress,
+        TrieHash,
+    };
+    use sha3::Keccak256;
+    use smallvec::SmallVec;
     use test_case::test_case;
 
     #[test_case(&[], false, &[0x00])]
@@ -387,5 +396,72 @@ mod test {
             &*super::nibbles_to_eth_compact(hex, has_value),
             expected_compact
         );
+    }
+
+    #[test]
+    fn account_branch_hash_matches_reference_and_inline_rlp() {
+        let account_nonce: u64 = 7;
+        let account_balance: u64 = 11;
+        let placeholder_storage_root = [0u8; 32];
+        let account_code_hash = [0x63u8; 32];
+
+        let mut account_stream = RlpStream::new_list(4);
+        account_stream.append(&account_nonce);
+        account_stream.append(&account_balance);
+        account_stream.append(&placeholder_storage_root.as_slice());
+        account_stream.append(&account_code_hash.as_slice());
+        let account_value = account_stream.out();
+
+        let child_partial_path: SmallVec<[u8; 8]> = SmallVec::from_slice(&[0x0a, 0x0b]);
+        let child_value = b"tv".to_vec();
+        let mut child_stream = RlpStream::new_list(2);
+        child_stream.append(&&*nibbles_to_eth_compact(child_partial_path.clone(), true));
+        child_stream.append(&child_value);
+        let child_rlp = child_stream.out();
+        let child_smallvec = SmallVec::<[u8; 32]>::from_slice(child_rlp.as_ref());
+        assert!(child_smallvec.len() < 32);
+        assert!(!child_smallvec.spilled());
+        let inline_child = RlpBytes::from(child_smallvec.clone());
+        assert_eq!(inline_child.as_slice(), child_smallvec.as_slice());
+        assert_eq!(inline_child.len(), child_smallvec.len());
+
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: Some(account_value.clone().to_vec().into_boxed_slice()),
+            children: BranchNode::empty_children(),
+        };
+        branch.children[3] = Some(Child::AddressWithHash(
+            LinearAddress::new(1).unwrap(),
+            HashType::Rlp(inline_child.clone()),
+        ));
+
+        let prefix = Path::from(vec![0u8; 64]);
+        let hashed_branch = HashedBranchChildren::try_new(&branch).expect("hashes present");
+        let computed_hash = hash_node(HashedNodeRef::Branch(hashed_branch), &prefix);
+
+        let mut single_child_stream = RlpStream::new_list(2);
+        single_child_stream.append(&&*nibbles_to_eth_compact(
+            branch.partial_path.0.clone(),
+            true,
+        ));
+        single_child_stream.append_raw(child_rlp.as_ref(), 1);
+        let single_child_payload = single_child_stream.out();
+        let replacement_hash = TrieHash::from(Keccak256::digest(single_child_payload.as_ref()));
+
+        let mut expected_account_stream = RlpStream::new_list(4);
+        expected_account_stream.append(&account_nonce);
+        expected_account_stream.append(&account_balance);
+        expected_account_stream.append(&replacement_hash.as_ref());
+        expected_account_stream.append(&account_code_hash.as_slice());
+        let expected_account = expected_account_stream.out();
+        let expected_hash = TrieHash::from(Keccak256::digest(expected_account.as_ref()));
+
+        match computed_hash {
+            HashType::Hash(actual) => assert_eq!(actual, expected_hash),
+            HashType::Rlp(_) => panic!("account branch must hash to TrieHash"),
+        }
+
+        // Ensure the fixed-array wrapper stays compact.
+        assert_eq!(std::mem::size_of::<RlpBytes>(), 33);
     }
 }
