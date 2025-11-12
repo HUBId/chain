@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use parking_lot::RwLock;
-use rpp_chain::runtime::node::StateSyncSessionCache;
+use rpp_chain::runtime::node::{StateSyncChunkError, StateSyncSessionCache};
 use rpp_p2p::SnapshotStore;
 
 #[path = "support/mod.rs"]
@@ -29,7 +29,8 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
     let expected_root = blake3::hash(valid_payload);
 
     let mut store = SnapshotStore::new(chunk_size);
-    store.insert(valid_payload.to_vec(), None);
+    let signature = BASE64.encode([0x11u8; 64]);
+    store.insert(valid_payload.to_vec(), Some(signature));
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
@@ -51,6 +52,17 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
     let snapshot_path = snapshot_dir.join("fixture-snapshot.bin");
     fs::write(&snapshot_path, valid_payload).expect("write original snapshot payload");
 
+    let mut signature_path = snapshot_path.clone();
+    let mut sig_name = snapshot_path
+        .file_name()
+        .expect("payload file name")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    let signature_bytes = [0x24u8; 64];
+    let signature_base64 = BASE64.encode(signature_bytes);
+    fs::write(&signature_path, &signature_base64).expect("write snapshot signature");
+
     let corrupted_payload = b"corrupted-snapshot-payload";
     fs::write(&snapshot_path, corrupted_payload)
         .expect("overwrite snapshot payload with corruption");
@@ -69,7 +81,7 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
 }
 
 #[test]
-fn state_sync_serves_legacy_snapshot_without_signature() {
+fn state_sync_rejects_snapshot_without_signature() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
 
@@ -116,30 +128,78 @@ fn state_sync_serves_legacy_snapshot_without_signature() {
         fs::remove_file(&signature_path).expect("remove pre-existing signature");
     }
 
-    let chunk = handle
-        .state_sync_session_chunk(0)
-        .expect("chunk served without signature");
-    assert_eq!(chunk.root, expected_root);
-    assert_eq!(chunk.index, 0);
-    let expected_total = if payload.is_empty() {
-        0
-    } else {
-        ((payload.len() - 1) / chunk_size + 1) as u64
-    };
-    assert_eq!(chunk.total, expected_total);
-    let expected_chunk = payload[..payload.len().min(chunk_size)].to_vec();
-    assert_eq!(chunk.data, expected_chunk);
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("missing signature should error");
+    match err {
+        StateSyncChunkError::Io(inner) => {
+            let message = inner.to_string();
+            assert!(
+                message.contains("snapshot signature missing"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
 
-    let snapshot_cache = handle.state_sync_session_snapshot();
-    let store = snapshot_cache.snapshot_store.expect("store cached");
-    let signature = store
-        .read()
-        .signature(&expected_root)
-        .expect("signature lookup succeeds");
+#[test]
+fn state_sync_rejects_snapshot_with_invalid_signature() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
     assert!(
-        signature.is_none(),
-        "legacy snapshot should not produce a signature"
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
     );
+
+    let payload = b"invalid-signature-state-sync-snapshot";
+    let expected_root = blake3::hash(payload);
+
+    let store = SnapshotStore::new(chunk_size);
+    let cache = StateSyncSessionCache::verified_for_tests(
+        expected_root,
+        chunk_size,
+        total_chunks,
+        Arc::new(RwLock::new(store)),
+    );
+    handle.install_state_sync_session_cache_for_tests(cache);
+
+    let bogus_root = blake3::hash(b"bogus-state-sync-root");
+    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
+    handle.configure_state_sync_session_cache(
+        Some(chunk_size),
+        Some(total_chunks),
+        Some(expected_root),
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
+    let payload_path = snapshot_dir.join("invalid-signature-snapshot.bin");
+    fs::write(&payload_path, payload).expect("write snapshot payload");
+
+    let mut signature_path = payload_path.clone();
+    let mut sig_name = payload_path
+        .file_name()
+        .expect("payload file name")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    fs::write(&signature_path, "not-base64").expect("write invalid signature");
+
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("invalid signature should error");
+    match err {
+        StateSyncChunkError::Io(inner) => {
+            let message = inner.to_string();
+            assert!(
+                message.contains("invalid snapshot signature encoding"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }
 
 #[test]
