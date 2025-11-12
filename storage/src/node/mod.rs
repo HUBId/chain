@@ -492,19 +492,51 @@ impl Node {
                 let mut children = BranchNode::empty_children();
                 if childcount == 0 {
                     // branch is full of all children
-                    for child in &mut children {
-                        // TODO: we can read them all at once
-                        let mut address_buf = [0u8; 8];
-                        serialized.read_exact(&mut address_buf)?;
-                        let address = u64::from_ne_bytes(address_buf);
+                    #[cfg(feature = "ethhash")]
+                    {
+                        for child in &mut children {
+                            let mut address_buf = [0u8; 8];
+                            serialized.read_exact(&mut address_buf)?;
+                            let address = u64::from_ne_bytes(address_buf);
 
-                        let hash = HashType::from_reader(&mut serialized)?;
+                            let hash = HashType::from_reader(&mut serialized)?;
 
-                        *child = Some(Child::AddressWithHash(
-                            LinearAddress::new(address)
-                                .ok_or(Error::other("zero address in child"))?,
-                            hash,
-                        ));
+                            *child = Some(Child::AddressWithHash(
+                                LinearAddress::new(address)
+                                    .ok_or(Error::other("zero address in child"))?,
+                                hash,
+                            ));
+                        }
+                    }
+
+                    #[cfg(not(feature = "ethhash"))]
+                    {
+                        const ADDRESS_BYTES: usize = size_of::<u64>();
+                        const HASH_BYTES: usize = size_of::<HashType>();
+                        const CHILD_BYTES: usize = ADDRESS_BYTES + HASH_BYTES;
+
+                        let mut child_bytes = vec![0u8; BranchNode::MAX_CHILDREN * CHILD_BYTES];
+                        serialized.read_exact(&mut child_bytes)?;
+
+                        for (child, chunk) in
+                            children.iter_mut().zip(child_bytes.chunks_exact(CHILD_BYTES))
+                        {
+                            let (address_slice, hash_slice) = chunk.split_at(ADDRESS_BYTES);
+
+                            let mut address_buf = [0u8; ADDRESS_BYTES];
+                            address_buf.copy_from_slice(address_slice);
+                            let address = u64::from_ne_bytes(address_buf);
+
+                            let mut hash_buf = [0u8; HASH_BYTES];
+                            hash_buf.copy_from_slice(hash_slice);
+                            let hash = HashType::from(hash_buf);
+
+                            *child = Some(Child::AddressWithHash(
+                                LinearAddress::new(address)
+                                    .ok_or(Error::other("zero address in child"))?,
+                                hash,
+                            ));
+                        }
                     }
                 } else {
                     for _ in 0..childcount {
@@ -592,7 +624,8 @@ mod test {
     use super::extend_vec_with_varint;
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::nodestore::AreaIndex;
-    use crate::{Child, LinearAddress, NibblesIterator, Path};
+    use crate::{Child, HashType, LinearAddress, NibblesIterator, Path};
+    use std::io::{Cursor, ErrorKind};
     use test_case::test_case;
 
     #[test_case(
@@ -746,5 +779,32 @@ than 126 bytes as the length would be encoded in multiple bytes.
         node.as_bytes(AreaIndex::MIN, &mut buffer);
         assert_eq!(ptr, buffer.as_ptr());
         assert_eq!(buffer.len(), serialized_len);
+    }
+
+    #[test]
+    fn full_branch_with_truncated_addresses_returns_unexpected_eof() {
+        let node = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: std::array::from_fn(|i| {
+                Some(Child::AddressWithHash(
+                    LinearAddress::new((i + 1) as u64).unwrap(),
+                    HashType::from([i as u8; 32]),
+                ))
+            }),
+        }));
+
+        let mut serialized = Vec::new();
+        node.as_bytes(AreaIndex::MIN, &mut serialized);
+
+        let header_len = 2 + if cfg!(feature = "branch_factor_256") { 1 } else { 0 };
+        let truncated_len = header_len + BranchNode::MAX_CHILDREN * size_of::<u64>() - 1;
+        assert!(truncated_len < serialized.len());
+
+        let mut cursor = Cursor::new(serialized[..truncated_len].to_vec());
+        cursor.set_position(1);
+
+        let error = Node::from_reader(&mut cursor).expect_err("deserialization should fail");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
     }
 }
