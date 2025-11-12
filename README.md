@@ -139,6 +139,22 @@ via `CARGO_CONFIG` to route Plonky3 crates to the mirror during
 `scripts/build.sh --backend plonky3` runs.【F:scripts/build.sh†L15-L55】【F:Makefile†L9-L27】
 Additional development workflow details live in [`docs/development_guide.md`](./docs/development_guide.md).
 
+## Firewood iterator benchmark
+
+Firewood’s Merkle iterators must stay allocation-stable when traversing
+in-memory proposals and persisted revisions. Run the dedicated regression
+benchmark whenever storage traversal code changes to ensure both variants keep
+the same allocation profile:
+
+```sh
+make bench-iter
+```
+
+The target executes `cargo bench --bench iter` for the `firewood` crate and
+asserts the allocation counts observed while walking `MerkleNodeIter` and
+`MerkleKeyValueIter` over persisted (`MaybePersisted`) and unpersisted (`Node`)
+children. CI invokes the same target so regressions are caught automatically.
+
 ## Running a local node
 
 1. Build the node binary with `cargo +1.79.0 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (or swap in `prover-stwo-simd` on hosts that support the SIMD-accelerated prover backend).

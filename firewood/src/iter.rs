@@ -81,6 +81,12 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
     }
 }
 
+impl<'a, T: TrieReader> From<&'a T> for MerkleNodeIter<'a, T> {
+    fn from(merkle: &'a T) -> Self {
+        Self::new(merkle, Cow::Borrowed(&[]))
+    }
+}
+
 impl<'a, T: TrieReader> Iterator for MerkleNodeIter<'a, T> {
     type Item = Result<(Key, SharedNode), FileIoError>;
 
