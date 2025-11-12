@@ -33,12 +33,14 @@ mod metrics_setup;
 mod proofs;
 mod value;
 
+use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
 use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
+use std::panic;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::RwLock;
+use std::sync::{Once, RwLock};
 
 use firewood::db::{Db, Proposal};
 use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};
@@ -59,6 +61,19 @@ type ProposalId = u32;
 #[doc(hidden)]
 static ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
+static PANIC_HOOK: Once = Once::new();
+
+fn install_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let default_hook = panic::take_hook();
+
+        panic::set_hook(Box::new(move |info| {
+            crate::value::record_panic_backtrace(Backtrace::force_capture());
+            default_hook(info);
+        }));
+    });
+}
+
 /// Atomically retrieves the next proposal ID.
 #[doc(hidden)]
 fn next_id() -> ProposalId {
@@ -71,6 +86,8 @@ fn next_id() -> ProposalId {
 /// information.
 #[inline]
 fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
+    install_panic_hook();
+
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(once)) {
         Ok(result) => result.into(),
         Err(panic) => T::from_panic(panic),
@@ -163,6 +180,12 @@ pub unsafe extern "C" fn fwd_get_latest(
     key: BorrowedBytes,
 ) -> ValueResult {
     invoke_with_handle(db, move |db| db.get_latest(key))
+}
+
+/// Triggers a panic to verify FFI panic handling from integration tests.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_trigger_panic_for_testing() -> VoidResult {
+    invoke::<VoidResult, ()>(|| -> () { panic!("ffi test panic") })
 }
 
 /// Gets the value associated with the given key from the proposal provided.

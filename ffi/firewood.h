@@ -1499,3 +1499,8 @@ struct VoidResult fwd_start_metrics(void);
  *   returned error (if any).
  */
 struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
+
+/**
+ * Triggers a panic to verify FFI panic handling from integration tests.
+ */
+struct VoidResult fwd_trigger_panic_for_testing(void);

@@ -17,6 +17,19 @@ and expect `VerifyRangeProof` to surface the failure without modifying the
 underlying store state. This provides coverage that the Go FFI forwards
 validation failures coming from the Rust verifier.
 
+## Panic reporting over FFI
+
+Rust panics that cross the FFI boundary now include a captured backtrace in
+their error payload. The shared panic hook serializes the panic message
+followed by the formatted backtrace so Go callers see the same context that a
+Rust caller would. Consumers that need to log the panic from Rust can decode
+the UTF-8 payload with `firewood::value::panic_error_to_str`.
+
+The Rust unit tests in `ffi/src/value/results.rs` and the Go integration test
+`TestFFIPanicIncludesBacktrace` cover this behaviour by triggering a controlled
+panic and asserting that both the panic message and `Backtrace:` marker are
+present in the resulting error string.
+
 ## Running the Go FFI tests locally
 
 To exercise the Go bindings end-to-end you must first build the Firewood FFI

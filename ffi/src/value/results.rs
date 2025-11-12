@@ -1,11 +1,32 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::backtrace::Backtrace;
+use std::cell::RefCell;
 use std::fmt;
+use std::str;
 
 use firewood::v2::api;
 
 use crate::{ChangeProofContext, HashKey, NextKeyRange, OwnedBytes, RangeProofContext};
+
+thread_local! {
+    static LAST_PANIC_BACKTRACE: RefCell<Option<Backtrace>> = RefCell::new(None);
+}
+
+pub(crate) fn record_panic_backtrace(backtrace: Backtrace) {
+    LAST_PANIC_BACKTRACE.with(|cell| {
+        *cell.borrow_mut() = Some(backtrace);
+    });
+}
+
+fn take_panic_backtrace() -> Option<Backtrace> {
+    LAST_PANIC_BACKTRACE.with(|cell| cell.borrow_mut().take())
+}
+
+pub fn panic_error_to_str(bytes: &[u8]) -> &str {
+    str::from_utf8(bytes).expect("panic errors are guaranteed to be valid UTF-8")
+}
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
@@ -301,7 +322,13 @@ pub(crate) trait CResult: Sized {
     where
         Self: Sized,
     {
-        Self::from_err(Panic::from(panic))
+        let panic = Panic::from(panic);
+        let panic = match take_panic_backtrace() {
+            Some(backtrace) => panic.with_backtrace(backtrace),
+            None => panic,
+        };
+
+        Self::from_err(panic)
     }
 }
 
@@ -354,8 +381,10 @@ enum Panic {
     SendSyncErr(Box<dyn std::error::Error + Send + Sync>),
     SendErr(Box<dyn std::error::Error + Send>),
     Unknown(#[expect(unused)] Box<dyn std::any::Any + Send>),
-    // TODO: add variant to capture backtrace with panic hook
-    // https://doc.rust-lang.org/stable/std/panic/fn.set_hook.html
+    WithBacktrace {
+        message: String,
+        backtrace: Backtrace,
+    },
 }
 
 impl From<Box<dyn std::any::Any + Send>> for Panic {
@@ -386,6 +415,55 @@ impl fmt::Display for Panic {
             Panic::SendSyncErr(err) => err.fmt(f),
             Panic::SendErr(err) => err.fmt(f),
             Panic::Unknown(_) => f.pad("unknown panic type recovered"),
+            Panic::WithBacktrace { message, backtrace } => {
+                write!(f, "{message}\n\nBacktrace:\n{backtrace}")
+            }
         }
+    }
+}
+
+impl Panic {
+    fn with_backtrace(self, backtrace: Backtrace) -> Self {
+        match self {
+            Panic::Static(message) => Panic::WithBacktrace {
+                message: message.to_string(),
+                backtrace,
+            },
+            Panic::Formatted(message) => Panic::WithBacktrace { message, backtrace },
+            Panic::SendSyncErr(error) => Panic::WithBacktrace {
+                message: error.to_string(),
+                backtrace,
+            },
+            Panic::SendErr(error) => Panic::WithBacktrace {
+                message: error.to_string(),
+                backtrace,
+            },
+            Panic::Unknown(_) => Panic::WithBacktrace {
+                message: "unknown panic type recovered".to_string(),
+                backtrace,
+            },
+            Panic::WithBacktrace { message, .. } => Panic::WithBacktrace { message, backtrace },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{panic_error_to_str, record_panic_backtrace, CResult, VoidResult};
+
+    #[test]
+    fn panic_backtrace_is_included_in_error_message() {
+        record_panic_backtrace(std::backtrace::Backtrace::force_capture());
+
+        let result = VoidResult::from_panic(Box::new(String::from("test panic")));
+
+        let VoidResult::Err(bytes) = result else {
+            panic!("expected error result");
+        };
+
+        let message = panic_error_to_str(bytes.as_slice());
+
+        assert!(message.contains("test panic"));
+        assert!(message.contains("Backtrace:"));
     }
 }

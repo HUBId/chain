@@ -71,6 +71,10 @@ func DefaultConfig() *Config {
 	}
 }
 
+func triggerPanicForTesting() error {
+	return getErrorFromVoidResult(C.fwd_trigger_panic_for_testing())
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
