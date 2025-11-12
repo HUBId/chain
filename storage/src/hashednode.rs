@@ -1,60 +1,116 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{BranchNode, Children, HashType, LeafNode, Node, Path};
+use crate::{BranchNode, Child, Children, HashType, LeafNode, Node, Path};
 use smallvec::SmallVec;
+use std::convert::TryFrom;
+use std::fmt;
+
+/// Error returned when a [`BranchNode`] contains a [`Child`] without an exposed hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MissingChildHashError {
+    child_index: usize,
+}
+
+impl MissingChildHashError {
+    /// Creates a new [`MissingChildHashError`] for the given child index.
+    #[must_use]
+    pub const fn new(child_index: usize) -> Self {
+        Self { child_index }
+    }
+
+    /// Index of the child without an exposed hash.
+    #[must_use]
+    pub const fn child_index(self) -> usize {
+        self.child_index
+    }
+}
+
+impl fmt::Display for MissingChildHashError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "branch child at index {} is missing a hash",
+            self.child_index
+        )
+    }
+}
+
+impl std::error::Error for MissingChildHashError {}
+
+/// Wrapper guaranteeing that every [`Child`] of the branch exposes a hash.
+#[derive(Clone, Copy, Debug)]
+pub struct HashedBranchChildren<'a> {
+    branch: &'a BranchNode,
+}
+
+impl<'a> HashedBranchChildren<'a> {
+    /// Attempts to wrap the given branch, returning an error when any child lacks a hash.
+    pub fn try_new(branch: &'a BranchNode) -> Result<Self, MissingChildHashError> {
+        for (index, child) in branch.children.iter().enumerate() {
+            if let Some(child) = child {
+                if child.hash().is_none() {
+                    #[cfg(debug_assertions)]
+                    panic!("branch child at index {index} is missing a hash: {child:?}");
+
+                    #[cfg(not(debug_assertions))]
+                    return Err(MissingChildHashError::new(index));
+                }
+            }
+        }
+        Ok(Self { branch })
+    }
+
+    /// Returns the wrapped branch.
+    #[must_use]
+    pub const fn as_ref(&self) -> &'a BranchNode {
+        self.branch
+    }
+}
+
+/// Reference to a node that is safe to hash.
+#[derive(Clone, Copy, Debug)]
+pub enum HashedNodeRef<'a> {
+    /// Branch with guaranteed child hashes.
+    Branch(HashedBranchChildren<'a>),
+    /// Leaf node.
+    Leaf(&'a LeafNode),
+}
+
+impl<'a> TryFrom<&'a Node> for HashedNodeRef<'a> {
+    type Error = MissingChildHashError;
+
+    fn try_from(node: &'a Node) -> Result<Self, Self::Error> {
+        Ok(match node {
+            Node::Branch(branch) => HashedNodeRef::Branch(HashedBranchChildren::try_new(branch)?),
+            Node::Leaf(leaf) => HashedNodeRef::Leaf(leaf),
+        })
+    }
+}
 
 /// Returns the hash of `node`, which is at the given `path_prefix`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
-    match node {
-        Node::Branch(node) => {
-            // All child hashes should be filled in.
-            // TODO danlaine: Enforce this with the type system.
-            #[cfg(debug_assertions)]
-            debug_assert!(
-                node.children
-                    .iter()
-                    .all(|c| !matches!(c, Some(crate::Child::Node(_)))),
-                "branch children: {:?}",
-                node.children
-            );
-            NodeAndPrefix {
-                node: node.as_ref(),
-                prefix: path_prefix,
-            }
-            .into()
-        }
-        Node::Leaf(node) => NodeAndPrefix {
-            node,
-            prefix: path_prefix,
-        }
-        .into(),
+pub fn hash_node(node: HashedNodeRef<'_>, path_prefix: &Path) -> HashType {
+    NodeAndPrefix {
+        node,
+        prefix: path_prefix,
     }
+    .into()
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
 /// when hashing the node. The node is at the given `path_prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage(node: HashedNodeRef<'_>, path_prefix: &Path) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
+    let est_len = node.partial_path().count() + path_prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
-    match node {
-        Node::Branch(node) => {
-            NodeAndPrefix {
-                node: node.as_ref(),
-                prefix: path_prefix,
-            }
-            .write(&mut buf);
-        }
-        Node::Leaf(node) => NodeAndPrefix {
-            node,
-            prefix: path_prefix,
-        }
-        .write(&mut buf),
+    NodeAndPrefix {
+        node,
+        prefix: path_prefix,
     }
+    .write(&mut buf);
     buf.into_boxed_slice()
 }
 
@@ -186,37 +242,32 @@ trait HashableNode: std::fmt::Debug {
     fn child_hashes(&self) -> Children<HashType>;
 }
 
-impl HashableNode for BranchNode {
+impl<'a> HashableNode for HashedNodeRef<'a> {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.partial_path.0.iter().copied()
+        match self {
+            HashedNodeRef::Branch(branch) => branch.as_ref().partial_path.0.iter().copied(),
+            HashedNodeRef::Leaf(leaf) => leaf.partial_path.0.iter().copied(),
+        }
     }
 
     fn value(&self) -> Option<&[u8]> {
-        self.value.as_deref()
+        match self {
+            HashedNodeRef::Branch(branch) => branch.as_ref().value.as_deref(),
+            HashedNodeRef::Leaf(leaf) => Some(&leaf.value),
+        }
     }
 
     fn child_hashes(&self) -> Children<HashType> {
-        self.children_hashes()
-    }
-}
-
-impl HashableNode for LeafNode {
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.partial_path.0.iter().copied()
-    }
-
-    fn value(&self) -> Option<&[u8]> {
-        Some(&self.value)
-    }
-
-    fn child_hashes(&self) -> Children<HashType> {
-        BranchNode::empty_children()
+        match self {
+            HashedNodeRef::Branch(branch) => branch.as_ref().children_hashes(),
+            HashedNodeRef::Leaf(_) => BranchNode::empty_children(),
+        }
     }
 }
 
 #[derive(Debug)]
 struct NodeAndPrefix<'a, N: HashableNode> {
-    node: &'a N,
+    node: N,
     prefix: &'a Path,
 }
 
@@ -235,11 +286,48 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
         self.node.partial_path()
     }
 
-    fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.node.value().map(ValueDigest::Value)
     }
 
     fn children(&self) -> Children<HashType> {
         self.node.child_hashes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn branch_with_unhashed_child() -> BranchNode {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        branch.update_child(
+            0,
+            Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::new(),
+                value: Box::from([]),
+            }))),
+        );
+        branch
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "branch child at index 0 is missing a hash")]
+    fn hashed_branch_children_panics_when_missing_hash_in_debug() {
+        let branch = branch_with_unhashed_child();
+        let _ = HashedBranchChildren::try_new(&branch);
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn hashed_branch_children_errors_when_missing_hash_in_release() {
+        let branch = branch_with_unhashed_child();
+        let err = HashedBranchChildren::try_new(&branch).expect_err("missing hash must error");
+        assert_eq!(err.child_index(), 0);
     }
 }

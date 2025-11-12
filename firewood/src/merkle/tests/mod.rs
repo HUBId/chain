@@ -1131,7 +1131,7 @@ fn dump_iteration_106_dataset() {
 #[test]
 #[ignore]
 fn inspect_iteration_106_roots() {
-    use firewood_storage::{hash_preimage, Child, Node, Path, SharedNode};
+    use firewood_storage::{hash_preimage, Child, HashedNodeRef, Node, Path, SharedNode};
     use hex::encode;
     use std::ops::Deref;
 
@@ -1241,7 +1241,10 @@ fn inspect_iteration_106_roots() {
         .and_then(|node| node.as_shared_node(expected_merkle.nodestore()).ok())
         .expect("expected root node");
 
-    let actual_preimage = hash_preimage(actual_root.deref(), &Path::new());
+    let actual_preimage = hash_preimage(
+        HashedNodeRef::try_from(actual_root.deref()).expect("actual root hashable"),
+        &Path::new(),
+    );
     println!("actual root preimage={}", encode(actual_preimage.as_ref()));
 
     let mut actual_lines = Vec::new();
@@ -1256,7 +1259,10 @@ fn inspect_iteration_106_roots() {
         println!("  {line}");
     }
 
-    let expected_preimage = hash_preimage(expected_root.deref(), &Path::new());
+    let expected_preimage = hash_preimage(
+        HashedNodeRef::try_from(expected_root.deref()).expect("expected root hashable"),
+        &Path::new(),
+    );
     println!(
         "expected root preimage={}",
         encode(expected_preimage.as_ref())

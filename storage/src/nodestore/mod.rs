@@ -98,7 +98,7 @@ use std::mem::take;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::hashednode::hash_node;
+use crate::hashednode::{hash_node, HashedNodeRef};
 use crate::node::persist::MaybePersistedNode;
 use crate::node::Node;
 use crate::{CacheReadStrategy, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
@@ -142,8 +142,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         };
 
         if let Some(root_address) = nodestore.header.root_address() {
-            let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let node = nodestore.read_node_from_disk(root_address, "open")?;
+            let hashed = HashedNodeRef::try_from(node.deref())
+                .map_err(|err| FileIoError::from_generic_no_file(err, "open root hash"))?;
+            let root_hash = hash_node(hashed, &Path(SmallVec::default()));
             nodestore.kind.root_hash = Some(root_hash.into_triehash());
         }
 

@@ -8,7 +8,9 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
-use crate::hashednode::hash_node;
+#[cfg(feature = "ethhash")]
+use crate::hashednode::MissingChildHashError;
+use crate::hashednode::{hash_node, HashedNodeRef};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
@@ -63,6 +65,16 @@ impl DerefMut for PathGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.path
     }
+}
+
+fn hash_node_checked(
+    node: &Node,
+    path_prefix: &Path,
+    context: &str,
+) -> Result<HashType, FileIoError> {
+    let node = HashedNodeRef::try_from(node)
+        .map_err(|err| FileIoError::from_generic_no_file(err, context))?;
+    Ok(hash_node(node, path_prefix))
 }
 
 /// Classified children for ethereum hash processing
@@ -174,7 +186,11 @@ where
                         } else {
                             path_guard.0.push(*child_idx as u8);
                         }
-                        hash_node(&hashable_node, &path_guard)
+                        hash_node_checked(
+                            &hashable_node,
+                            &path_guard,
+                            "hash_helper_inner ethhash rehash",
+                        )?
                     };
                     **child_hash = hash;
                 }
@@ -249,13 +265,13 @@ where
                 std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
             ));
             trace!("new node: {fake_root:?}");
-            hash_node(&fake_root, &path_prefix)
+            hash_node_checked(&fake_root, &path_prefix, "hash_helper_inner fake root")?
         } else {
-            hash_node(&node, &path_prefix)
+            hash_node_checked(&node, &path_prefix, "hash_helper_inner")?
         };
 
         #[cfg(not(feature = "ethhash"))]
-        let hash = hash_node(&node, &path_prefix);
+        let hash = hash_node_checked(&node, &path_prefix, "hash_helper_inner")?;
 
         let serialized_len = node.serialized_length() as u64;
         AreaIndex::from_size(serialized_len)
@@ -269,7 +285,7 @@ where
         node: &Node,
         path_prefix: &Path,
         have_peers: bool,
-    ) -> HashType {
+    ) -> Result<HashType, MissingChildHashError> {
         if path_prefix.0.len() == 65 && !have_peers {
             // This is the special case when this node is the only child of an account
             //  - 64 nibbles for account + 1 nibble for its position in account branch node
@@ -282,9 +298,11 @@ where
                     .chain(fake_root.partial_path().0.iter())
                     .copied(),
             ));
-            hash_node(&fake_root, path_prefix)
+            let node = HashedNodeRef::try_from(&fake_root)?;
+            Ok(hash_node(node, path_prefix))
         } else {
-            hash_node(node, path_prefix)
+            let node = HashedNodeRef::try_from(node)?;
+            Ok(hash_node(node, path_prefix))
         }
     }
 }
