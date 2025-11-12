@@ -62,8 +62,9 @@ pub use node::{
     BranchNode, Child, Children, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{
-    AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, NodeStoreHeader, Parentable, ReapDeletedSummary, RootReader, TrieReader,
+    AreaIndex, Committed, HasUnpersistedRoot, HashedNodeReader, ImmutableProposal, LinearAddress,
+    MutableProposal, NodeReader, NodeStore, NodeStoreHeader, Parentable, ReapDeletedSummary,
+    RootReader, TrieReader,
 };
 
 pub use linear::filebacked::FileBacked;

@@ -8,6 +8,11 @@
 //! This module handles all persistence operations for the nodestore, including writing
 //! headers, nodes, and metadata to storage with support for different I/O backends.
 //!
+//! Iterator helpers in this module operate on nodestore variants that implement
+//! [`HasUnpersistedRoot`](crate::nodestore::HasUnpersistedRoot), guaranteeing the
+//! root node is still in memory and has not yet been written to persistent
+//! storage.
+//!
 //! ## I/O Backend Support
 //!
 //! This module supports multiple I/O backends through conditional compilation:
@@ -51,7 +56,7 @@ use crate::ReadableStorage;
 
 use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
-use super::{Committed, NodeStore};
+use super::{Committed, HasUnpersistedRoot, NodeStore};
 
 #[cfg(not(test))]
 use super::RootReader;
@@ -112,26 +117,45 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
 
 /// Iterator that returns unpersisted nodes in depth first order.
 ///
-/// This iterator assumes the root node is unpersisted and will return it as the
-/// last item. It looks at each node and traverses the children in depth first order.
-/// A stack of child iterators is maintained to properly handle nested branches.
+/// This iterator requires nodestores that implement
+/// [`HasUnpersistedRoot`](crate::nodestore::HasUnpersistedRoot), guaranteeing the
+/// root node is unpersisted and will be yielded last. It looks at each node and
+/// traverses the children in depth first order, maintaining a stack of child
+/// iterators to properly handle nested branches.
+///
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use crate::nodestore::{ImmutableProposal, NodeStore};
+/// use crate::nodestore::persist::UnPersistedNodeIterator;
+/// use crate::ReadableStorage;
+///
+/// fn iterator_requires_unpersisted_root<S: ReadableStorage>(
+///     store: &NodeStore<Arc<ImmutableProposal>, S>,
+/// ) {
+///     // Immutable proposals are not guaranteed to have an unpersisted root,
+///     // so constructing the iterator is a type error.
+///     let _iter = UnPersistedNodeIterator::new(store);
+/// }
+/// ```
 struct UnPersistedNodeIterator<'a, N> {
     store: &'a N,
     stack: Vec<MaybePersistedNode>,
     child_iter_stack: Vec<Box<dyn Iterator<Item = MaybePersistedNode> + 'a>>,
 }
 
-impl<N: NodeReader + RootReader> FusedIterator for UnPersistedNodeIterator<'_, N> {}
+impl<N> FusedIterator for UnPersistedNodeIterator<'_, N> where
+    N: HasUnpersistedRoot + NodeReader + RootReader
+{
+}
 
-impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
+impl<'a, N> UnPersistedNodeIterator<'a, N>
+where
+    N: HasUnpersistedRoot + NodeReader + RootReader,
+{
     /// Creates a new iterator over unpersisted nodes in depth-first order.
     fn new(store: &'a N) -> Self {
         let root = store.root_as_maybe_persisted_node();
 
-        // we must have an unpersisted root node to use this iterator
-        // It's hard to tell at compile time if this is the case, so we assert it here
-        // TODO: can we use another trait or generic to enforce this?
-        debug_assert!(root.as_ref().is_none_or(|r| r.unpersisted().is_some()));
         let (child_iter_stack, stack) = if let Some(root) = root {
             if let Some(branch) = root
                 .as_shared_node(store)
