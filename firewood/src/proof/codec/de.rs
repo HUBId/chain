@@ -2,7 +2,10 @@
 // See the file LICENSE.md for licensing terms.
 
 #[cfg(feature = "ethhash")]
-use firewood_storage::HashType;
+use firewood_storage::{
+    node::branch::ethhash::{InvalidRlpLength, RlpBytes},
+    HashType,
+};
 use firewood_storage::{BranchNode, TrieHash, ValueDigest};
 use integer_encoding::VarInt;
 
@@ -244,7 +247,20 @@ impl<'a> ReadItem<'a> for HashType {
             .map_err(|err| err.set_item("hash type discriminant"))?
         {
             0 => Ok(HashType::Hash(reader.read_item()?)),
-            1 => Ok(HashType::Rlp(reader.read_item::<&[u8]>()?.into())),
+            1 => {
+                let rlp_bytes = reader
+                    .read_item::<&[u8]>()
+                    .map_err(|err| err.set_item("RLP payload"))?;
+                let rlp_bytes: RlpBytes =
+                    rlp_bytes.try_into().map_err(|InvalidRlpLength(len)| {
+                        reader.invalid_item(
+                            "RLP payload",
+                            "less than 32 bytes",
+                            format!("{len} bytes"),
+                        )
+                    })?;
+                Ok(HashType::Rlp(rlp_bytes))
+            }
             found => {
                 Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
             }

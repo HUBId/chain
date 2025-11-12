@@ -245,7 +245,7 @@ impl Child {
 }
 
 #[cfg(feature = "ethhash")]
-mod ethhash {
+pub mod ethhash {
     use sha2::Digest as _;
     use sha3::Keccak256;
     use smallvec::SmallVec;
@@ -263,7 +263,109 @@ mod ethhash {
         Hash(TrieHash),
         // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
         // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
-        Rlp(SmallVec<[u8; 32]>),
+        Rlp(RlpBytes),
+    }
+
+    #[derive(Clone)]
+    pub struct RlpBytes {
+        bytes: [u8; 32],
+        len: u8,
+    }
+
+    impl RlpBytes {
+        pub const fn new(bytes: [u8; 32], len: u8) -> Self {
+            debug_assert!(len < 32, "RLP payloads must be shorter than 32 bytes");
+            Self { bytes, len }
+        }
+
+        pub fn copy_from_slice(slice: &[u8]) -> Result<Self, InvalidRlpLength> {
+            let len: u8 = slice
+                .len()
+                .try_into()
+                .map_err(|_| InvalidRlpLength(slice.len()))?;
+            if len >= 32 {
+                return Err(InvalidRlpLength(slice.len()));
+            }
+            let mut bytes = [0u8; 32];
+            bytes[..slice.len()].copy_from_slice(slice);
+            Ok(Self { bytes, len })
+        }
+
+        #[allow(clippy::missing_const_for_fn)]
+        pub fn len(&self) -> usize {
+            usize::from(self.len)
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.len == 0
+        }
+
+        pub fn as_slice(&self) -> &[u8] {
+            &self.bytes[..self.len()]
+        }
+    }
+
+    impl std::fmt::Debug for RlpBytes {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_tuple("RlpBytes")
+                .field(&hex::encode(self.as_slice()))
+                .finish()
+        }
+    }
+
+    impl PartialEq for RlpBytes {
+        fn eq(&self, other: &Self) -> bool {
+            self.as_slice() == other.as_slice()
+        }
+    }
+
+    impl Eq for RlpBytes {}
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    #[error("invalid RLP payload length {0}; expected < 32 bytes")]
+    pub struct InvalidRlpLength(pub usize);
+
+    impl TryFrom<&[u8]> for RlpBytes {
+        type Error = InvalidRlpLength;
+
+        fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+            Self::copy_from_slice(slice)
+        }
+    }
+
+    impl From<SmallVec<[u8; 32]>> for RlpBytes {
+        fn from(value: SmallVec<[u8; 32]>) -> Self {
+            debug_assert!(
+                value.len() < 32,
+                "RLP payloads must be shorter than 32 bytes"
+            );
+            let len = value.len();
+            let mut bytes = [0u8; 32];
+            bytes[..len].copy_from_slice(value.as_slice());
+            // SAFETY: `len` was just computed from the slice length, so it fits in u8 and < 32.
+            let len = len as u8;
+            Self { bytes, len }
+        }
+    }
+
+    impl From<RlpBytes> for Box<[u8]> {
+        fn from(value: RlpBytes) -> Self {
+            value.as_slice().into()
+        }
+    }
+
+    impl AsRef<[u8]> for RlpBytes {
+        fn as_ref(&self) -> &[u8] {
+            self.as_slice()
+        }
+    }
+
+    impl std::ops::Deref for RlpBytes {
+        type Target = [u8];
+
+        fn deref(&self) -> &Self::Target {
+            self.as_slice()
+        }
     }
 
     impl HashOrRlp {
@@ -311,7 +413,7 @@ mod ethhash {
         fn eq(&self, other: &Self) -> bool {
             match (self, other) {
                 (HashOrRlp::Hash(h1), HashOrRlp::Hash(h2)) => h1 == h2,
-                (HashOrRlp::Rlp(r1), HashOrRlp::Rlp(r2)) => r1 == r2,
+                (HashOrRlp::Rlp(r1), HashOrRlp::Rlp(r2)) => r1.as_slice() == r2.as_slice(),
                 (HashOrRlp::Hash(h), HashOrRlp::Rlp(r))
                 | (HashOrRlp::Rlp(r), HashOrRlp::Hash(h)) => {
                     Keccak256::digest(r.as_ref()).as_slice() == h.as_ref()
@@ -348,10 +450,7 @@ mod ethhash {
                 }
                 len if len < 32 => {
                     reader.read_exact(&mut bytes[0..len as usize])?;
-                    Ok(HashOrRlp::Rlp(SmallVec::from_buf_and_len(
-                        bytes,
-                        len as usize,
-                    )))
+                    Ok(HashOrRlp::Rlp(RlpBytes::new(bytes, len)))
                 }
                 _ => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -365,7 +464,7 @@ mod ethhash {
         fn from(val: HashOrRlp) -> Self {
             match val {
                 HashOrRlp::Hash(h) => h,
-                HashOrRlp::Rlp(r) => Keccak256::digest(&r).into(),
+                HashOrRlp::Rlp(r) => Keccak256::digest(r.as_ref()).into(),
             }
         }
     }
@@ -415,7 +514,7 @@ mod ethhash {
                 HashOrRlp::Hash(h) => write!(f, "{h}"),
                 HashOrRlp::Rlp(r) => {
                     let width = f.precision().unwrap_or(32);
-                    write!(f, "{:.*}", width, hex::encode(r))
+                    write!(f, "{:.*}", width, hex::encode(r.as_slice()))
                 }
             }
         }
