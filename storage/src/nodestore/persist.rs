@@ -39,8 +39,9 @@
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
+use crate::node::Node;
 use crate::nodestore::AreaIndex;
-use crate::{firewood_gauge, WalFlushOutcome};
+use crate::{firewood_counter, firewood_gauge, WalFlushOutcome};
 use coarsetime::Instant;
 
 #[cfg(feature = "io-uring")]
@@ -60,6 +61,11 @@ use super::{Committed, HasUnpersistedRoot, NodeStore};
 
 #[cfg(not(test))]
 use super::RootReader;
+
+fn serialization_area_index(node: &Node) -> Result<AreaIndex, std::io::Error> {
+    let serialized_len = node.serialized_length() as u64;
+    AreaIndex::from_size(serialized_len)
+}
 
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
@@ -242,11 +248,92 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
 #[derive(Default)]
 struct FlushStats {
     bytes_written: u64,
+    serialized_total: u64,
+    serialized_count: u64,
+    serialized_max: usize,
+    capacity_hint_total: u64,
+    capacity_hint_max: usize,
+    reserve_misses: u64,
+    reserve_miss_bytes: u64,
 }
 
 impl FlushStats {
-    fn record_bytes(&mut self, bytes: usize) {
-        self.bytes_written = self.bytes_written.saturating_add(bytes as u64);
+    fn record_serialization(
+        &mut self,
+        serialized_len: usize,
+        capacity_hint: usize,
+        actual_capacity: usize,
+    ) {
+        self.bytes_written = self.bytes_written.saturating_add(serialized_len as u64);
+        self.serialized_total = self.serialized_total.saturating_add(serialized_len as u64);
+        self.capacity_hint_total = self
+            .capacity_hint_total
+            .saturating_add(capacity_hint as u64);
+        self.serialized_count = self.serialized_count.saturating_add(1);
+        self.serialized_max = self.serialized_max.max(serialized_len);
+        self.capacity_hint_max = self.capacity_hint_max.max(capacity_hint);
+
+        if actual_capacity > capacity_hint {
+            let excess = actual_capacity.saturating_sub(capacity_hint);
+            self.reserve_misses = self.reserve_misses.saturating_add(1);
+            self.reserve_miss_bytes = self.reserve_miss_bytes.saturating_add(excess as u64);
+            firewood_counter!(
+                "firewood.nodestore.serialize.reserve_miss",
+                "Number of times nodestore serialization exceeded the capacity hint"
+            )
+            .increment(1);
+        }
+    }
+
+    fn emit_metrics(&self) {
+        if self.serialized_count == 0 {
+            return;
+        }
+
+        let avg_serialized = self.serialized_total / self.serialized_count;
+        let avg_capacity_hint = self.capacity_hint_total / self.serialized_count;
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.nodes",
+            "Number of nodes serialized during WAL flush"
+        )
+        .set(self.serialized_count as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.avg_len",
+            "Average serialized node length observed during WAL flush"
+        )
+        .set(avg_serialized as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.avg_capacity_hint",
+            "Average serialization capacity hint during WAL flush"
+        )
+        .set(avg_capacity_hint as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.max_len",
+            "Largest serialized node length observed during WAL flush"
+        )
+        .set(self.serialized_max as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.max_capacity_hint",
+            "Largest serialization capacity hint observed during WAL flush"
+        )
+        .set(self.capacity_hint_max as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.reserve_miss_count",
+            "Number of serialization buffer growth events during WAL flush"
+        )
+        .set(self.reserve_misses as f64);
+
+        firewood_gauge!(
+            "firewood.nodestore.serialize.reserve_miss_bytes",
+            "Total bytes allocated beyond serialization capacity hints during WAL flush"
+        )
+        .set(self.reserve_miss_bytes as f64);
     }
 }
 
@@ -282,6 +369,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             .record_wal_flush_duration(outcome, duration.into());
         self.metrics
             .record_wal_flush_bytes(outcome, stats.bytes_written);
+        stats.emit_metrics();
         result
     }
 
@@ -317,8 +405,24 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
         for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
-            let mut serialized = Vec::new();
+            let capacity_hint = serialization_area_index(&shared_node)
+                .map(|area| area.size() as usize)
+                .map_err(|e| {
+                    self.storage.file_io_error(
+                        e,
+                        0,
+                        Some("flush_nodes_generic capacity hint".to_string()),
+                    )
+                })?;
+            let mut serialized = Vec::with_capacity(capacity_hint);
             shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
+
+            debug_assert!(
+                serialized.len() <= capacity_hint,
+                "serialized len {} exceeded capacity hint {}",
+                serialized.len(),
+                capacity_hint
+            );
 
             let serialized_len = serialized.len() as u64;
             AreaIndex::from_size(serialized_len).map_err(|e| {
@@ -331,7 +435,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
-            stats.record_bytes(serialized.len());
+            stats.record_serialization(serialized.len(), capacity_hint, serialized.capacity());
 
             // Decrement gauge immediately after node is written to storage
             firewood_gauge!(
@@ -472,12 +576,28 @@ impl NodeStore<Committed, FileBacked> {
         // Process each unpersisted node directly from the iterator
         for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
-            let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
+            let capacity_hint = serialization_area_index(&shared_node)
+                .map(|area| area.size() as usize)
+                .map_err(|e| {
+                    self.storage.file_io_error(
+                        e,
+                        0,
+                        Some("flush_nodes_io_uring capacity hint".to_string()),
+                    )
+                })?;
+            let mut serialized = Vec::with_capacity(capacity_hint);
             shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
+            debug_assert!(
+                serialized.len() <= capacity_hint,
+                "serialized len {} exceeded capacity hint {}",
+                serialized.len(),
+                capacity_hint
+            );
             let (persisted_address, area_size_index) =
                 node_allocator.allocate_node(serialized.as_slice())?;
             *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
             let node_len = serialized.len();
+            stats.record_serialization(node_len, capacity_hint, serialized.capacity());
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
@@ -489,7 +609,6 @@ impl NodeStore<Committed, FileBacked> {
                 {
                     pbe.pinned_buffer = std::pin::Pin::new(std::mem::take(&mut serialized));
                     pbe.node = Some((persisted_address, node.clone()));
-                    stats.record_bytes(node_len);
 
                     let submission_queue_entry = self
                         .storage
@@ -881,6 +1000,61 @@ mod tests {
         // inner_branch should come before root_branch
         assert!(leaf3_pos < inner_branch_pos);
         assert!(inner_branch_pos < root_pos);
+    }
+
+    #[cfg_attr(
+        not(feature = "large-serialization-tests"),
+        ignore = "requires large-serialization-tests feature"
+    )]
+    #[test]
+    fn serialization_capacity_hint_handles_large_nodes() {
+        fn assert_serialization_uses_hint(node: Node) {
+            let shared = SharedNode::new(node);
+            let area_index = serialization_area_index(&shared).expect("capacity hint");
+            let capacity_hint = area_index.size() as usize;
+            let mut buffer = Vec::with_capacity(capacity_hint);
+            let initial_capacity = buffer.capacity();
+            shared.as_bytes(AreaIndex::MIN, &mut buffer);
+
+            assert!(
+                buffer.len() <= capacity_hint,
+                "serialized len {} exceeded capacity hint {}",
+                buffer.len(),
+                capacity_hint
+            );
+            assert_eq!(
+                buffer.capacity(),
+                initial_capacity,
+                "serialization buffer reallocated (hint {capacity_hint}, initial {initial_capacity}, final {})",
+                buffer.capacity()
+            );
+        }
+
+        let large_path: Vec<u8> = (0..512).map(|idx| (idx % 16) as u8).collect();
+        let large_value = vec![0xAA; 6 * 1024];
+
+        let large_leaf = Node::Leaf(LeafNode {
+            partial_path: Path::from(large_path.clone()),
+            value: large_value.clone().into_boxed_slice(),
+        });
+        assert_serialization_uses_hint(large_leaf);
+
+        let mut children = BranchNode::empty_children();
+        for (idx, child_slot) in children
+            .iter_mut()
+            .enumerate()
+            .take(BranchNode::MAX_CHILDREN)
+        {
+            let address = LinearAddress::new((idx + 1) as u64).expect("linear address");
+            child_slot.replace(Child::AddressWithHash(address, HashType::empty()));
+        }
+
+        let large_branch = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from(large_path),
+            value: Some(large_value.into_boxed_slice()),
+            children,
+        }));
+        assert_serialization_uses_hint(large_branch);
     }
 
     #[test]

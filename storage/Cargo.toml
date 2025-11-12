@@ -64,6 +64,7 @@ io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
 backend-rpp-stark = []
+large-serialization-tests = []
 
 [[bench]]
 name = "serializer"
