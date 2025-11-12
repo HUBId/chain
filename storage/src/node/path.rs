@@ -15,7 +15,7 @@
 )]
 
 use smallvec::SmallVec;
-use std::fmt::{self, Debug, LowerHex};
+use std::fmt::{self, Debug, LowerHex, Write as _};
 use std::iter::{once, FusedIterator};
 use std::ops::Add;
 
@@ -40,20 +40,25 @@ impl Debug for Path {
     }
 }
 
+// Lower hex formatting prints the path's nibbles without separators, optionally
+// prefixed with `0x` when the alternate flag is set. The resulting string is
+// passed through `Formatter::pad` to respect width, alignment, and fill settings.
 impl LowerHex for Path {
-    // TODO: handle fill / alignment / etc
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         if self.0.is_empty() {
-            write!(f, "[]")
-        } else {
-            if f.alternate() {
-                write!(f, "0x")?;
-            }
-            for nib in &self.0 {
-                write!(f, "{:x}", *nib)?;
-            }
-            Ok(())
+            return f.pad("[]");
         }
+
+        let mut buf = String::new();
+        if f.alternate() {
+            buf.push_str("0x");
+        }
+
+        for nib in &self.0 {
+            write!(&mut buf, "{:x}", *nib)?;
+        }
+
+        f.pad(&buf)
     }
 }
 
@@ -412,6 +417,29 @@ mod test {
         );
         let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<[u8; 32]>>();
         assert_eq!(encode.as_ref(), to_encoded.as_ref());
+    }
+
+    #[test]
+    fn lower_hex_empty_path_formatting() {
+        let empty = Path::new();
+        assert_eq!(format!("{:x}", empty), "[]");
+        assert_eq!(format!("{:#x}", empty), "[]");
+    }
+
+    #[test]
+    fn lower_hex_odd_length_output() {
+        let path = Path::from([0xa, 0xb, 0xc]);
+        assert_eq!(format!("{:x}", path.clone()), "abc");
+        assert_eq!(format!("{:#x}", path), "0xabc");
+    }
+
+    #[test]
+    fn lower_hex_padding_and_alignment() {
+        let path = Path::from([0xa]);
+        assert_eq!(format!("{:>4x}", path.clone()), "   a");
+        assert_eq!(format!("{:<4x}", path.clone()), "a   ");
+        assert_eq!(format!("{:0>4x}", path.clone()), "000a");
+        assert_eq!(format!("{:^5x}", path), "  a  ");
     }
 
     #[test_case(Path::new(), "[]", "[]")]
