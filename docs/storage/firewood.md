@@ -27,6 +27,22 @@ metadata keys are encoded on disk. Snapshot ingestion therefore validates both
 Merkle proofs and schema versioning before the runtime exposes the updated
 state.
 
+## Trie node layout and allocation
+
+Firewood represents trie nodes with the `firewood_storage::Node` enum, which
+stores branch nodes behind a `Box` but keeps leaves inline. That split keeps the
+enum's footprint manageable: a `BranchNode` is 1,752 bytes with the default
+branching factor because it owns the full `[Option<Child>; 16]` fan-out plus the
+embedded value slot, while a `LeafNode` is only 88 bytes (a `Path` wrapper around
+`SmallVec<[u8; 64]>` and the boxed value). Boxing the branch variant holds the
+`Node` enum at 96 bytes so cloning or swapping nodes only copies a pointer-sized
+handle and the discriminant; storing branches inline would force every `Node` and
+`Option<Node>` allocation to reserve ≈1.7 KiB even when the variant contains a
+leaf. The serialization routines therefore match the in-memory layout—branch
+payloads live in heap allocations that mirror the persisted area entries, while
+leaves remain compact for fast hashing and persistence (see
+`storage/src/node/mod.rs`).
+
 ## Pruning automation and operational hooks
 
 The runtime now ships a pruning worker alongside the lifecycle helper so nodes

@@ -37,8 +37,18 @@ mod leaf;
 pub mod path;
 pub mod persist;
 /// A node, either a Branch or Leaf
-
-// TODO: explain why Branch is boxed but Leaf is not
+//
+// The [`BranchNode`] variant is boxed because branch nodes are several orders of
+// magnitude larger than leaves: `size_of::<BranchNode>()` is 1,752 bytes with the
+// default 16-way branching factor, while `size_of::<LeafNode>()` is only 88 bytes
+// (a [`Path`] plus the boxed value). Storing branch nodes inline would inflate
+// the `Node` enum itself to the branch size (≈1.7 KiB), making every move,
+// clone, or `Option<Node>` allocation pay for an entire branch payload even when
+// the variant holds a leaf. Boxing keeps `Node` at 96 bytes so branch-heavy
+// traversals copy just the pointer-sized handle, and matches the persistence
+// layout described in the Firewood storage architecture notes. See
+// `docs/storage/firewood.md` for a detailed breakdown of the node layout and
+// allocation trade-offs.
 #[derive(PartialEq, Eq, Clone, Debug, EnumAsInner)]
 #[repr(C)]
 pub enum Node {
