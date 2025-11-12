@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use askama::Template;
 use clap::Args;
 use firewood::v2::api;
 use firewood_storage::{
-    noop_storage_metrics, CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore,
+    noop_storage_metrics, CacheReadStrategy, CheckOpt, CheckerError, DBStats, FileBacked, NodeStore,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
@@ -18,7 +19,6 @@ use std::num::NonZero;
 
 use crate::DatabasePath;
 
-// TODO: (optionally) add a fix option
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
@@ -47,15 +47,17 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_path = PathBuf::from(&opts.database.dbpath);
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
+    let ring_entries = NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap();
+    let read_strategy = CacheReadStrategy::WritesOnly;
 
     let fb = FileBacked::new(
         db_path,
         node_cache_size,
         free_list_cache_size,
         false,
-        false,                         // don't create if missing
-        CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
-        NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
+        false,         // don't create if missing
+        read_strategy, // we scan the database once - no need to cache anything
+        ring_entries,
     )?;
     let storage = Arc::new(fb);
 
@@ -73,57 +75,122 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     };
 
     let nodestore = NodeStore::open(storage, noop_storage_metrics())?;
-    let db_stats = if opts.fix {
-        let (nodestore, report) = nodestore.check_and_fix(check_ops);
-        if let Err(e) = &nodestore {
-            println!("Error fixing database: {e}");
-        }
-        println!("Fixed Errors ({}):", report.fixed.len());
-        for error in &report.fixed {
-            println!("\t{error}");
-        }
-        println!();
-        println!("Unfixable Errors ({}):", report.unfixable.len(),);
-        for (error, io_error) in &report.unfixable {
-            println!("\t{error}");
-            if let Some(io_error) = io_error {
-                println!("\t\tError encountered while fixing: {io_error}");
-            }
-        }
-        println!();
-
-        match nodestore {
-            Ok(nodestore) => {
-                let verify_report = nodestore.check(CheckOpt {
-                    hash_check: opts.hash_check,
-                    progress_bar: None,
-                });
-                if !verify_report.errors.is_empty() {
-                    println!(
-                        "Errors encountered after fix ({}):",
-                        verify_report.errors.len()
-                    );
-                    for error in verify_report.errors {
-                        println!("\t{error}");
-                    }
-                }
-                verify_report.db_stats
-            }
-            Err(_) => report.db_stats,
-        }
+    let (db_stats, outcome) = if opts.fix {
+        run_with_fix(nodestore, check_ops)
     } else {
-        let report = nodestore.check(check_ops);
-        println!("Errors ({}):", report.errors.len());
-        for error in report.errors {
-            println!("\t{error}");
-        }
-        report.db_stats
+        run_without_fix(nodestore, check_ops)
     };
-    println!();
 
+    println!();
     print_stats_report(db_stats);
 
+    outcome
+}
+
+fn run_with_fix<S: firewood_storage::WritableStorage + 'static>(
+    nodestore: NodeStore<firewood_storage::Committed, S>,
+    check_opts: CheckOpt,
+) -> (DBStats, Result<(), api::Error>) {
+    let (committed_result, report) = nodestore.check_and_fix(check_opts);
+    println!(
+        "Repair summary: applied {} fix(es), {} issue(s) remain.",
+        report.fixed.len(),
+        report.unfixable.len()
+    );
+
+    if !report.fixed.is_empty() {
+        for error in &report.fixed {
+            println!("    fixed: {error}");
+        }
+    }
+
+    if !report.unfixable.is_empty() {
+        for (error, io_error) in &report.unfixable {
+            match io_error {
+                Some(io_error) => {
+                    println!("    unfixable: {error}");
+                    println!("        while repairing: {io_error}");
+                }
+                None => println!("    unfixable: {error}"),
+            }
+        }
+    }
+
+    match committed_result {
+        Ok(committed) => {
+            let outcome = if !report.unfixable.is_empty() {
+                Err(CheckerCliError::new(format!(
+                    "{} issue(s) could not be repaired.",
+                    report.unfixable.len()
+                ))
+                .into())
+            } else {
+                persist_repairs(&committed)
+            };
+
+            (report.db_stats, outcome)
+        }
+        Err(err) => (report.db_stats, Err(err.into())),
+    }
+}
+
+fn run_without_fix<S: firewood_storage::ReadableStorage + 'static>(
+    nodestore: NodeStore<firewood_storage::Committed, S>,
+    check_opts: CheckOpt,
+) -> (DBStats, Result<(), api::Error>) {
+    let report = nodestore.check(check_opts);
+    print_error_summary(&report.errors);
+
+    let outcome = if report.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CheckerCliError::new(format!(
+            "Checker detected {} error(s).",
+            report.errors.len()
+        ))
+        .into())
+    };
+
+    (report.db_stats, outcome)
+}
+
+fn persist_repairs<S: firewood_storage::WritableStorage + 'static>(
+    store: &NodeStore<firewood_storage::Committed, S>,
+) -> Result<(), api::Error> {
+    store.flush_freelist().map_err(api::Error::from)?;
+    store.flush_header().map_err(api::Error::from)?;
     Ok(())
+}
+
+fn print_error_summary(errors: &[CheckerError]) {
+    println!("Checker finished with {} error(s).", errors.len());
+
+    for error in errors {
+        println!("    {error}");
+    }
+}
+
+#[derive(Debug)]
+struct CheckerCliError(String);
+
+impl CheckerCliError {
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for CheckerCliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CheckerCliError {}
+
+impl From<CheckerCliError> for api::Error {
+    fn from(value: CheckerCliError) -> Self {
+        api::Error::InternalError(Box::new(value))
+    }
 }
 
 fn calculate_area_totals(area_counts: &BTreeMap<u64, u64>) -> (u64, u64) {

@@ -3,6 +3,8 @@
 
 use anyhow::{anyhow, Result};
 use assert_cmd::Command;
+use bytemuck::bytes_of;
+use firewood_storage::WritableStorage;
 use predicates::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
@@ -599,6 +601,118 @@ fn fwdctl_check_db_with_data() -> Result<()> {
         .success();
 
     fwdctl_delete_db()
+}
+
+#[test]
+#[serial]
+fn fwdctl_check_reports_and_repairs_leaks() -> Result<()> {
+    create_leaky_database()?;
+
+    Command::cargo_bin(PRG)?
+        .arg("check")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "Checker finished with 1 error(s).",
+        ));
+
+    Command::cargo_bin(PRG)?
+        .arg("check")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .arg("--fix")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Repair summary: applied 1 fix(es), 0 issue(s) remain.",
+        ));
+
+    fwdctl_delete_db()
+}
+
+fn create_leaky_database() -> Result<()> {
+    use firewood_storage::{
+        noop_storage_metrics, AreaIndex, CacheReadStrategy, FileBacked, LinearAddress, NodeStore,
+        NodeStoreHeader,
+    };
+    use std::num::NonZero;
+    use std::sync::Arc;
+
+    if Path::new(tmpdb::path()).exists() {
+        remove_file(tmpdb::path()).map_err(|e| anyhow!(e))?;
+    }
+
+    let storage = Arc::new(
+        FileBacked::new(
+            tmpdb::path().to_path_buf(),
+            NonZero::<usize>::new(1).expect("non-zero cache size"),
+            NonZero::<usize>::new(1).expect("non-zero freelist cache size"),
+            true,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NonZero::<u32>::new(FileBacked::DEFAULT_RING_ENTRIES).expect("non-zero ring entries"),
+        )
+        .map_err(|e| anyhow!(e))?,
+    );
+
+    // Initialize a valid header so the CLI can open the database before injecting leaks.
+    let nodestore = NodeStore::new_empty_committed(storage.clone(), noop_storage_metrics())
+        .map_err(|e| anyhow!(e))?;
+    nodestore
+        .flush_header_with_padding()
+        .map_err(|e| anyhow!(e))?;
+    nodestore.flush_freelist().map_err(|e| anyhow!(e))?;
+    drop(nodestore);
+
+    let mut header = NodeStoreHeader::new();
+    let area_index = AreaIndex::MIN;
+    let area_size = area_index.size();
+    header.set_size(NodeStoreHeader::SIZE + area_size);
+    storage
+        .write(0, bytes_of(&header))
+        .map_err(|e| anyhow!(e))?;
+
+    let first_addr = LinearAddress::new(NodeStoreHeader::SIZE).expect("aligned leak start");
+
+    write_free_area_stub(storage.as_ref(), first_addr, area_index, None)?;
+
+    drop(storage);
+
+    Ok(())
+}
+
+fn write_free_area_stub(
+    storage: &firewood_storage::FileBacked,
+    address: firewood_storage::LinearAddress,
+    area_index: firewood_storage::AreaIndex,
+    next: Option<firewood_storage::LinearAddress>,
+) -> Result<()> {
+    let mut bytes = vec![0u8; area_index.size() as usize];
+    bytes[0] = area_index.get();
+    bytes[1] = 0xff;
+
+    let mut next_value = next.map_or(0, firewood_storage::LinearAddress::get);
+    let mut offset = 2usize;
+    loop {
+        let mut byte = (next_value & 0x7f) as u8;
+        next_value >>= 7;
+        if next_value != 0 {
+            byte |= 0x80;
+        }
+        bytes[offset] = byte;
+        offset += 1;
+        if next_value == 0 {
+            break;
+        }
+    }
+
+    storage
+        .write(address.get(), &bytes)
+        .map_err(|e| anyhow!(e))?;
+
+    Ok(())
 }
 
 // A module to create a temporary database name for use in

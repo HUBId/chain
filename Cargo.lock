@@ -2164,6 +2164,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "axum 0.6.20",
+ "bytemuck",
  "clap",
  "csv",
  "env_logger 0.11.8",
