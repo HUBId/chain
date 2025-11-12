@@ -2,8 +2,8 @@ use std::io::Read;
 use std::sync::Arc;
 
 use firewood_storage::{
-    noop_storage_metrics, AreaIndex, CheckOpt, Committed, LinearAddress, MemStore, NodeStore,
-    NodeStoreHeader, WritableStorage,
+    noop_storage_metrics, AreaIndex, CheckOpt, Committed, ImmutableProposal, LinearAddress,
+    MemStore, MutableProposal, NodeStore, NodeStoreHeader, WritableStorage,
 };
 
 fn setup_nodestore() -> (NodeStore<Committed, MemStore>, Arc<MemStore>) {
@@ -95,7 +95,7 @@ fn leaked_area_fix_enqueues_and_reuses_free_blocks() {
     let committed = NodeStore::open(storage.clone(), noop_storage_metrics())
         .expect("open nodestore with leaks");
 
-    let (immutable_res, fix_report) = committed.check_and_fix(CheckOpt {
+    let (committed_res, fix_report) = committed.check_and_fix(CheckOpt {
         hash_check: false,
         progress_bar: None,
     });
@@ -105,10 +105,20 @@ fn leaked_area_fix_enqueues_and_reuses_free_blocks() {
     );
     assert_eq!(fix_report.fixed.len(), 1, "expected single leak fix");
 
-    let immutable = immutable_res.expect("proposal conversion succeeded");
-    immutable
+    let committed = committed_res.expect("proposal conversion succeeded");
+    committed
         .flush_freelist()
         .expect("flush freelist after recovery");
+
+    let mutable_after_fix = NodeStore::<MutableProposal, _>::new(&committed)
+        .expect("create proposal after recovery");
+    let immutable_after_fix =
+        NodeStore::<Arc<ImmutableProposal>, _>::try_from(mutable_after_fix)
+            .expect("convert repaired proposal to immutable");
+    let recommitted = immutable_after_fix.as_committed(&committed);
+    recommitted
+        .flush_freelist()
+        .expect("flush freelist after recommitting repaired store");
 
     let header_after_fix = read_header(storage.as_ref());
     let freelist_head = header_after_fix.free_lists()[area_index.as_usize()]

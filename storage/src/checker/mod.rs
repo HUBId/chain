@@ -579,12 +579,11 @@ pub struct FixReport {
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Check the node store and fix any errors found.
     /// Returns a report of the fix operation.
-    // TODO: return a committed revision instead of an immutable proposal
     pub fn check_and_fix(
         &self,
         opt: CheckOpt,
     ) -> (
-        Result<NodeStore<Arc<ImmutableProposal>, S>, FileIoError>,
+        Result<NodeStore<Committed, S>, FileIoError>,
         FixReport,
     ) {
         let check_report = self.check(opt);
@@ -600,8 +599,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
         };
         let fix_report = proposal.fix(check_report);
-        let immutable_proposal = NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal);
-        (immutable_proposal, fix_report)
+        let committed =
+            NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal)
+                .map(|immutable| immutable.as_committed(self));
+        (committed, fix_report)
     }
 }
 
