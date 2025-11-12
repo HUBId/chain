@@ -922,7 +922,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     value: branch.value.take().expect(
                                         "branch node must have a value if it previously had only 1 child",
                                     ),
-                                    partial_path: branch.partial_path.clone(), // TODO remove clone
+                                    partial_path: std::mem::take(&mut branch.partial_path),
                                 });
                             return Ok((Some(leaf), removed_value));
                         };
@@ -951,14 +951,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         // The child's partial path is the concatenation of its (now removed) parent,
                         // its (former) child index, and its partial path.
-                        let child_partial_path = Path::from_nibbles_iterator(
-                            branch
-                                .partial_path
-                                .iter()
-                                .chain(once(&(child_index as u8)))
-                                .chain(child.partial_path().iter())
-                                .copied(),
-                        );
+                        let child_partial_path = branch
+                            .partial_path
+                            .with_appended_nibble(child_index as u8)
+                            .with_appended_iter(child.partial_path().iter().copied());
                         child.update_partial_path(child_partial_path);
 
                         Ok((Some(child), removed_value))
@@ -1076,7 +1072,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     value: branch.value.take().expect(
                                         "branch node must have a value if it previously had only 1 child",
                                     ),
-                                    partial_path: branch.partial_path.clone(), // TODO remove clone
+                                    partial_path: std::mem::take(&mut branch.partial_path),
                                 });
                             return Ok(Some(leaf));
                         };
@@ -1105,14 +1101,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         // The child's partial path is the concatenation of its (now removed) parent,
                         // its (former) child index, and its partial path.
-                        let child_partial_path = Path::from_nibbles_iterator(
-                            branch
-                                .partial_path
-                                .iter()
-                                .chain(once(&(child_index as u8)))
-                                .chain(child.partial_path().iter())
-                                .copied(),
-                        );
+                        let child_partial_path = branch
+                            .partial_path
+                            .with_appended_nibble(child_index as u8)
+                            .with_appended_iter(child.partial_path().iter().copied());
                         child.update_partial_path(child_partial_path);
 
                         Ok(Some(child))
