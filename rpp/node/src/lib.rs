@@ -298,6 +298,14 @@ pub struct RuntimeOptions {
     #[arg(long)]
     pub write_config: bool,
 
+    /// Override the io-uring ring size defined in the node configuration
+    #[arg(
+        long = "storage-ring-size",
+        value_name = "ENTRIES",
+        env = "RPP_NODE_STORAGE_RING_SIZE"
+    )]
+    pub storage_ring_size: Option<u32>,
+
     #[command(flatten)]
     pub pruning: PruningCliOverrides,
 }
@@ -318,6 +326,7 @@ impl RuntimeOptions {
             log_json,
             dry_run,
             write_config,
+            storage_ring_size,
             pruning,
         } = self;
 
@@ -350,6 +359,7 @@ impl RuntimeOptions {
             log_json,
             dry_run,
             write_config,
+            storage_ring_size,
             pruning: pruning.into_overrides(),
         }
     }
@@ -526,6 +536,7 @@ pub struct BootstrapOptions {
     pub log_json: bool,
     pub dry_run: bool,
     pub write_config: bool,
+    pub storage_ring_size: Option<u32>,
     pub pruning: PruningOverrides,
 }
 
@@ -679,6 +690,12 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         apply_overrides(&mut bundle.value, &options);
     }
     if let Some(bundle) = node_bundle.as_ref() {
+        bundle
+            .value
+            .validate()
+            .map_err(BootstrapError::configuration)?;
+    }
+    if let Some(bundle) = node_bundle.as_ref() {
         ensure_worm_export_configured(mode, &bundle.value)?;
     }
     let mut wallet_bundle =
@@ -711,6 +728,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let wallet_metadata = wallet_bundle
         .as_ref()
         .and_then(|bundle| bundle.metadata.as_ref().cloned());
+    let storage_ring_size = node_bundle
+        .as_ref()
+        .map(|bundle| u64::from(bundle.value.storage.ring_size));
 
     let mut default_config = None;
     let tracing_config = if let Some(bundle) = node_bundle.as_ref() {
@@ -760,6 +780,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         mode = mode.as_str(),
         config_source = config_source,
         dry_run = options.dry_run,
+        storage_io_uring_ring_entries = tracing_config.storage.ring_size,
         "bootstrap configuration resolved"
     );
 
@@ -814,22 +835,31 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     }
 
     if options.dry_run {
-        info!(
-            mode = %mode.as_str(),
-            node_config = node_metadata
-                .as_ref()
-                .map(|metadata| metadata.path.display().to_string()),
-            node_config_source = node_metadata
-                .as_ref()
-                .map(|metadata| metadata.source.as_str()),
-            wallet_config = wallet_metadata
-                .as_ref()
-                .map(|metadata| metadata.path.display().to_string()),
-            wallet_config_source = wallet_metadata
-                .as_ref()
-                .map(|metadata| metadata.source.as_str()),
-            "dry run completed"
-        );
+        macro_rules! log_dry_run {
+            ($ring:expr) => {
+                info!(
+                    mode = %mode.as_str(),
+                    node_config = node_metadata
+                        .as_ref()
+                        .map(|metadata| metadata.path.display().to_string()),
+                    node_config_source = node_metadata
+                        .as_ref()
+                        .map(|metadata| metadata.source.as_str()),
+                    wallet_config = wallet_metadata
+                        .as_ref()
+                        .map(|metadata| metadata.path.display().to_string()),
+                    wallet_config_source = wallet_metadata
+                        .as_ref()
+                        .map(|metadata| metadata.source.as_str()),
+                    storage_io_uring_ring_entries = $ring,
+                    "dry run completed"
+                );
+            };
+        }
+        match storage_ring_size {
+            Some(ring) => log_dry_run!(ring),
+            None => log_dry_run!(tracing::field::Empty),
+        }
         return Ok(());
     }
 
@@ -1821,6 +1851,9 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
             config.rollout.telemetry.enabled = true;
         }
     }
+    if let Some(ring_size) = options.storage_ring_size {
+        config.storage.ring_size = ring_size;
+    }
     if let Some(cadence) = options.pruning.cadence_secs {
         if cadence == 0 {
             warn!("ignoring pruning cadence override of zero seconds");
@@ -1888,6 +1921,7 @@ fn init_tracing(
     };
 
     let telemetry_config = resolved_telemetry_config(config)?;
+    metrics::gauge!("firewood.storage.io_uring_ring_entries").set(config.storage.ring_size as f64);
     let prometheus_listen = telemetry_config.metrics.listen.map(|addr| addr.to_string());
     let prometheus_listen_field = prometheus_listen.as_deref();
     let prometheus_auth = telemetry_config.metrics.auth_token.is_some();
@@ -1914,7 +1948,8 @@ fn init_tracing(
             prometheus_auth = prometheus_auth,
             dry_run = true,
             mode = mode.as_str(),
-            config_source = config_source
+            config_source = config_source,
+            storage_io_uring_ring_entries = config.storage.ring_size
         );
         let _span_guard = telemetry_span.enter();
         let metrics_endpoint = TelemetryExporterBuilder::new(&telemetry_config)
@@ -1933,6 +1968,7 @@ fn init_tracing(
             metrics_endpoint = metrics_endpoint.as_deref(),
             prometheus_listen = prometheus_listen_field,
             prometheus_auth = prometheus_auth,
+            storage_io_uring_ring_entries = config.storage.ring_size,
             mode = mode.as_str(),
             config_source = config_source,
             "tracing initialised"
@@ -2002,7 +2038,8 @@ fn init_tracing(
                 prometheus_auth = prometheus_auth,
                 dry_run = false,
                 mode = mode.as_str(),
-                config_source = config_source
+                config_source = config_source,
+                storage_io_uring_ring_entries = config.storage.ring_size
             );
             let _span_guard = telemetry_span.enter();
             info!(
@@ -2019,6 +2056,7 @@ fn init_tracing(
                 prometheus_listen = prometheus_listen_field,
                 prometheus_auth = prometheus_auth,
                 dry_run = false,
+                storage_io_uring_ring_entries = config.storage.ring_size,
                 mode = mode.as_str(),
                 config_source = config_source,
                 "tracing initialised"
@@ -2757,6 +2795,7 @@ mod tests {
             log_json: false,
             dry_run: true,
             write_config: false,
+            storage_ring_size: None,
             pruning: PruningOverrides::default(),
         }
     }

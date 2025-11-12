@@ -95,10 +95,20 @@ impl FileBacked {
     }
 
     #[cfg(feature = "io-uring")]
-    // The size of the kernel ring buffer. This buffer will control how many writes we do with
-    // a single system call.
-    // TODO: make this configurable
-    pub(crate) const RINGSIZE: u32 = 32;
+    /// Minimum number of io-uring entries supported.
+    pub(crate) const MIN_RING_ENTRIES: u32 = 2;
+
+    #[cfg(feature = "io-uring")]
+    /// Maximum number of io-uring entries supported.
+    pub(crate) const MAX_RING_ENTRIES: u32 = 4096;
+
+    #[cfg(feature = "io-uring")]
+    /// Default io-uring ring size when configuration does not override it.
+    pub const DEFAULT_RING_ENTRIES: u32 = 32;
+
+    #[cfg(not(feature = "io-uring"))]
+    /// Default io-uring ring size when configuration does not override it.
+    pub const DEFAULT_RING_ENTRIES: u32 = 32;
 
     /// Create or open a file at a given path
     pub fn new(
@@ -108,6 +118,7 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        #[allow(unused_variables)] ring_entries: NonZero<u32>,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -124,6 +135,20 @@ impl FileBacked {
 
         #[cfg(feature = "io-uring")]
         let ring = {
+            let requested = ring_entries.get();
+            if requested < Self::MIN_RING_ENTRIES || requested > Self::MAX_RING_ENTRIES {
+                let context = format!(
+                    "io-uring ring size {requested} outside supported range {}-{}",
+                    Self::MIN_RING_ENTRIES,
+                    Self::MAX_RING_ENTRIES
+                );
+                return Err(FileIoError {
+                    inner: std::io::Error::other(context.clone()),
+                    filename: Some(path.clone()),
+                    offset: 0,
+                    context: Some(context),
+                });
+            }
             // The kernel will stop the worker thread in this many ms if there is no work to do
             const IDLETIME_MS: u32 = 1000;
 
@@ -132,10 +157,10 @@ impl FileBacked {
                 .dontfork()
                 .setup_single_issuer()
                 // completion queue should be larger than the request queue, we allocate double
-                .setup_cqsize(FileBacked::RINGSIZE * 2)
+                .setup_cqsize(requested * 2)
                 // start a kernel thread to do the IO
                 .setup_sqpoll(IDLETIME_MS)
-                .build(FileBacked::RINGSIZE)
+                .build(requested)
                 .map_err(|e| FileIoError {
                     inner: e,
                     filename: Some(path.clone()),
@@ -143,6 +168,17 @@ impl FileBacked {
                     context: Some("IO-uring setup".to_string()),
                 })?
         };
+
+        #[cfg(feature = "io-uring")]
+        {
+            metrics::gauge!("firewood.storage.io_uring_ring_entries")
+                .set(ring_entries.get() as f64);
+            crate::logger::info!(
+                target = "storage",
+                ring_entries = ring_entries.get(),
+                "initialised io-uring ring"
+            );
+        }
 
         Ok(Self {
             fd,
@@ -338,6 +374,7 @@ mod test {
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
+    use std::num::NonZero;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -356,6 +393,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
         )
         .unwrap();
 
@@ -398,6 +436,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
         )
         .unwrap();
 

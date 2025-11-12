@@ -103,3 +103,35 @@ fn startup_rejects_invalid_env_overrides() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn startup_rejects_out_of_range_ring_size() -> Result<()> {
+    let temp_dir = TempDir::new().context("create temporary directory")?;
+    let mut ports = PortAllocator::default();
+    let config_path = write_node_config(temp_dir.path(), None, &mut ports)
+        .context("write baseline node configuration")?;
+
+    let binary = locate_rpp_node_binary().context("locate rpp-node binary")?;
+    let output = Command::new(&binary)
+        .arg("node")
+        .arg("--config")
+        .arg(&config_path)
+        .env("RPP_NODE_STORAGE_RING_SIZE", "1")
+        .output()
+        .context("spawn rpp-node with invalid ring size override")?;
+
+    assert!(!output.status.success(), "process unexpectedly succeeded");
+    assert_eq!(
+        output.status.code(),
+        Some(CONFIG_EXIT_CODE),
+        "invalid ring size should map to configuration exit code",
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("storage.ring_size must be between 2 and 4096"),
+        "expected storage ring size validation failure in stderr, found: {stderr}"
+    );
+
+    Ok(())
+}

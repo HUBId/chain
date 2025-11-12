@@ -14,6 +14,7 @@ use firewood_storage::{
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
+use std::num::NonZero;
 
 use crate::DatabasePath;
 
@@ -54,6 +55,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
+        NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
     )?;
     let storage = Arc::new(fb);
 

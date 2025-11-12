@@ -12,6 +12,10 @@
 snapshot_dir = "./data/snapshots"
 # Directory that stores the binary pruning proofs referenced by manifests.
 proof_dir = "./data/proofs"
+# io_uring submission queue entries allocated when Firewood opens its storage
+# ring. Larger values can improve throughput for highly concurrent workloads,
+# while smaller rings conserve kernel resources. Valid range: 2-4096.
+ring_size = 32
 # Flush metadata updates with `fsync` on every commit ("always") or defer the
 # sync until the next compaction cycle ("deferred").
 sync_policy = "always"

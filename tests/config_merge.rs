@@ -24,6 +24,8 @@ fn config_merge_sources() -> Result<()> {
     run_cli_config_case(&binary)?;
     run_env_config_case(&binary)?;
     run_default_template_case(&binary)?;
+    run_cli_ring_size_override_case(&binary)?;
+    run_env_ring_size_override_case(&binary)?;
     run_missing_cli_config_case(&binary)?;
 
     Ok(())
@@ -38,7 +40,8 @@ fn run_cli_config_case(binary: &Path) -> Result<()> {
         &mut ports,
     )?;
 
-    run_success_case(binary, Some(config_path.as_path()), None, "cli")
+    let _ = run_success_case(binary, Some(config_path.as_path()), None, "cli")?;
+    Ok(())
 }
 
 fn run_env_config_case(binary: &Path) -> Result<()> {
@@ -50,19 +53,25 @@ fn run_env_config_case(binary: &Path) -> Result<()> {
         &mut ports,
     )?;
 
-    run_success_case(binary, None, Some(config_path.as_path()), "env")
+    let _ = run_success_case(binary, None, Some(config_path.as_path()), "env")?;
+    Ok(())
 }
 
 fn run_default_template_case(binary: &Path) -> Result<()> {
-    run_success_case(binary, None, None, "default")
+    let json = run_success_case(binary, None, None, "default")?;
+    assert!(
+        json.get("storage_io_uring_ring_entries").is_some(),
+        "dry run log should include storage ring size field: {json}"
+    );
+    Ok(())
 }
 
-fn run_success_case(
+fn dry_run_with_overrides(
     binary: &Path,
     cli_config: Option<&Path>,
     env_config: Option<&Path>,
-    expected_source: &str,
-) -> Result<()> {
+    configure_command: impl FnOnce(&mut Command),
+) -> Result<Value> {
     let mut command = Command::new(binary);
     command
         .arg("node")
@@ -85,6 +94,8 @@ fn run_success_case(
         command.env("RPP_CONFIG", path);
     }
 
+    configure_command(&mut command);
+
     let mut child = command.spawn().context("failed to spawn rpp-node")?;
     let mut guard = ChildTerminationGuard {
         child: Some(&mut child),
@@ -95,6 +106,27 @@ fn run_success_case(
     let json: Value = serde_json::from_str(&dry_run_log)
         .with_context(|| format!("failed to parse structured log: {dry_run_log}"))?;
 
+    start_log_drain(logs);
+
+    let status = wait_for_exit(&mut child)?;
+    if !status.success() {
+        return Err(anyhow!(
+            "dry run completed log emitted but process exited with status {status}"
+        ));
+    }
+
+    guard.child.take();
+    Ok(json)
+}
+
+fn run_success_case(
+    binary: &Path,
+    cli_config: Option<&Path>,
+    env_config: Option<&Path>,
+    expected_source: &str,
+) -> Result<Value> {
+    let json = dry_run_with_overrides(binary, cli_config, env_config, |_| {})?;
+
     let source = json
         .get("rpp.config_source")
         .and_then(Value::as_str)
@@ -104,26 +136,13 @@ fn run_success_case(
         "dry run completed log reported unexpected config source",
     );
 
-    let message = json
-        .get("msg")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let message = json.get("msg").and_then(Value::as_str).unwrap_or_default();
     assert!(
         message.contains("dry run completed"),
         "dry run completed log missing expected message: {message}",
     );
 
-    start_log_drain(logs);
-
-    let status = wait_for_exit(&mut child)?;
-    if !status.success() {
-        return Err(anyhow!(
-            "dry run for {expected_source} source exited with status {status}",
-        ));
-    }
-
-    guard.child.take();
-    Ok(())
+    Ok(json)
 }
 
 fn run_missing_cli_config_case(binary: &Path) -> Result<()> {
@@ -161,6 +180,56 @@ fn run_missing_cli_config_case(binary: &Path) -> Result<()> {
     assert!(
         stderr.contains("resolved from the command line"),
         "stderr missing configuration source: {stderr}"
+    );
+
+    Ok(())
+}
+
+fn run_cli_ring_size_override_case(binary: &Path) -> Result<()> {
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let mut ports = PortAllocator::default();
+    let config_path = write_node_config(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        &mut ports,
+    )?;
+
+    let json = dry_run_with_overrides(binary, Some(config_path.as_path()), None, |command| {
+        command.arg("--storage-ring-size").arg("64");
+    })?;
+
+    let ring_size = json
+        .get("storage_io_uring_ring_entries")
+        .and_then(Value::as_u64)
+        .context("dry run log missing storage ring size")?;
+    assert_eq!(
+        ring_size, 64,
+        "cli override should appear in dry run log: {json}"
+    );
+
+    Ok(())
+}
+
+fn run_env_ring_size_override_case(binary: &Path) -> Result<()> {
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let mut ports = PortAllocator::default();
+    let config_path = write_node_config(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        &mut ports,
+    )?;
+
+    let json = dry_run_with_overrides(binary, None, Some(config_path.as_path()), |command| {
+        command.env("RPP_NODE_STORAGE_RING_SIZE", "128");
+    })?;
+
+    let ring_size = json
+        .get("storage_io_uring_ring_entries")
+        .and_then(Value::as_u64)
+        .context("dry run log missing storage ring size")?;
+    assert_eq!(
+        ring_size, 128,
+        "env override should appear in dry run log: {json}"
     );
 
     Ok(())

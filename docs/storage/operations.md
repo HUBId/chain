@@ -1,5 +1,25 @@
 # Firewood storage operations
 
+## io-uring ring sizing
+
+Firewood allocates an [`io_uring`](https://docs.kernel.org/io_uring.html) ring when
+`storage.ring_size` is configured in `config/node.toml` (or
+`config/storage.toml`). The default ring contains 32 entries, which balances
+moderate concurrency with kernel resource usage. Operators can tune the ring to
+any value between 2 and 4096:
+
+```toml
+[storage]
+ring_size = 32
+```
+
+The chosen size is emitted during bootstrap logs as the structured field
+`storage_io_uring_ring_entries` and exported as the metric
+`firewood.storage.io_uring_ring_entries`. The ring size can also be overridden at
+startup with either the `--storage-ring-size <entries>` CLI flag or the
+`RPP_NODE_STORAGE_RING_SIZE=<entries>` environment variable. Values outside the
+supported range are rejected before the node initialises.
+
 ## WAL crash-recovery chaos drill
 
 Nightly CI exercises abrupt termination of the Firewood write-ahead log to

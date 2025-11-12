@@ -920,6 +920,7 @@ mod tests {
     #[test]
     fn test_downcast_to_file_backed() {
         use nonzero_ext::nonzero;
+        use std::num::NonZero;
 
         use crate::CacheReadStrategy;
 
@@ -935,6 +936,7 @@ mod tests {
                     false,
                     true,
                     CacheReadStrategy::WritesOnly,
+                    NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
                 )
                 .unwrap(),
             );
