@@ -1633,6 +1633,10 @@ impl Default for FirewoodSyncPolicyConfig {
     }
 }
 
+pub const MIN_STORAGE_RING_SIZE: u32 = 2;
+pub const MAX_STORAGE_RING_SIZE: u32 = 4096;
+const DEFAULT_STORAGE_RING_SIZE: u32 = 32;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FirewoodStorageConfig {
@@ -1641,6 +1645,7 @@ pub struct FirewoodStorageConfig {
     pub sync_policy: FirewoodSyncPolicyConfig,
     pub commit_io_budget_bytes: u64,
     pub compaction_io_budget_bytes: u64,
+    pub ring_size: u32,
 }
 
 impl FirewoodStorageConfig {
@@ -1669,6 +1674,7 @@ impl Default for FirewoodStorageConfig {
             sync_policy: FirewoodSyncPolicyConfig::Always,
             commit_io_budget_bytes: 64 * 1024 * 1024,
             compaction_io_budget_bytes: 128 * 1024 * 1024,
+            ring_size: DEFAULT_STORAGE_RING_SIZE,
         }
     }
 }
@@ -1892,6 +1898,13 @@ impl NodeConfig {
                 "node configuration storage.compaction_io_budget_bytes must be greater than 0"
                     .into(),
             ));
+        }
+        if self.storage.ring_size < MIN_STORAGE_RING_SIZE
+            || self.storage.ring_size > MAX_STORAGE_RING_SIZE
+        {
+            return Err(ChainError::Config(format!(
+                "node configuration storage.ring_size must be between {MIN_STORAGE_RING_SIZE} and {MAX_STORAGE_RING_SIZE}"
+            )));
         }
         self.network.validate()?;
         self.rollout.telemetry.validate()?;

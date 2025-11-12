@@ -45,6 +45,11 @@ pub struct RevisionManagerConfig {
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
+
+    #[builder(
+        default_code = "NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).expect(\"non-zero\")"
+    )]
+    ring_entries: NonZero<u32>,
 }
 
 #[derive(Clone, Debug, TypedBuilder)]
@@ -139,6 +144,7 @@ impl RevisionManager {
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
+            config.manager.ring_entries,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes

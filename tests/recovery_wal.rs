@@ -12,7 +12,7 @@ use firewood_storage::{
 };
 use rand::RngCore;
 use std::io::Read;
-use std::num::NonZeroUsize;
+use std::num::{NonZero, NonZeroUsize};
 use std::sync::Arc;
 use storage_firewood::{
     kv::FirewoodKv,
@@ -258,6 +258,7 @@ fn wal_persists_split_free_blocks() {
             true,
             true,
             CacheReadStrategy::WritesOnly,
+            NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
         )
         .expect("create file backed storage"),
     );
