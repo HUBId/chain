@@ -131,6 +131,9 @@ mkdir -p "$(dirname "$REPORT_PATH")"
   fi
 } > "$REPORT_PATH"
 
+echo "Running Firewood Merkle iterator allocation benchmark"
+make bench-iter
+
 if (( total_findings == 0 )); then
   echo "Stable scan: no nightly usages detected. Report written to ${REPORT_PATH}."
 else

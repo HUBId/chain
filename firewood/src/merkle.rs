@@ -6,14 +6,14 @@
 #[cfg(test)]
 pub(crate) mod tests;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
+use crate::iter::{MerkleKeyValueIter, MerkleNodeIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, HashedNodeReader, ImmutableProposal, IntoHashType,
     LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable,
-    Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    Path, ReadableStorage, SharedNode, TrieHash, TrieReader,
 };
 use metrics::counter;
 use std::collections::HashSet;
@@ -260,7 +260,12 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {
+    /// Returns an iterator that visits every node in the trie in order starting from the root.
+    pub fn node_iter(&self) -> MerkleNodeIter<'_, T> {
+        MerkleNodeIter::from(&self.nodestore)
+    }
+
+    pub fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {
         MerkleKeyValueIter::from(&self.nodestore)
     }
 
