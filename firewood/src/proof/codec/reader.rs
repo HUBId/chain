@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proofs::header::{Header, InvalidHeader};
+use super::header::{Header, InvalidHeader};
 
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.

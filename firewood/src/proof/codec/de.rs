@@ -6,14 +6,14 @@ use firewood_storage::HashType;
 use firewood_storage::{BranchNode, TrieHash, ValueDigest};
 use integer_encoding::VarInt;
 
+use super::{
+    bitmap::ChildrenMap,
+    header::{Header, InvalidHeader},
+    proof_type::ProofType,
+    reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
+};
 use crate::{
     proof::{Proof, ProofNode},
-    proofs::{
-        bitmap::ChildrenMap,
-        header::{Header, InvalidHeader},
-        proof_type::ProofType,
-        reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
-    },
     v2::api::FrozenRangeProof,
 };
 
