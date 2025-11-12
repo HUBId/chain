@@ -127,16 +127,12 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-// TODO: make it work with any size SmallVec
-// impl<T: AsRef<[u8]> + smallvec::Array> HasUpdate for SmallVec<T> {
-//     fn update<U: AsRef<[u8]>>(&mut self, data: U) {
-//         self.extend(data.as_ref());
-//     }
-// }
-
-impl HasUpdate for SmallVec<[u8; 32]> {
+impl<A> HasUpdate for SmallVec<A>
+where
+    A: smallvec::Array<Item = u8>,
+{
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        self.extend(data.as_ref().iter().copied());
+        self.extend_from_slice(data.as_ref());
     }
 }
 
@@ -329,5 +325,23 @@ mod tests {
         let branch = branch_with_unhashed_child();
         let err = HashedBranchChildren::try_new(&branch).expect_err("missing hash must error");
         assert_eq!(err.child_index(), 0);
+    }
+
+    #[test]
+    fn smallvec_has_update_supports_capacity_4() {
+        let mut buf: SmallVec<[u8; 4]> = SmallVec::new();
+        HasUpdate::update(&mut buf, [1u8, 2, 3]);
+        HasUpdate::update(&mut buf, [4u8, 5]);
+
+        assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn smallvec_has_update_supports_capacity_8() {
+        let mut buf: SmallVec<[u8; 8]> = SmallVec::new();
+        HasUpdate::update(&mut buf, [0xAA, 0xBB]);
+        HasUpdate::update(&mut buf, [0xCC; 4]);
+
+        assert_eq!(buf.as_slice(), &[0xAA, 0xBB, 0xCC, 0xCC, 0xCC, 0xCC]);
     }
 }
