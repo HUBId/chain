@@ -208,6 +208,20 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close())
 }
 
+func TestFFIPanicIncludesBacktrace(t *testing.T) {
+	t.Parallel()
+
+	r := require.New(t)
+
+	err := triggerPanicForTesting()
+
+	r.Error(err)
+
+	msg := err.Error()
+	r.Contains(msg, "ffi test panic")
+	r.Contains(msg, "Backtrace:")
+}
+
 func TestClosedDatabase(t *testing.T) {
 	r := require.New(t)
 	dbFile := filepath.Join(t.TempDir(), "test.db")
