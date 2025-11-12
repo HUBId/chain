@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-firewood "github.com/ava-labs/firewood-go/ffi"
+	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
@@ -71,8 +71,9 @@ func newFirewoodDatabase(dbFile string) (*firewood.Database, func() error, error
 }
 
 type tree struct {
-	require *require.Assertions
-	rand    *rand.Rand
+	require     *require.Assertions
+	rand        *rand.Rand
+	valueSource *byteStepper
 
 	id       int
 	nextID   int
@@ -94,7 +95,7 @@ type proposal struct {
 	children []*proposal
 }
 
-func newTestTree(t *testing.T, rand *rand.Rand) *tree {
+func newTestTree(t *testing.T, rand *rand.Rand, valueSource *byteStepper) *tree {
 	r := require.New(t)
 
 	memdb := memdb.New()
@@ -102,13 +103,14 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 	r.NoError(err)
 
 	tr := &tree{
-		merkleDB:  merkleDB,
-		fwdDB:     newTestFirewoodDatabase(t),
-		proposals: make(map[int]*proposal),
-		children:  make([]*proposal, 0),
-		require:   r,
-		rand:      rand,
-		keys:      createRandomByteSlices(min(1, rand.Intn(maxNumKeys)), keySize, rand),
+		merkleDB:    merkleDB,
+		fwdDB:       newTestFirewoodDatabase(t),
+		proposals:   make(map[int]*proposal),
+		children:    make([]*proposal, 0),
+		require:     r,
+		rand:        rand,
+		valueSource: valueSource,
+		keys:        createRandomByteSlices(min(1, rand.Intn(maxNumKeys)), keySize, rand),
 	}
 	return tr
 }
@@ -141,7 +143,7 @@ func (tr *tree) dropAllProposals() {
 
 func (tr *tree) dbUpdate() {
 	key := tr.keys[tr.rand.Intn(len(tr.keys))]
-	val := createRandomSlice(valSize, tr.rand)
+	val := tr.valueSource.nextSlice(valSize)
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
@@ -153,7 +155,10 @@ func (tr *tree) dbUpdate() {
 
 func (tr *tree) createRandomBatch(numKeys int) ([][]byte, [][]byte) {
 	keys := tr.selectRandomKeys(numKeys)
-	vals := createRandomByteSlices(len(keys), valSize, tr.rand)
+	vals := make([][]byte, len(keys))
+	for i := range vals {
+		vals[i] = tr.valueSource.nextSlice(valSize)
+	}
 	return keys, vals
 }
 
@@ -337,39 +342,7 @@ func (tr *tree) commitProposal() {
 }
 
 func fuzzTree(t *testing.T, randSource int64, byteSteps []byte) {
-	rand := rand.New(rand.NewSource(randSource))
-
-	if len(byteSteps) > 100 {
-		byteSteps = byteSteps[:100] // limit the number of steps to 100
-	}
-
-	tr := newTestTree(t, rand)
-
-	// TODO: replace randomly generated values with bytes from the fuzzer
-	for _, step := range byteSteps {
-		step = step % maxStep
-		// Make this two lines so debugger displays the stepStr value
-		stepStr := stepMap[step]
-		t.Log(stepStr)
-		switch step {
-		case dbGet:
-			tr.dbGet()
-		case dbUpdate:
-			tr.dbUpdate()
-		case dbBatch:
-			tr.dbBatch()
-		case checkDBHash:
-			tr.checkDBHash()
-		case createProposalOnProposal:
-			tr.createProposalOnProposal()
-		case createProposalOnDB:
-			tr.createProposalOnDB()
-		case proposalGet:
-			tr.proposalGet()
-		case commitProposal:
-			tr.commitProposal()
-		}
-	}
+	_ = executeTreeSteps(t, randSource, byteSteps)
 }
 
 func FuzzTree(f *testing.F) {
@@ -417,6 +390,90 @@ func FuzzTree(f *testing.F) {
 	f.Fuzz(fuzzTree)
 }
 
+type executionSummary struct {
+	MerkleRoot []byte
+	FwdRoot    []byte
+}
+
+func executeTreeSteps(t *testing.T, randSource int64, byteSteps []byte) executionSummary {
+	rand := rand.New(rand.NewSource(randSource))
+
+	if len(byteSteps) > 100 {
+		byteSteps = byteSteps[:100] // limit the number of steps to 100
+	}
+
+	valueSource := newByteStepper(byteSteps)
+	tr := newTestTree(t, rand, valueSource)
+
+	for _, step := range byteSteps {
+		step = step % maxStep
+		// Make this two lines so debugger displays the stepStr value
+		stepStr := stepMap[step]
+		t.Log(stepStr)
+		switch step {
+		case dbGet:
+			tr.dbGet()
+		case dbUpdate:
+			tr.dbUpdate()
+		case dbBatch:
+			tr.dbBatch()
+		case checkDBHash:
+			tr.checkDBHash()
+		case createProposalOnProposal:
+			tr.createProposalOnProposal()
+		case createProposalOnDB:
+			tr.createProposalOnDB()
+		case proposalGet:
+			tr.proposalGet()
+		case commitProposal:
+			tr.commitProposal()
+		}
+	}
+
+	merkleRoot, err := tr.merkleDB.GetMerkleRoot(context.Background())
+	tr.require.NoError(err)
+
+	fwdRoot, err := tr.fwdDB.Root()
+	tr.require.NoError(err)
+
+	return executionSummary{
+		MerkleRoot: append([]byte(nil), merkleRoot[:]...),
+		FwdRoot:    slices.Clone(fwdRoot),
+	}
+}
+
+func TestFuzzTreeDeterministic(t *testing.T) {
+	t.Parallel()
+
+	steps := []byte{
+		dbUpdate,
+		dbBatch,
+		createProposalOnDB,
+		commitProposal,
+		checkDBHash,
+	}
+
+	first := executeTreeSteps(t, 42, steps)
+	second := executeTreeSteps(t, 42, steps)
+
+	require.Equal(t, first, second)
+}
+
+func TestFuzzTreePayloadsDependOnRawSteps(t *testing.T) {
+	t.Parallel()
+
+	// These inputs resolve to the same logical step sequence because of the
+	// modulo performed in executeTreeSteps, but the raw bytes differ. The
+	// deterministic byteStepper should therefore yield different payloads.
+	baseSteps := []byte{dbUpdate, dbUpdate, checkDBHash}
+	variantSteps := []byte{dbUpdate + maxStep, dbUpdate + maxStep, checkDBHash}
+
+	base := executeTreeSteps(t, 99, baseSteps)
+	variant := executeTreeSteps(t, 99, variantSteps)
+
+	require.NotEqual(t, base, variant)
+}
+
 func createRandomSlice(maxSize int, rand *rand.Rand) []byte {
 	sliceSize := rand.Intn(maxSize) + 1 // always create non-empty slices
 	slice := make([]byte, sliceSize)
@@ -433,4 +490,38 @@ func createRandomByteSlices(numSlices int, maxSliceSize int, rand *rand.Rand) []
 		slices[i] = createRandomSlice(maxSliceSize, rand)
 	}
 	return slices
+}
+
+type byteStepper struct {
+	data []byte
+	idx  int
+}
+
+func newByteStepper(data []byte) *byteStepper {
+	cloned := slices.Clone(data)
+	return &byteStepper{data: cloned}
+}
+
+func (s *byteStepper) nextByte() byte {
+	if len(s.data) == 0 {
+		s.idx++
+		return 0
+	}
+
+	value := s.data[s.idx%len(s.data)]
+	s.idx++
+	return value
+}
+
+func (s *byteStepper) nextSlice(maxSize int) []byte {
+	if maxSize <= 0 {
+		return nil
+	}
+
+	length := int(s.nextByte()%byte(maxSize)) + 1
+	buf := make([]byte, length)
+	for i := range buf {
+		buf[i] = s.nextByte()
+	}
+	return buf
 }
