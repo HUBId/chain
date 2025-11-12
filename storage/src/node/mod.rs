@@ -141,6 +141,44 @@ pub(crate) fn extend_vec_with_varint<VI: VarInt>(buffer: &mut Vec<u8>, value: VI
     }
 }
 
+fn packed_nibble_len(nibbles: usize) -> usize {
+    nibbles / 2 + nibbles % 2
+}
+
+fn extend_with_packed_nibbles(buffer: &mut Vec<u8>, path: &Path) {
+    let mut iter = path.iter().copied();
+    while let Some(high) = iter.next() {
+        debug_assert!(high <= 0x0f, "partial path nibble overflow: {high}");
+        match iter.next() {
+            Some(low) => {
+                debug_assert!(low <= 0x0f, "partial path nibble overflow: {low}");
+                buffer.push((high << 4) | (low & 0x0f));
+            }
+            None => buffer.push(high << 4),
+        }
+    }
+}
+
+fn path_from_packed_bytes(bytes: Vec<u8>, nibble_len: usize) -> Path {
+    if nibble_len == 0 {
+        return Path::new();
+    }
+
+    let mut nibbles = Vec::with_capacity(nibble_len);
+    for byte in bytes {
+        if nibbles.len() == nibble_len {
+            break;
+        }
+        nibbles.push(byte >> 4);
+        if nibbles.len() == nibble_len {
+            break;
+        }
+        nibbles.push(byte & 0x0f);
+    }
+
+    Path::from(nibbles)
+}
+
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
@@ -200,7 +238,7 @@ impl Node {
         if partial_path_len >= BRANCH_PARTIAL_PATH_LEN_OVERFLOW as usize {
             length += Self::varint_length(partial_path_len);
         }
-        length += partial_path_len;
+        length += packed_nibble_len(partial_path_len);
 
         if let Some(value) = &branch.value {
             length += Self::varint_length(value.len());
@@ -237,7 +275,7 @@ impl Node {
         if partial_path_len >= LEAF_PARTIAL_PATH_LEN_OVERFLOW as usize {
             length += Self::varint_length(partial_path_len);
         }
-        length += partial_path_len;
+        length += packed_nibble_len(partial_path_len);
 
         length += Self::varint_length(leaf.value.len());
         length += leaf.value.len();
@@ -293,7 +331,8 @@ impl Node {
     ///     (for `branch_factor_256`, bits 2-7 are used for `partial_path` length, up to 63 nibbles)
     ///
     /// The remaining bytes are in the following order:
-    ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
+    ///   - The partial path packed as pairs of nibbles (two per byte, with an odd trailing nibble padded)
+    ///     and preceded by a varint length when longer than 3 nibbles
     ///   - The number of children, if the branch factor is 256
     ///   - The children. If the number of children == [`BranchNode::MAX_CHILDREN`], then the children are just
     ///     addresses with hashes. Otherwise, they are offset, address, hash tuples.
@@ -305,7 +344,8 @@ impl Node {
     ///      126 and the length is encoded in the next byte.
     ///
     /// The remaining bytes are in the following order:
-    ///    - The partial path, possibly preceeded by the length if it is longer than 126 nibbles (varint encoded)
+    ///    - The partial path packed as pairs of nibbles (two per byte, with an odd trailing nibble padded)
+    ///      and preceded by a varint length when longer than 126 nibbles
     ///    - The value, always preceeded by the length, varint encoded
     ///
     /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
@@ -313,8 +353,6 @@ impl Node {
     ///
     /// Note that there is a "prefix" byte which is the size of the area when serializing this object. Since
     /// we always have one of those, we include it as a parameter for serialization.
-    ///
-    /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
     pub fn as_bytes(&self, prefix: AreaIndex, encoded: &mut Vec<u8>) {
         match self {
             Node::Branch(b) => {
@@ -354,7 +392,7 @@ impl Node {
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
                     extend_vec_with_varint(encoded, b.partial_path.len());
                 }
-                encoded.extend_from_slice(&b.partial_path);
+                extend_with_packed_nibbles(encoded, &b.partial_path);
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
@@ -399,7 +437,7 @@ impl Node {
                 if pp_len == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
                     extend_vec_with_varint(encoded, l.partial_path.len());
                 }
-                encoded.extend_from_slice(&l.partial_path);
+                extend_with_packed_nibbles(encoded, &l.partial_path);
 
                 // encode the value
                 extend_vec_with_varint(encoded, l.value.len());
@@ -536,7 +574,14 @@ fn read_path_with_prefix_length(reader: &mut impl Read) -> std::io::Result<Path>
 
 #[inline]
 fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io::Result<Path> {
-    reader.read_fixed_len(len).map(Path::from)
+    if len == 0 {
+        return Ok(Path::new());
+    }
+
+    let packed_len = packed_nibble_len(len);
+    reader
+        .read_fixed_len(packed_len)
+        .map(|bytes| path_from_packed_bytes(bytes, len))
 }
 
 #[cfg(test)]
@@ -554,12 +599,17 @@ mod test {
         Node::Leaf(LeafNode {
             partial_path: Path::from(vec![0, 1, 2, 3]),
             value: vec![4, 5, 6, 7].into()
-        }), 11; "leaf node with value")]
+        }), 9; "leaf node with value")]
+    #[test_case(
+        Node::Leaf(LeafNode {
+            partial_path: Path::from(vec![0, 1, 2]),
+            value: vec![4, 5].into()
+        }), 7; "leaf node with odd partial path")]
     #[test_case(
         Node::Leaf(LeafNode {
             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
             value: vec![4, 5, 6, 7].into()
-        }), 211; "leaf node obnoxiously long partial path")]
+        }), 110; "leaf node obnoxiously long partial path")]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
@@ -569,21 +619,32 @@ mod test {
             } else {
                 None
             }
-        })})), 45; "one child branch node with short partial path and no value"
+        })})), 44; "one child branch node with short partial path and no value"
+    )]
+    #[test_case(Node::Branch(Box::new(BranchNode {
+        partial_path: Path::from(vec![0, 1, 2]),
+        value: None,
+        children: std::array::from_fn(|i| {
+            if i == 15 {
+                Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
+            } else {
+                None
+            }
+        })})), 46; "one child branch node with odd partial path and no value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
         children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 652; "full branch node with long partial path and value"
+        )})), 650; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some(vec![4, 5, 6, 7].into()),
         children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 851; "full branch node with obnoxiously long partial path"
+        )})), 750; "full branch node with obnoxiously long partial path"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
@@ -595,7 +656,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         ").into()),
         children: std::array::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
-        )})), 1165; "full branch node with obnoxiously long partial path and long value"
+        )})), 1064; "full branch node with obnoxiously long partial path and long value"
     )]
     // When ethhash is enabled, we don't actually check the `expected_length`
     fn test_serialize_deserialize(
