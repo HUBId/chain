@@ -149,8 +149,39 @@ fn run_unit_suites() -> Result<()> {
     apply_feature_flags(&mut command);
     run_command(command, "unit test suite")?;
 
+    run_stwo_backend_matrix_tests()?;
     run_zsi_renewal_tests()?;
     run_rpp_fail_matrix_tests()
+}
+
+fn run_stwo_backend_matrix_tests() -> Result<()> {
+    let root = workspace_root();
+
+    let mut default = Command::new("cargo");
+    default
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("prover_stwo_backend")
+        .arg("--locked")
+        .arg("--features")
+        .arg("official");
+    run_command(default, "stwo backend witness matrix (official)")?;
+
+    if has_feature_flag("backend-rpp-stark") {
+        let mut backend = Command::new("cargo");
+        backend
+            .current_dir(&root)
+            .arg("test")
+            .arg("-p")
+            .arg("prover_stwo_backend")
+            .arg("--locked")
+            .arg("--features")
+            .arg("official");
+        run_command(backend, "stwo backend witness matrix (backend-rpp-stark)")?;
+    }
+
+    Ok(())
 }
 
 fn run_rpp_fail_matrix_tests() -> Result<()> {

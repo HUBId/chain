@@ -37,6 +37,10 @@ circuits through the shared backend interface:
 * Verification reconstructs public inputs, validates commitments, and feeds the
   decoded proofs into [`NodeVerifier`](../prover/prover_stwo_backend/src/official/verifier/mod.rs),
   ensuring the official verifier logic is exercised across all circuits.【F:prover/prover_stwo_backend/src/backend.rs†L291-L488】【F:prover/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】
+* The backend regression matrix now executes every `SupportedCircuit` witness
+  through a success path as well as public-input tampering and malformed witness
+  scenarios, and CI invokes the suite for both the default backend and the
+  `backend-rpp-stark` feature gate.【F:prover/prover_stwo_backend/src/backend.rs†L1193-L1740】【F:xtask/src/main.rs†L137-L181】
 
 These adapters provide the concrete keygen/prove/verify hooks the blueprint
 anticipated, making the `official` integration the canonical STWO backend for
