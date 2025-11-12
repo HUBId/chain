@@ -147,9 +147,9 @@ subsections below expand on the linked runbook URLs referenced by the alert anno
 
 #### Firewood WAL queue depth
 
-1. **Confirm backlog.** Graph `max(firewood_nodes_unwritten)` over the last 15 minutes to verify the
+1. **Confirm backlog.** Graph `max(firewood_nodestore_unwritten_nodes)` over the last 15 minutes to verify the
    warning (>1 000) or critical (>5 000) threshold that fired.【F:docs/storage/monitoring.md†L9-L11】 The
-   gauge reflects staged nodes waiting for persistence, so large values indicate WAL pressure.【F:storage/src/nodestore/mod.rs†L622-L648】【F:storage/src/nodestore/persist.rs†L448-L536】
+   gauge reflects staged nodes waiting for persistence, so large values indicate WAL pressure.【F:storage/src/nodestore/mod.rs†L468-L498】【F:storage/src/nodestore/persist.rs†L348-L470】
 2. **Correlate with IO budgets.** Compare `firewood.storage.io_budget{stage="commit"|"compaction"}` with the
    provisioned budgets to determine whether workloads outgrew the documented envelope.【F:storage-firewood/src/state.rs†L201-L210】【F:docs/storage/firewood.md†L60-L88】 Adjust `storage.commit_io_budget_bytes` only after identifying upstream causes for larger batches.
 3. **Mitigate sustained back-pressure.** Throttle intake (pause new submissions or snapshots) and review

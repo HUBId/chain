@@ -3,7 +3,7 @@ groups:
     interval: 1m
     rules:
       - alert: FirewoodWalQueueDepthWarning
-        expr: max(firewood_nodes_unwritten) > 1000
+        expr: max(firewood_nodestore_unwritten_nodes) > 1000
         for: 10m
         labels:
           severity: warning
@@ -15,7 +15,7 @@ groups:
             Check disk latency, IO budgets, and upstream submission rate.
           runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#firewood-wal-queue-depth
       - alert: FirewoodWalQueueDepthCritical
-        expr: max(firewood_nodes_unwritten) > 5000
+        expr: max(firewood_nodestore_unwritten_nodes) > 5000
         for: 5m
         labels:
           severity: critical

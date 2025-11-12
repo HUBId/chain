@@ -19,7 +19,7 @@ use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeStore, Parentable, ReadableStorage, StorageMetricsHandle, TrieReader,
 };
-use metrics::{counter, describe_counter, describe_histogram, histogram};
+use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -87,6 +87,7 @@ pub struct DbMetrics {
     propose_metrics: RequestMetrics,
     commit_metrics: RequestMetrics,
     revision_metrics: RequestMetrics,
+    unwritten_nodes: metrics::Gauge,
 }
 
 impl std::fmt::Debug for DbMetrics {
@@ -263,11 +264,20 @@ impl Db {
             "Firewood database request latencies grouped by operation and result"
         );
 
+        describe_gauge!(
+            "firewood.nodestore.unwritten_nodes",
+            "Current number of unwritten nodes queued for persistence"
+        );
+
+        let unwritten_nodes = gauge!("firewood.nodestore.unwritten_nodes");
+        unwritten_nodes.set(0.0);
+
         let db_metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
             propose_metrics: RequestMetrics::new("propose"),
             commit_metrics: RequestMetrics::new("commit"),
             revision_metrics: RequestMetrics::new("revision"),
+            unwritten_nodes,
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
         let config_manager = ConfigManager::builder()
