@@ -14,14 +14,13 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-// TODO: remove bitflags, we only use one bit
-use bitflags::bitflags;
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, LowerHex};
 use std::iter::{once, FusedIterator};
 use std::ops::Add;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const ODD_LEN_FLAG: u8 = 0b0001;
 
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
@@ -71,13 +70,6 @@ impl<T: AsRef<[u8]>> From<T> for Path {
     }
 }
 
-bitflags! {
-    // should only ever be the size of a nibble
-    struct Flags: u8 {
-        const ODD_LEN  = 0b0001;
-    }
-}
-
 impl Path {
     /// Creates a [`Path`] from an iterator over nibbles.
     pub fn from_iter<I>(iter: I) -> Self
@@ -89,20 +81,13 @@ impl Path {
 
     /// Return an iterator over the encoded bytes
     pub fn iter_encoded(&self) -> impl Iterator<Item = u8> + '_ {
-        let mut flags = Flags::empty();
-
         let has_odd_len = self.0.len() & 1 == 1;
+        let flags = if has_odd_len { ODD_LEN_FLAG } else { 0 };
 
-        let extra_byte = if has_odd_len {
-            flags.insert(Flags::ODD_LEN);
+        let extra_byte = if has_odd_len { None } else { Some(0) };
 
-            None
-        } else {
-            Some(0)
-        };
-
-        once(flags.bits())
-            .chain(extra_byte)
+        once(flags)
+            .chain(extra_byte.into_iter())
             .chain(self.0.iter().copied())
     }
 
@@ -120,13 +105,13 @@ impl Path {
 
     /// Read from an iterator that returns nibbles with a prefix
     /// The prefix is one optional byte -- if not present, the Path is empty
-    /// If there is one byte, and the byte contains a [`Flags::ODD_LEN`] (0x1)
+    /// If there is one byte, and the byte contains the odd-length flag (0x1)
     /// then there is another discarded byte after that.
     #[cfg(test)]
     pub fn from_encoded_iter<Iter: Iterator<Item = u8>>(mut iter: Iter) -> Self {
-        let flags = Flags::from_bits_retain(iter.next().unwrap_or_default());
+        let flags = iter.next().unwrap_or_default();
 
-        if !flags.contains(Flags::ODD_LEN) {
+        if flags & ODD_LEN_FLAG == 0 {
             let _ = iter.next();
         }
 
@@ -406,6 +391,15 @@ mod test {
         assert_eq!(iter.next(), Some(1));
         assert!(iter.is_empty());
         assert_eq!(iter.size_hint(), (0, Some(0)));
+    }
+
+    #[test]
+    fn iter_encoded_sets_odd_length_flag() {
+        let path = Path::from([0xa, 0xb, 0xc]);
+        let encoded = path.iter_encoded().collect::<SmallVec<[u8; 8]>>();
+
+        assert_eq!(encoded[0], super::ODD_LEN_FLAG);
+        assert_eq!(encoded.as_slice()[1..], [0xa, 0xb, 0xc]);
     }
 
     #[test_case([0, 0, 2, 3], [2, 3])]
