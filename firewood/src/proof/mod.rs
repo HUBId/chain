@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Firewood proof system encompassing Merkle proof verification, serialization codecs, and range proofs.
+
 #![expect(
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
@@ -9,6 +11,12 @@
     clippy::needless_continue,
     reason = "Found 1 occurrences after enabling the lint."
 )]
+
+pub mod codec;
+pub mod range;
+
+pub use codec::{InvalidHeader, ReadError};
+pub use range::{RangeProof, RangeProofIter};
 
 use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
@@ -79,7 +87,7 @@ pub enum ProofError {
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::ReadError),
+    Deserialization(codec::ReadError),
 
     /// Empty range
     #[error("empty range")]

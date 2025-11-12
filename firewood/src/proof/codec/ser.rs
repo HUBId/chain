@@ -4,11 +4,8 @@
 use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
-use crate::{
-    proof::ProofNode,
-    proofs::{bitmap::ChildrenMap, header::Header, proof_type::ProofType},
-    v2::api::FrozenRangeProof,
-};
+use super::{bitmap::ChildrenMap, header::Header, proof_type::ProofType};
+use crate::{proof::ProofNode, v2::api::FrozenRangeProof};
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.

@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-pub use crate::range_proof::RangeProof;
+pub use crate::proof::RangeProof;
 pub use crate::v2::batch_op::{BatchOp, KeyValuePair, KeyValuePairIter, MapIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,

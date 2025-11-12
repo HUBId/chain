@@ -132,18 +132,11 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
-/// Proof module
+/// Proof module providing Merkle proof verification, serialization utilities, and range proofs
 pub mod proof;
-
-/// Change, Range, and Key proofs for the Merkle Trie
-// TODO: push `proof` and `range_proof` modules into this module
-pub mod proofs;
 
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
-
-/// Range proof module
-pub mod range_proof;
 
 /// Version 2 API
 pub mod v2;

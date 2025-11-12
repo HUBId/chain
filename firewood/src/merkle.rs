@@ -7,8 +7,7 @@
 pub(crate) mod tests;
 
 use crate::iter::{MerkleKeyValueIter, MerkleNodeIter, PathIterator, TryExtend};
-use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
-use crate::range_proof::RangeProof;
+use crate::proof::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, HashedNodeReader, ImmutableProposal, IntoHashType,
