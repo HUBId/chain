@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::node::branch::Serializable;
-use crate::node::ExtendableBytes;
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -111,7 +110,7 @@ impl TrieHash {
 }
 
 impl Serializable for TrieHash {
-    fn write_to<W: ExtendableBytes>(&self, vec: &mut W) {
+    fn write_to_vec(&self, vec: &mut Vec<u8>) {
         vec.extend_from_slice(&self.0);
     }
 

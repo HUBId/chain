@@ -29,7 +29,7 @@ use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
 use std::fmt::Debug;
-use std::io::{Error, Read, Write};
+use std::io::{Error, Read};
 use std::mem::size_of;
 
 pub mod branch;
@@ -121,45 +121,23 @@ impl Default for LeafFirstByte {
     }
 }
 
-// TODO: Unstable extend_reserve re-implemented here
-// Extend<A>::extend_reserve is unstable so we implement it here
-// see https://github.com/rust-lang/rust/issues/72631
-pub trait ExtendableBytes: Write {
-    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T);
-    fn reserve(&mut self, reserve: usize) {
-        let _ = reserve;
-    }
-    fn push(&mut self, value: u8);
+/// Maximum number of bytes required to encode a [`VarInt`].
+const MAX_VARINT_LENGTH: usize = 10;
 
-    fn extend_from_slice(&mut self, other: &[u8]) {
-        self.extend(other.iter().copied());
-    }
+/// Append the varint-encoded representation of `value` to `buffer` without allocating
+/// temporary storage on the heap.
+///
+/// We reserve the maximum encoded length up-front so that callers can provide capacity
+/// hints and avoid reallocations even though we use a stack buffer for encoding.
+#[inline]
+pub(crate) fn extend_vec_with_varint<VI: VarInt>(buffer: &mut Vec<u8>, value: VI) {
+    buffer.reserve(MAX_VARINT_LENGTH);
 
-    /// Write a variable-length integer to the buffer without allocating an
-    /// intermediate buffer on the heap.
-    ///
-    /// This uses a stack buffer for holding the encoded integer and copies it
-    /// into the buffer.
     #[expect(clippy::indexing_slicing)]
-    fn extend_var_int<VI: VarInt>(&mut self, int: VI) {
-        let mut buf = [0u8; 10];
-        let len = VarInt::encode_var(int, &mut buf);
-        self.extend_from_slice(&buf[..len]);
-    }
-}
-
-impl ExtendableBytes for Vec<u8> {
-    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
-        std::iter::Extend::extend(self, other);
-    }
-    fn reserve(&mut self, reserve: usize) {
-        self.reserve(reserve);
-    }
-    fn push(&mut self, value: u8) {
-        Vec::push(self, value);
-    }
-    fn extend_from_slice(&mut self, other: &[u8]) {
-        Vec::extend_from_slice(self, other);
+    {
+        let mut scratch = [0u8; MAX_VARINT_LENGTH];
+        let written = VarInt::encode_var(value, &mut scratch);
+        buffer.extend_from_slice(&scratch[..written]);
     }
 }
 
@@ -337,7 +315,7 @@ impl Node {
     /// we always have one of those, we include it as a parameter for serialization.
     ///
     /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
-    pub fn as_bytes<T: ExtendableBytes>(&self, prefix: AreaIndex, encoded: &mut T) {
+    pub fn as_bytes(&self, prefix: AreaIndex, encoded: &mut Vec<u8>) {
         match self {
             Node::Branch(b) => {
                 let child_iter = b
@@ -374,13 +352,13 @@ impl Node {
 
                 // encode the partial path, including the length if it didn't fit above
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
-                    encoded.extend_var_int(b.partial_path.len());
+                    extend_vec_with_varint(encoded, b.partial_path.len());
                 }
                 encoded.extend_from_slice(&b.partial_path);
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
-                    encoded.extend_var_int(v.len());
+                    extend_vec_with_varint(encoded, v.len());
                     encoded.extend_from_slice(v);
                 }
 
@@ -391,16 +369,16 @@ impl Node {
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        hash.write_to_vec(encoded);
                     }
                 } else {
                     for (position, child) in child_iter {
-                        encoded.extend_var_int(position);
+                        extend_vec_with_varint(encoded, position);
                         let (address, hash) = child
                             .persist_info()
                             .expect("child must be hashed when serializing");
                         encoded.extend_from_slice(&address.get().to_ne_bytes());
-                        hash.write_to(encoded);
+                        hash.write_to_vec(encoded);
                     }
                 }
             }
@@ -419,12 +397,12 @@ impl Node {
 
                 // encode the partial path, including the length if it didn't fit above
                 if pp_len == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
-                    encoded.extend_var_int(l.partial_path.len());
+                    extend_vec_with_varint(encoded, l.partial_path.len());
                 }
                 encoded.extend_from_slice(&l.partial_path);
 
                 // encode the value
-                encoded.extend_var_int(l.value.len());
+                extend_vec_with_varint(encoded, l.value.len());
                 encoded.extend_from_slice(&l.value);
             }
         }
@@ -566,6 +544,7 @@ mod test {
     #![allow(clippy::unwrap_used)] // Tests unwrap to exercise encoding paths that intentionally violate invariants.
     #![allow(clippy::expect_used)] // Tests call expect while mutating synthetic nodes to expose encoding regressions.
 
+    use super::extend_vec_with_varint;
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::nodestore::AreaIndex;
     use crate::{Child, LinearAddress, NibblesIterator, Path};
@@ -639,5 +618,72 @@ than 126 bytes as the length would be encoded in multiple bytes.
         let deserialized = Node::from_reader(&mut cursor).unwrap();
 
         assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn extend_vec_with_varint_reuses_allocation() {
+        let mut buffer = Vec::with_capacity(32);
+        let ptr = buffer.as_ptr();
+
+        extend_vec_with_varint(&mut buffer, 1u64);
+
+        assert_eq!(
+            ptr,
+            buffer.as_ptr(),
+            "varint encoding should not reallocate when spare capacity is available"
+        );
+        assert_eq!(buffer.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn branch_serialization_reuses_capacity() {
+        let node = Node::Branch(Box::new(BranchNode {
+            partial_path: Path::from(vec![0, 1, 2, 3]),
+            value: Some(vec![4, 5, 6, 7].into()),
+            children: std::array::from_fn(|i| {
+                if i == 7 {
+                    Some(Child::AddressWithHash(
+                        LinearAddress::new(1).unwrap(),
+                        std::array::from_fn::<u8, 32, _>(|j| (j + 1) as u8).into(),
+                    ))
+                } else {
+                    None
+                }
+            }),
+        }));
+
+        let mut buffer = Vec::with_capacity(1024);
+        let ptr = buffer.as_ptr();
+
+        node.as_bytes(AreaIndex::MIN, &mut buffer);
+        assert_eq!(ptr, buffer.as_ptr());
+
+        let serialized_len = buffer.len();
+        buffer.clear();
+
+        node.as_bytes(AreaIndex::MIN, &mut buffer);
+        assert_eq!(ptr, buffer.as_ptr());
+        assert_eq!(buffer.len(), serialized_len);
+    }
+
+    #[test]
+    fn leaf_serialization_reuses_capacity() {
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from(vec![0, 1, 2, 3, 4, 5]),
+            value: vec![10; 256].into(),
+        });
+
+        let mut buffer = Vec::with_capacity(512);
+        let ptr = buffer.as_ptr();
+
+        node.as_bytes(AreaIndex::MIN, &mut buffer);
+        assert_eq!(ptr, buffer.as_ptr());
+
+        let serialized_len = buffer.len();
+        buffer.clear();
+
+        node.as_bytes(AreaIndex::MIN, &mut buffer);
+        assert_eq!(ptr, buffer.as_ptr());
+        assert_eq!(buffer.len(), serialized_len);
     }
 }
