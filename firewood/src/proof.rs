@@ -12,7 +12,7 @@
 
 use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
-    PathIterItem, Preimage, TrieHash, ValueDigest,
+    PathIterItem, Preimage, SharedNode, TrieHash, ValueDigest,
 };
 #[cfg(feature = "ethhash")]
 use firewood_storage::{EthNodeHasher, TrieError};
@@ -167,6 +167,20 @@ impl From<PathIterItem> for ProofNode {
                 .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
             child_hashes,
         }
+    }
+}
+
+impl ProofNode {
+    /// Construct a [`ProofNode`] representation of the root [`SharedNode`].
+    #[must_use]
+    pub fn from_root(node: &SharedNode) -> Self {
+        let key_nibbles = node.partial_path().iter().copied().collect();
+
+        Self::from(PathIterItem {
+            key_nibbles,
+            node: node.clone(),
+            next_nibble: None,
+        })
     }
 }
 

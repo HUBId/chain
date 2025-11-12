@@ -163,24 +163,7 @@ impl<T: TrieReader> Merkle<T> {
         if proof.is_empty() {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
-            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
-            let child_hashes = if let Some(branch) = root.as_branch() {
-                branch.children_hashes()
-            } else {
-                BranchNode::empty_children()
-            };
-
-            proof.push(ProofNode {
-                // key is expected to be in nibbles
-                key: root.partial_path().iter().copied().collect(),
-                // partial len is the number of nibbles in the path leading to this node,
-                // which is always zero for the root node.
-                partial_len: 0,
-                value_digest: root
-                    .value()
-                    .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
-                child_hashes,
-            });
+            proof.push(ProofNode::from_root(&root));
         }
 
         Ok(Proof::new(proof.into_boxed_slice()))
