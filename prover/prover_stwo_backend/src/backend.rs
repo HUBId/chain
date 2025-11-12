@@ -959,6 +959,211 @@ mod tests {
     const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
     const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
 
+    #[derive(Clone)]
+    enum CircuitFixture {
+        Transaction(TransactionWitness),
+        Identity(IdentityWitness),
+        State(StateWitness),
+        Pruning(PruningWitness),
+        Recursive(RecursiveWitness),
+        Uptime(UptimeWitness),
+        Consensus(ConsensusWitness),
+    }
+
+    impl CircuitFixture {
+        fn matrix() -> Vec<Self> {
+            vec![
+                Self::Transaction(sample_transaction_witness()),
+                Self::Identity(sample_identity_witness()),
+                Self::State(sample_state_witness()),
+                Self::Pruning(sample_pruning_witness()),
+                Self::Recursive(sample_recursive_witness()),
+                Self::Uptime(sample_uptime_witness()),
+                Self::Consensus(sample_consensus_witness()),
+            ]
+        }
+
+        fn name(&self) -> &'static str {
+            match self {
+                CircuitFixture::Transaction(_) => "transaction",
+                CircuitFixture::Identity(_) => "identity",
+                CircuitFixture::State(_) => "state",
+                CircuitFixture::Pruning(_) => "pruning",
+                CircuitFixture::Recursive(_) => "recursive",
+                CircuitFixture::Uptime(_) => "uptime",
+                CircuitFixture::Consensus(_) => "consensus",
+            }
+        }
+
+        fn circuit(&self) -> SupportedCircuit {
+            match self {
+                CircuitFixture::Transaction(_) => SupportedCircuit::Transaction,
+                CircuitFixture::Identity(_) => SupportedCircuit::Identity,
+                CircuitFixture::State(_) => SupportedCircuit::State,
+                CircuitFixture::Pruning(_) => SupportedCircuit::Pruning,
+                CircuitFixture::Recursive(_) => SupportedCircuit::Recursive,
+                CircuitFixture::Uptime(_) => SupportedCircuit::Uptime,
+                CircuitFixture::Consensus(_) => SupportedCircuit::Consensus,
+            }
+        }
+
+        fn witness_bytes(&self) -> WitnessBytes {
+            match self {
+                CircuitFixture::Transaction(witness) => encode_tx_witness(witness),
+                CircuitFixture::Identity(witness) => encode_identity_witness(witness),
+                CircuitFixture::State(witness) => encode_state_witness(witness),
+                CircuitFixture::Pruning(witness) => encode_pruning_witness(witness),
+                CircuitFixture::Recursive(witness) => encode_recursive_witness(witness),
+                CircuitFixture::Uptime(witness) => encode_uptime_witness(witness),
+                CircuitFixture::Consensus(witness) => encode_consensus_witness(witness),
+            }
+        }
+
+        fn expected_public_inputs(
+            &self,
+            proof: &ProofPayload,
+            raw_inputs: &[String],
+        ) -> CircuitPublicInputs {
+            match (self, proof) {
+                (CircuitFixture::Transaction(_), ProofPayload::Transaction(_)) => {
+                    let inputs = tx_public_inputs_from_fields(raw_inputs);
+                    CircuitPublicInputs::Transaction(inputs)
+                }
+                (CircuitFixture::Identity(witness), ProofPayload::Identity(_)) => {
+                    CircuitPublicInputs::Identity(identity_public_inputs(witness))
+                }
+                (CircuitFixture::State(witness), ProofPayload::State(_)) => {
+                    CircuitPublicInputs::State(state_public_inputs(witness))
+                }
+                (CircuitFixture::Pruning(witness), ProofPayload::Pruning(_)) => {
+                    CircuitPublicInputs::Pruning(pruning_public_inputs(witness))
+                }
+                (CircuitFixture::Recursive(witness), ProofPayload::Recursive(_)) => {
+                    CircuitPublicInputs::Recursive(recursive_public_inputs(witness))
+                }
+                (CircuitFixture::Uptime(witness), ProofPayload::Uptime(_)) => {
+                    CircuitPublicInputs::Uptime(uptime_public_inputs(witness))
+                }
+                (CircuitFixture::Consensus(witness), ProofPayload::Consensus(_)) => {
+                    CircuitPublicInputs::Consensus(consensus_public_inputs(witness))
+                }
+                (fixture, payload) => panic!(
+                    "fixture '{}' expected matching proof payload, found {payload:?}",
+                    fixture.name(),
+                ),
+            }
+        }
+
+        fn tamper_public_inputs(&self, inputs: &mut CircuitPublicInputs) {
+            match (self, inputs) {
+                (CircuitFixture::Transaction(_), CircuitPublicInputs::Transaction(inputs)) => {
+                    flip_first_byte(&mut inputs.transaction_commitment)
+                }
+                (CircuitFixture::Identity(_), CircuitPublicInputs::Identity(inputs)) => {
+                    flip_first_byte(&mut inputs.wallet_address)
+                }
+                (CircuitFixture::State(_), CircuitPublicInputs::State(inputs)) => {
+                    flip_first_byte(&mut inputs.new_state_root)
+                }
+                (CircuitFixture::Pruning(_), CircuitPublicInputs::Pruning(inputs)) => {
+                    inputs.removed_transactions += 1;
+                }
+                (CircuitFixture::Recursive(_), CircuitPublicInputs::Recursive(inputs)) => {
+                    inputs.transaction_commitments =
+                        inputs.transaction_commitments.saturating_add(1);
+                }
+                (CircuitFixture::Uptime(_), CircuitPublicInputs::Uptime(inputs)) => {
+                    flip_first_byte(&mut inputs.commitment)
+                }
+                (CircuitFixture::Consensus(_), CircuitPublicInputs::Consensus(inputs)) => {
+                    if let Some(entry) = inputs.vrf_entries.first_mut() {
+                        if let Some(byte) = entry.randomness.first_mut() {
+                            *byte ^= 0xff;
+                        }
+                    }
+                }
+                _ => panic!(
+                    "public input variant does not match fixture {}",
+                    self.name()
+                ),
+            }
+        }
+
+        fn malformed_witness(&self) -> WitnessBytes {
+            match self {
+                CircuitFixture::Transaction(witness) => {
+                    let mut malformed = witness.clone();
+                    malformed.sender_account.nonce = malformed.signed_tx.payload.nonce;
+                    encode_tx_witness(&malformed)
+                }
+                CircuitFixture::Identity(witness) => {
+                    let mut malformed = witness.clone();
+                    flip_hex_string(&mut malformed.commitment);
+                    encode_identity_witness(&malformed)
+                }
+                CircuitFixture::State(witness) => {
+                    let mut malformed = witness.clone();
+                    malformed.new_state_root = malformed.prev_state_root.clone();
+                    encode_state_witness(&malformed)
+                }
+                CircuitFixture::Pruning(witness) => {
+                    let mut malformed = witness.clone();
+                    flip_hex_string(&mut malformed.pruning_fold);
+                    encode_pruning_witness(&malformed)
+                }
+                CircuitFixture::Recursive(witness) => {
+                    let mut malformed = witness.clone();
+                    flip_hex_string(&mut malformed.aggregated_commitment);
+                    encode_recursive_witness(&malformed)
+                }
+                CircuitFixture::Uptime(witness) => {
+                    let mut malformed = witness.clone();
+                    flip_hex_string(&mut malformed.commitment);
+                    encode_uptime_witness(&malformed)
+                }
+                CircuitFixture::Consensus(witness) => {
+                    let mut malformed = witness.clone();
+                    if let Some(entry) = malformed.vrf_entries.first_mut() {
+                        entry.proof = "zz".into();
+                    }
+                    encode_consensus_witness(&malformed)
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    enum CircuitPublicInputs {
+        Transaction(TxPublicInputs),
+        Identity(IdentityPublicInputs),
+        State(StatePublicInputs),
+        Pruning(PruningPublicInputs),
+        Recursive(RecursivePublicInputs),
+        Uptime(UptimePublicInputs),
+        Consensus(ConsensusPublicInputs),
+    }
+
+    fn flip_first_byte(bytes: &mut [u8; 32]) {
+        if let Some(first) = bytes.first_mut() {
+            *first ^= 0x01;
+        }
+    }
+
+    fn flip_hex_string(value: &mut String) {
+        if value.is_empty() {
+            value.push_str("01");
+            return;
+        }
+
+        let mut bytes = hex::decode(value).expect("hex string decodes");
+        if let Some(first) = bytes.first_mut() {
+            *first ^= 0x01;
+        } else {
+            bytes.push(1);
+        }
+        *value = hex::encode(bytes);
+    }
+
     fn address_from_public_key(public_key: &DalekVerifyingKey) -> String {
         let hash: [u8; 32] =
             crate::proof_backend::Blake2sHasher::hash(public_key.as_bytes()).into();
@@ -999,221 +1204,510 @@ mod tests {
     }
 
     #[test]
-    fn transaction_proof_round_trip_from_witness_fixture() {
+    fn circuit_matrix_round_trips() {
         let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Transaction);
-        let witness = sample_transaction_witness();
-        let witness_bytes = encode_tx_witness(&witness);
 
-        let proof_bytes = backend
-            .prove_tx(&proving_key, &witness_bytes)
-            .expect("proving should succeed for valid witness");
-        let proof = decode_tx_proof(&proof_bytes).expect("proof decodes");
+        for fixture in CircuitFixture::matrix() {
+            match fixture.clone() {
+                CircuitFixture::Transaction(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Transaction);
+                    let witness_bytes = encode_tx_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_tx(&proving_key, &witness_bytes)
+                        .expect("transaction proving succeeds");
+                    let proof = decode_tx_proof(&proof_bytes).expect("transaction proof decodes");
 
-        match &proof.payload {
-            ProofPayload::Transaction(decoded) => {
-                assert_eq!(decoded, &witness, "witness payload should round-trip");
+                    match &proof.payload {
+                        ProofPayload::Transaction(decoded) => assert_eq!(decoded, &witness),
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    assert!(
+                        proof.commitment_proof.to_official().is_some(),
+                        "transaction commitment proof should be present"
+                    );
+                    assert!(
+                        proof.fri_proof.to_official().is_some(),
+                        "transaction FRI proof should be present"
+                    );
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Transaction(inputs) => {
+                            let verified = backend
+                                .verify_tx(
+                                    &verifying_key(SupportedCircuit::Transaction),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("transaction verification succeeds");
+                            assert!(verified, "transaction verification should return true");
+                        }
+                        other => panic!(
+                            "transaction fixture produced unexpected public inputs: {other:?}"
+                        ),
+                    }
+                }
+                CircuitFixture::Identity(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Identity);
+                    let witness_bytes = encode_identity_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_identity(&proving_key, &witness_bytes)
+                        .expect("identity proving succeeds");
+                    let proof =
+                        decode_identity_proof(&proof_bytes).expect("identity proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::Identity(decoded) => assert_eq!(decoded, &witness),
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Identity(inputs) => {
+                            backend
+                                .verify_identity(
+                                    &verifying_key(SupportedCircuit::Identity),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("identity verification succeeds");
+                        }
+                        other => {
+                            panic!("identity fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::State(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::State);
+                    let witness_bytes = encode_state_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_state(&proving_key, &witness_bytes)
+                        .expect("state proving succeeds");
+                    let proof = decode_state_proof(&proof_bytes).expect("state proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::State(decoded) => {
+                            assert_eq!(decoded.prev_state_root, witness.prev_state_root)
+                        }
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::State(inputs) => {
+                            backend
+                                .verify_state(
+                                    &verifying_key(SupportedCircuit::State),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("state verification succeeds");
+                        }
+                        other => {
+                            panic!("state fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Pruning(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Pruning);
+                    let witness_bytes = encode_pruning_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_pruning(&proving_key, &witness_bytes)
+                        .expect("pruning proving succeeds");
+                    let proof = decode_pruning_proof(&proof_bytes).expect("pruning proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::Pruning(decoded) => {
+                            assert_eq!(decoded.removed_transactions, witness.removed_transactions)
+                        }
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Pruning(inputs) => {
+                            backend
+                                .verify_pruning(
+                                    &verifying_key(SupportedCircuit::Pruning),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("pruning verification succeeds");
+                        }
+                        other => {
+                            panic!("pruning fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Recursive(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Recursive);
+                    let witness_bytes = encode_recursive_witness(&witness);
+                    let decoded_witness = decode_recursive_witness(&witness_bytes)
+                        .expect("recursive witness decodes");
+                    assert_eq!(
+                        decoded_witness.pruning_binding_digest,
+                        witness.pruning_binding_digest
+                    );
+                    assert_eq!(
+                        decoded_witness.pruning_segment_commitments,
+                        witness.pruning_segment_commitments
+                    );
+
+                    let proof_bytes = backend
+                        .prove_recursive(&proving_key, &witness_bytes)
+                        .expect("recursive proving succeeds");
+                    let proof =
+                        decode_recursive_proof(&proof_bytes).expect("recursive proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::Recursive(decoded) => {
+                            assert_eq!(decoded.aggregated_commitment, witness.aggregated_commitment)
+                        }
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Recursive(inputs) => {
+                            backend
+                                .verify_recursive(
+                                    &verifying_key(SupportedCircuit::Recursive),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("recursive verification succeeds");
+                        }
+                        other => {
+                            panic!("recursive fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Uptime(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Uptime);
+                    let witness_bytes = encode_uptime_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_uptime(&proving_key, &witness_bytes)
+                        .expect("uptime proving succeeds");
+                    let proof = decode_uptime_proof(&proof_bytes).expect("uptime proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::Uptime(decoded) => assert_eq!(decoded, &witness),
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Uptime(inputs) => {
+                            backend
+                                .verify_uptime(
+                                    &verifying_key(SupportedCircuit::Uptime),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect("uptime verification succeeds");
+                        }
+                        other => {
+                            panic!("uptime fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Consensus(witness) => {
+                    let witness_bytes = encode_consensus_witness(&witness);
+                    let (proof_bytes, verifying_key, circuit) = backend
+                        .prove_consensus(&witness_bytes)
+                        .expect("consensus proving succeeds");
+                    let proof =
+                        decode_consensus_proof(&proof_bytes).expect("consensus proof decodes");
+
+                    match &proof.payload {
+                        ProofPayload::Consensus(decoded) => assert_eq!(decoded, &witness),
+                        other => panic!("unexpected payload variant: {other:?}"),
+                    }
+
+                    let inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Consensus(inputs) => {
+                            backend
+                                .verify_consensus(&verifying_key, &proof_bytes, &circuit, inputs)
+                                .expect("consensus verification succeeds");
+                        }
+                        other => {
+                            panic!("consensus fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
             }
-            other => panic!("unexpected payload variant: {other:?}"),
         }
-
-        assert!(
-            proof.commitment_proof.to_official().is_some(),
-            "commitment proof should be preserved"
-        );
-        assert!(
-            proof.fri_proof.to_official().is_some(),
-            "fri transcript should be preserved"
-        );
     }
 
     #[test]
-    fn identity_proof_round_trip() {
+    fn circuit_matrix_rejects_public_input_tampering() {
         let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Identity);
-        let witness = sample_identity_witness();
-        let witness_bytes = encode_identity_witness(&witness);
 
-        let proof_bytes = backend
-            .prove_identity(&proving_key, &witness_bytes)
-            .expect("identity proving succeeds");
-        let proof = decode_identity_proof(&proof_bytes).expect("proof decodes");
+        for fixture in CircuitFixture::matrix() {
+            match fixture.clone() {
+                CircuitFixture::Transaction(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Transaction);
+                    let witness_bytes = encode_tx_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_tx(&proving_key, &witness_bytes)
+                        .expect("transaction proving succeeds");
+                    let proof = decode_tx_proof(&proof_bytes).expect("transaction proof decodes");
 
-        match &proof.payload {
-            ProofPayload::Identity(decoded) => assert_eq!(decoded, &witness),
-            other => panic!("unexpected payload variant: {other:?}"),
-        }
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Transaction(inputs) => {
+                            let err = backend
+                                .verify_tx(
+                                    &verifying_key(SupportedCircuit::Transaction),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered transaction inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => panic!(
+                            "transaction fixture produced unexpected public inputs: {other:?}"
+                        ),
+                    }
+                }
+                CircuitFixture::Identity(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Identity);
+                    let witness_bytes = encode_identity_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_identity(&proving_key, &witness_bytes)
+                        .expect("identity proving succeeds");
+                    let proof =
+                        decode_identity_proof(&proof_bytes).expect("identity proof decodes");
 
-        backend
-            .verify_identity(
-                &verifying_key(SupportedCircuit::Identity),
-                &proof_bytes,
-                &identity_public_inputs(&witness),
-            )
-            .expect("identity verification succeeds");
-    }
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Identity(inputs) => {
+                            let err = backend
+                                .verify_identity(
+                                    &verifying_key(SupportedCircuit::Identity),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered identity inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("identity fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::State(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::State);
+                    let witness_bytes = encode_state_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_state(&proving_key, &witness_bytes)
+                        .expect("state proving succeeds");
+                    let proof = decode_state_proof(&proof_bytes).expect("state proof decodes");
 
-    #[test]
-    fn state_proof_round_trip() {
-        let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::State);
-        let witness = sample_state_witness();
-        let witness_bytes = encode_state_witness(&witness);
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::State(inputs) => {
+                            let err = backend
+                                .verify_state(
+                                    &verifying_key(SupportedCircuit::State),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered state inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("state fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Pruning(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Pruning);
+                    let witness_bytes = encode_pruning_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_pruning(&proving_key, &witness_bytes)
+                        .expect("pruning proving succeeds");
+                    let proof = decode_pruning_proof(&proof_bytes).expect("pruning proof decodes");
 
-        let proof_bytes = backend
-            .prove_state(&proving_key, &witness_bytes)
-            .expect("state proving succeeds");
-        let proof = decode_state_proof(&proof_bytes).expect("proof decodes");
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Pruning(inputs) => {
+                            let err = backend
+                                .verify_pruning(
+                                    &verifying_key(SupportedCircuit::Pruning),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered pruning inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("pruning fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Recursive(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Recursive);
+                    let witness_bytes = encode_recursive_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_recursive(&proving_key, &witness_bytes)
+                        .expect("recursive proving succeeds");
+                    let proof =
+                        decode_recursive_proof(&proof_bytes).expect("recursive proof decodes");
 
-        match &proof.payload {
-            ProofPayload::State(decoded) => {
-                assert_eq!(decoded.prev_state_root, witness.prev_state_root)
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Recursive(inputs) => {
+                            let err = backend
+                                .verify_recursive(
+                                    &verifying_key(SupportedCircuit::Recursive),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered recursive inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("recursive fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Uptime(witness) => {
+                    let proving_key = proving_key(SupportedCircuit::Uptime);
+                    let witness_bytes = encode_uptime_witness(&witness);
+                    let proof_bytes = backend
+                        .prove_uptime(&proving_key, &witness_bytes)
+                        .expect("uptime proving succeeds");
+                    let proof = decode_uptime_proof(&proof_bytes).expect("uptime proof decodes");
+
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Uptime(inputs) => {
+                            let err = backend
+                                .verify_uptime(
+                                    &verifying_key(SupportedCircuit::Uptime),
+                                    &proof_bytes,
+                                    inputs,
+                                )
+                                .expect_err("tampered uptime inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("uptime fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
+                CircuitFixture::Consensus(witness) => {
+                    let witness_bytes = encode_consensus_witness(&witness);
+                    let (proof_bytes, verifying_key, circuit) = backend
+                        .prove_consensus(&witness_bytes)
+                        .expect("consensus proving succeeds");
+                    let proof =
+                        decode_consensus_proof(&proof_bytes).expect("consensus proof decodes");
+
+                    let mut inputs =
+                        fixture.expected_public_inputs(&proof.payload, &proof.public_inputs);
+                    fixture.tamper_public_inputs(&mut inputs);
+                    match &inputs {
+                        CircuitPublicInputs::Consensus(inputs) => {
+                            let err = backend
+                                .verify_consensus(&verifying_key, &proof_bytes, &circuit, inputs)
+                                .expect_err("tampered consensus inputs should fail");
+                            assert!(matches!(err, BackendError::Failure(_)));
+                        }
+                        other => {
+                            panic!("consensus fixture produced unexpected public inputs: {other:?}")
+                        }
+                    }
+                }
             }
-            other => panic!("unexpected payload variant: {other:?}"),
         }
-
-        backend
-            .verify_state(
-                &verifying_key(SupportedCircuit::State),
-                &proof_bytes,
-                &state_public_inputs(&witness),
-            )
-            .expect("state verification succeeds");
     }
 
     #[test]
-    fn pruning_proof_round_trip() {
+    fn circuit_matrix_rejects_malformed_witnesses() {
         let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Pruning);
-        let witness = sample_pruning_witness();
-        let witness_bytes = encode_pruning_witness(&witness);
 
-        let proof_bytes = backend
-            .prove_pruning(&proving_key, &witness_bytes)
-            .expect("pruning proving succeeds");
-        let proof = decode_pruning_proof(&proof_bytes).expect("proof decodes");
-
-        match &proof.payload {
-            ProofPayload::Pruning(decoded) => {
-                assert_eq!(decoded.removed_transactions, witness.removed_transactions)
+        for fixture in CircuitFixture::matrix() {
+            let malformed = fixture.malformed_witness();
+            match fixture.circuit() {
+                SupportedCircuit::Transaction => {
+                    let proving_key = proving_key(SupportedCircuit::Transaction);
+                    let err = backend
+                        .prove_tx(&proving_key, &malformed)
+                        .expect_err("malformed transaction witness should fail");
+                    match err {
+                        BackendError::Failure(message) => assert!(
+                            message.contains("nonce"),
+                            "unexpected transaction failure message: {message}"
+                        ),
+                        other => panic!("unexpected backend error variant: {other:?}"),
+                    }
+                }
+                SupportedCircuit::Identity => {
+                    let proving_key = proving_key(SupportedCircuit::Identity);
+                    let err = backend
+                        .prove_identity(&proving_key, &malformed)
+                        .expect_err("malformed identity witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
+                SupportedCircuit::State => {
+                    let proving_key = proving_key(SupportedCircuit::State);
+                    let err = backend
+                        .prove_state(&proving_key, &malformed)
+                        .expect_err("malformed state witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
+                SupportedCircuit::Pruning => {
+                    let proving_key = proving_key(SupportedCircuit::Pruning);
+                    let err = backend
+                        .prove_pruning(&proving_key, &malformed)
+                        .expect_err("malformed pruning witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
+                SupportedCircuit::Recursive => {
+                    let proving_key = proving_key(SupportedCircuit::Recursive);
+                    let err = backend
+                        .prove_recursive(&proving_key, &malformed)
+                        .expect_err("malformed recursive witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
+                SupportedCircuit::Uptime => {
+                    let proving_key = proving_key(SupportedCircuit::Uptime);
+                    let err = backend
+                        .prove_uptime(&proving_key, &malformed)
+                        .expect_err("malformed uptime witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
+                SupportedCircuit::Consensus => {
+                    let err = backend
+                        .prove_consensus(&malformed)
+                        .expect_err("malformed consensus witness should fail");
+                    assert!(matches!(err, BackendError::Failure(_)));
+                }
             }
-            other => panic!("unexpected payload variant: {other:?}"),
         }
-
-        backend
-            .verify_pruning(
-                &verifying_key(SupportedCircuit::Pruning),
-                &proof_bytes,
-                &pruning_public_inputs(&witness),
-            )
-            .expect("pruning verification succeeds");
-    }
-
-    #[test]
-    fn recursive_proof_round_trip() {
-        let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Recursive);
-        let witness = sample_recursive_witness();
-        let witness_bytes = encode_recursive_witness(&witness);
-        let decoded_witness =
-            decode_recursive_witness(&witness_bytes).expect("recursive witness decodes");
-        assert_eq!(
-            decoded_witness.pruning_binding_digest,
-            witness.pruning_binding_digest
-        );
-        assert_eq!(
-            decoded_witness.pruning_segment_commitments,
-            witness.pruning_segment_commitments
-        );
-
-        let proof_bytes = backend
-            .prove_recursive(&proving_key, &witness_bytes)
-            .expect("recursive proving succeeds");
-        let proof = decode_recursive_proof(&proof_bytes).expect("proof decodes");
-
-        match &proof.payload {
-            ProofPayload::Recursive(decoded) => {
-                assert_eq!(decoded.aggregated_commitment, witness.aggregated_commitment);
-                assert_eq!(
-                    decoded.pruning_binding_digest,
-                    witness.pruning_binding_digest
-                );
-                assert_eq!(
-                    decoded.pruning_segment_commitments,
-                    witness.pruning_segment_commitments
-                );
-            }
-            other => panic!("unexpected payload variant: {other:?}"),
-        }
-
-        backend
-            .verify_recursive(
-                &verifying_key(SupportedCircuit::Recursive),
-                &proof_bytes,
-                &recursive_public_inputs(&witness),
-            )
-            .expect("recursive verification succeeds");
-    }
-
-    #[test]
-    fn uptime_proof_round_trip() {
-        let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Uptime);
-        let witness = sample_uptime_witness();
-        let witness_bytes = encode_uptime_witness(&witness);
-
-        let proof_bytes = backend
-            .prove_uptime(&proving_key, &witness_bytes)
-            .expect("uptime proving succeeds");
-        let proof = decode_uptime_proof(&proof_bytes).expect("proof decodes");
-
-        match &proof.payload {
-            ProofPayload::Uptime(decoded) => assert_eq!(decoded.commitment, witness.commitment),
-            other => panic!("unexpected payload variant: {other:?}"),
-        }
-
-        backend
-            .verify_uptime(
-                &verifying_key(SupportedCircuit::Uptime),
-                &proof_bytes,
-                &uptime_public_inputs(&witness),
-            )
-            .expect("uptime verification succeeds");
-    }
-
-    #[test]
-    fn consensus_proof_round_trip() {
-        let backend = StwoBackend::new();
-        let witness = sample_consensus_witness();
-        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
-        let witness_bytes =
-            WitnessBytes::encode(&header, &witness).expect("consensus witness encodes");
-
-        let (proof_bytes, verifying_key, circuit) = backend
-            .prove_consensus(&witness_bytes)
-            .expect("consensus proving succeeds");
-        assert_eq!(circuit.identifier, "consensus");
-
-        let (_header, decoded_witness) =
-            decode_consensus_witness(&witness_bytes).expect("witness decodes");
-        assert_eq!(decoded_witness.block_hash, witness.block_hash);
-
-        let (_proof_header, proof) = decode_consensus_proof(&proof_bytes).expect("proof decodes");
-        match &proof.payload {
-            ProofPayload::Consensus(decoded) => {
-                assert_eq!(decoded.quorum_threshold, witness.quorum_threshold)
-            }
-            other => panic!("unexpected payload variant: {other:?}"),
-        }
-
-        backend
-            .verify_consensus(
-                &verifying_key,
-                &proof_bytes,
-                &circuit,
-                &consensus_public_inputs(&witness),
-            )
-            .expect("consensus verification succeeds");
     }
 
     #[test]
@@ -1333,29 +1827,6 @@ mod tests {
         assert!(matches!(err, BackendError::Failure(_)));
     }
 
-    #[test]
-    fn transaction_prover_failures_map_to_backend_errors() {
-        let backend = StwoBackend::new();
-        let proving_key = proving_key(SupportedCircuit::Transaction);
-        let mut witness = sample_transaction_witness();
-        witness.sender_account.nonce = witness.signed_tx.payload.nonce;
-        let witness_bytes = encode_tx_witness(&witness);
-
-        let err = backend
-            .prove_tx(&proving_key, &witness_bytes)
-            .expect_err("invalid witness should fail proving");
-        match err {
-            BackendError::Failure(message) => {
-                assert!(
-                    message.contains("nonce"),
-                    "unexpected failure message: {message}"
-                );
-            }
-            other => panic!("unexpected backend error variant: {other:?}"),
-        }
-    }
-
-    // TODO: consolidate transaction-specific coverage with the generalized circuit matrix above.
     fn proving_key(circuit: SupportedCircuit) -> ProvingKey {
         ProvingKey(key_payload_bytes(circuit))
     }
@@ -1397,6 +1868,49 @@ mod tests {
     fn encode_uptime_witness(witness: &UptimeWitness) -> WitnessBytes {
         let header = WitnessHeader::new(ProofSystemKind::Stwo, "uptime");
         WitnessBytes::encode(&header, witness).expect("witness encodes")
+    }
+
+    fn encode_consensus_witness(witness: &ConsensusWitness) -> WitnessBytes {
+        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
+        WitnessBytes::encode(&header, witness).expect("witness encodes")
+    }
+
+    fn tx_public_inputs_from_fields(fields: &[String]) -> TxPublicInputs {
+        assert!(
+            fields.len() >= 8,
+            "transaction public inputs must encode at least eight field elements",
+        );
+
+        let mut utxo_root = [0u8; 32];
+        let mut transaction_commitment = [0u8; 32];
+
+        for (index, field) in fields.iter().take(4).enumerate() {
+            let chunk = field_chunk_bytes(field);
+            utxo_root[index * 8..(index + 1) * 8].copy_from_slice(&chunk);
+        }
+
+        for (index, field) in fields.iter().skip(4).take(4).enumerate() {
+            let chunk = field_chunk_bytes(field);
+            transaction_commitment[index * 8..(index + 1) * 8].copy_from_slice(&chunk);
+        }
+
+        TxPublicInputs {
+            utxo_root,
+            transaction_commitment,
+        }
+    }
+
+    fn field_chunk_bytes(value: &str) -> [u8; 8] {
+        let mut chunk = [0u8; 8];
+        if value.is_empty() {
+            return chunk;
+        }
+
+        let decoded = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
+        let take = decoded.len().min(chunk.len());
+        let start = chunk.len() - take;
+        chunk[start..].copy_from_slice(&decoded[decoded.len() - take..]);
+        chunk
     }
 
     fn sample_transaction_witness() -> TransactionWitness {
