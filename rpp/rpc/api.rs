@@ -88,6 +88,7 @@ use crate::runtime::node_runtime::node::{
     NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotSessionId,
     SnapshotStreamStatus,
 };
+use crate::runtime::sync::StateSyncServer;
 use crate::runtime::{
     ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
 };
@@ -136,8 +137,8 @@ pub use routes::p2p::{
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 pub use routes::state_sync::{
     chunk_by_id as state_sync_chunk_by_id, head_stream as state_sync_head_stream,
-    session_status as state_sync_session_status, SnapshotChunkJson, StateSyncChunkResponse,
-    StateSyncStatusResponse,
+    session_status as state_sync_session_status, session_stream as state_sync_session_stream,
+    SnapshotChunkJson, StateSyncChunkResponse, StateSyncStatusResponse,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -359,6 +360,7 @@ pub struct ApiContext {
     request_limit_per_minute: Option<NonZeroU64>,
     auth_token_enabled: bool,
     state_sync_api: Option<Arc<dyn StateSyncApi>>,
+    state_sync_server: Option<Arc<StateSyncServer>>,
     pruning_service: Option<Arc<dyn PruningServiceApi>>,
     metrics: Arc<RuntimeMetrics>,
     wallet_runtime_active: bool,
@@ -388,6 +390,16 @@ impl ApiContext {
             .as_ref()
             .map(|handle| Arc::new(handle.clone()) as Arc<dyn StateSyncApi>);
 
+        let state_sync_server = node
+            .as_ref()
+            .and_then(|handle| handle.state_sync_server())
+            .or_else(|| {
+                wallet
+                    .as_ref()
+                    .and_then(|wallet| wallet.node_runtime_handle())
+                    .and_then(|handle| handle.state_sync_server())
+            });
+
         let metrics = if let Some(handle) = node.as_ref() {
             handle.runtime_metrics()
         } else if let Some(wallet) = wallet.as_ref() {
@@ -408,6 +420,7 @@ impl ApiContext {
             request_limit_per_minute,
             auth_token_enabled,
             state_sync_api,
+            state_sync_server,
             pruning_service,
             metrics,
             wallet_runtime_active,
@@ -488,6 +501,10 @@ impl ApiContext {
         self.state_sync_api.as_ref().map(Arc::clone)
     }
 
+    fn state_sync_server(&self) -> Option<Arc<StateSyncServer>> {
+        self.state_sync_server.as_ref().map(Arc::clone)
+    }
+
     fn pruning_service(&self) -> Option<Arc<dyn PruningServiceApi>> {
         self.pruning_service.as_ref().map(Arc::clone)
     }
@@ -535,8 +552,22 @@ impl ApiContext {
         Ok(api)
     }
 
+    fn require_state_sync_server(
+        &self,
+    ) -> Result<Arc<StateSyncServer>, (StatusCode, Json<ErrorResponse>)> {
+        if self.node_available() && !self.node_enabled() {
+            return Err(unavailable("node"));
+        }
+        self.state_sync_server().ok_or_else(|| not_started("node"))
+    }
+
     pub fn with_state_sync_api(mut self, api: Arc<dyn StateSyncApi>) -> Self {
         self.state_sync_api = Some(api);
+        self
+    }
+
+    pub fn with_state_sync_server(mut self, server: Arc<StateSyncServer>) -> Self {
+        self.state_sync_server = Some(server);
         self
     }
 
@@ -1391,6 +1422,10 @@ where
         .route(
             "/state-sync/session",
             get(routes::state_sync::session_status),
+        )
+        .route(
+            "/state-sync/session/stream",
+            get(routes::state_sync::session_stream),
         )
         .route(
             "/state-sync/head/stream",

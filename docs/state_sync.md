@@ -72,6 +72,15 @@ Runtime nodes expose the verification status over REST and an SSE head stream:
   `LightHeadSse` events as the light client advances. Each event reports the
   current height, block hash, state root, recursive proof commitment, an emission
   timestamp, and whether the head is finalized.【F:rpp/rpc/src/routes/state_sync.rs†L55-L94】【F:rpp/rpc/api.rs†L122-L162】
+- `GET /state-sync/session/stream` opens an SSE stream that first publishes the
+  active session status and then streams verified snapshot chunks as they are
+  served. Each chunk event embeds the same status payload as the REST response
+  so clients can track progress without polling.【F:rpp/rpc/src/routes/state_sync.rs†L20-L204】【F:rpp/rpc/api.rs†L122-L162】
+
+The runtime records dedicated telemetry while serving chunks: stream starts,
+per-chunk counters, active stream samples, and backpressure events are exported
+via the `rpp.runtime.state_sync.stream.{starts,chunks,active,backpressure}`
+metrics.【F:rpp/runtime/telemetry/metrics.rs†L220-L466】
 
 The RPC layer mirrors verification failures from the runtime, so clients can
 surface metadata mismatches, missing receipts, or proof errors immediately. Unit

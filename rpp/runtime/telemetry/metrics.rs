@@ -88,6 +88,10 @@ pub struct RuntimeMetrics {
     chain_block_height: Histogram<u64>,
     network_peer_counts: Histogram<u64>,
     reputation_penalties: Counter<u64>,
+    state_sync_stream_starts: Counter<u64>,
+    state_sync_stream_chunks: Counter<u64>,
+    state_sync_stream_backpressure: Counter<u64>,
+    state_sync_active_streams: Histogram<u64>,
 }
 
 impl RuntimeMetrics {
@@ -220,6 +224,28 @@ impl RuntimeMetrics {
             reputation_penalties: meter
                 .u64_counter("rpp.runtime.reputation.penalties")
                 .with_description("Total reputation penalties applied by the runtime")
+                .with_unit("1")
+                .build(),
+            state_sync_stream_starts: meter
+                .u64_counter("rpp.runtime.state_sync.stream.starts")
+                .with_description("Total number of state sync session streams started")
+                .with_unit("1")
+                .build(),
+            state_sync_stream_chunks: meter
+                .u64_counter("rpp.runtime.state_sync.stream.chunks")
+                .with_description("Total number of state sync snapshot chunks streamed")
+                .with_unit("1")
+                .build(),
+            state_sync_stream_backpressure: meter
+                .u64_counter("rpp.runtime.state_sync.stream.backpressure")
+                .with_description(
+                    "Number of times clients waited for state sync chunk stream capacity",
+                )
+                .with_unit("1")
+                .build(),
+            state_sync_active_streams: meter
+                .u64_histogram("rpp.runtime.state_sync.stream.active")
+                .with_description("Active state sync stream count sampled on lifecycle changes")
                 .with_unit("1")
                 .build(),
         }
@@ -419,6 +445,23 @@ impl RuntimeMetrics {
         let label = label.into();
         let attributes = [KeyValue::new("label", label)];
         self.reputation_penalties.add(1, &attributes);
+    }
+
+    pub fn record_state_sync_stream_start(&self, active: u64) {
+        self.state_sync_stream_starts.add(1, &[]);
+        self.state_sync_active_streams.record(active, &[]);
+    }
+
+    pub fn record_state_sync_stream_finish(&self, active: u64) {
+        self.state_sync_active_streams.record(active, &[]);
+    }
+
+    pub fn record_state_sync_chunk_served(&self) {
+        self.state_sync_stream_chunks.add(1, &[]);
+    }
+
+    pub fn record_state_sync_stream_backpressure(&self) {
+        self.state_sync_stream_backpressure.add(1, &[]);
     }
 }
 
