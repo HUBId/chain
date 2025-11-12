@@ -31,6 +31,7 @@ firewood-storage.workspace = true
 hex.workspace = true
 log.workspace = true
 nonzero_ext.workspace = true
+serde_json.workspace = true
 # Regular dependencies
 axum = { version = "=0.6.20" }
 csv = "=1.4.0"
@@ -53,6 +54,7 @@ anyhow = "=1.0.100"
 assert_cmd = "=2.0.17"
 predicates = "=3.1.3"
 serial_test = "=3.2.0"
+tempfile.workspace = true
 
 [lints]
 workspace = true
