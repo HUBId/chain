@@ -9,9 +9,47 @@ use predicates::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 const PRG: &str = "fwdctl";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+macro_rules! fixtures {
+    ($($key:expr => $value:expr),* $(,)?) => {{
+        let mut entries = Vec::new();
+        $(entries.push(($key.to_string(), $value.to_string()));)*
+        entries
+    }};
+}
+
+fn fwdctl_load(entries: Vec<(String, String)>) -> Result<()> {
+    use serde_json::{Map, Value};
+
+    let mut map = Map::with_capacity(entries.len());
+    for (key, value) in entries {
+        map.insert(key, Value::String(value));
+    }
+
+    let mut fixture = NamedTempFile::new().map_err(|err| anyhow!(err))?;
+    serde_json::to_writer_pretty(fixture.as_file_mut(), &Value::Object(map))
+        .map_err(|err| anyhow!(err))?;
+    let temp_path = fixture.into_temp_path();
+    let path_buf = temp_path.to_path_buf();
+
+    let assert = Command::cargo_bin(PRG)?
+        .arg("load")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .arg("--file")
+        .arg(&path_buf)
+        .assert();
+
+    assert.success().stdout(predicate::str::contains("Loaded"));
+
+    temp_path.close().map_err(|err| anyhow!(err))?;
+
+    Ok(())
+}
 
 // Removes the firewood database on disk
 fn fwdctl_delete_db() -> Result<()> {
@@ -87,15 +125,7 @@ fn fwdctl_get_successful() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .args(["year"])
-        .args(["2023"])
-        .arg("--db")
-        .arg(tmpdb::path())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("year"));
+    fwdctl_load(fixtures!("year" => "2023"))?;
 
     // Get value back out
     Command::cargo_bin(PRG)?
@@ -120,15 +150,7 @@ fn fwdctl_delete_successful() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .args(["year"])
-        .args(["2023"])
-        .arg("--db")
-        .arg(tmpdb::path())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("year"));
+    fwdctl_load(fixtures!("year" => "2023"))?;
 
     // Delete key -- prints raw data of deleted value
     Command::cargo_bin(PRG)?
@@ -153,15 +175,7 @@ fn fwdctl_root_hash() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .args(["year"])
-        .args(["2023"])
-        .arg("--db")
-        .arg(tmpdb::path())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("year"));
+    fwdctl_load(fixtures!("year" => "2023"))?;
 
     // Get root
     Command::cargo_bin(PRG)?
@@ -185,15 +199,7 @@ fn fwdctl_dump() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .args(["year"])
-        .args(["2023"])
-        .arg("--db")
-        .arg(tmpdb::path())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("year"));
+    fwdctl_load(fixtures!("year" => "2023"))?;
 
     // Get root
     Command::cargo_bin(PRG)?
@@ -217,35 +223,7 @@ fn fwdctl_dump_with_start_stop_and_max() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["a"])
-        .args(["1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("a"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["b"])
-        .args(["2"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("b"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["c"])
-        .args(["3"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("c"));
+    fwdctl_load(fixtures!("a" => "1", "b" => "2", "c" => "3"))?;
 
     // Test stop in the middle
     Command::cargo_bin(PRG)?
@@ -329,35 +307,7 @@ fn fwdctl_dump_with_csv_and_json() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["a"])
-        .args(["1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("a"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["b"])
-        .args(["2"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("b"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["c"])
-        .args(["3"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("c"));
+    fwdctl_load(fixtures!("a" => "1", "b" => "2", "c" => "3"))?;
 
     // Test output csv
     Command::cargo_bin(PRG)?
@@ -405,15 +355,7 @@ fn fwdctl_dump_with_file_name() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["a"])
-        .args(["1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("a"));
+    fwdctl_load(fixtures!("a" => "1"))?;
 
     // Test without output format
     Command::cargo_bin(PRG)?
@@ -424,7 +366,9 @@ fn fwdctl_dump_with_file_name() -> Result<()> {
         .arg("test")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--output-format"));
+        .stderr(predicate::str::contains(
+            "one or more required arguments were not provided",
+        ));
 
     // Test output csv
     Command::cargo_bin(PRG)?
@@ -473,35 +417,7 @@ fn fwdctl_dump_with_hex() -> Result<()> {
         .assert()
         .success();
 
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["a"])
-        .args(["1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("a"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["b"])
-        .args(["2"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("b"));
-
-    Command::cargo_bin(PRG)?
-        .arg("insert")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .args(["c"])
-        .args(["3"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("c"));
+    fwdctl_load(fixtures!("a" => "1", "b" => "2", "c" => "3"))?;
 
     // Test without output format
     Command::cargo_bin(PRG)?
@@ -514,8 +430,9 @@ fn fwdctl_dump_with_hex() -> Result<()> {
         .arg("61")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--start-key"))
-        .stderr(predicate::str::contains("--start-key-hex"));
+        .stderr(predicate::str::contains(
+            "an argument cannot be used with one or more of the other specified arguments",
+        ));
 
     // Test start with hex value
     Command::cargo_bin(PRG)?
@@ -579,19 +496,14 @@ fn fwdctl_check_db_with_data() -> Result<()> {
         .assert()
         .success();
 
-    // TODO: bulk loading data instead of inserting one by one
+    let mut entries = Vec::new();
     for _ in 0..4 {
         let key = sample_iter.by_ref().take(64).collect::<String>();
         let value = sample_iter.by_ref().take(10).collect::<String>();
-        Command::cargo_bin(PRG)?
-            .arg("insert")
-            .arg("--db")
-            .arg(tmpdb::path())
-            .args([key])
-            .args([value])
-            .assert()
-            .success();
+        entries.push((key, value));
     }
+
+    fwdctl_load(entries)?;
 
     Command::cargo_bin(PRG)?
         .arg("check")

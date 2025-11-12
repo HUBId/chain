@@ -5,6 +5,7 @@ use clap::Args;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::v2::api::{self, Db as _, Proposal as _};
 use firewood_storage::noop_storage_metrics;
+use std::path::PathBuf;
 
 use crate::DatabasePath;
 
@@ -24,21 +25,25 @@ pub struct Options {
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("inserting key value pair {opts:?}");
-    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
-
-    let db = Db::new(
-        opts.database.dbpath.clone(),
-        cfg.build(),
-        noop_storage_metrics(),
-    )?;
-
     let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::Put {
         key: opts.key.clone().into(),
         value: opts.value.bytes().collect(),
     }];
-    let proposal = db.propose(batch)?;
-    proposal.commit()?;
+
+    commit_batch(opts.database.dbpath.clone(), batch)?;
 
     println!("{}", opts.key);
     Ok(())
+}
+
+pub(crate) fn commit_batch(
+    db_path: PathBuf,
+    batch: Vec<BatchOp<Vec<u8>, Vec<u8>>>,
+) -> Result<(), api::Error> {
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
+
+    let db = Db::new(db_path, cfg.build(), noop_storage_metrics())?;
+
+    let proposal = db.propose(batch)?;
+    proposal.commit()
 }
