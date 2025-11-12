@@ -84,7 +84,6 @@ func TestRangeProofPartialRange(t *testing.T) {
 	// ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 
-	// TODO(https://github.com/ava-labs/chain/issues/738): verify the proofs
 }
 
 func TestRangeProofDiffersAfterUpdate(t *testing.T) {
@@ -133,7 +132,41 @@ func TestRoundTripSerialization(t *testing.T) {
 	r.NoError(err)
 	r.Equal(proofBytes, serialized)
 
+	requireVerifyRangeProof(t, db, proof, root, nothing(), nothing())
+
 	r.NoError(proof.Free())
+}
+
+func TestVerifyRangeProofRejectsTampering(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(50)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	original := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
+	r.NotEmpty(original)
+
+	tampered := make([]byte, len(original))
+	copy(tampered, original)
+	tampered[0] ^= 0xFF
+	if len(tampered) > 1 {
+		tampered[len(tampered)-1] ^= 0xFF
+	}
+
+	proof := new(RangeProof)
+	r.NoError(proof.UnmarshalBinary(tampered))
+	defer func() {
+		r.NoError(proof.Free())
+	}()
+
+	err = db.VerifyRangeProof(proof, nothing(), nothing(), root, maxProofLen)
+	r.Error(err)
+
+	currentRoot, err := db.Root()
+	r.NoError(err)
+	r.Equal(root, currentRoot)
 }
 
 // rangeProofWithAndWithoutRoot checks that requesting a range proof with and
@@ -152,6 +185,7 @@ func rangeProofWithAndWithoutRoot(
 	r.NotNil(proof1)
 	proof1Bytes, err := proof1.MarshalBinary()
 	r.NoError(err)
+	requireVerifyRangeProof(t, db, proof1, root, startKey, endKey)
 	r.NoError(proof1.Free())
 
 	proof2, err := db.RangeProof(maybe{hasValue: true, value: root}, startKey, endKey, maxProofLen)
@@ -159,9 +193,28 @@ func rangeProofWithAndWithoutRoot(
 	r.NotNil(proof2)
 	proof2Bytes, err := proof2.MarshalBinary()
 	r.NoError(err)
+	requireVerifyRangeProof(t, db, proof2, root, startKey, endKey)
 	r.NoError(proof2.Free())
 
 	r.Equal(proof1Bytes, proof2Bytes)
 
 	return proof1Bytes
+}
+
+func requireVerifyRangeProof(
+	t *testing.T,
+	db *Database,
+	proof *RangeProof,
+	root []byte,
+	startKey, endKey maybe,
+) {
+	t.Helper()
+	r := require.New(t)
+
+	err := db.VerifyRangeProof(proof, startKey, endKey, root, maxProofLen)
+	r.NoError(err)
+
+	currentRoot, err := db.Root()
+	r.NoError(err)
+	r.Equal(root, currentRoot)
 }
