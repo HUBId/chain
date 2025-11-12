@@ -377,6 +377,14 @@ pub trait RootReader {
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode>;
 }
 
+/// Marker trait for nodestores whose root node is guaranteed to be unpersisted.
+///
+/// This is implemented for mutable nodestore variants that hold in-memory state
+/// which has not yet been written to the underlying storage backend. Callers
+/// can rely on this guarantee to safely traverse in-memory nodes that are yet
+/// to be persisted.
+pub trait HasUnpersistedRoot {}
+
 /// A committed revision of a merkle trie.
 #[derive(Debug)]
 pub struct Committed {
@@ -698,6 +706,8 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
     }
 }
 
+impl<S: ReadableStorage> HasUnpersistedRoot for NodeStore<MutableProposal, S> {}
+
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
         let Some(root) = self.kind.root.as_ref() else {
@@ -721,6 +731,8 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
         self.kind.root.clone()
     }
 }
+
+impl<S: WritableStorage> HasUnpersistedRoot for NodeStore<Committed, S> {}
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
