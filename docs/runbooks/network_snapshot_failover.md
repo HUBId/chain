@@ -38,6 +38,11 @@ playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/obser
    endpoint).
 3. Confirm the session identifier from the alert, log message, or via
    `GET /p2p/snapshots`.
+4. Ensure the published snapshot payload has a matching `.sig` file. The
+   runtime now refuses to stream snapshots when the signature is missing or
+   malformed; unsigned payloads surface as `snapshot signature missing` I/O
+   errors in `state_sync_session_chunk` responses. Stage replacements in a
+   temporary directory and rotate the manifest + signature pair atomically.
 
 All snapshot RPC calls require the `Authorization: Bearer` header whenever RPC
 authentication is enabled; missing headers return `401 Unauthorized`.【F:docs/network/snapshots.md†L74-L117】
@@ -171,6 +176,10 @@ If the provider validator crashed or shows storage errors:
      `"precedes next expected chunk"` or
      `"skips ahead of next expected chunk"` means the request regressed or
      skipped offsets. Use the last confirmed chunk from Step 1 and try again.
+   - `500 Internal Server Error` with `"snapshot signature"` indicates the
+     payload on disk is unsigned or has an invalid base64-encoded signature.
+     Restore the original `.sig` file or regenerate the manifest + signature
+     pair before retrying.
    - `500 Internal Server Error` with `"plan id"` indicates the provider has
      rotated to a different snapshot plan; fetch the latest status to obtain the
      new `plan_id` before retrying.

@@ -1118,7 +1118,6 @@ pub(crate) struct NodeInner {
     runtime_metrics: Arc<RuntimeMetrics>,
     state_sync_session: ParkingMutex<StateSyncSessionCache>,
     state_sync_server: OnceCell<Arc<StateSyncServer>>,
-    legacy_snapshot_warnings: ParkingMutex<HashSet<Hash>>,
 }
 
 #[cfg_attr(not(feature = "prover-stwo"), allow(dead_code))]
@@ -2246,7 +2245,6 @@ impl Node {
             runtime_metrics: runtime_metrics.clone(),
             state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
             state_sync_server: OnceCell::new(),
-            legacy_snapshot_warnings: ParkingMutex::new(HashSet::new()),
         });
         let server = Arc::new(StateSyncServer::new(
             Arc::downgrade(&inner),
@@ -4561,7 +4559,7 @@ impl NodeInner {
     fn load_snapshot_payload(
         &self,
         root: &Hash,
-    ) -> Result<Option<(Vec<u8>, Option<String>)>, std::io::Error> {
+    ) -> Result<Option<(Vec<u8>, String)>, std::io::Error> {
         let base = self.config.snapshot_dir.clone();
         if base.as_os_str().is_empty() {
             return Ok(None);
@@ -4591,39 +4589,46 @@ impl NodeInner {
                     sig_name.push(".sig");
                     signature_path.set_file_name(sig_name);
                     if !signature_path.exists() {
-                        let mut warned = self.legacy_snapshot_warnings.lock();
                         let root_hex = hex::encode(root.as_bytes());
-                        if warned.insert(*root) {
-                            warn!(
-                                target: "node",
-                                root = %root_hex,
-                                path = %payload_path.display(),
-                                "snapshot signature missing; serving legacy manifest"
-                            );
-                        } else {
-                            debug!(
-                                target: "node",
-                                root = %root_hex,
-                                path = %payload_path.display(),
-                                "snapshot signature still missing; serving legacy manifest"
-                            );
-                        }
-                        // TODO(ENG-4972): remove legacy snapshot signature fallback once manifests ship signatures.
-                        return Ok(Some((payload, None)));
+                        error!(
+                            target: "node",
+                            root = %root_hex,
+                            path = %payload_path.display(),
+                            signature = %signature_path.display(),
+                            "snapshot signature missing"
+                        );
+                        return Err(std::io::Error::new(
+                            ErrorKind::NotFound,
+                            format!(
+                                "snapshot signature missing for {}",
+                                signature_path.display()
+                            ),
+                        ));
                     }
                     let encoded = fs::read_to_string(&signature_path)?;
                     let trimmed = encoded.trim();
-                    let signature_bytes = BASE64.decode(trimmed).map_err(|err| {
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            format!(
-                                "invalid snapshot signature encoding at {}: {err}",
-                                signature_path.display()
-                            ),
-                        )
-                    })?;
+                    let signature_bytes = match BASE64.decode(trimmed) {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            let root_hex = hex::encode(root.as_bytes());
+                            error!(
+                                target: "node",
+                                root = %root_hex,
+                                signature = %signature_path.display(),
+                                %err,
+                                "snapshot signature failed base64 decoding"
+                            );
+                            return Err(std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "invalid snapshot signature encoding at {}: {err}",
+                                    signature_path.display()
+                                ),
+                            ));
+                        }
+                    };
                     let canonical = BASE64.encode(signature_bytes);
-                    return Ok(Some((payload, Some(canonical))));
+                    return Ok(Some((payload, canonical)));
                 }
             }
         }
@@ -4677,7 +4682,7 @@ impl NodeInner {
                 Err(err) => return Err(StateSyncChunkError::Io(err)),
             };
             let mut store = SnapshotStore::new(chunk_size);
-            let actual_root = store.insert(payload, signature);
+            let actual_root = store.insert(payload, Some(signature));
             if actual_root != root {
                 return Err(StateSyncChunkError::SnapshotRootMismatch {
                     expected: root,

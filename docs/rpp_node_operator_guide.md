@@ -202,6 +202,12 @@ verwenden, um einzelne Pfade bzw. einen alternativen Public Key zu setzen.【F:r
 Übung inklusive Smoke-Fixtures und Artefakt-Checks folge dem
 [Phase‑A Operator Lab](training/phaseA_operator_lab.md).
 
+> **Hinweis:** Die Runtime streamt keine Snapshots mehr, wenn die
+> zugehörige `.sig`-Datei fehlt oder kein gültiges Base64 enthält. Stelle bei
+> jeder Veröffentlichung sicher, dass Payload und Signatur gemeinsam rotiert
+> werden (z. B. durch `rename(2)` auf ein vorbereitetes Verzeichnis), damit
+> Konsumenten keine unsignierten Manifeste sehen.
+
 ```text
 $ rpp-node validator snapshot verify --config config/validator.toml
 {

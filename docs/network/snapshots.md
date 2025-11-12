@@ -142,6 +142,11 @@ minutes and can be tuned through `snapshot_validator.cadence_secs` in
 chunk directories in sync whenever snapshots rotate so the validator catches
 corruption immediately after tampering or partial deployments.
 
+The runtime refuses to serve snapshots unless the payload has a companion
+`<file>.sig` containing a base64-encoded Ed25519 signature. Missing or invalid
+signatures surface as I/O errors and prevent state sync from streaming chunks,
+so always rotate manifest and signature files together.
+
 ## Offline manifest verification
 
 Release bundles and nightly audits ship the pruning snapshot manifest

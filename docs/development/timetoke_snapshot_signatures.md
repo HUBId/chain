@@ -12,13 +12,12 @@ Ed25519 signature is encoded as base64 for transport and storage.
   signature in the `SnapshotStore`. Callers receive a `TimetokeSnapshotHandle` whose
   `signature: Option<String>` field contains the base64 signature so they can persist it alongside
   the manifest.
-* Persisting components should write the JSON manifest as usual and create a sibling
-  `<file>.sig` text file containing the base64 signature. Empty signature files should not be
-  created; omit the `.sig` when the handle reports `None`.
-* Runtime state sync and other snapshot readers surface the stored signature through
-  `SnapshotStore::signature`. The `.sig` companion is optional during the migration—missing files
-  trigger a warning (`TODO(ENG-4972)`) but the manifest is still served so legacy stores remain
-  consumable.
+* Persisting components must write the JSON manifest and a sibling `<file>.sig`
+  text file containing the base64 signature. Empty or missing signature files
+  are treated as fatal errors by the runtime.
+* Runtime state sync and other snapshot readers surface the stored signature
+  through `SnapshotStore::signature`. Consumers expect a value and propagate I/O
+  errors if the signature cannot be read or decoded.
 
 ## Key management
 
@@ -47,6 +46,6 @@ artifacts they receive via state sync or direct file transfer.
 
 ## Legacy compatibility
 
-State sync warns once per snapshot root when the companion `.sig` file is missing, but continues to
-serve the payload. This fallback is temporary—tracked under `TODO(ENG-4972)`—and lets existing
-snapshot archives remain valid while the new signatures propagate through the network.
+Legacy manifests without signatures are no longer supported. Operators must
+retrofit `.sig` files when migrating archives; otherwise state sync fails with a
+`snapshot signature missing` error as soon as the runtime loads the payload.
