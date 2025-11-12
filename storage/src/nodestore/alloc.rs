@@ -378,16 +378,13 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
         Self { storage, header }
     }
 
-    /// Returns (index, `area_size`) for the stored area at `addr`.
-    /// `index` is the index of `area_size` in the array of valid block sizes.
+    /// Returns the `AreaIndex` for the stored area at `addr`.
+    /// Use [`AreaIndex::size`] to recover the stored area's length.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read.
-    pub fn area_index_and_size(
-        &self,
-        addr: LinearAddress,
-    ) -> Result<(AreaIndex, u64), FileIoError> {
+    pub fn area_index_and_size(&self, addr: LinearAddress) -> Result<AreaIndex, FileIoError> {
         area_index_and_size(self.storage, addr)
     }
 
@@ -558,7 +555,8 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         };
         debug_assert!(addr.is_aligned());
 
-        let (area_size_index, _) = self.area_index_and_size(addr)?;
+        let area_size_index = self.area_index_and_size(addr)?;
+        let area_size = area_size_index.size();
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(
             "firewood.delete_node",
@@ -571,7 +569,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
             "Bytes freed in nodestore",
             "index" => index_name(area_size_index)
         )
-        .increment(area_size_index.size());
+        .increment(area_size);
 
         self.add_free_block(addr, area_size_index)?;
 

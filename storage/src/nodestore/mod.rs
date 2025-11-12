@@ -774,11 +774,10 @@ where
     }
 }
 
-// TODO: return only the index since we can easily get the size from the index
 fn area_index_and_size<S: ReadableStorage>(
     storage: &S,
     addr: LinearAddress,
-) -> Result<(AreaIndex, u64), FileIoError> {
+) -> Result<AreaIndex, FileIoError> {
     let mut area_stream = storage.stream_from(addr.get())?;
 
     let index: AreaIndex = AreaIndex::new(area_stream.read_byte().map_err(|e| {
@@ -796,9 +795,7 @@ fn area_index_and_size<S: ReadableStorage>(
         )
     })?;
 
-    let size = index.size();
-
-    Ok((index, size))
+    Ok(index)
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S> {
@@ -867,16 +864,13 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
         Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
     }
 
-    /// Returns (index, `area_size`) for the stored area at `addr`.
-    /// `index` is the index of `area_size` in the array of valid block sizes.
+    /// Returns the `AreaIndex` for the stored area at `addr`.
+    /// Callers can retrieve the corresponding size using [`AreaIndex::size`].
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read.
-    pub fn area_index_and_size(
-        &self,
-        addr: LinearAddress,
-    ) -> Result<(AreaIndex, u64), FileIoError> {
+    pub fn area_index_and_size(&self, addr: LinearAddress) -> Result<AreaIndex, FileIoError> {
         area_index_and_size(self.storage.as_ref(), addr)
     }
 }
@@ -994,6 +988,7 @@ where
 mod tests {
 
     use crate::linear::memory::MemStore;
+    use crate::nodestore::alloc::test_utils::test_write_new_node;
     use crate::LeafNode;
     use arc_swap::access::DynGuard;
     use std::sync::Arc;
@@ -1057,6 +1052,38 @@ mod tests {
         }
 
         assert!(AreaIndex::from_size(AreaIndex::MAX_AREA_SIZE + 1).is_err());
+    }
+
+    #[test]
+    fn area_index_reports_expected_size() {
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), crate::noop_storage_metrics())
+                .expect("create nodestore");
+
+        let offset = NodeStoreHeader::SIZE;
+        let address = LinearAddress::new(offset).expect("non-zero address");
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from([0xA]),
+            value: vec![0xB, 0xC, 0xD].into_boxed_slice(),
+        });
+
+        let (_bytes_written, stored_area_size) = test_write_new_node(&nodestore, &node, offset);
+        nodestore
+            .header
+            .set_size(offset.saturating_add(stored_area_size));
+
+        let index_from_store = nodestore
+            .area_index_and_size(address)
+            .expect("area index via nodestore");
+        assert_eq!(index_from_store.size(), stored_area_size);
+
+        let allocator = NodeAllocator::new(nodestore.storage.as_ref(), &mut nodestore.header);
+        let index_from_allocator = allocator
+            .area_index_and_size(address)
+            .expect("area index via allocator");
+        assert_eq!(index_from_allocator, index_from_store);
+        assert_eq!(index_from_allocator.size(), stored_area_size);
     }
 
     #[test]
