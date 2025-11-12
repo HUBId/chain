@@ -45,7 +45,10 @@ pub mod logger;
 pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{hash_node, hash_preimage, Hashable, Preimage, ValueDigest};
+pub use hashednode::{
+    hash_node, hash_preimage, Hashable, HashedBranchChildren, HashedNodeRef, MissingChildHashError,
+    Preimage, ValueDigest,
+};
 #[cfg(feature = "ethhash")]
 pub use hashers::ethhash::{EthNodeHasher, TrieError};
 pub use identity_tree::{
@@ -202,6 +205,21 @@ pub enum CheckerError {
         computed_hash: HashType,
     },
 
+    /// A branch node contains a child without a hash.
+    #[error(
+        "Branch node {path:?} at address {address} (parent: {parent:#x}) has a child without a hash at index {child_index}"
+    )]
+    MissingChildHash {
+        /// The path of the node whose child was missing a hash
+        path: Path,
+        /// Address of the node whose child was missing a hash
+        address: LinearAddress,
+        /// Parent pointer for context
+        parent: TrieNodeParent,
+        /// Index of the offending child
+        child_index: usize,
+    },
+
     /// The address is out of bounds
     #[error(
         "stored area at {start:#x} with size {size} (parent: {parent:#x}) is out of bounds ({bounds:#x?})"
@@ -322,6 +340,7 @@ impl CheckerError {
             | CheckerError::AreaMisaligned { parent, .. }
             | CheckerError::IO { parent, .. } => Some(*parent),
             CheckerError::HashMismatch { parent, .. }
+            | CheckerError::MissingChildHash { parent, .. }
             | CheckerError::NodeLargerThanArea { parent, .. }
             | CheckerError::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
             CheckerError::FreelistAreaSizeMismatch { parent, .. } => {

@@ -17,11 +17,11 @@ use crate::{
 };
 
 #[cfg(not(feature = "ethhash"))]
-use crate::hashednode::hash_node;
+use crate::hashednode::{hash_node, HashedNodeRef};
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 use indicatif::ProgressBar;
@@ -330,9 +330,27 @@ where
         // compute the hash of the node and check it against the stored hash
         if hash_check {
             #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
+            let hash =
+                Self::compute_node_ethhash(&node, &path_prefix, has_peers).map_err(|err| {
+                    vec![CheckerError::MissingChildHash {
+                        path: current_path_prefix.clone(),
+                        address: subtrie_root_address,
+                        parent,
+                        child_index: err.child_index(),
+                    }]
+                })?;
             #[cfg(not(feature = "ethhash"))]
-            let hash = hash_node(&node, &path_prefix);
+            let hash = {
+                let hashed_node = HashedNodeRef::try_from(node.deref()).map_err(|err| {
+                    vec![CheckerError::MissingChildHash {
+                        path: current_path_prefix.clone(),
+                        address: subtrie_root_address,
+                        parent,
+                        child_index: err.child_index(),
+                    }]
+                })?;
+                hash_node(hashed_node, &path_prefix)
+            };
             if hash != subtrie_root_hash {
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
@@ -582,10 +600,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     pub fn check_and_fix(
         &self,
         opt: CheckOpt,
-    ) -> (
-        Result<NodeStore<Committed, S>, FileIoError>,
-        FixReport,
-    ) {
+    ) -> (Result<NodeStore<Committed, S>, FileIoError>, FixReport) {
         let check_report = self.check(opt);
         let mut proposal = match NodeStore::<MutableProposal, S>::new(self) {
             Ok(proposal) => proposal,
@@ -599,9 +614,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             }
         };
         let fix_report = proposal.fix(check_report);
-        let committed =
-            NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal)
-                .map(|immutable| immutable.as_committed(self));
+        let committed = NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal)
+            .map(|immutable| immutable.as_committed(self));
         (committed, fix_report)
     }
 }
@@ -796,8 +810,8 @@ mod test {
     use crate::nodestore::primitives::area_size_iter;
     use crate::nodestore::NodeStoreHeader;
     use crate::{
-        area_index, hash_node, noop_storage_metrics, BranchNode, Child, FreeListParent, LeafNode,
-        NodeStore, Path,
+        area_index, hash_node, noop_storage_metrics, BranchNode, Child, FreeListParent,
+        HashedNodeRef, LeafNode, NodeStore, Path,
     };
 
     #[derive(Debug)]
@@ -835,7 +849,10 @@ mod test {
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
+        let leaf_hash = hash_node(
+            HashedNodeRef::try_from(&leaf).expect("leaf nodes always have hashes"),
+            &Path::from([2, 0, 3, 1]),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
@@ -851,7 +868,10 @@ mod test {
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node(&branch, &Path::from([2, 0]));
+        let branch_hash = hash_node(
+            HashedNodeRef::try_from(&branch).expect("branch child hashed"),
+            &Path::from([2, 0]),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
@@ -867,7 +887,10 @@ mod test {
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_hash = hash_node(&root, &Path::new());
+        let root_hash = hash_node(
+            HashedNodeRef::try_from(&root).expect("root child hashed"),
+            &Path::new(),
+        );
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
@@ -1081,12 +1104,16 @@ mod test {
         // Compute the current branch hash
         #[cfg(feature = "ethhash")]
         let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
-            branch_node,
+            &*branch_node,
             &Path::from([2, 0]),
             false,
-        );
+        )
+        .expect("branch hash present");
         #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
+        let computed_hash = hash_node(
+            HashedNodeRef::try_from(&*branch_node).expect("branch hash present"),
+            &Path::from([2, 0]),
+        );
 
         // Get parent stored hash
         let (root_node, _) = test_trie
