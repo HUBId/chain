@@ -424,7 +424,7 @@ impl NodeStore<Committed, FileBacked> {
             Ok(completed_count)
         }
 
-        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
+        const RINGSIZE: usize = FileBacked::DEFAULT_RING_ENTRIES as usize;
 
         let mut header = self.header;
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);

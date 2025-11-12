@@ -174,9 +174,8 @@ impl FileBacked {
             metrics::gauge!("firewood.storage.io_uring_ring_entries")
                 .set(ring_entries.get() as f64);
             crate::logger::info!(
-                target = "storage",
-                ring_entries = ring_entries.get(),
-                "initialised io-uring ring"
+                "initialised io-uring ring with {} entries",
+                ring_entries.get()
             );
         }
 
