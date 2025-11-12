@@ -393,7 +393,6 @@ pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
     root_hash: Option<TrieHash>,
     root: Option<MaybePersistedNode>,
-    /// TODO: No readers of this variable yet - will be used for tracking unwritten nodes in committed revisions
     unwritten_nodes: AtomicUsize,
 }
 
@@ -466,8 +465,8 @@ impl Drop for ImmutableProposal {
         if self.unwritten_nodes > 0 {
             #[allow(clippy::cast_precision_loss)]
             firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
+                "firewood.nodestore.unwritten_nodes",
+                "current number of unwritten nodes queued for persistence"
             )
             .decrement(self.unwritten_nodes as f64);
         }
@@ -671,8 +670,8 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         // Track unwritten nodes in metrics
         #[allow(clippy::cast_precision_loss)]
         firewood_gauge!(
-            "firewood.nodes.unwritten",
-            "current number of unwritten nodes"
+            "firewood.nodestore.unwritten_nodes",
+            "current number of unwritten nodes queued for persistence"
         )
         .increment(unwritten_count as f64);
 
@@ -1093,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Node size 16777225 is too large")]
+    #[should_panic(expected = "Node size 16777224 is too large")]
     fn giant_node() {
         let memstore = MemStore::new(vec![]);
         let mut node_store =

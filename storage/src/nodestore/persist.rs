@@ -37,6 +37,7 @@
 //!
 
 use std::iter::FusedIterator;
+use std::sync::atomic::Ordering;
 
 use crate::linear::FileIoError;
 use crate::node::Node;
@@ -338,6 +339,43 @@ impl FlushStats {
 }
 
 impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
+    #[inline]
+    fn record_flushed_nodes(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        let mut observed = self.kind.unwritten_nodes.load(Ordering::Relaxed);
+
+        while observed != 0 {
+            let step = observed.min(count);
+            match self.kind.unwritten_nodes.compare_exchange(
+                observed,
+                observed - step,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    if step > 0 {
+                        #[allow(clippy::cast_precision_loss)]
+                        firewood_gauge!(
+                            "firewood.nodestore.unwritten_nodes",
+                            "current number of unwritten nodes queued for persistence"
+                        )
+                        .decrement(step as f64);
+
+                        debug_assert!(
+                            step == count || observed < count,
+                            "attempted to flush {count} unwritten nodes but only {observed} remained"
+                        );
+                    }
+                    return;
+                }
+                Err(current) => observed = current,
+            }
+        }
+    }
+
     /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
@@ -437,12 +475,8 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
                 .write(persisted_address.get(), serialized.as_slice())?;
             stats.record_serialization(serialized.len(), capacity_hint, serialized.capacity());
 
-            // Decrement gauge immediately after node is written to storage
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(1.0);
+            // Decrement counters immediately after node is written to storage
+            self.record_flushed_nodes(1);
 
             // Allocate the node to store the address, then collect for caching and persistence
             node.allocate_at(persisted_address);
@@ -648,14 +682,7 @@ impl NodeStore<Committed, FileBacked> {
                 )?;
 
                 // Decrement gauge for writes that have actually completed
-                if completed_writes > 0 {
-                    #[expect(clippy::cast_precision_loss)]
-                    firewood_gauge!(
-                        "firewood.nodes.unwritten",
-                        "current number of unwritten nodes"
-                    )
-                    .decrement(completed_writes as f64);
-                }
+                self.record_flushed_nodes(completed_writes);
             }
 
             // Allocate the node to store the address, then collect for caching and persistence
@@ -675,14 +702,7 @@ impl NodeStore<Committed, FileBacked> {
             handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 
         // Decrement gauge for final batch of writes that completed
-        if final_completed_writes > 0 {
-            #[expect(clippy::cast_precision_loss)]
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(final_completed_writes as f64);
-        }
+        self.record_flushed_nodes(final_completed_writes);
 
         debug_assert!(
             !saved_pinned_buffers.iter().any(|pbe| pbe.node.is_some()),
@@ -817,7 +837,7 @@ mod tests {
 
         let mut proposal = NodeStore::new(&base).unwrap();
         proposal.root_mut().replace(Node::Leaf(LeafNode {
-            partial_path: Path::from([0xAB]),
+            partial_path: Path::from([0x0A, 0x0B]),
             value: Box::from([0xCD]),
         }));
 

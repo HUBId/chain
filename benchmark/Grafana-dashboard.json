@@ -940,7 +940,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "firewood_nodes_unwritten",
+          "expr": "firewood_nodestore_unwritten_nodes",
           "legendFormat": "Unwritten Nodes",
           "range": true,
           "refId": "A",

@@ -75,6 +75,8 @@ metrics:
   - name: rpp.runtime.storage.wal_flush.total
     labels:
       - outcome
+  - name: firewood.nodestore.unwritten_nodes
+    labels: []
   - name: rpp.runtime.wallet.rpc_latency
     labels:
       - method
