@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -17,8 +18,8 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::warn;
 
 use super::super::{
-    state_sync_error_to_http, ApiContext, ErrorResponse, LightHeadSse, StateSyncApi,
-    StateSyncSessionInfo,
+    chunk_error_to_state_sync, state_sync_error_to_http, ApiContext, ErrorResponse, LightHeadSse,
+    StateSyncApi, StateSyncError, StateSyncSessionInfo,
 };
 use crate::node::LightClientVerificationEvent;
 use rpp_p2p::SnapshotChunk;
@@ -136,6 +137,71 @@ pub(super) async fn head_stream(
     ))
 }
 
+pub(super) async fn session_stream(
+    State(state): State<ApiContext>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
+    let api = state.require_state_sync_api()?;
+    api.ensure_state_sync_session()
+        .map_err(state_sync_error_to_http)?;
+    let server = state.require_state_sync_server()?;
+
+    let session = api
+        .state_sync_active_session()
+        .map_err(state_sync_error_to_http)?;
+    let status = StateSyncStatusResponse::from(&session);
+    let initial = tokio_stream::once(Result::<Event, Infallible>::Ok(json_event(
+        "status", &status,
+    )));
+
+    let chunk_stream = server
+        .stream_session()
+        .await
+        .map_err(chunk_error_to_state_sync)
+        .map_err(state_sync_error_to_http)?;
+
+    let api = Arc::clone(&api);
+    let chunk_events = chunk_stream.scan(false, move |errored, result| {
+        let api = Arc::clone(&api);
+        async move {
+            if *errored {
+                return None;
+            }
+
+            match result {
+                Ok(chunk) => {
+                    let payload = SnapshotChunkJson::from_chunk(chunk);
+                    let status = match api.state_sync_active_session() {
+                        Ok(session) => StateSyncStatusResponse::from(&session),
+                        Err(err) => {
+                            *errored = true;
+                            let error = error_event(err);
+                            return Some(Ok(error));
+                        }
+                    };
+                    let response = StateSyncChunkResponse {
+                        chunk: payload,
+                        status,
+                    };
+                    Some(Ok(json_event("chunk", &response)))
+                }
+                Err(err) => {
+                    *errored = true;
+                    let error = chunk_error_to_state_sync(err);
+                    Some(Ok(error_event(error)))
+                }
+            }
+        }
+    });
+
+    let stream = initial.chain(chunk_events);
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .comment("hb"),
+    ))
+}
+
 #[derive(Deserialize)]
 pub(super) struct ChunkIdPath {
     pub id: u32,
@@ -209,4 +275,22 @@ fn describe_event(event: &LightClientVerificationEvent) -> String {
             format!("verification completed for snapshot root {snapshot_root}")
         }
     }
+}
+
+fn json_event<T>(event: &'static str, payload: &T) -> Event
+where
+    T: Serialize,
+{
+    match Event::default().event(event).json_data(payload) {
+        Ok(event) => event,
+        Err(err) => {
+            warn!(?err, "failed to encode state sync SSE payload");
+            Event::default().event(event)
+        }
+    }
+}
+
+fn error_event(error: StateSyncError) -> Event {
+    let (_, Json(body)) = state_sync_error_to_http(error.clone());
+    json_event("error", &body)
 }

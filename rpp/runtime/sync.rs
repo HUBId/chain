@@ -1,8 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 
 use base64::{engine::general_purpose, Engine as _};
+use futures::Stream;
 use hex;
 use serde::Serialize;
 
@@ -35,7 +39,12 @@ use rpp_p2p::{
 use rpp_pruning::{
     TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
+use crate::runtime::node::{
+    NodeInner, StateSyncChunkError, StateSyncSessionCache, StateSyncVerificationStatus,
+};
+use crate::runtime::telemetry::RuntimeMetrics;
 pub mod invariants {
     use std::sync::Arc;
 
@@ -298,6 +307,157 @@ pub fn subscribe_light_client_heads(
 
 pub fn latest_light_client_head(client: &LightClientSync) -> Option<LightClientHead> {
     client.latest_head()
+}
+
+const STATE_SYNC_STREAM_CONCURRENCY: usize = 4;
+
+#[derive(Clone)]
+pub struct StateSyncServer {
+    node: Weak<NodeInner>,
+    metrics: Arc<RuntimeMetrics>,
+    semaphore: Arc<Semaphore>,
+    active_streams: Arc<AtomicUsize>,
+}
+
+impl StateSyncServer {
+    pub fn new(node: Weak<NodeInner>, metrics: Arc<RuntimeMetrics>) -> Self {
+        let permits = STATE_SYNC_STREAM_CONCURRENCY.max(1);
+        Self {
+            node,
+            metrics,
+            semaphore: Arc::new(Semaphore::new(permits)),
+            active_streams: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub async fn stream_session(&self) -> Result<SnapshotStream, StateSyncChunkError> {
+        let permit = match self.semaphore.try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::NoPermits) => {
+                self.metrics.record_state_sync_stream_backpressure();
+                self.semaphore.acquire_owned().await.map_err(|_| {
+                    StateSyncChunkError::Internal("state sync stream semaphore closed".into())
+                })?
+            }
+            Err(TryAcquireError::Closed) => {
+                return Err(StateSyncChunkError::Internal(
+                    "state sync stream semaphore closed".into(),
+                ))
+            }
+        };
+
+        let node = self.node.upgrade().ok_or_else(|| {
+            StateSyncChunkError::Internal("state sync runtime unavailable".into())
+        })?;
+
+        let cache = node.state_sync_session_snapshot();
+        if cache.status() != StateSyncVerificationStatus::Verified {
+            return Err(StateSyncChunkError::NoActiveSession);
+        }
+
+        let root = cache
+            .snapshot_root()
+            .ok_or(StateSyncChunkError::NoActiveSession)?;
+        let total = cache
+            .total_chunks()
+            .ok_or(StateSyncChunkError::NoActiveSession)?;
+        let total = u32::try_from(total).map_err(|value| {
+            StateSyncChunkError::Internal(format!(
+                "state sync chunk count {value} exceeds supported range"
+            ))
+        })?;
+
+        Ok(SnapshotStream::new(
+            node,
+            root,
+            total,
+            self.metrics.clone(),
+            permit,
+            Arc::clone(&self.active_streams),
+        ))
+    }
+}
+
+pub struct SnapshotStream {
+    node: Arc<NodeInner>,
+    root: Hash,
+    next_index: u32,
+    total: u32,
+    finished: bool,
+    metrics: Arc<RuntimeMetrics>,
+    permit: Option<OwnedSemaphorePermit>,
+    active_streams: Arc<AtomicUsize>,
+}
+
+impl SnapshotStream {
+    fn new(
+        node: Arc<NodeInner>,
+        root: Hash,
+        total: u32,
+        metrics: Arc<RuntimeMetrics>,
+        permit: OwnedSemaphorePermit,
+        active_streams: Arc<AtomicUsize>,
+    ) -> Self {
+        let active = active_streams.fetch_add(1, Ordering::SeqCst) + 1;
+        metrics.record_state_sync_stream_start(active as u64);
+        Self {
+            node,
+            root,
+            next_index: 0,
+            total,
+            finished: false,
+            metrics,
+            permit: Some(permit),
+            active_streams,
+        }
+    }
+
+    pub fn root(&self) -> Hash {
+        self.root
+    }
+
+    pub fn total(&self) -> u32 {
+        self.total
+    }
+}
+
+impl Stream for SnapshotStream {
+    type Item = Result<SnapshotChunk, StateSyncChunkError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.finished {
+            return Poll::Ready(None);
+        }
+
+        if self.next_index >= self.total {
+            self.finished = true;
+            return Poll::Ready(None);
+        }
+
+        let index = self.next_index;
+        self.next_index = self
+            .next_index
+            .checked_add(1)
+            .expect("state sync stream index overflow");
+
+        let result = self.node.state_sync_session_chunk(index);
+        match &result {
+            Ok(_) => self.metrics.record_state_sync_chunk_served(),
+            Err(_) => self.finished = true,
+        }
+        Poll::Ready(Some(result))
+    }
+}
+
+impl Drop for SnapshotStream {
+    fn drop(&mut self) {
+        if let Some(_permit) = self.permit.take() {
+            // releasing the permit on drop enforces concurrency bounds
+        }
+        let previous = self.active_streams.fetch_sub(1, Ordering::SeqCst);
+        let active = previous.saturating_sub(1);
+        self.metrics.record_state_sync_stream_finish(active as u64);
+    }
 }
 
 #[derive(Clone, Debug)]

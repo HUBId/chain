@@ -130,6 +130,10 @@ impl StateSyncFixture {
         self.plan.snapshot.commitments.global_state_root
     }
 
+    pub fn state_sync_plan(&self) -> &StateSyncPlan {
+        &self.plan
+    }
+
     /// Constructs a state-sync cache whose chunk retrievals always surface a proof IO error.
     pub fn failing_session_cache(&self) -> StateSyncSessionCache {
         let reader = FailingRootReader::new();

@@ -27,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Keypair, SigningKey};
 use malachite::Natural;
+use once_cell::sync::OnceCell;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc, watch, Mutex, Notify};
@@ -90,7 +91,7 @@ use crate::runtime::node_runtime::{
 };
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
-    stream_state_sync_chunks as runtime_stream_state_sync_chunks,
+    stream_state_sync_chunks as runtime_stream_state_sync_chunks, StateSyncServer,
 };
 use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
 use crate::runtime::{
@@ -903,6 +904,22 @@ impl StateSyncSessionCache {
         *self = Self::default();
     }
 
+    fn status(&self) -> StateSyncVerificationStatus {
+        self.status
+    }
+
+    fn snapshot_root(&self) -> Option<Hash> {
+        self.snapshot_root
+    }
+
+    fn total_chunks(&self) -> Option<usize> {
+        self.total_chunks
+    }
+
+    fn chunk_size(&self) -> Option<usize> {
+        self.chunk_size
+    }
+
     fn configure(
         &mut self,
         chunk_size: Option<usize>,
@@ -1100,6 +1117,7 @@ pub(crate) struct NodeInner {
     audit_exporter: AuditExporter,
     runtime_metrics: Arc<RuntimeMetrics>,
     state_sync_session: ParkingMutex<StateSyncSessionCache>,
+    state_sync_server: OnceCell<Arc<StateSyncServer>>,
     legacy_snapshot_warnings: ParkingMutex<HashSet<Hash>>,
 }
 
@@ -2227,8 +2245,14 @@ impl Node {
             audit_exporter,
             runtime_metrics: runtime_metrics.clone(),
             state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
+            state_sync_server: OnceCell::new(),
             legacy_snapshot_warnings: ParkingMutex::new(HashSet::new()),
         });
+        let server = Arc::new(StateSyncServer::new(
+            Arc::downgrade(&inner),
+            runtime_metrics.clone(),
+        ));
+        let _ = inner.state_sync_server.set(server);
         {
             let weak_inner = Arc::downgrade(&inner);
             inner
@@ -3242,6 +3266,10 @@ impl NodeHandle {
 
     pub fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {
         self.inner.state_sync_plan(chunk_size)
+    }
+
+    pub fn state_sync_server(&self) -> Option<Arc<StateSyncServer>> {
+        self.inner.state_sync_server()
     }
 
     pub fn network_state_sync_plan(&self, chunk_size: usize) -> ChainResult<NetworkStateSyncPlan> {
@@ -4517,6 +4545,10 @@ impl NodeInner {
 
     fn state_sync_session_snapshot(&self) -> StateSyncSessionCache {
         self.state_sync_session.lock().clone()
+    }
+
+    fn state_sync_server(&self) -> Option<Arc<StateSyncServer>> {
+        self.state_sync_server.get().cloned()
     }
 
     fn parse_chunk_total(message: &str) -> Option<u32> {
