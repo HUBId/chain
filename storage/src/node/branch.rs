@@ -12,6 +12,7 @@
 #![allow(clippy::expect_used)] // Branch node helpers rely on expect to assert persistence invariants for corrupted tries.
 
 use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
+use std::fmt::Write as _;
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 
@@ -104,6 +105,67 @@ pub enum Child {
 
     /// A `MaybePersisted` child
     MaybePersisted(MaybePersistedNode, HashType),
+}
+
+const DEBUG_CHILD_PATH_PREVIEW_NIBBLES: usize = 16;
+const DEBUG_CHILD_VALUE_PREVIEW_BYTES: usize = 8;
+
+fn format_path_preview(path: &Path) -> String {
+    if path.is_empty() {
+        return "[]".to_string();
+    }
+
+    let mut buf = String::from("0x");
+    for nibble in path.iter().take(DEBUG_CHILD_PATH_PREVIEW_NIBBLES) {
+        let _ = write!(&mut buf, "{nibble:x}");
+    }
+    if path.len() > DEBUG_CHILD_PATH_PREVIEW_NIBBLES {
+        buf.push('…');
+    }
+    buf
+}
+
+fn hex_preview(bytes: &[u8], max_bytes: usize) -> String {
+    let limit = bytes.len().min(max_bytes);
+    let mut buf = String::new();
+    for byte in bytes.iter().take(limit) {
+        let _ = write!(&mut buf, "{byte:02x}");
+    }
+    if bytes.len() > limit {
+        buf.push('…');
+    }
+    buf
+}
+
+fn format_value_preview(bytes: &[u8]) -> String {
+    format!(
+        "0x{} (len={})",
+        hex_preview(bytes, DEBUG_CHILD_VALUE_PREVIEW_BYTES),
+        bytes.len()
+    )
+}
+
+fn summarize_child_node(node: &Node) -> String {
+    match node {
+        Node::Branch(branch) => {
+            let path_preview = format_path_preview(&branch.partial_path);
+            let child_count = branch
+                .children
+                .iter()
+                .filter(|child| child.is_some())
+                .count();
+            let value_preview = branch
+                .value
+                .as_deref()
+                .map_or_else(|| "nil".to_string(), format_value_preview);
+            format!("branch path={path_preview} children={child_count} value={value_preview}")
+        }
+        Node::Leaf(leaf) => {
+            let path_preview = format_path_preview(&leaf.partial_path);
+            let value_preview = format_value_preview(&leaf.value);
+            format!("leaf path={path_preview} value={value_preview}")
+        }
+    }
 }
 
 impl Child {
@@ -387,7 +449,9 @@ impl Debug for BranchNode {
         for (i, c) in self.children.iter().enumerate() {
             match c {
                 None => {}
-                Some(Child::Node(_)) => {} //TODO
+                Some(Child::Node(node)) => {
+                    write!(f, "({i:?}: node={})", summarize_child_node(node))?;
+                }
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
@@ -542,6 +606,46 @@ impl BranchNode {
             }
         }
         addrs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_includes_child_node_summaries() {
+        let mut parent = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+
+        parent.update_child(
+            0,
+            Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::from([0x1, 0x2, 0x3]),
+                value: vec![0xaa, 0xbb, 0xcc].into_boxed_slice(),
+            }))),
+        );
+
+        let child_branch = BranchNode {
+            partial_path: Path::from([0x0a]),
+            value: Some(vec![0xde, 0xad, 0xbe, 0xef].into_boxed_slice()),
+            children: BranchNode::empty_children(),
+        };
+        parent.update_child(1, Some(Child::Node(Node::from(child_branch))));
+
+        let debug_output = format!("{:?}", parent);
+
+        assert!(
+            debug_output.contains("leaf path=0x123"),
+            "expected leaf summary in {debug_output}"
+        );
+        assert!(
+            debug_output.contains("branch path=0xa"),
+            "expected branch summary in {debug_output}"
+        );
     }
 }
 
