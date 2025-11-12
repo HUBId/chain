@@ -264,12 +264,11 @@ impl<T: TrieReader> Merkle<T> {
         MerkleKeyValueIter::from(&self.nodestore)
     }
 
-    pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
-        &self,
-        key: K,
-    ) -> MerkleKeyValueIter<'_, T> {
-        // TODO danlaine: change key to &[u8]
-        MerkleKeyValueIter::from_key(&self.nodestore, key.as_ref())
+    pub(super) fn key_value_iter_from_key<'a>(
+        &'a self,
+        key: &'a [u8],
+    ) -> MerkleKeyValueIter<'a, T> {
+        MerkleKeyValueIter::from_slice(&self.nodestore, key)
     }
 
     /// Generate a cryptographic proof for a range of key-value pairs in the Merkle trie.
@@ -356,8 +355,7 @@ impl<T: TrieReader> Merkle<T> {
         }
 
         let mut iter = match start_key {
-            // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self.key_value_iter_from_key(key.to_vec().into_boxed_slice()),
+            Some(key) => self.key_value_iter_from_key(key),
             None => self.key_value_iter(),
         };
 
