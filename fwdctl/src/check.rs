@@ -75,22 +75,42 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let nodestore = NodeStore::open(storage, noop_storage_metrics())?;
     let db_stats = if opts.fix {
         let (nodestore, report) = nodestore.check_and_fix(check_ops);
-        if let Err(e) = nodestore {
+        if let Err(e) = &nodestore {
             println!("Error fixing database: {e}");
         }
         println!("Fixed Errors ({}):", report.fixed.len());
-        for error in report.fixed {
+        for error in &report.fixed {
             println!("\t{error}");
         }
         println!();
         println!("Unfixable Errors ({}):", report.unfixable.len(),);
-        for (error, io_error) in report.unfixable {
+        for (error, io_error) in &report.unfixable {
             println!("\t{error}");
             if let Some(io_error) = io_error {
                 println!("\t\tError encountered while fixing: {io_error}");
             }
         }
-        report.db_stats
+        println!();
+
+        match nodestore {
+            Ok(nodestore) => {
+                let verify_report = nodestore.check(CheckOpt {
+                    hash_check: opts.hash_check,
+                    progress_bar: None,
+                });
+                if !verify_report.errors.is_empty() {
+                    println!(
+                        "Errors encountered after fix ({}):",
+                        verify_report.errors.len()
+                    );
+                    for error in verify_report.errors {
+                        println!("\t{error}");
+                    }
+                }
+                verify_report.db_stats
+            }
+            Err(_) => report.db_stats,
+        }
     } else {
         let report = nodestore.check(check_ops);
         println!("Errors ({}):", report.errors.len());

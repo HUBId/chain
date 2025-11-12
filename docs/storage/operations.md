@@ -73,3 +73,11 @@ changes:
    to surface crash recovery events.
 4. Once recovery behaviour is validated, prune the damaged WAL segment and
    rerun the nightly chaos test before re-enabling affected nodes.
+
+## Storage checker repairs
+
+`firewood_storage::NodeStore::check_and_fix` returns a new committed view of the
+database after applying repairs, allowing operators to run follow-up checks or
+flush metadata without reopening the file. The CLI uses the returned handle to
+re-run the checker when `--fix` is specified so the printed statistics reflect
+the repaired state, surfacing any lingering issues immediately.【F:storage/src/checker/mod.rs†L604-L622】【F:fwdctl/src/check.rs†L67-L112】
