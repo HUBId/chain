@@ -289,14 +289,15 @@ where
         self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
 
         // read the node from the disk - we avoid cache since we will never visit the same node twice
-        let (area_index, area_size) =
-            self.area_index_and_size(subtrie_root_address)
-                .map_err(|e| {
-                    vec![CheckerError::IO {
-                        error: e,
-                        parent: StoredAreaParent::TrieNode(parent),
-                    }]
-                })?;
+        let area_index = self
+            .area_index_and_size(subtrie_root_address)
+            .map_err(|e| {
+                vec![CheckerError::IO {
+                    error: e,
+                    parent: StoredAreaParent::TrieNode(parent),
+                }]
+            })?;
+        let area_size = area_index.size();
         let (node, node_bytes) = self
             .read_node_with_num_bytes_from_disk(subtrie_root_address)
             .map_err(|e| {
