@@ -12,6 +12,7 @@ mod ethhash;
 mod branch_factor_256;
 mod proof;
 mod range;
+mod remove;
 #[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
 mod triehash;
 

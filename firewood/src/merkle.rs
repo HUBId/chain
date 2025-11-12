@@ -1000,15 +1000,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
 
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
-            unique_node.split_first(),
-        ) {
-            (None, _) => {
-                // 1. The node is at `key`, or we're just above it
-                // so we can start deleting below here
+        let key_split = unique_key
+            .split_first()
+            .map(|(index, path)| (*index, Path::from(path)));
+        let node_split = unique_node
+            .split_first()
+            .map(|(index, path)| (*index, Path::from(path)));
+
+        match (key_split, node_split) {
+            (None, None) => {
+                // 1. The node is at `key`
                 match &mut node {
                     Node::Branch(branch) => {
                         if branch.value.is_some() {
@@ -1024,9 +1025,37 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 }
                 Ok(None)
             }
-            (_, Some(_)) => {
-                // Case (2) or (4)
-                Ok(Some(node))
+            (None, Some((_node_index, _node_partial_path))) => {
+                // 2. The key is above the node (i.e. its ancestor)
+                match node {
+                    Node::Leaf(_) => {
+                        *deleted = deleted.saturating_add(1);
+                        Ok(None)
+                    }
+                    Node::Branch(mut branch) => {
+                        if branch.value.is_some() {
+                            *deleted = deleted.saturating_add(1);
+                        }
+
+                        for child in branch.children.iter_mut() {
+                            if let Some(child) = child.take() {
+                                let child_node = match child {
+                                    Child::Node(node) => node,
+                                    Child::AddressWithHash(addr, _) => {
+                                        self.nodestore.read_for_update(addr.into())?
+                                    }
+                                    Child::MaybePersisted(maybe_persisted, _) => {
+                                        self.nodestore.read_for_update(maybe_persisted)?
+                                    }
+                                };
+
+                                let _ = self.remove_prefix_helper(child_node, &[], deleted)?;
+                            }
+                        }
+
+                        Ok(None)
+                    }
+                }
             }
             (Some((child_index, child_partial_path)), None) => {
                 // 3. The key is below the node (i.e. its descendant)
@@ -1111,6 +1140,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     }
                 }
             }
+            (Some(_), Some(_)) => {
+                // Case (4). Neither is an ancestor of the other.
+                Ok(Some(node))
+            }
         }
     }
 
@@ -1126,23 +1159,24 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
         for children in &mut branch.children {
             // read the child node
-            let child = match children {
-                Some(Child::Node(node)) => node,
+            let child_node = match children.take() {
+                Some(Child::Node(node)) => Some(node),
                 Some(Child::AddressWithHash(addr, _)) => {
-                    &mut self.nodestore.read_for_update((*addr).into())?
+                    Some(self.nodestore.read_for_update(addr.into())?)
                 }
                 Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                    // For MaybePersisted, we need to get the node to update it
-                    // We can't get a mutable reference from SharedNode, so we need to handle this differently
-                    // For now, we'll skip this child since we can't modify it
-                    let _shared_node = maybe_persisted.as_shared_node(&self.nodestore)?;
-                    continue;
+                    Some(self.nodestore.read_for_update(maybe_persisted)?)
                 }
-                None => continue,
+                None => None,
             };
-            match child {
-                Node::Branch(child_branch) => {
-                    self.delete_children(child_branch, deleted)?;
+
+            let Some(child_node) = child_node else {
+                continue;
+            };
+
+            match child_node {
+                Node::Branch(mut child_branch) => {
+                    self.delete_children(child_branch.as_mut(), deleted)?;
                 }
                 Node::Leaf(_) => {
                     *deleted = deleted.saturating_add(1);
