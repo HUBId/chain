@@ -11,8 +11,7 @@
 //! In particular, a truncated inclusion proof must always surface as an
 //! "incomplete proof" failure so the caller can retry with a fresh proof.
 
-use firewood_storage::logger::debug;
-use firewood_storage::Preimage;
+use firewood_storage::{logger::debug, PathIterItem, Preimage};
 
 use super::*;
 
@@ -163,6 +162,41 @@ fn test_empty_tree_proof() {
 
     let proof_err = merkle.prove(key).unwrap_err();
     assert!(matches!(proof_err, ProofError::Empty), "{proof_err:?}");
+}
+
+#[test]
+fn proof_fallback_matches_path_iter_encoding() {
+    use crate::proof::ProofNode;
+
+    let merkle = init_merkle([([0xBE, 0xEF], [0x42])]);
+    let nodestore = merkle.nodestore();
+    let root = nodestore
+        .root_as_maybe_persisted_node()
+        .and_then(|node| node.as_shared_node(nodestore).ok())
+        .expect("root node");
+
+    let missing = &[0xF0];
+
+    let mut path_iter = merkle.path_iter(missing).unwrap();
+    assert!(
+        path_iter.next().is_none(),
+        "path iterator unexpectedly yielded nodes"
+    );
+
+    let proof = merkle.prove(missing).unwrap();
+    assert_eq!(
+        proof.as_ref().len(),
+        1,
+        "fallback proof should contain root"
+    );
+
+    let expected = ProofNode::from(PathIterItem {
+        key_nibbles: root.partial_path().iter().copied().collect(),
+        node: root.clone(),
+        next_nibble: None,
+    });
+
+    assert_eq!(proof.as_ref(), &[expected]);
 }
 
 #[test]
