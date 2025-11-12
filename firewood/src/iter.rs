@@ -10,6 +10,7 @@ use crate::v2::api;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
 
@@ -48,10 +49,10 @@ impl std::fmt::Debug for IterationNode {
 }
 
 #[derive(Debug)]
-enum NodeIterState {
+enum NodeIterState<'a> {
     /// The iterator state is lazily initialized when `poll_next` is called
     /// for the first time. The iteration start key is stored here.
-    StartFromKey(Key),
+    StartFromKey(Cow<'a, [u8]>),
     Iterating {
         /// Each element is a node that will be visited (i.e. returned)
         /// or has been visited but has unvisited children.
@@ -65,35 +66,29 @@ enum NodeIterState {
 #[derive(Debug)]
 /// An iterator of nodes in order starting from a specific point in the trie.
 pub struct MerkleNodeIter<'a, T> {
-    state: NodeIterState,
+    state: NodeIterState<'a>,
     merkle: &'a T,
-}
-
-impl From<Key> for NodeIterState {
-    fn from(key: Key) -> Self {
-        Self::StartFromKey(key)
-    }
 }
 
 impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a T, key: Cow<'a, [u8]>) -> Self {
         Self {
-            state: NodeIterState::from(key),
+            state: NodeIterState::StartFromKey(key),
             merkle,
         }
     }
 }
 
-impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
+impl<'a, T: TrieReader> Iterator for MerkleNodeIter<'a, T> {
     type Item = Result<(Key, SharedNode), FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(self.merkle, key) {
+                    match get_iterator_intial_state(self.merkle, key.as_ref()) {
                         Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
@@ -180,10 +175,10 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
 impl<T: TrieReader> FusedIterator for MerkleNodeIter<'_, T> {}
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T: TrieReader>(
+fn get_iterator_intial_state<'a, T: TrieReader>(
     merkle: &T,
     key: &[u8],
-) -> Result<NodeIterState, FileIoError> {
+) -> Result<NodeIterState<'a>, FileIoError> {
     let Some(root) = merkle
         .root_as_maybe_persisted_node()
         .map(|root| root.as_shared_node(merkle))
@@ -284,17 +279,24 @@ pub struct MerkleKeyValueIter<'a, T> {
 impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueIter<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
-            iter: MerkleNodeIter::new(merkle, Box::new([])),
+            iter: MerkleNodeIter::new(merkle, Cow::Borrowed(&[])),
         }
     }
 }
 
 impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
     /// Construct a [`MerkleKeyValueIter`] that will iterate over all the key-value pairs in `merkle`
-    /// starting from a particular key
+    /// starting from a particular key.
+    pub fn from_slice(merkle: &'a T, key: &'a [u8]) -> Self {
+        Self {
+            iter: MerkleNodeIter::new(merkle, Cow::Borrowed(key)),
+        }
+    }
+
+    /// Construct a [`MerkleKeyValueIter`] that starts from an owned key buffer.
     pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
         Self {
-            iter: MerkleNodeIter::new(merkle, key.as_ref().into()),
+            iter: MerkleNodeIter::new(merkle, Cow::Owned(key.as_ref().to_vec())),
         }
     }
 }
@@ -748,14 +750,29 @@ mod tests {
     #[test]
     fn key_value_iterate_empty() {
         let merkle = create_test_merkle();
-        let iter = merkle.key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
+        let iter = merkle.key_value_iter_from_key(b"x");
         assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_iter_from_key_borrows_start_key() {
+        let merkle = create_test_merkle();
+        let start = [0xAA, 0xBB];
+
+        let iter = merkle.key_value_iter_from_key(&start);
+
+        match &iter.iter.state {
+            NodeIterState::StartFromKey(Cow::Borrowed(buffer)) => {
+                assert_eq!(*buffer, start);
+            }
+            state => panic!("expected borrowed start key, got {state:?}"),
+        }
     }
 
     #[test]
     fn node_iterate_empty() {
         let merkle = create_test_merkle();
-        let iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+        let iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Borrowed(&[]));
         assert_iterator_is_exhausted(iter);
     }
 
@@ -765,7 +782,7 @@ mod tests {
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
-        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Borrowed(&[]));
 
         let (key, node) = iter.next().unwrap().unwrap();
 
@@ -822,7 +839,7 @@ mod tests {
     fn node_iterator_no_start_key() {
         let merkle = created_populated_merkle();
 
-        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Borrowed(&[]));
 
         // Covers case of branch with no value
         let (key, node) = iter.next().unwrap().unwrap();
@@ -865,10 +882,7 @@ mod tests {
     fn node_iterator_start_key_between_nodes() {
         let merkle = created_populated_merkle();
 
-        let mut iter = MerkleNodeIter::new(
-            merkle.nodestore(),
-            vec![0x00, 0x00, 0x01].into_boxed_slice(),
-        );
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Owned(vec![0x00, 0x00, 0x01]));
 
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -892,10 +906,7 @@ mod tests {
     fn node_iterator_start_key_on_node() {
         let merkle = created_populated_merkle();
 
-        let mut iter = MerkleNodeIter::new(
-            merkle.nodestore(),
-            vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
-        );
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Owned(vec![0x00, 0xD0, 0xD0]));
 
         let (key, node) = iter.next().unwrap().unwrap();
         assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
@@ -919,7 +930,7 @@ mod tests {
     fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let iter = MerkleNodeIter::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
+        let iter = MerkleNodeIter::new(merkle.nodestore(), Cow::Owned(vec![0xFF]));
 
         assert_iterator_is_exhausted(iter);
     }
@@ -937,7 +948,7 @@ mod tests {
         }
 
         let mut iter = match start {
-            Some(start) => merkle.key_value_iter_from_key(start.to_vec().into_boxed_slice()),
+            Some(start) => merkle.key_value_iter_from_key(start),
             None => merkle.key_value_iter(),
         };
 
@@ -999,7 +1010,8 @@ mod tests {
 
         // Test with start key
         for i in 0..=max {
-            let mut iter = merkle.key_value_iter_from_key(vec![i].into_boxed_slice());
+            let start_key = vec![i];
+            let mut iter = merkle.key_value_iter_from_key(&start_key);
             for j in 0..=max {
                 let expected_key = vec![i, j];
                 let expected_value = vec![i, j];
@@ -1128,7 +1140,8 @@ mod tests {
             merkle.insert(key, key.clone().into_boxed_slice()).unwrap();
         }
 
-        let mut iter = merkle.key_value_iter_from_key(vec![intermediate].into_boxed_slice());
+        let start_key = vec![intermediate];
+        let mut iter = merkle.key_value_iter_from_key(&start_key);
 
         let first_expected = key_values[1].as_slice();
         let first = iter.next().unwrap().unwrap();
@@ -1174,7 +1187,8 @@ mod tests {
         let start = keys.iter().position(|key| key[0] == branch_path).unwrap();
         let keys = &keys[start..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![branch_path].into_boxed_slice());
+        let start_key = vec![branch_path];
+        let mut iter = merkle.key_value_iter_from_key(&start_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1222,7 +1236,7 @@ mod tests {
         let start = keys.iter().position(|key| key == &branch_key).unwrap();
         let keys = &keys[start..];
 
-        let mut iter = merkle.key_value_iter_from_key(branch_key.into_boxed_slice());
+        let mut iter = merkle.key_value_iter_from_key(&branch_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1252,7 +1266,8 @@ mod tests {
 
         let keys = &keys[(missing as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+        let start_key = vec![missing];
+        let mut iter = merkle.key_value_iter_from_key(&start_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1278,7 +1293,8 @@ mod tests {
             merkle.insert(&key, key.clone().into()).unwrap();
         });
 
-        let iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+        let start_key_buf = vec![start_key];
+        let iter = merkle.key_value_iter_from_key(&start_key_buf);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -1299,7 +1315,8 @@ mod tests {
             })
             .collect();
 
-        let mut iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+        let start_key_buf = vec![start_key];
+        let mut iter = merkle.key_value_iter_from_key(&start_key_buf);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1331,7 +1348,8 @@ mod tests {
 
         let keys = &keys[((missing >> 4) as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+        let start_key = vec![missing];
+        let mut iter = merkle.key_value_iter_from_key(&start_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
@@ -1350,7 +1368,7 @@ mod tests {
         let mut merkle = create_test_merkle();
         merkle.insert(&key, key.into()).unwrap();
 
-        let iter = merkle.key_value_iter_from_key(greater_key);
+        let iter = merkle.key_value_iter_from_key(&greater_key);
 
         assert_iterator_is_exhausted(iter);
     }
@@ -1375,7 +1393,8 @@ mod tests {
 
         let keys = &keys[((greatest >> 4) as usize)..];
 
-        let mut iter = merkle.key_value_iter_from_key(vec![greatest].into_boxed_slice());
+        let start_key = vec![greatest];
+        let mut iter = merkle.key_value_iter_from_key(&start_key);
 
         for key in keys {
             let next = iter.next().unwrap().unwrap();
