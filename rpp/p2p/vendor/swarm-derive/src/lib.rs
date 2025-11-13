@@ -67,6 +67,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> syn::Result<Toke
     let either_ident = quote! { #prelude_path::Either };
     let network_behaviour_action = quote! { #prelude_path::ToSwarm };
     let connection_handler = quote! { #prelude_path::ConnectionHandler };
+    let empty_connection_handler = quote! { #prelude_path::EmptyConnectionHandler };
     let proto_select_ident = quote! { #prelude_path::ConnectionHandlerSelect };
     let peer_id = quote! { #prelude_path::PeerId };
     let connection_id = quote! { #prelude_path::ConnectionId };
@@ -266,7 +267,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> syn::Result<Toke
             }
         }
         // ph_ty = Some(quote! )
-        ph_ty.unwrap_or(quote! {()}) // TODO: `!` instead
+        ph_ty.unwrap_or(empty_connection_handler.clone())
     };
 
     // The content of `handle_pending_inbound_connection`.
@@ -306,7 +307,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> syn::Result<Toke
             }
         }
 
-        out_handler.unwrap_or(quote! {()}) // TODO: See test `empty`.
+        out_handler.unwrap_or(empty_connection_handler.clone())
     };
 
     // The content of `handle_pending_outbound_connection`.
@@ -356,7 +357,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> syn::Result<Toke
             }
         }
 
-        out_handler.unwrap_or(quote! {()}) // TODO: See test `empty`.
+        out_handler.unwrap_or(empty_connection_handler)
     };
 
     // List of statements to put in `poll()`.

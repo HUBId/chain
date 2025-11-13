@@ -67,6 +67,9 @@ pub mod handler;
 mod listen_opts;
 mod translation;
 
+/// [`ConnectionHandler`] that does not support any protocols or events.
+pub use dummy::ConnectionHandler as EmptyConnectionHandler;
+
 /// Bundles all symbols required for the [`libp2p_swarm_derive::NetworkBehaviour`] macro.
 #[doc(hidden)]
 pub mod derive_prelude {
@@ -86,7 +89,8 @@ pub mod derive_prelude {
             NewListener,
         },
         connection::ConnectionId,
-        ConnectionDenied, ConnectionHandler, ConnectionHandlerSelect, DialError, NetworkBehaviour,
+        ConnectionDenied, ConnectionHandler, ConnectionHandlerSelect, DialError,
+        EmptyConnectionHandler, NetworkBehaviour,
         THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
     };
 }
