@@ -3,26 +3,36 @@ use crate::db::UtxoOutpoint;
 
 use super::{CandidateUtxo, DraftOutput};
 
-const DEFAULT_DUST_LIMIT: u128 = 546;
-
 #[derive(Clone, Debug)]
 pub struct PolicyEngine {
     min_confirmations: u32,
     dust_limit: u128,
+    max_change_outputs: u32,
     daily_limit: Option<u128>,
 }
 
 impl PolicyEngine {
-    pub fn new(min_confirmations: u32, daily_limit: Option<u128>) -> Self {
+    pub fn new(
+        min_confirmations: u32,
+        dust_limit: u128,
+        max_change_outputs: u32,
+        daily_limit: Option<u128>,
+    ) -> Self {
         Self {
             min_confirmations,
-            dust_limit: DEFAULT_DUST_LIMIT,
+            dust_limit,
+            max_change_outputs,
             daily_limit,
         }
     }
 
     pub fn from_config(config: &WalletPolicyConfig) -> Self {
-        Self::new(config.min_confirmations, None)
+        Self::new(
+            config.min_confirmations,
+            config.dust_limit,
+            config.max_change_outputs,
+            config.spend_limit_daily,
+        )
     }
 
     pub fn min_confirmations(&self) -> u32 {
@@ -31,6 +41,14 @@ impl PolicyEngine {
 
     pub fn dust_limit(&self) -> u128 {
         self.dust_limit
+    }
+
+    pub fn max_change_outputs(&self) -> u32 {
+        self.max_change_outputs
+    }
+
+    pub fn daily_limit(&self) -> Option<u128> {
+        self.daily_limit
     }
 
     pub fn set_daily_limit(&mut self, limit: Option<u128>) {
@@ -50,21 +68,44 @@ impl PolicyEngine {
     }
 
     pub fn evaluate_outputs(&self, outputs: &[DraftOutput]) -> Vec<PolicyViolation> {
-        outputs
+        let mut violations: Vec<PolicyViolation> = outputs
             .iter()
-            .filter(|output| !output.change && output.value < self.dust_limit)
-            .map(|output| PolicyViolation::DustOutput {
-                address: output.address.clone(),
-                value: output.value,
-                threshold: self.dust_limit,
+            .filter(|output| output.value < self.dust_limit)
+            .map(|output| {
+                if output.change {
+                    PolicyViolation::ChangeOutputDust {
+                        address: output.address.clone(),
+                        value: output.value,
+                        threshold: self.dust_limit,
+                    }
+                } else {
+                    PolicyViolation::DustOutput {
+                        address: output.address.clone(),
+                        value: output.value,
+                        threshold: self.dust_limit,
+                    }
+                }
             })
-            .collect()
+            .collect();
+
+        let change_count = outputs.iter().filter(|output| output.change).count() as u32;
+        if change_count > self.max_change_outputs {
+            violations.push(PolicyViolation::ChangeOutputLimit {
+                limit: self.max_change_outputs,
+                observed: change_count,
+            });
+        }
+
+        violations
     }
 
     pub fn evaluate_daily_limit(&self, amount: u128) -> Option<PolicyViolation> {
         self.daily_limit.and_then(|limit| {
             if amount > limit {
-                Some(PolicyViolation::DailyLimitExceeded { limit, attempted: amount })
+                Some(PolicyViolation::DailyLimitExceeded {
+                    limit,
+                    attempted: amount,
+                })
             } else {
                 None
             }
@@ -79,6 +120,15 @@ pub enum PolicyViolation {
         value: u128,
         threshold: u128,
     },
+    ChangeOutputDust {
+        address: String,
+        value: u128,
+        threshold: u128,
+    },
+    ChangeOutputLimit {
+        limit: u32,
+        observed: u32,
+    },
     InsufficientConfirmations {
         outpoint: UtxoOutpoint,
         confirmations: u32,
@@ -89,4 +139,3 @@ pub enum PolicyViolation {
         attempted: u128,
     },
 }
-

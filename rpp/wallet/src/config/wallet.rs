@@ -6,6 +6,9 @@ const DEFAULT_MIN_CONFIRMATIONS: u32 = 1;
 const DEFAULT_MIN_FEE_RATE: u64 = 1;
 const DEFAULT_MAX_FEE_RATE: u64 = 200;
 const DEFAULT_FEE_RATE: u64 = 5;
+const DEFAULT_DUST_LIMIT: u128 = 546;
+const DEFAULT_MAX_CHANGE_OUTPUTS: u32 = 1;
+const DEFAULT_PENDING_LOCK_TIMEOUT_SECS: u64 = 600;
 
 /// High-level wallet configuration exposed to runtime services.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -60,6 +63,16 @@ pub struct WalletPolicyConfig {
     pub internal_gap_limit: u32,
     /// Minimum confirmations required before funds become spendable.
     pub min_confirmations: u32,
+    /// Threshold below which outputs are considered dust and rejected.
+    pub dust_limit: u128,
+    /// Cap the number of change outputs emitted by a transaction.
+    pub max_change_outputs: u32,
+    /// Optional daily spend limit enforced before draft creation succeeds.
+    pub spend_limit_daily: Option<u128>,
+    /// Timeout (in seconds) after which pending input locks may be released.
+    pub pending_lock_timeout: u64,
+    /// Hooks coordinating tier-aware policy integrations.
+    pub tier: PolicyTierHooks,
 }
 
 impl Default for WalletPolicyConfig {
@@ -68,6 +81,31 @@ impl Default for WalletPolicyConfig {
             external_gap_limit: DEFAULT_GAP_LIMIT,
             internal_gap_limit: DEFAULT_GAP_LIMIT,
             min_confirmations: DEFAULT_MIN_CONFIRMATIONS,
+            dust_limit: DEFAULT_DUST_LIMIT,
+            max_change_outputs: DEFAULT_MAX_CHANGE_OUTPUTS,
+            spend_limit_daily: None,
+            pending_lock_timeout: DEFAULT_PENDING_LOCK_TIMEOUT_SECS,
+            tier: PolicyTierHooks::default(),
+        }
+    }
+}
+
+/// Control tier-aware runtime integrations for wallet policies.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PolicyTierHooks {
+    /// Enable tier integration checks for spending policies.
+    pub enabled: bool,
+    /// Optional named hook surfaced to clients for bespoke integrations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook: Option<String>,
+}
+
+impl Default for PolicyTierHooks {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hook: None,
         }
     }
 }
@@ -129,6 +167,15 @@ mod tests {
         assert_eq!(config.policy.external_gap_limit, DEFAULT_GAP_LIMIT);
         assert_eq!(config.policy.internal_gap_limit, DEFAULT_GAP_LIMIT);
         assert_eq!(config.policy.min_confirmations, DEFAULT_MIN_CONFIRMATIONS);
+        assert_eq!(config.policy.dust_limit, DEFAULT_DUST_LIMIT);
+        assert_eq!(config.policy.max_change_outputs, DEFAULT_MAX_CHANGE_OUTPUTS);
+        assert!(config.policy.spend_limit_daily.is_none());
+        assert_eq!(
+            config.policy.pending_lock_timeout,
+            DEFAULT_PENDING_LOCK_TIMEOUT_SECS
+        );
+        assert!(!config.policy.tier.enabled);
+        assert!(config.policy.tier.hook.is_none());
         assert_eq!(config.fees.default_sats_per_vbyte, DEFAULT_FEE_RATE);
         assert_eq!(config.fees.min_sats_per_vbyte, DEFAULT_MIN_FEE_RATE);
         assert_eq!(config.fees.max_sats_per_vbyte, DEFAULT_MAX_FEE_RATE);
@@ -148,6 +195,14 @@ mod tests {
                 external_gap_limit: 32,
                 internal_gap_limit: 16,
                 min_confirmations: 12,
+                dust_limit: 2_000,
+                max_change_outputs: 4,
+                spend_limit_daily: Some(50_000),
+                pending_lock_timeout: 900,
+                tier: PolicyTierHooks {
+                    enabled: true,
+                    hook: Some("tier:tl2".to_string()),
+                },
             },
             fees: WalletFeeConfig {
                 default_sats_per_vbyte: 11,
@@ -172,6 +227,12 @@ mod tests {
         assert_eq!(restored.policy.external_gap_limit, 32);
         assert_eq!(restored.policy.internal_gap_limit, 16);
         assert_eq!(restored.policy.min_confirmations, 12);
+        assert_eq!(restored.policy.dust_limit, 2_000);
+        assert_eq!(restored.policy.max_change_outputs, 4);
+        assert_eq!(restored.policy.spend_limit_daily, Some(50_000));
+        assert_eq!(restored.policy.pending_lock_timeout, 900);
+        assert!(restored.policy.tier.enabled);
+        assert_eq!(restored.policy.tier.hook.as_deref(), Some("tier:tl2"));
         assert_eq!(restored.fees.default_sats_per_vbyte, 11);
         assert_eq!(restored.fees.min_sats_per_vbyte, 5);
         assert_eq!(restored.fees.max_sats_per_vbyte, 250);

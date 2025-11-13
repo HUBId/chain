@@ -434,6 +434,7 @@ mod tests {
             external_gap_limit: 4,
             internal_gap_limit: 4,
             min_confirmations: 1,
+            ..WalletPolicyConfig::default()
         };
         let engine = Arc::new(
             WalletEngine::new(Arc::clone(&store), seed, policy, WalletFeeConfig::default())

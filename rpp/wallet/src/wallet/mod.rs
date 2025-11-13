@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+use crate::config::wallet::{
+    PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig, WalletProverConfig,
+};
 use crate::db::{TxCacheEntry, UtxoRecord, WalletStore};
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
@@ -30,6 +32,10 @@ pub enum WalletError {
 pub struct PolicyPreview {
     pub min_confirmations: u32,
     pub dust_limit: u128,
+    pub max_change_outputs: u32,
+    pub spend_limit_daily: Option<u128>,
+    pub pending_lock_timeout: u64,
+    pub tier_hooks: PolicyTierHooks,
 }
 
 pub struct Wallet {
@@ -105,6 +111,10 @@ impl Wallet {
         PolicyPreview {
             min_confirmations: policy.min_confirmations(),
             dust_limit: policy.dust_limit(),
+            max_change_outputs: policy.max_change_outputs(),
+            spend_limit_daily: policy.daily_limit(),
+            pending_lock_timeout: self.engine.pending_lock_timeout(),
+            tier_hooks: self.engine.tier_hooks().clone(),
         }
     }
 
