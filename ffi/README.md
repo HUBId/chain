@@ -154,3 +154,7 @@ cargo build # use debug
 go test -a -c -o binary_file # ignore cache
 leaks --nostacks --atExit -- ./binary_file
 ```
+
+#### CGO pointer safety
+
+Firewood's cgo bindings rely on Go's pointer checks to catch unsafe pointer passing between Go and Rust. The Firewood test suite enforces this by keeping a `//go:debug cgocheck=1` directive in [`firewood_cgocheck_test.go`](./firewood_cgocheck_test.go) for toolchains that still support configuring the setting via source code. Go 1.25 removed that support, so the directive file is excluded there and the runtime defaults (along with the guard in `TestMain`) keep checks enabled. CI contains an explicit guard test that fails when the directive disappears, so any updates must preserve the directive (or update the guard alongside the invariant change).
