@@ -84,23 +84,11 @@ func inferHashingMode() (string, error) {
 
 func TestMain(m *testing.M) {
 	// The cgocheck debugging flag checks that all pointers are pinned.
-	// TODO(arr4n) why doesn't `//go:debug cgocheck=1` work? https://go.dev/doc/godebug
 	debug := strings.Split(os.Getenv("GODEBUG"), ",")
-	var hasCgoCheck bool
 	for _, kv := range debug {
 		switch strings.TrimSpace(kv) {
-		case "cgocheck=1":
-			hasCgoCheck = true
 		case "cgocheck=0":
 			fmt.Fprint(os.Stderr, "GODEBUG=cgocheck=0; MUST be 1 for Firewood cgo tests")
-			os.Exit(1)
-		}
-	}
-
-	if !hasCgoCheck {
-		debug = append(debug, "cgocheck=1")
-		if err := os.Setenv("GODEBUG", strings.Join(debug, ",")); err != nil {
-			fmt.Fprintf(os.Stderr, `os.Setenv("GODEBUG", ...) error %v`, err)
 			os.Exit(1)
 		}
 	}
