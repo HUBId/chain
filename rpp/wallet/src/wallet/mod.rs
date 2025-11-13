@@ -26,6 +26,12 @@ pub enum WalletError {
     Sync(#[from] WalletSyncError),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyPreview {
+    pub min_confirmations: u32,
+    pub dust_limit: u128,
+}
+
 pub struct Wallet {
     store: Arc<WalletStore>,
     engine: Arc<WalletEngine>,
@@ -92,6 +98,14 @@ impl Wallet {
         fee_rate: Option<u64>,
     ) -> Result<DraftTransaction, WalletError> {
         Ok(self.engine.create_draft(to, amount, fee_rate)?)
+    }
+
+    pub fn policy_preview(&self) -> PolicyPreview {
+        let policy = self.engine.policy_engine();
+        PolicyPreview {
+            min_confirmations: policy.min_confirmations(),
+            dust_limit: policy.dust_limit(),
+        }
     }
 
     pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, WalletError> {
