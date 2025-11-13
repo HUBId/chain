@@ -16,12 +16,15 @@ use crate::logger::trace;
 use crate::node::Node;
 #[cfg(feature = "ethhash")]
 use crate::Children;
+#[cfg(feature = "ethhash")]
+use crate::{firewood_counter, TrieError};
 use crate::{
     AreaIndex, Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode,
 };
 
 use super::NodeReader;
 
+use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 
 /// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
@@ -163,6 +166,28 @@ where
             {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
+                let mut account_path = path_prefix.deref().clone();
+                account_path.0.extend(b.partial_path.0.iter().copied());
+                if let Some((child_idx, _)) = b.children.iter().enumerate().find(|(_, child)| {
+                    matches!(
+                        child,
+                        Some(Child::MaybePersisted(maybe_child, _))
+                            if maybe_child.as_linear_address().is_none()
+                    )
+                }) {
+                    firewood_counter!(
+                        "firewood.nodestore.ethhash.corrupt_proof",
+                        "count of ethhash hashing failures detected during proof validation",
+                        "reason" => "missing_address"
+                    )
+                    .increment(1);
+                    return Err(FileIoError::from_generic_no_file(
+                        TrieError::CorruptProof(format!(
+                            "account branch child {child_idx} missing persisted address at path {account_path:?}"
+                        )),
+                        "hash_helper_inner ethhash missing address",
+                    ));
+                }
                 let ClassifiedChildren {
                     unhashed,
                     mut hashed,
@@ -170,10 +195,20 @@ where
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
-                    // Extract the address from the MaybePersistedNode
-                    let addr: crate::LinearAddress = child_node
-                        .as_linear_address()
-                        .expect("hashed node should be persisted");
+                    let Some(addr) = child_node.as_linear_address() else {
+                        firewood_counter!(
+                            "firewood.nodestore.ethhash.corrupt_proof",
+                            "count of ethhash hashing failures detected during proof validation",
+                            "reason" => "missing_address"
+                        )
+                        .increment(1);
+                        return Err(FileIoError::from_generic_no_file(
+                            TrieError::CorruptProof(format!(
+                                "account branch child {child_idx} missing persisted address at path {account_path:?}"
+                            )),
+                            "hash_helper_inner ethhash rehash missing address",
+                        ));
+                    };
                     let mut hashable_node = self.read_node(addr)?.deref().clone();
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
@@ -195,8 +230,43 @@ where
                     **child_hash = hash;
                 }
                 // handle the single-child case for an account special below
-                if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0 as u8)
+                if hashed.is_empty() {
+                    match unhashed.as_slice() {
+                        [] => None,
+                        [single] => {
+                            let Ok(nibble) = u8::try_from(single.0) else {
+                                firewood_counter!(
+                                    "firewood.nodestore.ethhash.corrupt_proof",
+                                    "count of ethhash hashing failures detected during proof validation",
+                                    "reason" => "invalid_child_index"
+                                )
+                                .increment(1);
+                                return Err(FileIoError::from_generic_no_file(
+                                    TrieError::CorruptProof(format!(
+                                        "account branch child index {} out of range at path {account_path:?}",
+                                        single.0
+                                    )),
+                                    "hash_helper_inner ethhash child index",
+                                ));
+                            };
+                            Some(nibble)
+                        }
+                        multiple => {
+                            firewood_counter!(
+                                "firewood.nodestore.ethhash.corrupt_proof",
+                                "count of ethhash hashing failures detected during proof validation",
+                                "reason" => "multiple_unhashed"
+                            )
+                            .increment(1);
+                            return Err(FileIoError::from_generic_no_file(
+                                TrieError::CorruptProof(format!(
+                                    "account branch at path {account_path:?} retains {} unhashed children",
+                                    multiple.len()
+                                )),
+                                "hash_helper_inner ethhash multiple unhashed",
+                            ));
+                        }
+                    }
                 } else {
                     None
                 }
