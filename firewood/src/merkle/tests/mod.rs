@@ -1091,11 +1091,8 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         .expect("merkle fuzz thread panicked")
 }
 
-#[test]
-#[ignore]
-fn dump_iteration_106_dataset() {
-    use hex::encode;
-
+#[cfg(debug_assertions)]
+fn iteration_106_dataset() -> Vec<(Vec<u8>, Vec<u8>)> {
     let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
     let max_len1 = 4;
@@ -1113,172 +1110,44 @@ fn dump_iteration_106_dataset() {
     };
 
     for iter in 0..=106 {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(100);
         for _ in 0..100 {
             let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
             items.push((keygen(), val));
         }
         if iter == 106 {
-            println!("ITER {iter}");
-            for (index, (key, value)) in items.iter().enumerate() {
-                println!("{}:{}:{}", index, encode(key), encode(value));
-            }
-            break;
+            return items;
         }
     }
+
+    unreachable!("iteration 106 dataset generation must return");
 }
 
+#[cfg(debug_assertions)]
 #[test]
-#[ignore]
-fn inspect_iteration_106_roots() {
-    use firewood_storage::{hash_preimage, Child, HashedNodeRef, Node, Path, SharedNode};
-    use hex::encode;
-    use std::ops::Deref;
-
-    fn describe_node(
-        store: &NodeStore<Committed, MemStore>,
-        node: SharedNode,
-        prefix: &Path,
-        lines: &mut Vec<String>,
-    ) {
-        match node.deref() {
-            Node::Branch(branch) => {
-                let mut full_path = prefix.clone();
-                full_path.extend(branch.partial_path.0.iter().copied());
-                let mut child_summaries = Vec::new();
-                for (idx, child) in branch.children.iter().enumerate() {
-                    let Some(child) = child else { continue };
-                    let hash = match child {
-                        Child::Node(_) => None,
-                        Child::AddressWithHash(_, hash) => Some(hash),
-                        Child::MaybePersisted(_, hash) => Some(hash),
-                    };
-                    let summary = if let Some(hash) = hash {
-                        format!("{idx}:{}", encode(&hash.as_ref()[..4]))
-                    } else {
-                        format!("{idx}:<pending>")
-                    };
-                    child_summaries.push(summary);
-                }
-                lines.push(format!(
-                    "branch path={} value={} children=[{}]",
-                    encode(full_path.as_ref()),
-                    branch.value.as_ref().map(|v| v.len()).unwrap_or(0),
-                    child_summaries.join(", "),
-                ));
-
-                for (idx, child) in branch.children.iter().enumerate() {
-                    let Some(child) = child else { continue };
-                    let child_node = match child {
-                        Child::Node(inner) => SharedNode::new(inner.clone()),
-                        Child::AddressWithHash(address, _) => {
-                            store.read_node((*address).into()).expect("read child")
-                        }
-                        Child::MaybePersisted(maybe, _) => {
-                            maybe.as_shared_node(store).expect("load persisted child")
-                        }
-                    };
-                    let mut child_prefix = full_path.clone();
-                    child_prefix.0.push(idx as u8);
-                    describe_node(store, child_node, &child_prefix, lines);
-                }
-            }
-            Node::Leaf(leaf) => {
-                let mut full_path = prefix.clone();
-                full_path.extend(leaf.partial_path.0.iter().copied());
-                lines.push(format!(
-                    "leaf path={} value_len={}",
-                    encode(full_path.as_ref()),
-                    leaf.value.len(),
-                ));
-            }
-        }
-    }
-
-    let rng = firewood_storage::SeededRng::from_option(Some(42));
-    let max_len0 = 8;
-    let max_len1 = 4;
-    let keygen = || {
-        let (len0, len1): (usize, usize) = {
-            (
-                rng.random_range(1..=max_len0),
-                rng.random_range(1..=max_len1),
-            )
-        };
-        (0..len0)
-            .map(|_| rng.random_range(0..2))
-            .chain((0..len1).map(|_| rng.random()))
-            .collect::<Vec<u8>>()
-    };
-
-    let mut items = Vec::new();
-    for iter in 0..=106 {
-        items.clear();
-        for _ in 0..100 {
-            let val: Vec<u8> = (0..256).map(|_| rng.random()).collect();
-            items.push((keygen(), val));
-        }
-        if iter == 106 {
-            break;
-        }
-    }
-
+fn iteration_106_roots_match_after_deduplication() {
+    let items = iteration_106_dataset();
     let actual_merkle = init_merkle(items.clone());
+
     let mut deduped: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-    for (key, value) in &items {
-        deduped.insert(key.clone(), value.clone());
+    for (key, value) in items {
+        deduped.insert(key, value);
     }
     let expected_merkle = init_merkle(deduped);
 
-    let actual_root = actual_merkle
+    let actual_hash = actual_merkle
         .nodestore()
-        .root_as_maybe_persisted_node()
-        .and_then(|node| node.as_shared_node(actual_merkle.nodestore()).ok())
-        .expect("actual root node");
-    let expected_root = expected_merkle
+        .root_hash()
+        .expect("actual root hash");
+    let expected_hash = expected_merkle
         .nodestore()
-        .root_as_maybe_persisted_node()
-        .and_then(|node| node.as_shared_node(expected_merkle.nodestore()).ok())
-        .expect("expected root node");
+        .root_hash()
+        .expect("expected root hash");
 
-    let actual_preimage = hash_preimage(
-        HashedNodeRef::try_from(actual_root.deref()).expect("actual root hashable"),
-        &Path::new(),
+    assert_eq!(
+        actual_hash, expected_hash,
+        "iteration 106 dataset should match deduplicated root"
     );
-    println!("actual root preimage={}", encode(actual_preimage.as_ref()));
-
-    let mut actual_lines = Vec::new();
-    describe_node(
-        actual_merkle.nodestore(),
-        actual_root,
-        &Path::new(),
-        &mut actual_lines,
-    );
-    println!("actual trie:");
-    for line in &actual_lines {
-        println!("  {line}");
-    }
-
-    let expected_preimage = hash_preimage(
-        HashedNodeRef::try_from(expected_root.deref()).expect("expected root hashable"),
-        &Path::new(),
-    );
-    println!(
-        "expected root preimage={}",
-        encode(expected_preimage.as_ref())
-    );
-
-    let mut expected_lines = Vec::new();
-    describe_node(
-        expected_merkle.nodestore(),
-        expected_root,
-        &Path::new(),
-        &mut expected_lines,
-    );
-    println!("expected trie:");
-    for line in &expected_lines {
-        println!("  {line}");
-    }
 }
 
 #[test]

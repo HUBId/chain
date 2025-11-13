@@ -121,6 +121,19 @@ impl<T> Merkle<T> {
     }
 }
 
+#[cfg(feature = "debug-tools")]
+impl<T> Merkle<T> {
+    /// Expose the underlying nodestore for debugging utilities.
+    pub fn into_inner_for_debug(self) -> T {
+        Self::into_inner(self)
+    }
+
+    /// Borrow the underlying nodestore for debugging utilities.
+    pub fn nodestore_for_debug(&self) -> &T {
+        &self.nodestore
+    }
+}
+
 impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
         Merkle { nodestore }
