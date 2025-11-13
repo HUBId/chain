@@ -269,8 +269,18 @@ impl Db {
             "Current number of unwritten nodes queued for persistence"
         );
 
+        describe_gauge!(
+            "firewood.commit.wal_flush.queue_depth",
+            "Number of persistence tasks waiting on the WAL flush executor"
+        );
+        describe_histogram!(
+            "firewood.commit.wal_flush.wait_seconds",
+            "Time spent waiting for the WAL flush executor to complete persistence"
+        );
+
         let unwritten_nodes = gauge!("firewood.nodestore.unwritten_nodes");
         unwritten_nodes.set(0.0);
+        gauge!("firewood.commit.wal_flush.queue_depth").set(0.0);
 
         let db_metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
