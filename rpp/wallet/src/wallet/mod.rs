@@ -6,8 +6,13 @@ use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
 use crate::engine::{DraftTransaction, EngineError, WalletBalance, WalletEngine};
+use crate::indexer::IndexerClient;
 use crate::node_client::{ChainHead, NodeClient, NodeClientError};
 use rpp::runtime::node::MempoolStatus;
+
+mod runtime;
+
+pub use self::runtime::{WalletSyncCoordinator, WalletSyncError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
@@ -17,11 +22,13 @@ pub enum WalletError {
     Prover(#[from] EngineProverError),
     #[error("node error: {0}")]
     Node(#[from] NodeClientError),
+    #[error("sync error: {0}")]
+    Sync(#[from] WalletSyncError),
 }
 
 pub struct Wallet {
     store: Arc<WalletStore>,
-    engine: WalletEngine,
+    engine: Arc<WalletEngine>,
     node_client: Arc<dyn NodeClient>,
     prover: Arc<dyn WalletProver>,
     identifier: String,
@@ -36,7 +43,12 @@ impl Wallet {
         prover_config: WalletProverConfig,
         node_client: Arc<dyn NodeClient>,
     ) -> Result<Self, WalletError> {
-        let engine = WalletEngine::new(Arc::clone(&store), root_seed, policy, fees)?;
+        let engine = Arc::new(WalletEngine::new(
+            Arc::clone(&store),
+            root_seed,
+            policy,
+            fees,
+        )?);
         let prover = build_wallet_prover(&prover_config)?;
         let identifier = engine.identifier();
         Ok(Self {
@@ -108,6 +120,17 @@ impl Wallet {
     }
 
     pub fn engine(&self) -> &WalletEngine {
-        &self.engine
+        self.engine.as_ref()
+    }
+
+    pub fn engine_handle(&self) -> Arc<WalletEngine> {
+        Arc::clone(&self.engine)
+    }
+
+    pub fn start_sync_coordinator(
+        &self,
+        indexer_client: Arc<dyn IndexerClient>,
+    ) -> Result<WalletSyncCoordinator, WalletError> {
+        WalletSyncCoordinator::start(self.engine_handle(), indexer_client).map_err(Into::into)
     }
 }
