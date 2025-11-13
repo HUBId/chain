@@ -98,6 +98,7 @@ async fn hybrid_mode_attaches_connector() {
         Box::new(DeterministicSync::new("hybrid")),
         Some(Box::new(sync_driver)),
         Some(Box::new(connector)),
+        None,
     )
     .expect("runtime start");
 

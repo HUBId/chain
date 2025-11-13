@@ -1,12 +1,15 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::serve;
+use axum::Router;
 use parking_lot::Mutex;
+use tokio::net::TcpListener as TokioTcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
@@ -45,6 +48,7 @@ struct WalletRuntimeState {
     shutdown_tx: watch::Sender<bool>,
     watch_task: Mutex<Option<JoinHandle<()>>>,
     sync_task: Mutex<Option<JoinHandle<()>>>,
+    http_task: Mutex<Option<JoinHandle<()>>>,
     checkpoint: Option<SyncCheckpoint>,
     attached_to_node: bool,
 }
@@ -76,6 +80,13 @@ impl WalletRuntimeState {
                         "wallet sync driver failed: {err}"
                     )));
                 }
+            }
+        }
+        if let Some(handle) = self.http_task.lock().take() {
+            if let Err(err) = handle.await {
+                return Err(ChainError::Config(format!(
+                    "wallet RPC server task failed: {err}"
+                )));
             }
         }
         Ok(())
@@ -187,11 +198,12 @@ pub trait SyncDriver: Send + 'static {
 impl WalletRuntime {
     pub fn start<W>(
         wallet: Arc<W>,
-        config: WalletRuntimeConfig,
+        mut config: WalletRuntimeConfig,
         metrics: Arc<RuntimeMetrics>,
         sync_provider: Box<dyn SyncProvider>,
         sync_driver: Option<Box<dyn SyncDriver>>,
         connector: Option<Box<dyn NodeConnector<W>>>,
+        rpc_router: Option<Router>,
     ) -> ChainResult<GenericWalletRuntimeHandle<W>>
     where
         W: WalletService + 'static,
@@ -203,8 +215,10 @@ impl WalletRuntime {
         let runtime_address = address.clone();
         let mut runtime_shutdown_rx = shutdown_rx.clone();
         let watch_task = tokio::spawn(async move {
-            metrics_clone
-                .record_wallet_rpc_latency(WalletRpcMethod::Status, Duration::from_millis(0));
+            metrics_clone.record_wallet_rpc_latency(
+                WalletRpcMethod::RuntimeStatus,
+                Duration::from_millis(0),
+            );
             loop {
                 if *runtime_shutdown_rx.borrow() {
                     break;
@@ -224,6 +238,48 @@ impl WalletRuntime {
         } else {
             None
         };
+
+        let (http_task, resolved_listen_addr) = if let Some(router) = rpc_router {
+            let std_listener = StdTcpListener::bind(config.listen_addr).map_err(|err| {
+                ChainError::Config(format!(
+                    "failed to bind wallet RPC listener at {}: {err}",
+                    config.listen_addr
+                ))
+            })?;
+            std_listener.set_nonblocking(true).map_err(|err| {
+                ChainError::Config(format!("failed to configure wallet RPC listener: {err}"))
+            })?;
+            let listener = TokioTcpListener::from_std(std_listener).map_err(|err| {
+                ChainError::Config(format!("failed to initialise wallet RPC listener: {err}"))
+            })?;
+            let listen_addr = listener.local_addr().map_err(|err| {
+                ChainError::Config(format!(
+                    "failed to determine wallet RPC listen address: {err}"
+                ))
+            })?;
+            let mut shutdown_rx_http = shutdown_rx.clone();
+            let service = router.into_make_service();
+            let server = serve(listener, service).with_graceful_shutdown(async move {
+                loop {
+                    if *shutdown_rx_http.borrow() {
+                        break;
+                    }
+                    if shutdown_rx_http.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let task = tokio::spawn(async move {
+                if let Err(err) = server.await {
+                    warn!(?err, "wallet RPC server terminated with error");
+                }
+            });
+            info!(listen = %listen_addr, "wallet runtime RPC server listening");
+            (Some(task), listen_addr)
+        } else {
+            (None, config.listen_addr)
+        };
+        config.listen_addr = resolved_listen_addr;
 
         let attached_to_node = if let Some(connector) = connector {
             let attachment = connector.attach(wallet.as_ref())?;
@@ -246,6 +302,7 @@ impl WalletRuntime {
             shutdown_tx,
             watch_task: Mutex::new(Some(watch_task)),
             sync_task: Mutex::new(sync_task),
+            http_task: Mutex::new(http_task),
             checkpoint,
             attached_to_node,
         };

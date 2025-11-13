@@ -1119,46 +1119,120 @@ fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
     RpcMethod::Other
 }
 
-fn wallet_rpc_method(method: &Method, path: &str) -> Option<WalletRpcMethod> {
+fn wallet_rpc_method(_method: &Method, path: &str) -> Option<WalletRpcMethod> {
     if !path.starts_with("/wallet/") {
         return None;
     }
 
-    if path.starts_with("/wallet/history") || path.starts_with("/wallet/ui/history") {
-        return Some(WalletRpcMethod::GetHistory);
+    if path.starts_with("/wallet/state/root") {
+        return Some(WalletRpcMethod::StateRoot);
     }
 
-    if path.starts_with("/wallet/tx/submit")
-        || path.starts_with("/wallet/tx/sign")
-        || path.starts_with("/wallet/uptime/submit")
-    {
+    if path.starts_with("/wallet/ui/history") {
+        return Some(WalletRpcMethod::UiHistory);
+    }
+
+    if path.starts_with("/wallet/ui/send/preview") {
+        return Some(WalletRpcMethod::UiSendPreview);
+    }
+
+    if path.starts_with("/wallet/ui/receive") {
+        return Some(WalletRpcMethod::UiReceive);
+    }
+
+    if path.starts_with("/wallet/ui/node") {
+        return Some(WalletRpcMethod::UiNode);
+    }
+
+    if path.starts_with("/wallet/account") {
+        return Some(WalletRpcMethod::Account);
+    }
+
+    if path.starts_with("/wallet/balance/") {
+        return Some(WalletRpcMethod::Balance);
+    }
+
+    if path.starts_with("/wallet/reputation/") {
+        return Some(WalletRpcMethod::Reputation);
+    }
+
+    if path.starts_with("/wallet/tier/") {
+        return Some(WalletRpcMethod::Tier);
+    }
+
+    if path.starts_with("/wallet/history") {
+        return Some(WalletRpcMethod::History);
+    }
+
+    if path.starts_with("/wallet/send/preview") {
+        return Some(WalletRpcMethod::SendPreview);
+    }
+
+    if path.starts_with("/wallet/tx/build") {
+        return Some(WalletRpcMethod::BuildTransaction);
+    }
+
+    if path.starts_with("/wallet/tx/sign") {
+        return Some(WalletRpcMethod::SignTransaction);
+    }
+
+    if path.starts_with("/wallet/tx/prove") {
+        return Some(WalletRpcMethod::ProveTransaction);
+    }
+
+    if path.starts_with("/wallet/tx/submit") {
         return Some(WalletRpcMethod::SubmitTransaction);
     }
 
-    if path.starts_with("/wallet/tx/prove")
-        || path.starts_with("/wallet/tx/build")
-        || path.starts_with("/wallet/send/preview")
-        || path.starts_with("/wallet/ui/send/preview")
-        || path.starts_with("/wallet/uptime/proof")
-    {
-        return Some(WalletRpcMethod::BuildProof);
+    if path.starts_with("/wallet/receive") {
+        return Some(WalletRpcMethod::ReceiveAddresses);
     }
 
-    if method == Method::GET
-        && (path.starts_with("/wallet/account")
-            || path.starts_with("/wallet/balance/")
-            || path.starts_with("/wallet/reputation/")
-            || path.starts_with("/wallet/tier/")
-            || path.starts_with("/wallet/receive")
-            || path.starts_with("/wallet/ui/receive")
-            || path.starts_with("/wallet/node")
-            || path.starts_with("/wallet/ui/node")
-            || path.starts_with("/wallet/state/root"))
-    {
-        return Some(WalletRpcMethod::GetBalance);
+    if path.starts_with("/wallet/node") {
+        return Some(WalletRpcMethod::NodeView);
     }
 
-    Some(WalletRpcMethod::Status)
+    if path.starts_with("/wallet/uptime/scheduler/offload") {
+        return Some(WalletRpcMethod::UptimeSchedulerOffload);
+    }
+
+    if path.starts_with("/wallet/uptime/scheduler/trigger") {
+        return Some(WalletRpcMethod::UptimeSchedulerTrigger);
+    }
+
+    if path.starts_with("/wallet/uptime/scheduler") {
+        return Some(WalletRpcMethod::UptimeSchedulerStatus);
+    }
+
+    if path.starts_with("/wallet/uptime/proof") {
+        return Some(WalletRpcMethod::UptimeProofGenerate);
+    }
+
+    if path.starts_with("/wallet/uptime/submit") {
+        return Some(WalletRpcMethod::UptimeSubmit);
+    }
+
+    if path.starts_with("/wallet/pipeline/dashboard") {
+        return Some(WalletRpcMethod::PipelineDashboard);
+    }
+
+    if path.starts_with("/wallet/pipeline/telemetry") {
+        return Some(WalletRpcMethod::PipelineTelemetry);
+    }
+
+    if path.starts_with("/wallet/pipeline/stream") {
+        return Some(WalletRpcMethod::PipelineStream);
+    }
+
+    if path.starts_with("/wallet/pipeline/wait") {
+        return Some(WalletRpcMethod::PipelineWait);
+    }
+
+    if path.starts_with("/wallet/pipeline/shutdown") {
+        return Some(WalletRpcMethod::PipelineShutdown);
+    }
+
+    Some(WalletRpcMethod::Unknown)
 }
 
 fn proof_rpc_method(path: &str) -> Option<ProofRpcMethod> {
