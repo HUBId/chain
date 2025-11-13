@@ -33,6 +33,39 @@ fn address_manager_respects_gap_limit_until_usage_recorded() {
 }
 
 #[test]
+fn address_manager_tracks_and_releases_locks() {
+    let store = seeded_store();
+    let manager = AddressManager::new(Arc::clone(&store), [3u8; 32], 2, 2).expect("manager");
+    let outpoint = UtxoOutpoint::new([1u8; 32], 0);
+    manager
+        .lock_inputs([&outpoint], None, 1_000)
+        .expect("lock inputs");
+    assert!(manager.is_outpoint_pending(&outpoint));
+    let locks = manager.pending_locks().expect("pending locks");
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].outpoint, outpoint);
+
+    manager
+        .attach_lock_txid([&outpoint], [9u8; 32])
+        .expect("attach txid");
+    let updated = manager.pending_locks().expect("locks after attach");
+    assert_eq!(updated[0].spending_txid, Some([9u8; 32]));
+
+    let expired = manager
+        .release_expired_locks(2_500, 1)
+        .expect("release expired");
+    assert_eq!(expired.len(), 1);
+    assert!(manager.pending_locks().expect("locks").is_empty());
+
+    manager
+        .lock_inputs([&outpoint], Some([4u8; 32]), 5_000)
+        .expect("lock again");
+    let released = manager.release_inputs([&outpoint]).expect("release inputs");
+    assert_eq!(released.len(), 1);
+    assert!(manager.pending_locks().expect("locks").is_empty());
+}
+
+#[test]
 fn coin_selection_prefers_confirmed_and_skips_pending() {
     let candidates = vec![
         CandidateUtxo::new(mock_utxo(1, 0, 30_000), 5, false),

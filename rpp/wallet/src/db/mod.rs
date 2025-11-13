@@ -2,7 +2,7 @@ pub mod codec;
 pub mod schema;
 pub mod store;
 
-pub use codec::{Address, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord};
+pub use codec::{Address, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord};
 pub use store::{AddressKind, WalletStore, WalletStoreBatch, WalletStoreError};
 
 #[cfg(test)]
@@ -14,7 +14,7 @@ mod tests {
     use super::{
         codec, schema,
         store::{AddressKind, WalletStore},
-        PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord,
+        PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord,
     };
 
     #[test]
@@ -123,5 +123,35 @@ mod tests {
         assert!(store.get_tx_cache_entry(&[6u8; 32]).unwrap().is_none());
         assert!(store.get_policy_snapshot("default").unwrap().is_none());
         assert!(store.get_checkpoint("sync").unwrap().is_none());
+    }
+
+    #[test]
+    fn pending_lock_helpers_roundtrip() {
+        let dir = tempdir().expect("tempdir");
+        let store = WalletStore::open(dir.path()).expect("open store");
+        let outpoint = UtxoOutpoint::new([8u8; 32], 3);
+        let lock = PendingLock::new(outpoint.clone(), 1_650_000_123_000, Some([1u8; 32]));
+
+        {
+            let mut batch = store.batch().expect("batch");
+            batch.put_pending_lock(&lock).expect("put lock");
+            batch.commit().expect("commit");
+        }
+
+        let fetched = store
+            .get_pending_lock(&outpoint)
+            .expect("get lock")
+            .expect("lock present");
+        assert_eq!(fetched, lock);
+
+        let iterated = store.iter_pending_locks().expect("iter locks");
+        assert_eq!(iterated, vec![lock.clone()]);
+
+        let mut cleanup = store.batch().expect("cleanup");
+        cleanup.delete_pending_lock(&outpoint);
+        cleanup.commit().expect("cleanup commit");
+
+        assert!(store.get_pending_lock(&outpoint).unwrap().is_none());
+        assert!(store.iter_pending_locks().unwrap().is_empty());
     }
 }

@@ -5934,6 +5934,7 @@ name = "prover_mock_backend"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "blake3",
  "prover-backend-interface",
  "serde",
 ]

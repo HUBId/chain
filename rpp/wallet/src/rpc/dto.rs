@@ -137,6 +137,15 @@ pub struct DraftOutputDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingLockDto {
+    pub utxo_txid: String,
+    pub utxo_index: u32,
+    pub locked_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spending_txid: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DraftSpendModelDto {
     Exact { amount: u128 },
@@ -153,6 +162,7 @@ pub struct CreateTxResponse {
     pub spend_model: DraftSpendModelDto,
     pub inputs: Vec<DraftInputDto>,
     pub outputs: Vec<DraftOutputDto>,
+    pub locks: Vec<PendingLockDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -168,6 +178,7 @@ pub struct SignTxResponse {
     pub proof_generated: bool,
     pub proof_size: Option<usize>,
     pub duration_ms: u64,
+    pub locks: Vec<PendingLockDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -179,6 +190,7 @@ pub struct BroadcastParams {
 pub struct BroadcastResponse {
     pub draft_id: String,
     pub accepted: bool,
+    pub locks: Vec<PendingLockDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

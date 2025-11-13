@@ -11,9 +11,9 @@ use dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
     EmptyParams, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListTransactionsResponse,
-    ListUtxosResponse, PolicyPreviewResponse, RescanParams, RescanResponse, SignTxParams,
-    SignTxResponse, SyncStatusParams, SyncStatusResponse, TransactionEntryDto, UtxoDto,
-    JSONRPC_VERSION,
+    ListUtxosResponse, PendingLockDto, PolicyPreviewResponse, RescanParams, RescanResponse,
+    SignTxParams, SignTxResponse, SyncStatusParams, SyncStatusResponse, TransactionEntryDto,
+    UtxoDto, JSONRPC_VERSION,
 };
 use hex::encode as hex_encode;
 use serde::de::DeserializeOwned;
@@ -229,6 +229,7 @@ impl WalletRpcRouter {
                 change: output.change,
             })
             .collect();
+        let locks = self.pending_lock_dtos()?;
         let response = CreateTxResponse {
             draft_id: draft_id.to_string(),
             fee_rate: draft.fee_rate,
@@ -238,6 +239,7 @@ impl WalletRpcRouter {
             spend_model: spend_model_to_dto(&draft.spend_model),
             inputs,
             outputs,
+            locks,
         };
         to_value(response)
     }
@@ -298,6 +300,7 @@ impl WalletRpcRouter {
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
         let output = self.wallet.sign_and_prove(&state.draft)?;
         let proof_size = output.proof.as_ref().map(|proof| proof.as_ref().len());
+        let locks = self.pending_lock_dtos()?;
         let response = SignTxResponse {
             draft_id: draft_id.clone(),
             backend: output.backend.clone(),
@@ -305,6 +308,7 @@ impl WalletRpcRouter {
             proof_generated: output.proof.is_some(),
             proof_size,
             duration_ms: output.duration_ms,
+            locks,
         };
         state.prover_output = Some(output);
         drop(drafts);
@@ -320,9 +324,11 @@ impl WalletRpcRouter {
             return Err(RouterError::DraftUnsigned(draft_id));
         }
         self.wallet.broadcast(&state.draft)?;
+        let locks = self.pending_lock_dtos()?;
         to_value(BroadcastResponse {
             draft_id,
             accepted: true,
+            locks,
         })
     }
 
@@ -342,6 +348,19 @@ impl WalletRpcRouter {
 
     fn lock_drafts(&self) -> Result<MutexGuard<'_, HashMap<String, DraftState>>, RouterError> {
         self.drafts.lock().map_err(|_| RouterError::StatePoisoned)
+    }
+
+    fn pending_lock_dtos(&self) -> Result<Vec<PendingLockDto>, RouterError> {
+        let locks = self.wallet.pending_locks()?;
+        Ok(locks
+            .into_iter()
+            .map(|lock| PendingLockDto {
+                utxo_txid: hex_encode(lock.outpoint.txid),
+                utxo_index: lock.outpoint.index,
+                locked_at_ms: lock.locked_at_ms,
+                spending_txid: lock.spending_txid.map(|txid| hex_encode(txid)),
+            })
+            .collect())
     }
 }
 

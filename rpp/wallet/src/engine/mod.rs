@@ -1,9 +1,11 @@
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig};
-use crate::db::{TxCacheEntry, UtxoOutpoint, UtxoRecord};
-use crate::db::{WalletStore, WalletStoreError};
+use crate::db::{
+    PendingLock, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreError,
+};
 
 pub mod addresses;
 pub mod builder;
@@ -217,6 +219,51 @@ impl WalletEngine {
         &self.tier_hooks
     }
 
+    pub fn pending_locks(&self) -> Result<Vec<PendingLock>, EngineError> {
+        self.release_stale_locks()?;
+        self.address_manager
+            .pending_locks()
+            .map_err(EngineError::from)
+    }
+
+    pub fn release_stale_locks(&self) -> Result<Vec<PendingLock>, EngineError> {
+        let now = current_timestamp_ms();
+        self.address_manager
+            .release_expired_locks(now, self.pending_lock_timeout)
+            .map_err(EngineError::from)
+    }
+
+    pub fn release_locks_for_inputs<'a, I>(
+        &self,
+        inputs: I,
+    ) -> Result<Vec<PendingLock>, EngineError>
+    where
+        I: IntoIterator<Item = &'a UtxoOutpoint>,
+    {
+        self.address_manager
+            .release_inputs(inputs)
+            .map_err(EngineError::from)
+    }
+
+    pub fn release_locks_by_txid(&self, txid: &[u8; 32]) -> Result<Vec<PendingLock>, EngineError> {
+        self.address_manager
+            .release_by_txid(txid)
+            .map_err(EngineError::from)
+    }
+
+    pub fn attach_locks_to_txid<'a, I>(
+        &self,
+        inputs: I,
+        txid: [u8; 32],
+    ) -> Result<Vec<PendingLock>, EngineError>
+    where
+        I: IntoIterator<Item = &'a UtxoOutpoint>,
+    {
+        self.address_manager
+            .attach_lock_txid(inputs, txid)
+            .map_err(EngineError::from)
+    }
+
     pub fn balance(&self) -> Result<WalletBalance, EngineError> {
         let utxos = self.store.iter_utxos()?;
         let confirmed = utxos.iter().map(|utxo| utxo.value).sum();
@@ -251,6 +298,9 @@ impl WalletEngine {
         fee_rate_override: Option<u64>,
     ) -> Result<DraftTransaction, EngineError> {
         let fee_rate = self.fee_estimator.resolve(fee_rate_override)?;
+        let now = current_timestamp_ms();
+        self.address_manager
+            .release_expired_locks(now, self.pending_lock_timeout)?;
         let utxos = self.store.iter_utxos()?;
         let candidates: Vec<CandidateUtxo> = utxos
             .into_iter()
@@ -325,8 +375,18 @@ impl WalletEngine {
         let draft = self
             .tx_builder
             .assemble(selection, outputs, fee_rate, fee, spend_model);
-        self.address_manager
-            .mark_inputs_pending(draft.inputs.iter().map(|input| &input.outpoint))?;
+        self.address_manager.lock_inputs(
+            draft.inputs.iter().map(|input| &input.outpoint),
+            None,
+            now,
+        )?;
         Ok(draft)
     }
+}
+
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }

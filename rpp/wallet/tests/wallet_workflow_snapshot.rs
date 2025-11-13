@@ -115,6 +115,11 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         draft.total_output_value + draft.fee,
         "draft should conserve value"
     );
+    assert_eq!(draft.locks.len(), 1, "expected pending lock to be recorded");
+    assert!(
+        draft.locks[0].spending_txid.is_none(),
+        "draft lock should not yet reference a spending txid",
+    );
 
     let sign_params = SignTxParams {
         draft_id: draft.draft_id.clone(),
@@ -132,6 +137,15 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         "proof size should be reported"
     );
     assert!(signed.witness_bytes > 0, "witness payload expected");
+    assert_eq!(
+        signed.locks.len(),
+        1,
+        "lock state should persist after signing"
+    );
+    assert!(
+        signed.locks[0].spending_txid.is_some(),
+        "signing should assign a spending txid to the lock",
+    );
 
     let broadcast_params = BroadcastParams {
         draft_id: draft.draft_id.clone(),
@@ -146,6 +160,10 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     .context("broadcast signed draft")?;
     assert_eq!(broadcast.draft_id, draft.draft_id);
     assert!(broadcast.accepted, "node client should accept the draft");
+    assert!(
+        broadcast.locks.is_empty(),
+        "locks should be cleared after successful broadcast",
+    );
 
     let node = fixture.node();
     let submission = node
@@ -157,6 +175,67 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         .shutdown()
         .await
         .context("shutdown wallet runtime")?;
+    sync.shutdown()
+        .await
+        .context("shutdown wallet sync coordinator")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wallet_blocks_duplicate_spends_until_locks_clear() -> Result<()> {
+    let fixture = WorkflowFixture::new().context("initialise wallet workflow fixture")?;
+    let wallet = fixture.wallet();
+    let sync = wallet
+        .start_sync_coordinator(fixture.indexer_client())
+        .context("start wallet sync coordinator")?;
+    let sync = Arc::new(sync);
+
+    wait_for(|| {
+        wallet
+            .list_utxos()
+            .map(|utxos| utxos.len() == 1)
+            .unwrap_or(false)
+    })
+    .await;
+
+    let destination = wallet
+        .derive_address(false)
+        .context("derive recipient address")?;
+    let amount = fixture.spend_amount();
+    let first = wallet
+        .create_draft(destination.clone(), amount, Some(2))
+        .context("create initial draft")?;
+    let locks = wallet
+        .pending_locks()
+        .context("inspect locks after draft")?;
+    assert_eq!(locks.len(), 1, "expected lock after first draft");
+
+    let second_attempt = wallet.create_draft(destination.clone(), amount, Some(2));
+    assert!(
+        second_attempt.is_err(),
+        "duplicate draft should fail while lock is held",
+    );
+
+    wallet
+        .sign_and_prove(&first)
+        .context("sign initial draft")?;
+    wallet
+        .broadcast(&first)
+        .context("broadcast initial draft")?;
+    assert!(
+        wallet
+            .pending_locks()
+            .context("locks after broadcast")?
+            .is_empty(),
+        "locks should clear after successful broadcast",
+    );
+
+    let retry = wallet
+        .create_draft(destination, amount, Some(2))
+        .context("retry draft after releasing locks")?;
+    assert_eq!(retry.inputs.len(), 1, "expected retry to succeed");
+
     sync.shutdown()
         .await
         .context("shutdown wallet sync coordinator")?;

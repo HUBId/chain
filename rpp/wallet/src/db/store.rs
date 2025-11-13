@@ -4,7 +4,10 @@ use std::sync::{Mutex, MutexGuard};
 use storage_firewood::kv::{FirewoodKv, Hash, KvError};
 
 use crate::db::{
-    codec::{self, Address, CodecError, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord},
+    codec::{
+        self, Address, CodecError, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
+        UtxoRecord,
+    },
     schema,
 };
 
@@ -113,6 +116,32 @@ impl WalletStore {
             .collect::<Result<Vec<_>, _>>()?;
         drop(guard);
         Ok(utxos)
+    }
+
+    /// Fetch a pending lock entry for a given outpoint.
+    pub fn get_pending_lock(
+        &self,
+        outpoint: &UtxoOutpoint,
+    ) -> Result<Option<PendingLock>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = pending_lock_key(outpoint);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_pending_lock(&bytes)?))
+    }
+
+    /// Iterate over all pending lock entries currently stored.
+    pub fn iter_pending_locks(&self) -> Result<Vec<PendingLock>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::PENDING_LOCKS_NAMESPACE;
+        let locks = guard
+            .scan_prefix(prefix)
+            .map(|(_, value)| codec::decode_pending_lock(&value))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(guard);
+        Ok(locks)
     }
 
     /// Fetch a cached transaction entry by txid.
@@ -308,6 +337,16 @@ impl<'a> WalletStoreBatch<'a> {
         self.guard.delete(&checkpoint_key(label));
     }
 
+    pub fn put_pending_lock(&mut self, lock: &PendingLock) -> Result<(), WalletStoreError> {
+        let value = codec::encode_pending_lock(lock)?;
+        self.guard.put(pending_lock_key(&lock.outpoint), value);
+        Ok(())
+    }
+
+    pub fn delete_pending_lock(&mut self, outpoint: &UtxoOutpoint) {
+        self.guard.delete(&pending_lock_key(outpoint));
+    }
+
     pub fn commit(self) -> Result<Hash, WalletStoreError> {
         Ok(self.guard.commit()?)
     }
@@ -391,6 +430,13 @@ fn policy_key(label: &str) -> Vec<u8> {
 
 fn checkpoint_key(label: &str) -> Vec<u8> {
     namespaced(schema::CHECKPOINTS_NAMESPACE, label.as_bytes())
+}
+
+fn pending_lock_key(outpoint: &UtxoOutpoint) -> Vec<u8> {
+    let mut key = schema::PENDING_LOCKS_NAMESPACE.to_vec();
+    key.extend_from_slice(&outpoint.txid);
+    key.extend_from_slice(&outpoint.index.to_be_bytes());
+    key
 }
 
 fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {

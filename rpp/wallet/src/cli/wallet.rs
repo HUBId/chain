@@ -19,8 +19,8 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::rpc::dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    JsonRpcRequest, JsonRpcResponse, PolicyPreviewResponse, RescanParams, RescanResponse,
-    SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
+    JsonRpcRequest, JsonRpcResponse, PendingLockDto, PolicyPreviewResponse, RescanParams,
+    RescanResponse, SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
@@ -543,6 +543,7 @@ impl SendSignCommand {
             println!("  Proof size    : {} bytes", size);
         }
         println!("  Duration      : {} ms", result.duration_ms);
+        render_locks(&result.locks);
         Ok(())
     }
 }
@@ -563,6 +564,7 @@ impl SendBroadcastCommand {
         println!("Broadcast result\n");
         println!("  Draft ID : {}", response.draft_id);
         println!("  Accepted : {}", format_bool(response.accepted));
+        render_locks(&response.locks);
         Ok(())
     }
 }
@@ -677,6 +679,31 @@ fn render_draft_summary(draft: &CreateTxResponse) {
                 format_bool(*change)
             );
         }
+    }
+
+    render_locks(&draft.locks);
+}
+
+fn render_locks(locks: &[PendingLockDto]) {
+    if locks.is_empty() {
+        println!("\n  Locks        : none");
+        return;
+    }
+    println!("\n  Locks:");
+    println!(
+        "    {:<68} {:>16} {:>64}",
+        "Outpoint", "Locked at (ms)", "Spending txid"
+    );
+    for PendingLockDto {
+        utxo_txid,
+        utxo_index,
+        locked_at_ms,
+        spending_txid,
+    } in locks
+    {
+        let outpoint = format!("{}:{}", utxo_txid, utxo_index);
+        let spending = spending_txid.clone().unwrap_or_else(|| "-".to_string());
+        println!("    {:<68} {:>16} {:>64}", outpoint, locked_at_ms, spending);
     }
 }
 

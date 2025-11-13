@@ -3,13 +3,14 @@ use std::sync::Arc;
 use crate::config::wallet::{
     PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig, WalletProverConfig,
 };
-use crate::db::{TxCacheEntry, UtxoRecord, WalletStore};
+use crate::db::{PendingLock, TxCacheEntry, UtxoRecord, WalletStore};
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
 use crate::engine::{DraftTransaction, EngineError, WalletBalance, WalletEngine};
 use crate::indexer::IndexerClient;
 use crate::node_client::{ChainHead, NodeClient, NodeClientError};
+use crate::proof_backend::Blake2sHasher;
 use rpp::runtime::node::MempoolStatus;
 
 mod runtime;
@@ -106,6 +107,20 @@ impl Wallet {
         Ok(self.engine.create_draft(to, amount, fee_rate)?)
     }
 
+    pub fn pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
+        Ok(self.engine.pending_locks()?)
+    }
+
+    pub fn release_stale_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
+        Ok(self.engine.release_stale_locks()?)
+    }
+
+    pub fn abort_draft(&self, draft: &DraftTransaction) -> Result<Vec<PendingLock>, WalletError> {
+        Ok(self
+            .engine
+            .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?)
+    }
+
     pub fn policy_preview(&self) -> PolicyPreview {
         let policy = self.engine.policy_engine();
         PolicyPreview {
@@ -119,12 +134,34 @@ impl Wallet {
     }
 
     pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, WalletError> {
-        Ok(self.prover.prove(draft)?)
+        match self.prover.prove(draft) {
+            Ok(output) => {
+                let txid = lock_fingerprint(draft);
+                self.engine
+                    .attach_locks_to_txid(draft.inputs.iter().map(|input| &input.outpoint), txid)?;
+                Ok(output)
+            }
+            Err(err) => {
+                self.engine
+                    .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?;
+                Err(err.into())
+            }
+        }
     }
 
     pub fn broadcast(&self, draft: &DraftTransaction) -> Result<(), WalletError> {
-        self.node_client.submit_tx(draft)?;
-        Ok(())
+        let txid = lock_fingerprint(draft);
+        match self.node_client.submit_tx(draft) {
+            Ok(()) => {
+                self.engine.release_locks_by_txid(&txid)?;
+                Ok(())
+            }
+            Err(err) => {
+                self.engine
+                    .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?;
+                Err(err.into())
+            }
+        }
     }
 
     pub fn estimate_fee(&self, confirmation_target: u16) -> Result<u64, WalletError> {
@@ -157,4 +194,29 @@ impl Wallet {
     ) -> Result<WalletSyncCoordinator, WalletError> {
         WalletSyncCoordinator::start(self.engine_handle(), indexer_client).map_err(Into::into)
     }
+}
+
+fn lock_fingerprint(draft: &DraftTransaction) -> [u8; 32] {
+    let mut material = Vec::new();
+    for input in &draft.inputs {
+        material.extend_from_slice(&input.outpoint.txid);
+        material.extend_from_slice(&input.outpoint.index.to_be_bytes());
+        material.extend_from_slice(&input.value.to_be_bytes());
+        material.extend_from_slice(&input.confirmations.to_be_bytes());
+    }
+    for output in &draft.outputs {
+        material.extend_from_slice(output.address.as_bytes());
+        material.extend_from_slice(&output.value.to_be_bytes());
+        material.push(output.change as u8);
+    }
+    material.extend_from_slice(&draft.fee_rate.to_be_bytes());
+    material.extend_from_slice(&draft.fee.to_be_bytes());
+    match &draft.spend_model {
+        SpendModel::Exact { amount } => {
+            material.push(0);
+            material.extend_from_slice(&amount.to_be_bytes());
+        }
+        SpendModel::Sweep => material.push(1),
+    }
+    Blake2sHasher::hash(&material).into()
 }

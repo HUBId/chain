@@ -10,6 +10,8 @@ pub const ADDR_EXTERNAL_NAMESPACE: &[u8] = b"wallet/addr_external/";
 pub const ADDR_INTERNAL_NAMESPACE: &[u8] = b"wallet/addr_internal/";
 /// Namespace for materialised UTXO records tracked by the wallet.
 pub const UTXOS_NAMESPACE: &[u8] = b"wallet/utxos/";
+/// Namespace tracking pending spend locks for wallet-controlled UTXOs.
+pub const PENDING_LOCKS_NAMESPACE: &[u8] = b"wallet/pending_locks/";
 /// Namespace for cached serialized transactions.
 pub const TX_CACHE_NAMESPACE: &[u8] = b"wallet/tx_cache/";
 /// Namespace for persisted policy snapshots.
