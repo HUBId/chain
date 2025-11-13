@@ -20,6 +20,10 @@ startup with either the `--storage-ring-size <entries>` CLI flag or the
 `RPP_NODE_STORAGE_RING_SIZE=<entries>` environment variable. Values outside the
 supported range are rejected before the node initialises.
 
+Continuous integration runs Firewood's unit, FFI, and giant-node suites with
+`XTASK_FEATURES=io-uring`, ensuring regressions in the async storage backend are
+flagged automatically before release.
+
 ## WAL crash-recovery chaos drill
 
 Nightly CI exercises abrupt termination of the Firewood write-ahead log to
