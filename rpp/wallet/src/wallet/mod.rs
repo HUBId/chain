@@ -1,9 +1,12 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{
     PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig, WalletProverConfig,
 };
-use crate::db::{PendingLock, TxCacheEntry, UtxoRecord, WalletStore};
+use crate::db::{
+    PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord, WalletStore, WalletStoreError,
+};
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
@@ -50,6 +53,8 @@ pub struct Wallet {
 }
 
 impl Wallet {
+    const DEFAULT_POLICY_LABEL: &'static str = "default";
+
     pub fn new(
         store: Arc<WalletStore>,
         root_seed: [u8; 32],
@@ -119,6 +124,10 @@ impl Wallet {
         Ok(self.engine.release_stale_locks()?)
     }
 
+    pub fn release_pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
+        Ok(self.engine.release_pending_locks()?)
+    }
+
     pub fn abort_draft(&self, draft: &DraftTransaction) -> Result<Vec<PendingLock>, WalletError> {
         Ok(self
             .engine
@@ -135,6 +144,29 @@ impl Wallet {
             pending_lock_timeout: self.engine.pending_lock_timeout(),
             tier_hooks: self.engine.tier_hooks().clone(),
         }
+    }
+
+    pub fn get_policy_snapshot(&self) -> Result<Option<PolicySnapshot>, WalletError> {
+        self.store
+            .get_policy_snapshot(Self::DEFAULT_POLICY_LABEL)
+            .map_err(store_error)
+    }
+
+    pub fn set_policy_snapshot(
+        &self,
+        statements: Vec<String>,
+    ) -> Result<PolicySnapshot, WalletError> {
+        let mut batch = self.store.batch().map_err(store_error)?;
+        let next_revision = self
+            .get_policy_snapshot()?
+            .map(|snapshot| snapshot.revision.saturating_add(1))
+            .unwrap_or(1);
+        let snapshot = PolicySnapshot::new(next_revision, current_timestamp_ms(), statements);
+        batch
+            .put_policy_snapshot(Self::DEFAULT_POLICY_LABEL, &snapshot)
+            .map_err(store_error)?;
+        batch.commit().map_err(store_error)?;
+        Ok(snapshot)
     }
 
     pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, WalletError> {
@@ -231,4 +263,17 @@ fn lock_fingerprint(draft: &DraftTransaction) -> [u8; 32] {
         }
     }
     Blake2sHasher::hash(&material).into()
+}
+
+fn store_error(error: WalletStoreError) -> WalletError {
+    WalletError::Engine(error.into())
+}
+
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }

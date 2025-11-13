@@ -266,17 +266,58 @@ where
 type RpcHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
 type JsonRpcHandler = AuthenticatedRpcHandler<RpcHandlerFn, JsonRpcRequest>;
 
-const JSON_RPC_METHODS: &[(&str, WalletRpcMethod)] = &[
-    ("get_balance", WalletRpcMethod::JsonGetBalance),
-    ("list_utxos", WalletRpcMethod::JsonListUtxos),
-    ("list_txs", WalletRpcMethod::JsonListTransactions),
-    ("derive_address", WalletRpcMethod::JsonDeriveAddress),
-    ("create_tx", WalletRpcMethod::JsonCreateTransaction),
-    ("sign_tx", WalletRpcMethod::JsonSignTransaction),
-    ("broadcast", WalletRpcMethod::JsonBroadcast),
-    ("policy_preview", WalletRpcMethod::JsonPolicyPreview),
-    ("sync_status", WalletRpcMethod::JsonSyncStatus),
-    ("rescan", WalletRpcMethod::JsonRescan),
+fn determine_rate_limit(limit_hint: Option<u64>, global: Option<NonZeroU64>) -> Option<NonZeroU64> {
+    let method_limit = limit_hint.and_then(NonZeroU64::new);
+    match (method_limit, global) {
+        (Some(method), Some(global)) => {
+            if method.get() <= global.get() {
+                Some(method)
+            } else {
+                Some(global)
+            }
+        }
+        (Some(method), None) => Some(method),
+        (None, Some(global)) => Some(global),
+        (None, None) => None,
+    }
+}
+
+const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[
+    ("get_balance", WalletRpcMethod::JsonGetBalance, Some(120)),
+    ("list_utxos", WalletRpcMethod::JsonListUtxos, Some(120)),
+    ("list_txs", WalletRpcMethod::JsonListTransactions, Some(60)),
+    (
+        "derive_address",
+        WalletRpcMethod::JsonDeriveAddress,
+        Some(60),
+    ),
+    (
+        "create_tx",
+        WalletRpcMethod::JsonCreateTransaction,
+        Some(30),
+    ),
+    ("sign_tx", WalletRpcMethod::JsonSignTransaction, Some(20)),
+    ("broadcast", WalletRpcMethod::JsonBroadcast, Some(20)),
+    (
+        "policy_preview",
+        WalletRpcMethod::JsonPolicyPreview,
+        Some(30),
+    ),
+    ("get_policy", WalletRpcMethod::JsonGetPolicy, Some(30)),
+    ("set_policy", WalletRpcMethod::JsonSetPolicy, Some(10)),
+    ("estimate_fee", WalletRpcMethod::JsonEstimateFee, Some(120)),
+    (
+        "list_pending_locks",
+        WalletRpcMethod::JsonListPendingLocks,
+        Some(60),
+    ),
+    (
+        "release_pending_locks",
+        WalletRpcMethod::JsonReleasePendingLocks,
+        Some(30),
+    ),
+    ("sync_status", WalletRpcMethod::JsonSyncStatus, Some(60)),
+    ("rescan", WalletRpcMethod::JsonRescan, Some(6)),
 ];
 
 struct WalletRpcServer {
@@ -291,12 +332,17 @@ impl WalletRpcServer {
         config: &WalletRuntimeConfig,
     ) -> Self {
         let mut handlers = HashMap::new();
-        for (name, method) in JSON_RPC_METHODS {
-            let handler =
-                Self::build_handler(Arc::clone(&router), Arc::clone(&metrics), config, *method);
+        for (name, method, limit) in JSON_RPC_METHODS {
+            let handler = Self::build_handler(
+                Arc::clone(&router),
+                Arc::clone(&metrics),
+                config,
+                *method,
+                *limit,
+            );
             handlers.insert(*name, handler);
         }
-        let fallback = Self::build_handler(router, metrics, config, WalletRpcMethod::Unknown);
+        let fallback = Self::build_handler(router, metrics, config, WalletRpcMethod::Unknown, None);
         Self { handlers, fallback }
     }
 
@@ -305,17 +351,19 @@ impl WalletRpcServer {
         metrics: Arc<RuntimeMetrics>,
         config: &WalletRuntimeConfig,
         method: WalletRpcMethod,
+        limit_hint: Option<u64>,
     ) -> JsonRpcHandler {
         let closure: RpcHandlerFn =
             Arc::new(move |invocation: RpcInvocation<'_, JsonRpcRequest>| {
                 router.handle(invocation.payload)
             });
+        let rate_limit = determine_rate_limit(limit_hint, config.requests_per_minute);
         authenticated_handler::<_, JsonRpcRequest, _>(
             StaticAuthenticator::new(config.auth_token.clone()),
             closure,
             metrics,
             method,
-            config.requests_per_minute,
+            rate_limit,
         )
     }
 

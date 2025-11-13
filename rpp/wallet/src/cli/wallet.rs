@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use argon2::{Algorithm, Argon2, Params, ParamsBuilder, PasswordHasher, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
@@ -19,8 +19,10 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::rpc::dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    FeeCongestionDto, FeeEstimateSourceDto, JsonRpcRequest, JsonRpcResponse, PendingLockDto,
-    PolicyPreviewResponse, RescanParams, RescanResponse, SignTxParams, SignTxResponse,
+    EstimateFeeParams, EstimateFeeResponse, FeeCongestionDto, FeeEstimateSourceDto,
+    GetPolicyResponse, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, PendingLockDto,
+    PolicyPreviewResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
     SyncStatusResponse, JSONRPC_VERSION,
 };
 
@@ -159,6 +161,41 @@ impl WalletRpcClient {
         Ok(serde_json::from_value(value)?)
     }
 
+    async fn get_policy(&self) -> Result<GetPolicyResponse, WalletCliError> {
+        let value = self.request::<Value>("get_policy", None).await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    async fn set_policy(
+        &self,
+        params: &SetPolicyParams,
+    ) -> Result<SetPolicyResponse, WalletCliError> {
+        let value = self.request("set_policy", Some(params)).await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    async fn estimate_fee(
+        &self,
+        confirmation_target: u16,
+    ) -> Result<EstimateFeeResponse, WalletCliError> {
+        let params = EstimateFeeParams {
+            confirmation_target,
+        };
+        let value = self.request("estimate_fee", Some(params)).await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    async fn list_pending_locks(&self) -> Result<ListPendingLocksResponse, WalletCliError> {
+        let value = self.request::<Value>("list_pending_locks", None).await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    async fn release_pending_locks(&self) -> Result<ReleasePendingLocksResponse, WalletCliError> {
+        let params = ReleasePendingLocksParams;
+        let value = self.request("release_pending_locks", Some(params)).await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
     async fn create_tx(&self, params: &CreateTxParams) -> Result<CreateTxResponse, WalletCliError> {
         let value = self.request("create_tx", Some(params)).await?;
         Ok(serde_json::from_value(value)?)
@@ -185,8 +222,7 @@ impl WalletRpcClient {
         Ok(serde_json::from_value(value)?)
     }
 
-    async fn rescan(&self, from_height: u64) -> Result<RescanResponse, WalletCliError> {
-        let params = RescanParams { from_height };
+    async fn rescan(&self, params: &RescanParams) -> Result<RescanResponse, WalletCliError> {
         let value = self.request("rescan", Some(params)).await?;
         Ok(serde_json::from_value(value)?)
     }
@@ -455,6 +491,171 @@ impl BalanceCommand {
 }
 
 #[derive(Debug, Args)]
+pub struct PolicyCommand {
+    #[command(subcommand)]
+    pub command: PolicySubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicySubcommand {
+    /// Inspect the persisted policy snapshot.
+    Get(PolicyGetCommand),
+    /// Update the persisted policy snapshot with new statements.
+    Set(PolicySetCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyGetCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+impl PolicyGetCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = WalletRpcClient::new(&self.rpc)?;
+        let response = client.get_policy().await?;
+        println!("Policy snapshot\n");
+        match response.snapshot {
+            Some(snapshot) => {
+                println!("  Revision   : {}", snapshot.revision);
+                println!("  Updated at : {}", snapshot.updated_at);
+                if snapshot.statements.is_empty() {
+                    println!("  Statements : none");
+                } else {
+                    println!("  Statements :");
+                    for statement in snapshot.statements {
+                        println!("    - {}", statement);
+                    }
+                }
+            }
+            None => println!("  Snapshot   : none recorded"),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct PolicySetCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Inline policy statement to persist (may be specified multiple times).
+    #[arg(long = "statement", value_name = "TEXT")]
+    pub statements: Vec<String>,
+    /// Optional file containing policy statements, one per line.
+    #[arg(long, value_name = "PATH")]
+    pub file: Option<PathBuf>,
+}
+
+impl PolicySetCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = WalletRpcClient::new(&self.rpc)?;
+        let mut statements = self.statements.clone();
+        if let Some(path) = &self.file {
+            let contents =
+                fs::read_to_string(path).map_err(|err| WalletCliError::Other(err.into()))?;
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    statements.push(trimmed.to_string());
+                }
+            }
+        }
+        let params = SetPolicyParams { statements };
+        let response = client.set_policy(&params).await?;
+        println!("Policy snapshot updated\n");
+        println!("  Revision   : {}", response.snapshot.revision);
+        println!("  Updated at : {}", response.snapshot.updated_at);
+        if response.snapshot.statements.is_empty() {
+            println!("  Statements : none");
+        } else {
+            println!("  Statements :");
+            for statement in response.snapshot.statements {
+                println!("    - {}", statement);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct FeesCommand {
+    #[command(subcommand)]
+    pub command: FeesSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FeesSubcommand {
+    /// Estimate a fee rate for the given confirmation target.
+    Estimate(FeesEstimateCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct FeesEstimateCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Desired confirmation target in blocks.
+    #[arg(long, value_name = "BLOCKS")]
+    pub target: u16,
+}
+
+impl FeesEstimateCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = WalletRpcClient::new(&self.rpc)?;
+        let response = client.estimate_fee(self.target).await?;
+        println!("Fee estimate\n");
+        println!("  Target confirmations : {}", response.confirmation_target);
+        println!("  Fee rate             : {} sat/vB", response.fee_rate);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct LocksCommand {
+    #[command(subcommand)]
+    pub command: LocksSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LocksSubcommand {
+    /// List all pending wallet input locks.
+    List(LocksListCommand),
+    /// Release all pending wallet input locks.
+    Release(LocksReleaseCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct LocksListCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+impl LocksListCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = WalletRpcClient::new(&self.rpc)?;
+        let response = client.list_pending_locks().await?;
+        println!("Pending locks\n");
+        render_locks(&response.locks);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct LocksReleaseCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+impl LocksReleaseCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = WalletRpcClient::new(&self.rpc)?;
+        let response = client.release_pending_locks().await?;
+        println!("Released pending locks\n");
+        render_locks(&response.released);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
 pub struct SendCommand {
     #[command(subcommand)]
     pub command: SendSubcommand,
@@ -575,16 +776,29 @@ pub struct RescanCommand {
     #[command(flatten)]
     pub rpc: RpcOptions,
     /// Block height to start rescanning from.
-    #[arg(long)]
-    pub from_height: u64,
+    #[arg(long, value_name = "HEIGHT")]
+    pub from_height: Option<u64>,
+    /// Number of blocks to look back from the latest indexed height.
+    #[arg(long, value_name = "BLOCKS")]
+    pub lookback_blocks: Option<u64>,
 }
 
 impl RescanCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        if self.from_height.is_none() && self.lookback_blocks.is_none() {
+            return Err(WalletCliError::Other(anyhow!(
+                "rescan requires --from-height or --lookback-blocks"
+            )));
+        }
         let client = WalletRpcClient::new(&self.rpc)?;
-        let response = client.rescan(self.from_height).await?;
+        let params = RescanParams {
+            from_height: self.from_height,
+            lookback_blocks: self.lookback_blocks,
+        };
+        let response = client.rescan(&params).await?;
         println!("Rescan request submitted\n");
-        println!("  Scheduled : {}", format_bool(response.scheduled));
+        println!("  Scheduled   : {}", format_bool(response.scheduled));
+        println!("  From height : {}", response.from_height);
         Ok(())
     }
 }
@@ -599,6 +813,12 @@ pub enum WalletCommand {
     Addr(AddrCommand),
     /// Display wallet balance information.
     Balance(BalanceCommand),
+    /// Inspect or update policy snapshots.
+    Policy(PolicyCommand),
+    /// Inspect fee estimates.
+    Fees(FeesCommand),
+    /// Inspect or manage pending locks.
+    Locks(LocksCommand),
     /// Manage transaction drafts.
     Send(SendCommand),
     /// Trigger a historical rescan.
@@ -614,6 +834,17 @@ impl WalletCommand {
                 AddrSubcommand::New(cmd) => cmd.execute().await,
             },
             WalletCommand::Balance(cmd) => cmd.execute().await,
+            WalletCommand::Policy(PolicyCommand { command }) => match command {
+                PolicySubcommand::Get(cmd) => cmd.execute().await,
+                PolicySubcommand::Set(cmd) => cmd.execute().await,
+            },
+            WalletCommand::Fees(FeesCommand { command }) => match command {
+                FeesSubcommand::Estimate(cmd) => cmd.execute().await,
+            },
+            WalletCommand::Locks(LocksCommand { command }) => match command {
+                LocksSubcommand::List(cmd) => cmd.execute().await,
+                LocksSubcommand::Release(cmd) => cmd.execute().await,
+            },
             WalletCommand::Send(SendCommand { command }) => match command {
                 SendSubcommand::Preview(cmd) => cmd.execute().await,
                 SendSubcommand::Create(cmd) => cmd.execute().await,

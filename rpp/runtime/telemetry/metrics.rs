@@ -745,6 +745,16 @@ pub enum WalletRpcMethod {
     JsonBroadcast,
     /// JSON-RPC: `policy_preview`.
     JsonPolicyPreview,
+    /// JSON-RPC: `get_policy`.
+    JsonGetPolicy,
+    /// JSON-RPC: `set_policy`.
+    JsonSetPolicy,
+    /// JSON-RPC: `estimate_fee`.
+    JsonEstimateFee,
+    /// JSON-RPC: `list_pending_locks`.
+    JsonListPendingLocks,
+    /// JSON-RPC: `release_pending_locks`.
+    JsonReleasePendingLocks,
     /// JSON-RPC: `sync_status`.
     JsonSyncStatus,
     /// JSON-RPC: `rescan`.
@@ -821,6 +831,11 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonSignTransaction => "json_sign_transaction",
             Self::JsonBroadcast => "json_broadcast",
             Self::JsonPolicyPreview => "json_policy_preview",
+            Self::JsonGetPolicy => "json_get_policy",
+            Self::JsonSetPolicy => "json_set_policy",
+            Self::JsonEstimateFee => "json_estimate_fee",
+            Self::JsonListPendingLocks => "json_list_pending_locks",
+            Self::JsonReleasePendingLocks => "json_release_pending_locks",
             Self::JsonSyncStatus => "json_sync_status",
             Self::JsonRescan => "json_rescan",
             Self::StateRoot => "state_root",
