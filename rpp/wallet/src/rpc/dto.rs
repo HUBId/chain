@@ -150,6 +150,7 @@ pub struct PendingLockDto {
 pub enum DraftSpendModelDto {
     Exact { amount: u128 },
     Sweep,
+    Account { debit: u128 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

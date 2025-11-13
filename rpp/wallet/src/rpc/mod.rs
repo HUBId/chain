@@ -461,6 +461,7 @@ fn spend_model_to_dto(model: &SpendModel) -> DraftSpendModelDto {
     match model {
         SpendModel::Exact { amount } => DraftSpendModelDto::Exact { amount: *amount },
         SpendModel::Sweep => DraftSpendModelDto::Sweep,
+        SpendModel::Account { debit } => DraftSpendModelDto::Account { debit: *debit },
     }
 }
 

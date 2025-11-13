@@ -711,6 +711,7 @@ fn format_spend_model(model: &DraftSpendModelDto) -> &'static str {
     match model {
         DraftSpendModelDto::Exact { .. } => "exact",
         DraftSpendModelDto::Sweep => "sweep",
+        DraftSpendModelDto::Account { .. } => "account",
     }
 }
 

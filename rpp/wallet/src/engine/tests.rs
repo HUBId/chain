@@ -4,9 +4,11 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 use super::addresses::{AddressError, AddressManager};
-use super::builder::TransactionBuilder;
+use super::builder::{BuildPlan, BuilderError, TransactionBuilder};
 use super::policies::{PolicyEngine, PolicyViolation};
-use super::utxo_sel::{select_coins, CandidateUtxo, SelectionError};
+use super::utxo_sel::{
+    select_coins, CandidateUtxo, SelectionError, SelectionRequest, SelectionStrategy,
+};
 use super::{DraftOutput, SpendModel};
 use crate::config::wallet::WalletPolicyConfig;
 use crate::db::{AddressKind, UtxoOutpoint, UtxoRecord, WalletStore};
@@ -66,22 +68,85 @@ fn address_manager_tracks_and_releases_locks() {
 }
 
 #[test]
-fn coin_selection_prefers_confirmed_and_skips_pending() {
+fn coin_selection_prefers_confirmed_and_falls_back_to_unconfirmed() {
     let candidates = vec![
         CandidateUtxo::new(mock_utxo(1, 0, 30_000), 5, false),
         CandidateUtxo::new(mock_utxo(2, 0, 25_000), 2, false),
         CandidateUtxo::new(mock_utxo(3, 0, 40_000), 0, false),
         CandidateUtxo::new(mock_utxo(4, 0, 20_000), 8, true),
     ];
-    let selection = select_coins(&candidates, 40_000, 1).expect("selection");
-    assert_eq!(selection.len(), 2);
-    assert_eq!(selection[0].record.outpoint.txid[0], 1);
-    assert_eq!(selection[0].record.value, 30_000);
-    assert_eq!(selection[1].record.value, 25_000);
+    let request = SelectionRequest {
+        candidates: &candidates,
+        amount: 40_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::PreferConfirmed,
+    };
+    let selection = select_coins(request).expect("selection");
+    assert_eq!(selection.inputs.len(), 2);
+    assert_eq!(selection.inputs[0].record.outpoint.txid[0], 1);
+    assert_eq!(selection.inputs[0].record.value, 30_000);
+    assert_eq!(selection.inputs[1].record.value, 25_000);
+    assert!(!selection.metadata.used_unconfirmed);
+
+    let request_with_fallback = SelectionRequest {
+        amount: 70_000,
+        ..request
+    };
+    let selection_with_unconfirmed = select_coins(request_with_fallback).expect("fallback");
+    assert_eq!(selection_with_unconfirmed.inputs.len(), 3);
+    assert!(selection_with_unconfirmed.metadata.used_unconfirmed);
+
+    let insufficient = SelectionRequest {
+        amount: 120_000,
+        ..request
+    };
     assert!(matches!(
-        select_coins(&candidates, 70_000, 6),
+        select_coins(insufficient),
         Err(SelectionError::InsufficientFunds { .. })
     ));
+}
+
+#[test]
+fn coin_selection_largest_first_prefers_high_values() {
+    let candidates = vec![
+        CandidateUtxo::new(mock_utxo(5, 0, 10_000), 3, false),
+        CandidateUtxo::new(mock_utxo(6, 0, 50_000), 6, false),
+        CandidateUtxo::new(mock_utxo(7, 0, 20_000), 4, false),
+    ];
+    let request = SelectionRequest {
+        candidates: &candidates,
+        amount: 45_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::LargestFirst,
+    };
+    let selection = select_coins(request).expect("largest first");
+    assert_eq!(selection.inputs.len(), 2);
+    assert_eq!(selection.inputs[0].record.value, 50_000);
+    assert_eq!(selection.inputs[1].record.value, 20_000);
+}
+
+#[test]
+fn coin_selection_branch_and_bound_finds_tight_combination() {
+    let candidates = vec![
+        CandidateUtxo::new(mock_utxo(8, 0, 25_000), 4, false),
+        CandidateUtxo::new(mock_utxo(9, 0, 15_000), 4, false),
+        CandidateUtxo::new(mock_utxo(10, 0, 5_000), 4, false),
+        CandidateUtxo::new(mock_utxo(11, 0, 30_000), 4, false),
+    ];
+    let request = SelectionRequest {
+        candidates: &candidates,
+        amount: 35_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::BranchAndBoundLight,
+    };
+    let selection = select_coins(request).expect("branch and bound");
+    let total: u128 = selection
+        .inputs
+        .iter()
+        .map(|candidate| candidate.record.value)
+        .sum();
+    assert_eq!(total, 35_000);
+    assert_eq!(selection.inputs.len(), 2);
 }
 
 #[test]
@@ -154,29 +219,79 @@ fn policy_engine_daily_limit_enforced() {
 
 #[test]
 fn builder_emits_change_when_above_dust_threshold() {
-    let builder = TransactionBuilder::new(500);
-    let selection = vec![
+    let builder = TransactionBuilder::new(500, 2);
+    let candidates = vec![
         CandidateUtxo::new(mock_utxo(5, 0, 15_000), 4, false),
         CandidateUtxo::new(mock_utxo(6, 0, 10_000), 3, false),
     ];
+    let selection = select_coins(SelectionRequest {
+        candidates: &candidates,
+        amount: 12_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::LargestFirst,
+    })
+    .expect("selection");
+    let spend_model = SpendModel::Exact { amount: 12_000 };
     let mut outputs = vec![DraftOutput::new("recipient", 12_000, false)];
-    let total_in: u128 = selection
-        .iter()
-        .map(|candidate| candidate.record.value)
-        .sum();
-    let fee_with_change = builder.estimate_fee(selection.len(), outputs.len() + 1, 2);
-    let change_value = total_in - outputs[0].value - fee_with_change;
-    assert!(change_value >= builder.dust_limit());
-    outputs.push(DraftOutput::new("change", change_value, true));
-    let draft = builder.assemble(
-        selection,
-        outputs,
-        2,
-        fee_with_change,
-        SpendModel::Exact { amount: 12_000 },
-    );
-    assert_eq!(draft.outputs.len(), 2);
-    assert!(draft.outputs.iter().any(|output| output.change));
+    let plan = builder
+        .plan(Some(&selection), &outputs, 2, &spend_model)
+        .expect("plan");
+    let BuildPlan {
+        fee,
+        change_values,
+        metadata,
+    } = plan;
+    assert_eq!(change_values.len(), 1);
+    assert!(change_values[0] >= builder.dust_limit());
+    for value in &change_values {
+        outputs.push(DraftOutput::new("change", *value, true));
+    }
+    let built = builder
+        .finalize(Some(selection), outputs, 2, fee, spend_model, metadata)
+        .expect("finalize");
+    assert_eq!(built.transaction.outputs.len(), 2);
+    assert_eq!(built.metadata.change_outputs, 1);
+    assert!(!built.metadata.change_folded_into_fee);
+}
+
+#[test]
+fn builder_folds_change_when_under_dust_or_limit() {
+    let builder = TransactionBuilder::new(10_000, 0);
+    let candidates = vec![CandidateUtxo::new(mock_utxo(12, 0, 25_000), 5, false)];
+    let selection = select_coins(SelectionRequest {
+        candidates: &candidates,
+        amount: 12_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::LargestFirst,
+    })
+    .expect("selection");
+    let spend_model = SpendModel::Exact { amount: 12_000 };
+    let outputs = vec![DraftOutput::new("recipient", 12_000, false)];
+    let plan = builder
+        .plan(Some(&selection), &outputs, 2, &spend_model)
+        .expect("plan");
+    assert!(plan.change_values.is_empty());
+    assert!(plan.metadata.change_folded_into_fee);
+    assert_eq!(plan.metadata.change_outputs, 0);
+}
+
+#[test]
+fn builder_rejects_insufficient_funds() {
+    let builder = TransactionBuilder::new(500, 1);
+    let candidates = vec![CandidateUtxo::new(mock_utxo(13, 0, 5_000), 2, false)];
+    let selection = select_coins(SelectionRequest {
+        candidates: &candidates,
+        amount: 5_000,
+        min_confirmations: 1,
+        strategy: SelectionStrategy::LargestFirst,
+    })
+    .expect("selection");
+    let outputs = vec![DraftOutput::new("recipient", 5_000, false)];
+    let spend_model = SpendModel::Exact { amount: 5_000 };
+    let error = builder
+        .plan(Some(&selection), &outputs, 10, &spend_model)
+        .expect_err("insufficient");
+    assert!(matches!(error, BuilderError::InsufficientFunds { .. }));
 }
 
 fn mock_utxo(seed: u8, index: u32, value: u128) -> UtxoRecord<'static> {
