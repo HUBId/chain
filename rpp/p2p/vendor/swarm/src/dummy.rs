@@ -60,7 +60,7 @@ impl NetworkBehaviour for Behaviour {
 
 /// An implementation of [`ConnectionHandler`] that neither handles any protocols nor does it keep
 /// the connection alive.
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ConnectionHandler;
 
 impl crate::handler::ConnectionHandler for ConnectionHandler {
