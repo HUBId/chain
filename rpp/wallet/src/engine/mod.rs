@@ -240,6 +240,18 @@ impl WalletEngine {
             .map_err(EngineError::from)
     }
 
+    pub fn release_pending_locks(&self) -> Result<Vec<PendingLock>, EngineError> {
+        let _ = self.release_stale_locks()?;
+        let locks = self.address_manager.pending_locks()?;
+        if locks.is_empty() {
+            return Ok(locks);
+        }
+        let outpoints: Vec<_> = locks.iter().map(|lock| lock.outpoint.clone()).collect();
+        self.address_manager
+            .release_inputs(outpoints.iter())
+            .map_err(EngineError::from)
+    }
+
     pub fn release_locks_for_inputs<'a, I>(
         &self,
         inputs: I,

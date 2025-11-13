@@ -10,17 +10,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    EmptyParams, FeeEstimateSourceDto, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetPolicyResponse,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsResponse, ListUtxosResponse, PendingLockDto, PolicyPreviewResponse,
-    RescanParams, RescanResponse, SignTxParams, SignTxResponse, SyncStatusParams,
-    SyncStatusResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
+    PolicySnapshotDto, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncStatusParams, SyncStatusResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
 };
 use hex::encode as hex_encode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::db::{TxCacheEntry, UtxoRecord};
+use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{DraftTransaction, SpendModel, WalletBalance};
 use crate::indexer::scanner::SyncStatus;
@@ -154,13 +156,39 @@ impl WalletRpcRouter {
                 let preview = self.wallet.policy_preview();
                 self.respond_policy_preview(preview)
             }
+            "get_policy" => {
+                parse_params::<EmptyParams>(params)?;
+                self.respond_policy_snapshot(self.wallet.get_policy_snapshot()?)
+            }
+            "set_policy" => {
+                let params: SetPolicyParams = parse_params(params)?;
+                let snapshot = self.wallet.set_policy_snapshot(params.statements)?;
+                self.respond_policy_updated(snapshot)
+            }
+            "estimate_fee" => {
+                let params: EstimateFeeParams = parse_params(params)?;
+                let fee_rate = self.wallet.estimate_fee(params.confirmation_target)?;
+                to_value(EstimateFeeResponse {
+                    confirmation_target: params.confirmation_target,
+                    fee_rate,
+                })
+            }
+            "list_pending_locks" => {
+                parse_params::<EmptyParams>(params)?;
+                self.respond_pending_locks(self.wallet.pending_locks()?)
+            }
+            "release_pending_locks" => {
+                let _params: ReleasePendingLocksParams = parse_params(params)?;
+                let released = self.wallet.release_pending_locks()?;
+                self.respond_released_locks(released)
+            }
             "sync_status" => {
                 parse_params::<SyncStatusParams>(params)?;
                 self.respond_sync_status()
             }
             "rescan" => {
                 let params: RescanParams = parse_params(params)?;
-                self.handle_rescan(params.from_height)
+                self.handle_rescan(params)
             }
             _ => Err(RouterError::MethodNotFound(method.to_string())),
         }
@@ -261,6 +289,29 @@ impl WalletRpcRouter {
         to_value(response)
     }
 
+    fn respond_policy_snapshot(
+        &self,
+        snapshot: Option<PolicySnapshot>,
+    ) -> Result<Value, RouterError> {
+        let dto = snapshot.map(policy_snapshot_to_dto);
+        to_value(GetPolicyResponse { snapshot: dto })
+    }
+
+    fn respond_policy_updated(&self, snapshot: PolicySnapshot) -> Result<Value, RouterError> {
+        let dto = policy_snapshot_to_dto(snapshot);
+        to_value(SetPolicyResponse { snapshot: dto })
+    }
+
+    fn respond_pending_locks(&self, locks: Vec<PendingLock>) -> Result<Value, RouterError> {
+        let locks = locks.into_iter().map(PendingLockDto::from).collect();
+        to_value(ListPendingLocksResponse { locks })
+    }
+
+    fn respond_released_locks(&self, locks: Vec<PendingLock>) -> Result<Value, RouterError> {
+        let released = locks.into_iter().map(PendingLockDto::from).collect();
+        to_value(ReleasePendingLocksResponse { released })
+    }
+
     fn respond_sync_status(&self) -> Result<Value, RouterError> {
         let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
         let status = sync.latest_status();
@@ -284,18 +335,38 @@ impl WalletRpcRouter {
         to_value(response)
     }
 
-    fn handle_rescan(&self, from_height: u64) -> Result<Value, RouterError> {
+    fn handle_rescan(&self, params: RescanParams) -> Result<Value, RouterError> {
         let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
-        if let Some(status) = sync.latest_status() {
-            if from_height > status.latest_height {
+        let status = sync.latest_status();
+        let target_height = if let Some(explicit) = params.from_height {
+            explicit
+        } else if let Some(lookback) = params.lookback_blocks {
+            let latest = status
+                .as_ref()
+                .ok_or_else(|| {
+                    RouterError::InvalidParams("lookback rescan requires known height".into())
+                })?
+                .latest_height;
+            latest.saturating_sub(lookback.min(latest))
+        } else {
+            return Err(RouterError::InvalidParams(
+                "rescan requires either from_height or lookback_blocks".into(),
+            ));
+        };
+
+        if let Some(status) = status {
+            if target_height > status.latest_height {
                 return Err(RouterError::RescanOutOfRange {
-                    requested: from_height,
+                    requested: target_height,
                     latest: status.latest_height,
                 });
             }
         }
-        let scheduled = sync.request_rescan(from_height)?;
-        to_value(RescanResponse { scheduled })
+        let scheduled = sync.request_rescan(target_height)?;
+        to_value(RescanResponse {
+            scheduled,
+            from_height: target_height,
+        })
     }
 
     fn sign_draft(&self, draft_id: String) -> Result<Value, RouterError> {
@@ -357,15 +428,7 @@ impl WalletRpcRouter {
 
     fn pending_lock_dtos(&self) -> Result<Vec<PendingLockDto>, RouterError> {
         let locks = self.wallet.pending_locks()?;
-        Ok(locks
-            .into_iter()
-            .map(|lock| PendingLockDto {
-                utxo_txid: hex_encode(lock.outpoint.txid),
-                utxo_index: lock.outpoint.index,
-                locked_at_ms: lock.locked_at_ms,
-                spending_txid: lock.spending_txid.map(|txid| hex_encode(txid)),
-            })
-            .collect())
+        Ok(locks.into_iter().map(PendingLockDto::from).collect())
     }
 }
 
@@ -467,6 +530,25 @@ fn spend_model_to_dto(model: &SpendModel) -> DraftSpendModelDto {
         SpendModel::Exact { amount } => DraftSpendModelDto::Exact { amount: *amount },
         SpendModel::Sweep => DraftSpendModelDto::Sweep,
         SpendModel::Account { debit } => DraftSpendModelDto::Account { debit: *debit },
+    }
+}
+
+impl From<PendingLock> for PendingLockDto {
+    fn from(lock: PendingLock) -> Self {
+        PendingLockDto {
+            utxo_txid: hex_encode(lock.outpoint.txid),
+            utxo_index: lock.outpoint.index,
+            locked_at_ms: lock.locked_at_ms,
+            spending_txid: lock.spending_txid.map(hex_encode),
+        }
+    }
+}
+
+fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
+    PolicySnapshotDto {
+        revision: snapshot.revision,
+        updated_at: snapshot.updated_at,
+        statements: snapshot.statements,
     }
 }
 

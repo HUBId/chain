@@ -32,8 +32,10 @@ use rpp_wallet::node_client::{
 };
 use rpp_wallet::rpc::dto::{
     BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
-    DeriveAddressResponse, JsonRpcRequest, JsonRpcResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, JSONRPC_VERSION,
+    DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse, GetPolicyResponse,
+    JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, ReleasePendingLocksParams,
+    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
+    SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
 use rpp_wallet::wallet::{Wallet, WalletSyncCoordinator};
@@ -80,6 +82,48 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         .map_or(false, |count| count > 0));
     assert!(sync_status.last_error.is_none());
 
+    let initial_policy: GetPolicyResponse = rpc_call(&client, &endpoint, "get_policy", None)
+        .await
+        .context("fetch initial policy snapshot")?;
+    assert!(initial_policy.snapshot.is_none());
+
+    let statements = vec!["allow tier".to_string()];
+    let set_policy: SetPolicyResponse = rpc_call(
+        &client,
+        &endpoint,
+        "set_policy",
+        Some(json!(SetPolicyParams {
+            statements: statements.clone(),
+        })),
+    )
+    .await
+    .context("update policy snapshot")?;
+    assert_eq!(set_policy.snapshot.statements, statements);
+
+    let refreshed_policy: GetPolicyResponse = rpc_call(&client, &endpoint, "get_policy", None)
+        .await
+        .context("fetch refreshed policy snapshot")?;
+    assert_eq!(
+        refreshed_policy
+            .snapshot
+            .expect("policy snapshot persisted")
+            .statements,
+        statements
+    );
+
+    let fee_estimate: EstimateFeeResponse = rpc_call(
+        &client,
+        &endpoint,
+        "estimate_fee",
+        Some(json!(EstimateFeeParams {
+            confirmation_target: 3,
+        })),
+    )
+    .await
+    .context("estimate fee")?;
+    assert_eq!(fee_estimate.confirmation_target, 3);
+    assert_eq!(fee_estimate.fee_rate, 1);
+
     let derived: DeriveAddressResponse = rpc_call(
         &client,
         &endpoint,
@@ -123,6 +167,12 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         "draft lock should not yet reference a spending txid",
     );
 
+    let listed_locks: ListPendingLocksResponse =
+        rpc_call(&client, &endpoint, "list_pending_locks", None)
+            .await
+            .context("list pending locks")?;
+    assert_eq!(listed_locks.locks.len(), 1);
+
     let sign_params = SignTxParams {
         draft_id: draft.draft_id.clone(),
     };
@@ -165,6 +215,33 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     assert!(
         broadcast.locks.is_empty(),
         "locks should be cleared after successful broadcast",
+    );
+
+    let release_response: ReleasePendingLocksResponse = rpc_call(
+        &client,
+        &endpoint,
+        "release_pending_locks",
+        Some(json!(ReleasePendingLocksParams)),
+    )
+    .await
+    .context("release pending locks")?;
+    assert!(release_response.released.is_empty());
+
+    let rescan_response: RescanResponse = rpc_call(
+        &client,
+        &endpoint,
+        "rescan",
+        Some(json!(RescanParams {
+            from_height: None,
+            lookback_blocks: Some(5),
+        })),
+    )
+    .await
+    .context("request rescan")?;
+    assert!(rescan_response.scheduled);
+    assert_eq!(
+        rescan_response.from_height,
+        fixture.latest_height.saturating_sub(5)
     );
 
     let node = fixture.node();
@@ -304,6 +381,66 @@ async fn wallet_cli_commands_render_expected_output() -> Result<()> {
     )));
     assert!(sync_stdout.contains("  Scanned scripts   : "));
 
+    let policy_get_output = Command::cargo_bin("wallet")?
+        .args(["policy", "get", "--rpc-endpoint", &endpoint])
+        .output()
+        .context("execute wallet policy get command")?;
+    assert!(
+        policy_get_output.status.success(),
+        "policy get should succeed"
+    );
+    let policy_get_stdout =
+        String::from_utf8(policy_get_output.stdout).context("decode wallet policy get stdout")?;
+    assert!(policy_get_stdout.contains("Policy snapshot"));
+    assert!(policy_get_stdout.contains("Snapshot   : none recorded"));
+
+    let policy_set_output = Command::cargo_bin("wallet")?
+        .args([
+            "policy",
+            "set",
+            "--rpc-endpoint",
+            &endpoint,
+            "--statement",
+            "allow tier",
+        ])
+        .output()
+        .context("execute wallet policy set command")?;
+    assert!(
+        policy_set_output.status.success(),
+        "policy set should succeed"
+    );
+    let policy_set_stdout =
+        String::from_utf8(policy_set_output.stdout).context("decode wallet policy set stdout")?;
+    assert!(policy_set_stdout.contains("Policy snapshot updated"));
+    assert!(policy_set_stdout.contains("Statements :"));
+    assert!(policy_set_stdout.contains("allow tier"));
+
+    let policy_refresh_output = Command::cargo_bin("wallet")?
+        .args(["policy", "get", "--rpc-endpoint", &endpoint])
+        .output()
+        .context("execute wallet policy get command after update")?;
+    assert!(policy_refresh_output.status.success());
+    let policy_refresh_stdout = String::from_utf8(policy_refresh_output.stdout)
+        .context("decode refreshed wallet policy get stdout")?;
+    assert!(policy_refresh_stdout.contains("allow tier"));
+
+    let fee_output = Command::cargo_bin("wallet")?
+        .args([
+            "fees",
+            "estimate",
+            "--rpc-endpoint",
+            &endpoint,
+            "--target",
+            "3",
+        ])
+        .output()
+        .context("execute wallet fees estimate command")?;
+    assert!(fee_output.status.success(), "fees estimate should succeed");
+    let fee_stdout =
+        String::from_utf8(fee_output.stdout).context("decode wallet fees estimate stdout")?;
+    assert!(fee_stdout.contains("Fee estimate"));
+    assert!(fee_stdout.contains("Target confirmations : 3"));
+
     let addr_output = Command::cargo_bin("wallet")?
         .args(["addr", "new", "--rpc-endpoint", &endpoint])
         .output()
@@ -338,6 +475,19 @@ async fn wallet_cli_commands_render_expected_output() -> Result<()> {
     assert!(create_stdout.contains("  Spend model   :"));
     let draft_id =
         extract_field(&create_stdout, "Draft ID").context("extract draft id from CLI output")?;
+
+    let locks_list_output = Command::cargo_bin("wallet")?
+        .args(["locks", "list", "--rpc-endpoint", &endpoint])
+        .output()
+        .context("execute wallet locks list command")?;
+    assert!(
+        locks_list_output.status.success(),
+        "locks list should succeed"
+    );
+    let locks_list_stdout =
+        String::from_utf8(locks_list_output.stdout).context("decode wallet locks list stdout")?;
+    assert!(locks_list_stdout.contains("Pending locks"));
+    assert!(locks_list_stdout.contains("Locks:"));
 
     let sign_output = Command::cargo_bin("wallet")?
         .args([
@@ -377,6 +527,38 @@ async fn wallet_cli_commands_render_expected_output() -> Result<()> {
     assert!(broadcast_stdout.contains("Broadcast result"));
     assert!(broadcast_stdout.contains(&format!("Draft ID : {}", draft_id)));
     assert!(broadcast_stdout.contains("Accepted : true"));
+
+    let locks_release_output = Command::cargo_bin("wallet")?
+        .args(["locks", "release", "--rpc-endpoint", &endpoint])
+        .output()
+        .context("execute wallet locks release command")?;
+    assert!(
+        locks_release_output.status.success(),
+        "locks release should succeed"
+    );
+    let locks_release_stdout = String::from_utf8(locks_release_output.stdout)
+        .context("decode wallet locks release stdout")?;
+    assert!(locks_release_stdout.contains("Released pending locks"));
+    assert!(locks_release_stdout.contains("Locks        : none"));
+
+    let rescan_output = Command::cargo_bin("wallet")?
+        .args([
+            "rescan",
+            "--rpc-endpoint",
+            &endpoint,
+            "--lookback-blocks",
+            "5",
+        ])
+        .output()
+        .context("execute wallet rescan command")?;
+    assert!(
+        rescan_output.status.success(),
+        "rescan command should succeed"
+    );
+    let rescan_stdout =
+        String::from_utf8(rescan_output.stdout).context("decode wallet rescan stdout")?;
+    assert!(rescan_stdout.contains("Rescan request submitted"));
+    assert!(rescan_stdout.contains("From height"));
 
     let node = fixture.node();
     assert_eq!(node.submission_count(), 1, "broadcast should submit once");

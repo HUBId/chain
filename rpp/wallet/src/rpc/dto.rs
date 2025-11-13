@@ -147,6 +147,13 @@ pub struct PendingLockDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicySnapshotDto {
+    pub revision: u64,
+    pub updated_at: u64,
+    pub statements: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DraftSpendModelDto {
     Exact { amount: u128 },
@@ -256,6 +263,47 @@ pub struct PolicyPreviewResponse {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetPolicyResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<PolicySnapshotDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetPolicyParams {
+    #[serde(default)]
+    pub statements: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetPolicyResponse {
+    pub snapshot: PolicySnapshotDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EstimateFeeParams {
+    pub confirmation_target: u16,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EstimateFeeResponse {
+    pub confirmation_target: u16,
+    pub fee_rate: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListPendingLocksResponse {
+    pub locks: Vec<PendingLockDto>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleasePendingLocksParams;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleasePendingLocksResponse {
+    pub released: Vec<PendingLockDto>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncStatusParams;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -273,12 +321,16 @@ pub struct SyncStatusResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RescanParams {
-    pub from_height: u64,
+    #[serde(default)]
+    pub from_height: Option<u64>,
+    #[serde(default)]
+    pub lookback_blocks: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RescanResponse {
     pub scheduled: bool,
+    pub from_height: u64,
 }
 
 #[cfg(test)]
@@ -477,6 +529,12 @@ mod tests {
             proof_generated: true,
             proof_size: Some(256),
             duration_ms: 42,
+            locks: vec![PendingLockDto {
+                utxo_txid: "aa".into(),
+                utxo_index: 0,
+                locked_at_ms: 1234,
+                spending_txid: None,
+            }],
         };
         roundtrip(&response);
     }
@@ -494,6 +552,7 @@ mod tests {
         let response = BroadcastResponse {
             draft_id: "draft1".to_string(),
             accepted: true,
+            locks: vec![],
         };
         roundtrip(&response);
     }
@@ -534,13 +593,71 @@ mod tests {
 
     #[test]
     fn rescan_params_roundtrip() {
-        let params = RescanParams { from_height: 25 };
+        let params = RescanParams {
+            from_height: Some(25),
+            lookback_blocks: None,
+        };
         roundtrip(&params);
     }
 
     #[test]
     fn rescan_response_roundtrip() {
-        let response = RescanResponse { scheduled: true };
+        let response = RescanResponse {
+            scheduled: true,
+            from_height: 42,
+        };
         roundtrip(&response);
+    }
+
+    #[test]
+    fn policy_snapshot_roundtrip() {
+        let response = GetPolicyResponse {
+            snapshot: Some(PolicySnapshotDto {
+                revision: 2,
+                updated_at: 1_700_000_000,
+                statements: vec!["allow foo".into(), "deny bar".into()],
+            }),
+        };
+        roundtrip(&response);
+        let set = SetPolicyResponse {
+            snapshot: PolicySnapshotDto {
+                revision: 3,
+                updated_at: 1_800_000_000,
+                statements: vec![],
+            },
+        };
+        roundtrip(&set);
+    }
+
+    #[test]
+    fn estimate_fee_roundtrip() {
+        let params = EstimateFeeParams {
+            confirmation_target: 3,
+        };
+        roundtrip(&params);
+        let response = EstimateFeeResponse {
+            confirmation_target: 3,
+            fee_rate: 42,
+        };
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn pending_locks_roundtrip() {
+        let list = ListPendingLocksResponse {
+            locks: vec![PendingLockDto {
+                utxo_txid: "bb".into(),
+                utxo_index: 1,
+                locked_at_ms: 2,
+                spending_txid: Some("cc".into()),
+            }],
+        };
+        roundtrip(&list);
+        let release = ReleasePendingLocksResponse {
+            released: list.locks.clone(),
+        };
+        roundtrip(&release);
+        let params = ReleasePendingLocksParams;
+        roundtrip(&params);
     }
 }
