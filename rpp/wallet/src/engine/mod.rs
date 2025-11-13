@@ -18,11 +18,14 @@ pub mod utxo_sel;
 pub mod tests;
 
 pub use addresses::{AddressError, AddressManager, DerivedAddress};
-pub use builder::{BuilderError, TransactionBuilder};
+pub use builder::{BuildMetadata, BuildPlan, BuilderError, BuiltTransaction, TransactionBuilder};
 pub use fees::{FeeError, FeeEstimator};
 pub use policies::{PolicyEngine, PolicyViolation};
 pub use signing::{ProverError, ProverOutput, WalletProver};
-pub use utxo_sel::{CandidateUtxo, SelectionError};
+pub use utxo_sel::{
+    CandidateUtxo, SelectionError, SelectionMetadata, SelectionRequest, SelectionResult,
+    SelectionStrategy,
+};
 
 /// Derivation path following a minimal BIP32-inspired structure.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -59,6 +62,7 @@ impl fmt::Display for DerivationPath {
 pub enum SpendModel {
     Exact { amount: u128 },
     Sweep,
+    Account { debit: u128 },
 }
 
 impl SpendModel {
@@ -66,6 +70,7 @@ impl SpendModel {
         match self {
             SpendModel::Exact { amount } => Some(*amount),
             SpendModel::Sweep => None,
+            SpendModel::Account { debit } => Some(*debit),
         }
     }
 }
@@ -174,7 +179,8 @@ impl WalletEngine {
         let fee_estimator = FeeEstimator::new(fees);
         let policy_engine = PolicyEngine::from_config(&policy);
         let dust_limit = policy_engine.dust_limit();
-        let tx_builder = TransactionBuilder::new(dust_limit);
+        let max_change_outputs = policy_engine.max_change_outputs();
+        let tx_builder = TransactionBuilder::new(dust_limit, max_change_outputs);
         Ok(Self {
             store,
             address_manager,
@@ -310,71 +316,46 @@ impl WalletEngine {
                 CandidateUtxo::new(record, confirmations, pending)
             })
             .collect();
-        let mut selection = utxo_sel::select_coins(&candidates, amount, self.min_confirmations)?;
-        let mut preflight = self.policy_engine.evaluate_selection(&selection);
+        let selection = utxo_sel::select_coins(SelectionRequest {
+            candidates: &candidates,
+            amount,
+            min_confirmations: self.min_confirmations,
+            strategy: SelectionStrategy::PreferConfirmed,
+        })?;
+        let mut preflight = self.policy_engine.evaluate_selection(&selection.inputs);
         if let Some(violation) = self.policy_engine.evaluate_daily_limit(amount) {
             preflight.push(violation);
         }
         if !preflight.is_empty() {
             return Err(EngineError::Policy(preflight));
         }
+        let spend_model = SpendModel::Exact { amount };
         let mut outputs = vec![DraftOutput::new(&to, amount, false)];
-        let total_in: u128 = selection.iter().map(|utxo| utxo.record.value).sum();
-        let mut fee = self
+        let plan = self
             .tx_builder
-            .estimate_fee(selection.len(), outputs.len(), fee_rate);
-        if total_in < amount + fee {
-            return Err(BuilderError::InsufficientFunds {
-                required: amount + fee,
-                available: total_in,
-            }
-            .into());
-        }
-        let mut change_output = None;
-        let mut remainder = total_in
-            .checked_sub(amount)
-            .and_then(|value| value.checked_sub(fee))
-            .ok_or_else(|| BuilderError::InsufficientFunds {
-                required: amount + fee,
-                available: total_in,
-            })?;
-        if remainder >= self.tx_builder.dust_limit() {
-            fee = self
-                .tx_builder
-                .estimate_fee(selection.len(), outputs.len() + 1, fee_rate);
-            remainder = total_in
-                .checked_sub(amount)
-                .and_then(|value| value.checked_sub(fee))
-                .ok_or_else(|| BuilderError::InsufficientFunds {
-                    required: amount + fee,
-                    available: total_in,
-                })?;
-            if remainder >= self.tx_builder.dust_limit() {
-                let change = self.address_manager.next_internal_address()?;
-                change_output = Some(DraftOutput::new(change.address, remainder, true));
-            } else {
-                fee = fee
-                    .checked_add(remainder)
-                    .ok_or(BuilderError::FeeOverflow)?;
-                remainder = 0;
-            }
-        } else {
-            fee = fee
-                .checked_add(remainder)
-                .ok_or(BuilderError::FeeOverflow)?;
-            remainder = 0;
-        }
-        if let Some(change) = change_output {
-            outputs.push(change);
+            .plan(Some(&selection), &outputs, fee_rate, &spend_model)?;
+        let BuildPlan {
+            fee,
+            change_values,
+            metadata,
+        } = plan;
+        for change_value in &change_values {
+            let change = self.address_manager.next_internal_address()?;
+            outputs.push(DraftOutput::new(change.address, *change_value, true));
         }
         let postflight = self.policy_engine.evaluate_outputs(&outputs);
         if !postflight.is_empty() {
             return Err(EngineError::Policy(postflight));
         }
-        let spend_model = SpendModel::Exact { amount };
-        let draft = self
-            .tx_builder
-            .assemble(selection, outputs, fee_rate, fee, spend_model);
+        let built = self.tx_builder.finalize(
+            Some(selection),
+            outputs,
+            fee_rate,
+            fee,
+            spend_model,
+            metadata,
+        )?;
+        let draft = built.transaction;
         self.address_manager.lock_inputs(
             draft.inputs.iter().map(|input| &input.outpoint),
             None,

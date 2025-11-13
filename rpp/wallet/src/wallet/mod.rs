@@ -7,7 +7,7 @@ use crate::db::{PendingLock, TxCacheEntry, UtxoRecord, WalletStore};
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
-use crate::engine::{DraftTransaction, EngineError, WalletBalance, WalletEngine};
+use crate::engine::{DraftTransaction, EngineError, SpendModel, WalletBalance, WalletEngine};
 use crate::indexer::IndexerClient;
 use crate::node_client::{ChainHead, NodeClient, NodeClientError};
 use crate::proof_backend::Blake2sHasher;
@@ -217,6 +217,10 @@ fn lock_fingerprint(draft: &DraftTransaction) -> [u8; 32] {
             material.extend_from_slice(&amount.to_be_bytes());
         }
         SpendModel::Sweep => material.push(1),
+        SpendModel::Account { debit } => {
+            material.push(2);
+            material.extend_from_slice(&debit.to_be_bytes());
+        }
     }
     Blake2sHasher::hash(&material).into()
 }
