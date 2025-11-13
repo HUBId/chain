@@ -53,6 +53,7 @@ ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
+assert_cmd = "2.0"
 tempfile = "3.10"
 uuid = { version = "1", features = ["v4"] }
 opentelemetry = "=0.30.0"
