@@ -310,13 +310,43 @@ pub struct SyncStatusParams;
 pub struct SyncStatusResponse {
     pub syncing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SyncModeDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scanned_scripthashes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_ranges: Vec<(u64, u64)>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_range: Option<(u64, u64)>,
+    pub checkpoints: Option<SyncCheckpointDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_rescan_timestamp: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncModeDto {
+    Full { start_height: u64 },
+    Resume { from_height: u64 },
+    Rescan { from_height: u64 },
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncCheckpointDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birthday_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_scan_ts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_full_rescan_ts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_compact_scan_ts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_targeted_rescan_ts: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -583,9 +613,19 @@ mod tests {
     fn sync_status_response_roundtrip() {
         let response = SyncStatusResponse {
             syncing: true,
+            mode: Some(SyncModeDto::Rescan { from_height: 5 }),
             latest_height: Some(12),
             scanned_scripthashes: Some(4),
-            pending_range: Some((10, 12)),
+            pending_ranges: vec![(10, 12)],
+            checkpoints: Some(SyncCheckpointDto {
+                resume_height: Some(12),
+                birthday_height: Some(0),
+                last_scan_ts: Some(1),
+                last_full_rescan_ts: Some(2),
+                last_compact_scan_ts: Some(3),
+                last_targeted_rescan_ts: Some(4),
+            }),
+            last_rescan_timestamp: Some(4),
             last_error: Some("stalled".to_string()),
         };
         roundtrip(&response);

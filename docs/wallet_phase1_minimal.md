@@ -116,8 +116,8 @@ material.
 #### `sync_status`
 
 - **Request**: `{}`.
-- **Response**: `{ syncing, latest_height?, scanned_scripthashes?,
-  pending_range?, last_error? }`.
+- **Response**: `{ syncing, mode?, latest_height?, scanned_scripthashes?,
+  pending_ranges?, checkpoints?, last_rescan_timestamp?, last_error? }`.
 - **Failures**: `-32050` when no sync coordinator is configured.
 
 #### `rescan`

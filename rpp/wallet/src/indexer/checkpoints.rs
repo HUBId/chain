@@ -3,6 +3,9 @@ use crate::db::{WalletStore, WalletStoreBatch, WalletStoreError};
 const RESUME_HEIGHT_LABEL: &str = "indexer::resume_height";
 const BIRTHDAY_HEIGHT_LABEL: &str = "indexer::birthday_height";
 const LAST_SCAN_TS_LABEL: &str = "indexer::last_scan_ts";
+const LAST_FULL_RESCAN_LABEL: &str = "indexer::last_full_rescan";
+const LAST_COMPACT_SCAN_LABEL: &str = "indexer::last_compact_scan";
+const LAST_TARGETED_RESCAN_LABEL: &str = "indexer::last_targeted_rescan";
 
 /// Load the stored resume height from the wallet store.
 pub fn resume_height(store: &WalletStore) -> Result<Option<u64>, WalletStoreError> {
@@ -55,12 +58,65 @@ pub fn persist_last_scan_ts(
     Ok(())
 }
 
+/// Fetch the timestamp for the last full rescan operation, if any.
+pub fn last_full_rescan_ts(store: &WalletStore) -> Result<Option<u64>, WalletStoreError> {
+    store.get_checkpoint(LAST_FULL_RESCAN_LABEL)
+}
+
+/// Update the stored timestamp for the last full rescan operation.
+pub fn persist_last_full_rescan_ts(
+    batch: &mut WalletStoreBatch<'_>,
+    timestamp: Option<u64>,
+) -> Result<(), WalletStoreError> {
+    match timestamp {
+        Some(value) => batch.put_checkpoint(LAST_FULL_RESCAN_LABEL, value)?,
+        None => batch.delete_checkpoint(LAST_FULL_RESCAN_LABEL),
+    }
+    Ok(())
+}
+
+/// Fetch the timestamp for the last compact (resume) scan, if any.
+pub fn last_compact_scan_ts(store: &WalletStore) -> Result<Option<u64>, WalletStoreError> {
+    store.get_checkpoint(LAST_COMPACT_SCAN_LABEL)
+}
+
+/// Update the stored timestamp for the last compact (resume) scan operation.
+pub fn persist_last_compact_scan_ts(
+    batch: &mut WalletStoreBatch<'_>,
+    timestamp: Option<u64>,
+) -> Result<(), WalletStoreError> {
+    match timestamp {
+        Some(value) => batch.put_checkpoint(LAST_COMPACT_SCAN_LABEL, value)?,
+        None => batch.delete_checkpoint(LAST_COMPACT_SCAN_LABEL),
+    }
+    Ok(())
+}
+
+/// Fetch the timestamp for the last targeted rescan operation, if any.
+pub fn last_targeted_rescan_ts(store: &WalletStore) -> Result<Option<u64>, WalletStoreError> {
+    store.get_checkpoint(LAST_TARGETED_RESCAN_LABEL)
+}
+
+/// Update the stored timestamp for the last targeted rescan operation.
+pub fn persist_last_targeted_rescan_ts(
+    batch: &mut WalletStoreBatch<'_>,
+    timestamp: Option<u64>,
+) -> Result<(), WalletStoreError> {
+    match timestamp {
+        Some(value) => batch.put_checkpoint(LAST_TARGETED_RESCAN_LABEL, value)?,
+        None => batch.delete_checkpoint(LAST_TARGETED_RESCAN_LABEL),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
     use super::{
-        birthday_height, last_scan_ts, persist_birthday_height, persist_last_scan_ts,
+        birthday_height, last_compact_scan_ts, last_full_rescan_ts, last_scan_ts,
+        last_targeted_rescan_ts, persist_birthday_height, persist_last_compact_scan_ts,
+        persist_last_full_rescan_ts, persist_last_scan_ts, persist_last_targeted_rescan_ts,
         persist_resume_height, resume_height,
     };
     use crate::db::WalletStore;
@@ -120,5 +176,62 @@ mod tests {
         batch.commit().expect("commit clear");
 
         assert_eq!(last_scan_ts(&store).unwrap(), None);
+    }
+
+    #[test]
+    fn last_full_rescan_roundtrip() {
+        let dir = tempdir().expect("tempdir");
+        let store = WalletStore::open(dir.path()).expect("open store");
+        assert_eq!(last_full_rescan_ts(&store).unwrap(), None);
+
+        let mut batch = store.batch().expect("batch");
+        persist_last_full_rescan_ts(&mut batch, Some(1)).expect("persist ts");
+        batch.commit().expect("commit");
+
+        assert_eq!(last_full_rescan_ts(&store).unwrap(), Some(1));
+
+        let mut batch = store.batch().expect("batch clear");
+        persist_last_full_rescan_ts(&mut batch, None).expect("clear");
+        batch.commit().expect("commit clear");
+
+        assert_eq!(last_full_rescan_ts(&store).unwrap(), None);
+    }
+
+    #[test]
+    fn last_compact_scan_roundtrip() {
+        let dir = tempdir().expect("tempdir");
+        let store = WalletStore::open(dir.path()).expect("open store");
+        assert_eq!(last_compact_scan_ts(&store).unwrap(), None);
+
+        let mut batch = store.batch().expect("batch");
+        persist_last_compact_scan_ts(&mut batch, Some(2)).expect("persist ts");
+        batch.commit().expect("commit");
+
+        assert_eq!(last_compact_scan_ts(&store).unwrap(), Some(2));
+
+        let mut batch = store.batch().expect("batch clear");
+        persist_last_compact_scan_ts(&mut batch, None).expect("clear");
+        batch.commit().expect("commit clear");
+
+        assert_eq!(last_compact_scan_ts(&store).unwrap(), None);
+    }
+
+    #[test]
+    fn last_targeted_rescan_roundtrip() {
+        let dir = tempdir().expect("tempdir");
+        let store = WalletStore::open(dir.path()).expect("open store");
+        assert_eq!(last_targeted_rescan_ts(&store).unwrap(), None);
+
+        let mut batch = store.batch().expect("batch");
+        persist_last_targeted_rescan_ts(&mut batch, Some(3)).expect("persist ts");
+        batch.commit().expect("commit");
+
+        assert_eq!(last_targeted_rescan_ts(&store).unwrap(), Some(3));
+
+        let mut batch = store.batch().expect("batch clear");
+        persist_last_targeted_rescan_ts(&mut batch, None).expect("clear");
+        batch.commit().expect("commit clear");
+
+        assert_eq!(last_targeted_rescan_ts(&store).unwrap(), None);
     }
 }

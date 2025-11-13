@@ -8,8 +8,10 @@ use thiserror::Error;
 
 use crate::db::{
     checkpoints::{
-        birthday_height, persist_birthday_height, persist_last_scan_ts, persist_resume_height,
-        resume_height,
+        birthday_height, last_compact_scan_ts, last_full_rescan_ts, last_scan_ts,
+        last_targeted_rescan_ts, persist_birthday_height, persist_last_compact_scan_ts,
+        persist_last_full_rescan_ts, persist_last_scan_ts, persist_last_targeted_rescan_ts,
+        persist_resume_height, resume_height,
     },
     AddressKind, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreBatch,
     WalletStoreError,
@@ -36,14 +38,36 @@ pub struct WalletScanner {
 pub struct SyncStatus {
     /// Latest chain height reported by the indexer backend.
     pub latest_height: u64,
+    /// Mode executed during the scan.
+    pub mode: SyncMode,
     /// Number of script hashes (addresses) visited during the scan.
     pub scanned_scripthashes: usize,
-    /// Optional pending height range that still requires backfilling.
-    pub pending_range: Option<(u64, u64)>,
+    /// Optional pending height ranges associated with the scan.
+    pub pending_ranges: Vec<(u64, u64)>,
+    /// Snapshot of the persisted checkpoints after the scan.
+    pub checkpoints: SyncCheckpoints,
+}
+
+/// Overall mode executed during a wallet scan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SyncMode {
+    Full { start_height: u64 },
+    Resume { from_height: u64 },
+    Rescan { from_height: u64 },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SyncCheckpoints {
+    pub resume_height: Option<u64>,
+    pub birthday_height: Option<u64>,
+    pub last_scan_ts: Option<u64>,
+    pub last_full_rescan_ts: Option<u64>,
+    pub last_compact_scan_ts: Option<u64>,
+    pub last_targeted_rescan_ts: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ScanMode {
+enum ScanIntent {
     Full,
     Resume,
     Rescan { from_height: u64 },
@@ -79,25 +103,25 @@ impl WalletScanner {
 
     /// Execute a full synchronisation starting from the configured birthday height.
     pub fn sync_full(&self) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanMode::Full)
+        self.scan(ScanIntent::Full)
     }
 
     /// Resume synchronisation from the last stored checkpoint.
     pub fn sync_resume(&self) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanMode::Resume)
+        self.scan(ScanIntent::Resume)
     }
 
     /// Trigger an explicit rescan starting from `from_height`.
     pub fn rescan_from(&self, from_height: u64) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanMode::Rescan { from_height })
+        self.scan(ScanIntent::Rescan { from_height })
     }
 
-    fn scan(&self, mode: ScanMode) -> Result<SyncStatus, ScannerError> {
+    fn scan(&self, intent: ScanIntent) -> Result<SyncStatus, ScannerError> {
         let store = self.engine.store();
-        let base_height = match mode {
-            ScanMode::Full => self.start_height,
-            ScanMode::Resume => resume_height(store)?.unwrap_or(self.start_height),
-            ScanMode::Rescan { from_height } => from_height,
+        let base_height = match intent {
+            ScanIntent::Full => self.start_height,
+            ScanIntent::Resume => resume_height(store)?.unwrap_or(self.start_height),
+            ScanIntent::Rescan { from_height } => from_height,
         };
 
         let headers = self
@@ -114,17 +138,35 @@ impl WalletScanner {
         let mut batch = store.batch()?;
         self.persist_checkpoints(
             &mut batch,
-            mode,
+            intent,
             base_height,
             latest_height,
             existing_birthday,
         )?;
         batch.commit()?;
 
+        let checkpoints = self.collect_checkpoints(store)?;
+        let pending_ranges = if base_height < latest_height {
+            vec![(base_height, latest_height)]
+        } else {
+            Vec::new()
+        };
+        let mode = match intent {
+            ScanIntent::Full => SyncMode::Full {
+                start_height: base_height,
+            },
+            ScanIntent::Resume => SyncMode::Resume {
+                from_height: base_height,
+            },
+            ScanIntent::Rescan { from_height } => SyncMode::Rescan { from_height },
+        };
+
         Ok(SyncStatus {
             latest_height,
+            mode,
             scanned_scripthashes,
-            pending_range: (base_height < latest_height).then_some((base_height, latest_height)),
+            pending_ranges,
+            checkpoints,
         })
     }
 
@@ -268,24 +310,49 @@ impl WalletScanner {
     fn persist_checkpoints(
         &self,
         batch: &mut WalletStoreBatch<'_>,
-        mode: ScanMode,
+        intent: ScanIntent,
         base_height: u64,
         latest_height: u64,
         existing_birthday: Option<u64>,
     ) -> Result<(), ScannerError> {
-        let desired_birthday = match (mode, existing_birthday) {
-            (ScanMode::Full, None) => Some(base_height),
-            (ScanMode::Full, Some(current)) => Some(current.min(base_height)),
-            (ScanMode::Resume, Some(current)) => Some(current),
-            (ScanMode::Resume, None) => Some(base_height),
-            (ScanMode::Rescan { from_height }, Some(current)) => Some(current.min(from_height)),
-            (ScanMode::Rescan { from_height }, None) => Some(from_height),
+        let desired_birthday = match (intent, existing_birthday) {
+            (ScanIntent::Full, None) => Some(base_height),
+            (ScanIntent::Full, Some(current)) => Some(current.min(base_height)),
+            (ScanIntent::Resume, Some(current)) => Some(current),
+            (ScanIntent::Resume, None) => Some(base_height),
+            (ScanIntent::Rescan { from_height }, Some(current)) => Some(current.min(from_height)),
+            (ScanIntent::Rescan { from_height }, None) => Some(from_height),
         };
         persist_birthday_height(batch, desired_birthday)?;
         persist_resume_height(batch, Some(latest_height))?;
         let ts = current_timestamp_ms();
         persist_last_scan_ts(batch, Some(ts))?;
+        match intent {
+            ScanIntent::Full => {
+                persist_last_full_rescan_ts(batch, Some(ts))?;
+            }
+            ScanIntent::Resume => {
+                persist_last_compact_scan_ts(batch, Some(ts))?;
+            }
+            ScanIntent::Rescan { .. } => {
+                persist_last_targeted_rescan_ts(batch, Some(ts))?;
+            }
+        }
         Ok(())
+    }
+
+    fn collect_checkpoints(
+        &self,
+        store: &Arc<WalletStore>,
+    ) -> Result<SyncCheckpoints, ScannerError> {
+        Ok(SyncCheckpoints {
+            resume_height: resume_height(store)?,
+            birthday_height: birthday_height(store)?,
+            last_scan_ts: last_scan_ts(store)?,
+            last_full_rescan_ts: last_full_rescan_ts(store)?,
+            last_compact_scan_ts: last_compact_scan_ts(store)?,
+            last_targeted_rescan_ts: last_targeted_rescan_ts(store)?,
+        })
     }
 }
 
@@ -361,6 +428,8 @@ mod tests {
         let status = scanner.sync_full().expect("sync full");
 
         assert_eq!(status.latest_height, latest_height);
+        assert!(matches!(status.mode, SyncMode::Full { start_height: 0 }));
+        assert_eq!(status.pending_ranges, vec![(0, latest_height)]);
         let utxos = engine.store().iter_utxos().expect("utxos");
         assert_eq!(utxos.len(), 1);
         assert_eq!(utxos[0].owner, addresses[1]);
@@ -395,7 +464,8 @@ mod tests {
 
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
         scanner.sync_full().expect("first sync");
-        scanner.sync_resume().expect("resume sync");
+        let resume_status = scanner.sync_resume().expect("resume sync");
+        assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
 
         let utxos = engine.store().iter_utxos().expect("utxos");
         assert_eq!(utxos.len(), 1);
@@ -414,6 +484,7 @@ mod tests {
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
         let status = scanner.sync_full().expect("sync full");
         assert_eq!(status.latest_height, latest_height);
+        assert!(matches!(status.mode, SyncMode::Full { .. }));
 
         let store = engine.store();
         let resume = checkpoints::resume_height(store).expect("resume");
@@ -422,6 +493,59 @@ mod tests {
         assert_eq!(birthday, Some(0));
         let timestamp = checkpoints::last_scan_ts(store).expect("ts");
         assert!(timestamp.unwrap_or(0) > 0);
+        assert_eq!(status.checkpoints.resume_height, Some(latest_height));
+        assert_eq!(status.checkpoints.birthday_height, Some(0));
+        assert_eq!(status.checkpoints.last_scan_ts, timestamp);
+    }
+
+    #[test]
+    fn scanner_persists_mode_specific_checkpoints() {
+        let seed = [4u8; 32];
+        let addresses = derive_external_addresses(seed, 1);
+        let latest_height = 40;
+        let mut mock = MockIndexer::new(latest_height);
+        mock.add_status(&addresses[0]);
+
+        let (engine, scanner) = test_engine_and_scanner(seed, mock);
+
+        let full_status = scanner.sync_full().expect("full");
+        let full_ts = full_status
+            .checkpoints
+            .last_full_rescan_ts
+            .expect("full ts");
+
+        let resume_status = scanner.sync_resume().expect("resume");
+        assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
+        let resume_ts = resume_status
+            .checkpoints
+            .last_compact_scan_ts
+            .expect("resume ts");
+        assert!(resume_ts >= full_ts);
+
+        let rescan_status = scanner.rescan_from(5).expect("rescan");
+        assert!(matches!(
+            rescan_status.mode,
+            SyncMode::Rescan { from_height: 5 }
+        ));
+        let rescan_ts = rescan_status
+            .checkpoints
+            .last_targeted_rescan_ts
+            .expect("rescan ts");
+        assert!(rescan_ts >= resume_ts);
+
+        let store = engine.store();
+        assert_eq!(
+            checkpoints::last_full_rescan_ts(store).expect("full"),
+            Some(full_ts)
+        );
+        assert_eq!(
+            checkpoints::last_compact_scan_ts(store).expect("resume"),
+            Some(resume_ts)
+        );
+        assert_eq!(
+            checkpoints::last_targeted_rescan_ts(store).expect("rescan"),
+            Some(rescan_ts)
+        );
     }
 
     fn test_engine_and_scanner(

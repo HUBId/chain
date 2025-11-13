@@ -15,7 +15,8 @@ use dto::{
     ListTransactionsResponse, ListUtxosResponse, PendingLockDto, PolicyPreviewResponse,
     PolicySnapshotDto, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
     RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusParams, SyncStatusResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
+    SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TransactionEntryDto,
+    UtxoDto, JSONRPC_VERSION,
 };
 use hex::encode as hex_encode;
 use serde::de::DeserializeOwned;
@@ -25,7 +26,7 @@ use serde_json::{json, Value};
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{DraftTransaction, SpendModel, WalletBalance};
-use crate::indexer::scanner::SyncStatus;
+use crate::indexer::scanner::{SyncCheckpoints, SyncMode, SyncStatus};
 use crate::node_client::NodeClientError;
 use crate::wallet::{PolicyPreview, Wallet, WalletError, WalletSyncCoordinator, WalletSyncError};
 
@@ -315,21 +316,45 @@ impl WalletRpcRouter {
     fn respond_sync_status(&self) -> Result<Value, RouterError> {
         let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
         let status = sync.latest_status();
-        let (latest_height, scanned_scripthashes, pending_range) = if let Some(status) = status {
+        let (
+            mode,
+            latest_height,
+            scanned_scripthashes,
+            pending_ranges,
+            checkpoints,
+            last_rescan_timestamp,
+        ) = if let Some(status) = status {
             (
+                Some(match status.mode {
+                    SyncMode::Full { start_height } => SyncModeDto::Full { start_height },
+                    SyncMode::Resume { from_height } => SyncModeDto::Resume { from_height },
+                    SyncMode::Rescan { from_height } => SyncModeDto::Rescan { from_height },
+                }),
                 Some(status.latest_height),
                 Some(status.scanned_scripthashes),
-                status.pending_range,
+                status.pending_ranges.clone(),
+                Some(SyncCheckpointDto {
+                    resume_height: status.checkpoints.resume_height,
+                    birthday_height: status.checkpoints.birthday_height,
+                    last_scan_ts: status.checkpoints.last_scan_ts,
+                    last_full_rescan_ts: status.checkpoints.last_full_rescan_ts,
+                    last_compact_scan_ts: status.checkpoints.last_compact_scan_ts,
+                    last_targeted_rescan_ts: status.checkpoints.last_targeted_rescan_ts,
+                }),
+                status.checkpoints.last_targeted_rescan_ts,
             )
         } else {
-            (None, None, None)
+            (None, None, None, Vec::new(), None, None)
         };
         let last_error = sync.last_error().map(|error| error.to_string());
         let response = SyncStatusResponse {
             syncing: sync.is_syncing(),
+            mode,
             latest_height,
             scanned_scripthashes,
-            pending_range,
+            pending_ranges,
+            checkpoints,
+            last_rescan_timestamp,
             last_error,
         };
         to_value(response)
@@ -619,8 +644,13 @@ mod tests {
     fn router_rejects_out_of_range_rescan() {
         let status = SyncStatus {
             latest_height: 10,
+            mode: SyncMode::Resume { from_height: 10 },
             scanned_scripthashes: 2,
-            pending_range: None,
+            pending_ranges: Vec::new(),
+            checkpoints: SyncCheckpoints {
+                resume_height: Some(10),
+                ..SyncCheckpoints::default()
+            },
         };
         let sync = Arc::new(StubSync {
             status: Some(status),

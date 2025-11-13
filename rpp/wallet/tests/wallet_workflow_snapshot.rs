@@ -74,8 +74,8 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     );
     assert_eq!(sync_status.latest_height, Some(fixture.latest_height));
     assert_eq!(
-        sync_status.pending_range,
-        Some((fixture.birthday, fixture.latest_height))
+        sync_status.pending_ranges,
+        vec![(fixture.birthday, fixture.latest_height)]
     );
     assert!(sync_status
         .scanned_scripthashes
