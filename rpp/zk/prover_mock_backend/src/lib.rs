@@ -104,7 +104,7 @@ impl ProofBackend for MockBackend {
         let identifier = format!("mock.consensus.{}", digest.to_hex());
         let circuit = ConsensusCircuitDef::new(identifier.clone());
         let header = ProofHeader::new(ProofSystemKind::Mock, identifier.clone());
-        let proof = ProofBytes::encode(&header, witness.as_slice())?;
+        let proof = ProofBytes::encode(&header, witness)?;
         let verifying_key = VerifyingKey(identifier.into_bytes());
         Ok((proof, verifying_key, circuit))
     }

@@ -26,7 +26,7 @@ pub use prover_backend_interface as proof_backend;
 pub use prover_stwo_backend as stwo;
 
 #[cfg(not(feature = "prover-stwo"))]
-#[path = "../../rpp/chain/src/stwo_stub.rs"]
+#[path = "stwo_stub.rs"]
 pub mod stwo;
 
 pub mod config;

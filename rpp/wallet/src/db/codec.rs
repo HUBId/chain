@@ -105,6 +105,25 @@ impl<'a> TxCacheEntry<'a> {
     }
 }
 
+/// Metadata describing a pending lock entry held by the wallet.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingLock {
+    pub outpoint: UtxoOutpoint,
+    pub locked_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spending_txid: Option<[u8; 32]>,
+}
+
+impl PendingLock {
+    pub fn new(outpoint: UtxoOutpoint, locked_at_ms: u64, spending_txid: Option<[u8; 32]>) -> Self {
+        Self {
+            outpoint,
+            locked_at_ms,
+            spending_txid,
+        }
+    }
+}
+
 /// Persisted snapshot of admission or spending policies.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicySnapshot {
@@ -180,6 +199,14 @@ pub fn decode_key_material(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
     Ok(buf.into_vec())
 }
 
+pub fn encode_pending_lock(lock: &PendingLock) -> Result<Vec<u8>, CodecError> {
+    options().serialize(lock)
+}
+
+pub fn decode_pending_lock(bytes: &[u8]) -> Result<PendingLock, CodecError> {
+    options().deserialize(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +239,18 @@ mod tests {
         let encoded = encode_tx_cache_entry(&entry).expect("encode entry");
         let decoded = decode_tx_cache_entry(&encoded).expect("decode entry");
         assert_eq!(decoded.into_owned(), entry.into_owned());
+    }
+
+    #[test]
+    fn pending_lock_roundtrip() {
+        let lock = PendingLock::new(
+            UtxoOutpoint::new([2u8; 32], 11),
+            1_650_000_000_000,
+            Some([9u8; 32]),
+        );
+        let encoded = encode_pending_lock(&lock).expect("encode lock");
+        let decoded = decode_pending_lock(&encoded).expect("decode lock");
+        assert_eq!(decoded, lock);
     }
 
     #[test]

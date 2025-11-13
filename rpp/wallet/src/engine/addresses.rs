@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use std::convert::TryInto;
 use ed25519_dalek::{PublicKey, SecretKey};
+use std::convert::TryInto;
 
-use crate::db::{AddressKind, UtxoOutpoint, WalletStore, WalletStoreError};
+use crate::db::{AddressKind, PendingLock, UtxoOutpoint, WalletStore, WalletStoreError};
 use crate::proof_backend::Blake2sHasher;
 
 use super::DerivationPath;
@@ -12,8 +12,6 @@ const META_EXTERNAL_CURSOR: &str = "addr_external_cursor";
 const META_INTERNAL_CURSOR: &str = "addr_internal_cursor";
 const META_EXTERNAL_UNUSED: &str = "addr_external_unused";
 const META_INTERNAL_UNUSED: &str = "addr_internal_unused";
-const META_PENDING_PREFIX: &str = "pending_utxo/";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedAddress {
     pub address: String,
@@ -79,24 +77,138 @@ impl AddressManager {
     }
 
     pub fn is_outpoint_pending(&self, outpoint: &UtxoOutpoint) -> bool {
-        let key = pending_key(outpoint);
         self.store
-            .get_meta(&key)
+            .get_pending_lock(outpoint)
             .map(|value| value.is_some())
             .unwrap_or(false)
     }
 
-    pub fn mark_inputs_pending<'a, I>(&self, inputs: I) -> Result<(), AddressError>
+    pub fn pending_locks(&self) -> Result<Vec<PendingLock>, AddressError> {
+        Ok(self.store.iter_pending_locks()?)
+    }
+
+    pub fn lock_inputs<'a, I>(
+        &self,
+        inputs: I,
+        spending_txid: Option<[u8; 32]>,
+        locked_at_ms: u64,
+    ) -> Result<Vec<PendingLock>, AddressError>
     where
         I: IntoIterator<Item = &'a UtxoOutpoint>,
     {
+        let inputs: Vec<UtxoOutpoint> = inputs.into_iter().cloned().collect();
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut batch = self.store.batch()?;
-        for outpoint in inputs {
-            let key = pending_key(outpoint);
-            batch.put_meta(&key, &[1]);
+        let mut locks = Vec::with_capacity(inputs.len());
+        for outpoint in &inputs {
+            let lock = PendingLock::new(outpoint.clone(), locked_at_ms, spending_txid);
+            batch.put_pending_lock(&lock)?;
+            locks.push(lock);
         }
         batch.commit()?;
-        Ok(())
+        Ok(locks)
+    }
+
+    pub fn attach_lock_txid<'a, I>(
+        &self,
+        inputs: I,
+        spending_txid: [u8; 32],
+    ) -> Result<Vec<PendingLock>, AddressError>
+    where
+        I: IntoIterator<Item = &'a UtxoOutpoint>,
+    {
+        let inputs: Vec<UtxoOutpoint> = inputs.into_iter().cloned().collect();
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut updated = Vec::new();
+        for outpoint in &inputs {
+            if let Some(mut lock) = self.store.get_pending_lock(outpoint)? {
+                lock.spending_txid = Some(spending_txid);
+                updated.push(lock);
+            }
+        }
+        if updated.is_empty() {
+            return Ok(updated);
+        }
+        let mut batch = self.store.batch()?;
+        for lock in &updated {
+            batch.put_pending_lock(lock)?;
+        }
+        batch.commit()?;
+        Ok(updated)
+    }
+
+    pub fn release_inputs<'a, I>(&self, inputs: I) -> Result<Vec<PendingLock>, AddressError>
+    where
+        I: IntoIterator<Item = &'a UtxoOutpoint>,
+    {
+        let inputs: Vec<UtxoOutpoint> = inputs.into_iter().cloned().collect();
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut released = Vec::new();
+        for outpoint in &inputs {
+            if let Some(lock) = self.store.get_pending_lock(outpoint)? {
+                released.push(lock);
+            }
+        }
+        if released.is_empty() {
+            return Ok(released);
+        }
+        let mut batch = self.store.batch()?;
+        for lock in &released {
+            batch.delete_pending_lock(&lock.outpoint);
+        }
+        batch.commit()?;
+        Ok(released)
+    }
+
+    pub fn release_by_txid(
+        &self,
+        spending_txid: &[u8; 32],
+    ) -> Result<Vec<PendingLock>, AddressError> {
+        let locks = self.store.iter_pending_locks()?;
+        let released: Vec<PendingLock> = locks
+            .into_iter()
+            .filter(|lock| lock.spending_txid.as_ref() == Some(spending_txid))
+            .collect();
+        if released.is_empty() {
+            return Ok(released);
+        }
+        let mut batch = self.store.batch()?;
+        for lock in &released {
+            batch.delete_pending_lock(&lock.outpoint);
+        }
+        batch.commit()?;
+        Ok(released)
+    }
+
+    pub fn release_expired_locks(
+        &self,
+        now_ms: u64,
+        timeout_secs: u64,
+    ) -> Result<Vec<PendingLock>, AddressError> {
+        if timeout_secs == 0 {
+            return Ok(Vec::new());
+        }
+        let locks = self.store.iter_pending_locks()?;
+        let timeout_ms = timeout_secs.saturating_mul(1000);
+        let expired: Vec<PendingLock> = locks
+            .into_iter()
+            .filter(|lock| now_ms.saturating_sub(lock.locked_at_ms) >= timeout_ms)
+            .collect();
+        if expired.is_empty() {
+            return Ok(expired);
+        }
+        let mut batch = self.store.batch()?;
+        for lock in &expired {
+            batch.delete_pending_lock(&lock.outpoint);
+        }
+        batch.commit()?;
+        Ok(expired)
     }
 
     fn next_address(&self, kind: AddressKind) -> Result<DerivedAddress, AddressError> {
@@ -115,10 +227,7 @@ impl AddressManager {
         let cursor = self.load_counter(cursor_key)?;
         let unused = self.load_counter(unused_key)?;
         if gap_limit > 0 && unused >= gap_limit {
-            return Err(AddressError::GapLimit {
-                kind,
-                gap_limit,
-            });
+            return Err(AddressError::GapLimit { kind, gap_limit });
         }
         let path = DerivationPath::new(0, matches!(kind, AddressKind::Internal), cursor);
         let address = self.derive_address(&path)?;
@@ -137,8 +246,8 @@ impl AddressManager {
         material.extend_from_slice(&(path.change as u32).to_be_bytes());
         material.extend_from_slice(&path.index.to_be_bytes());
         let seed: [u8; 32] = Blake2sHasher::hash(&material).into();
-        let secret = SecretKey::from_bytes(&seed)
-            .map_err(|err| AddressError::Key(err.to_string()))?;
+        let secret =
+            SecretKey::from_bytes(&seed).map_err(|err| AddressError::Key(err.to_string()))?;
         let public = PublicKey::from(&secret);
         let hash: [u8; 32] = Blake2sHasher::hash(public.as_bytes()).into();
         Ok(hex::encode(hash))
@@ -157,12 +266,3 @@ impl AddressManager {
         }
     }
 }
-
-fn pending_key(outpoint: &UtxoOutpoint) -> String {
-    format!(
-        "{META_PENDING_PREFIX}{}:{}",
-        hex::encode(outpoint.txid),
-        outpoint.index
-    )
-}
-
