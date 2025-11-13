@@ -607,6 +607,12 @@ where
                 if remaining_established_connection_ids.is_empty() {
                     self.established.remove(&peer_id);
                 }
+                let remote_address = endpoint.get_remote_address().clone();
+                let error = error.map(|err| {
+                    err.with_peer_id(peer_id.clone())
+                        .with_remote_address(remote_address.clone())
+                });
+
                 return Poll::Ready(PoolEvent::ConnectionClosed {
                     id,
                     connected: Connected { endpoint, peer_id },

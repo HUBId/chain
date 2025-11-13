@@ -199,7 +199,9 @@ pub(crate) async fn new_for_established_connection<THandler>(
                         }))
                         .await;
 
-                    let error = closing_muxer.await.err().map(ConnectionError::IO);
+                    let error = closing_muxer.await.err().map(|io_error| {
+                        ConnectionError::from(io_error).with_peer_id(peer_id.clone())
+                    });
 
                     let _ = events
                         .send(EstablishedConnectionEvent::Closed {

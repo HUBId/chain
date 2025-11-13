@@ -935,22 +935,25 @@ where
                 remaining_established_connection_ids,
                 ..
             } => {
+                let Connected { endpoint, peer_id } = connected;
+                let remote_addr = endpoint.get_remote_address().clone();
+
                 if let Some(error) = error.as_ref() {
                     tracing::debug!(
                         total_peers=%remaining_established_connection_ids.len(),
-                        "Connection closed with error {:?}: {:?}",
-                        error,
-                        connected,
+                        %peer_id,
+                        remote_addr=%remote_addr,
+                        "Connection closed with error: {error}",
                     );
                 } else {
                     tracing::debug!(
                         total_peers=%remaining_established_connection_ids.len(),
-                        "Connection closed: {:?}",
-                        connected
+                        %peer_id,
+                        remote_addr=%remote_addr,
+                        "Connection closed",
                     );
                 }
-                let peer_id = connected.peer_id;
-                let endpoint = connected.endpoint;
+
                 let num_established =
                     u32::try_from(remaining_established_connection_ids.len()).unwrap();
 
