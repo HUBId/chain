@@ -1,0 +1,181 @@
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+const DEFAULT_GAP_LIMIT: u32 = 20;
+const DEFAULT_MIN_CONFIRMATIONS: u32 = 1;
+const DEFAULT_MIN_FEE_RATE: u64 = 1;
+const DEFAULT_MAX_FEE_RATE: u64 = 200;
+const DEFAULT_FEE_RATE: u64 = 5;
+
+/// High-level wallet configuration exposed to runtime services.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletConfig {
+    pub engine: WalletEngineConfig,
+    pub policy: WalletPolicyConfig,
+    pub fees: WalletFeeConfig,
+    pub prover: WalletProverConfig,
+}
+
+impl Default for WalletConfig {
+    fn default() -> Self {
+        Self {
+            engine: WalletEngineConfig::default(),
+            policy: WalletPolicyConfig::default(),
+            fees: WalletFeeConfig::default(),
+            prover: WalletProverConfig::default(),
+        }
+    }
+}
+
+/// Configure storage paths and lifecycle metadata for the wallet engine.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletEngineConfig {
+    /// Directory where the wallet stores state and cache data.
+    pub data_dir: PathBuf,
+    /// Path to the persisted keystore bundle used by the wallet engine.
+    pub keystore_path: PathBuf,
+    /// Optional birthday height used when bootstrapping from checkpoints.
+    pub birthday_height: Option<u64>,
+}
+
+impl Default for WalletEngineConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: PathBuf::from("./data/wallet"),
+            keystore_path: PathBuf::from("./data/wallet/keystore.toml"),
+            birthday_height: None,
+        }
+    }
+}
+
+/// Spending policy constraints enforced by the wallet engine.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletPolicyConfig {
+    /// Maximum number of unused external addresses tracked by the wallet.
+    pub external_gap_limit: u32,
+    /// Maximum number of unused change addresses tracked by the wallet.
+    pub internal_gap_limit: u32,
+    /// Minimum confirmations required before funds become spendable.
+    pub min_confirmations: u32,
+}
+
+impl Default for WalletPolicyConfig {
+    fn default() -> Self {
+        Self {
+            external_gap_limit: DEFAULT_GAP_LIMIT,
+            internal_gap_limit: DEFAULT_GAP_LIMIT,
+            min_confirmations: DEFAULT_MIN_CONFIRMATIONS,
+        }
+    }
+}
+
+/// Fee rate guidance exposed to RPC consumers.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletFeeConfig {
+    /// Default fee rate applied when callers omit an explicit value.
+    pub default_sats_per_vbyte: u64,
+    /// Lowest allowed fee rate for submitted transactions.
+    pub min_sats_per_vbyte: u64,
+    /// Highest allowed fee rate for submitted transactions.
+    pub max_sats_per_vbyte: u64,
+}
+
+impl Default for WalletFeeConfig {
+    fn default() -> Self {
+        Self {
+            default_sats_per_vbyte: DEFAULT_FEE_RATE,
+            min_sats_per_vbyte: DEFAULT_MIN_FEE_RATE,
+            max_sats_per_vbyte: DEFAULT_MAX_FEE_RATE,
+        }
+    }
+}
+
+/// Controls prover integration toggles for the wallet runtime.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletProverConfig {
+    /// Enable prover-backed flows for transaction authoring.
+    pub enabled: bool,
+    /// Allow falling back to the mock prover backend when available.
+    pub mock_fallback: bool,
+}
+
+impl Default for WalletProverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mock_fallback: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wallet_defaults_match_expected_ranges() {
+        let config = WalletConfig::default();
+        assert_eq!(config.engine.data_dir, PathBuf::from("./data/wallet"));
+        assert_eq!(
+            config.engine.keystore_path,
+            PathBuf::from("./data/wallet/keystore.toml")
+        );
+        assert!(config.engine.birthday_height.is_none());
+        assert_eq!(config.policy.external_gap_limit, DEFAULT_GAP_LIMIT);
+        assert_eq!(config.policy.internal_gap_limit, DEFAULT_GAP_LIMIT);
+        assert_eq!(config.policy.min_confirmations, DEFAULT_MIN_CONFIRMATIONS);
+        assert_eq!(config.fees.default_sats_per_vbyte, DEFAULT_FEE_RATE);
+        assert_eq!(config.fees.min_sats_per_vbyte, DEFAULT_MIN_FEE_RATE);
+        assert_eq!(config.fees.max_sats_per_vbyte, DEFAULT_MAX_FEE_RATE);
+        assert!(!config.prover.enabled);
+        assert!(config.prover.mock_fallback);
+    }
+
+    #[test]
+    fn serde_roundtrip_preserves_nested_configuration() {
+        let config = WalletConfig {
+            engine: WalletEngineConfig {
+                data_dir: PathBuf::from("./custom"),
+                keystore_path: PathBuf::from("./custom/keys.toml"),
+                birthday_height: Some(42),
+            },
+            policy: WalletPolicyConfig {
+                external_gap_limit: 32,
+                internal_gap_limit: 16,
+                min_confirmations: 12,
+            },
+            fees: WalletFeeConfig {
+                default_sats_per_vbyte: 11,
+                min_sats_per_vbyte: 5,
+                max_sats_per_vbyte: 250,
+            },
+            prover: WalletProverConfig {
+                enabled: true,
+                mock_fallback: false,
+            },
+        };
+
+        let serialized = toml::to_string(&config).expect("serialize");
+        let restored: WalletConfig = toml::from_str(&serialized).expect("deserialize");
+
+        assert_eq!(restored.engine.data_dir, PathBuf::from("./custom"));
+        assert_eq!(
+            restored.engine.keystore_path,
+            PathBuf::from("./custom/keys.toml")
+        );
+        assert_eq!(restored.engine.birthday_height, Some(42));
+        assert_eq!(restored.policy.external_gap_limit, 32);
+        assert_eq!(restored.policy.internal_gap_limit, 16);
+        assert_eq!(restored.policy.min_confirmations, 12);
+        assert_eq!(restored.fees.default_sats_per_vbyte, 11);
+        assert_eq!(restored.fees.min_sats_per_vbyte, 5);
+        assert_eq!(restored.fees.max_sats_per_vbyte, 250);
+        assert!(restored.prover.enabled);
+        assert!(!restored.prover.mock_fallback);
+    }
+}

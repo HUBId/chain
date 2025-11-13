@@ -51,7 +51,7 @@ use rpp_chain::{
     types::BlockPayload,
 };
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::config::ElectrsConfig;
+use rpp_wallet::config::electrs::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
