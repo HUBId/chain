@@ -8,7 +8,8 @@ use crate::merkle::{branch_child_ref, Key, Value};
 use crate::v2::api;
 
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
+    BranchNode, Child, FileIoError, LinearAddress, MaybePersistedNode, NibblesIterator, Node,
+    PathIterItem, SharedNode, TrieReader,
 };
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -26,9 +27,7 @@ enum IterationNode {
     Visited {
         /// The key (as nibbles) of this node.
         key: Key,
-        /// Returns the non-empty children of this node and their positions
-        /// in the node's children array.
-        children_iter: Box<dyn Iterator<Item = (u8, Child)> + Send>,
+        cursor: BranchChildrenCursor,
     },
 }
 
@@ -40,11 +39,74 @@ impl std::fmt::Debug for IterationNode {
                 .field("key", key)
                 .field("node", node)
                 .finish(),
-            Self::Visited {
-                key,
-                children_iter: _,
-            } => f.debug_struct("Visited").field("key", key).finish(),
+            Self::Visited { key, cursor } => f
+                .debug_struct("Visited")
+                .field("key", key)
+                .field("cursor", cursor)
+                .finish(),
         }
+    }
+}
+
+#[derive(Debug)]
+struct BranchChildrenCursor {
+    branch: SharedNode,
+    next_child_index: usize,
+    cached_children: Box<[Option<SharedNode>]>,
+}
+
+#[derive(Debug)]
+enum BranchChild<'a> {
+    Address(LinearAddress),
+    MaybePersisted(&'a MaybePersistedNode),
+    Shared(&'a SharedNode),
+}
+
+impl BranchChildrenCursor {
+    fn new(branch: SharedNode) -> Self {
+        Self::with_start_index(branch, 0)
+    }
+
+    fn with_start_index(branch: SharedNode, start_index: usize) -> Self {
+        debug_assert!(branch.as_branch().is_some());
+
+        Self {
+            branch,
+            next_child_index: start_index,
+            cached_children: vec![None; BranchNode::MAX_CHILDREN].into_boxed_slice(),
+        }
+    }
+
+    fn next(&mut self) -> Option<(u8, BranchChild<'_>)> {
+        let branch = self
+            .branch
+            .as_branch()
+            .expect("cursor must reference a branch node");
+
+        while self.next_child_index < BranchNode::MAX_CHILDREN {
+            let idx = self.next_child_index;
+            self.next_child_index += 1;
+
+            let Some(child) = branch.children[idx].as_ref() else {
+                continue;
+            };
+
+            match child {
+                Child::AddressWithHash(addr, _) => {
+                    return Some((idx as u8, BranchChild::Address(*addr)));
+                }
+                Child::Node(node) => {
+                    let entry = &mut self.cached_children[idx];
+                    let shared = entry.get_or_insert_with(|| SharedNode::new(node.clone()));
+                    return Some((idx as u8, BranchChild::Shared(shared)));
+                }
+                Child::MaybePersisted(maybe_persisted, _) => {
+                    return Some((idx as u8, BranchChild::MaybePersisted(maybe_persisted)));
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -105,13 +167,11 @@ impl<'a, T: TrieReader> Iterator for MerkleNodeIter<'a, T> {
                             IterationNode::Unvisited { key, node } => {
                                 match &*node {
                                     Node::Leaf(_) => {}
-                                    Node::Branch(branch) => {
+                                    Node::Branch(_) => {
                                         // `node` is a branch node. Visit its children next.
                                         iter_stack.push(IterationNode::Visited {
                                             key: key.clone(),
-                                            children_iter: Box::new(as_enumerated_children_iter(
-                                                branch,
-                                            )),
+                                            cursor: BranchChildrenCursor::new(node.clone()),
                                         });
                                     }
                                 }
@@ -121,23 +181,23 @@ impl<'a, T: TrieReader> Iterator for MerkleNodeIter<'a, T> {
                             }
                             IterationNode::Visited {
                                 ref key,
-                                ref mut children_iter,
+                                ref mut cursor,
                             } => {
                                 // We returned `node` already. Visit its next child.
-                                let Some((pos, child)) = children_iter.next() else {
+                                let Some((pos, child)) = cursor.next() else {
                                     // We visited all this node's descendants. Go back to its parent.
                                     continue;
                                 };
 
                                 let child = match child {
-                                    Child::AddressWithHash(addr, _) => {
+                                    BranchChild::Address(addr) => {
                                         match self.merkle.read_node(addr) {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }
                                     }
-                                    Child::Node(node) => node.clone().into(),
-                                    Child::MaybePersisted(maybe_persisted, _) => {
+                                    BranchChild::Shared(node) => node.clone(),
+                                    BranchChild::MaybePersisted(maybe_persisted) => {
                                         // For MaybePersisted, we need to get the node
                                         match maybe_persisted.as_shared_node(self.merkle) {
                                             Ok(node) => node,
@@ -249,11 +309,12 @@ fn get_iterator_intial_state<'a, T: TrieReader>(
                     // There is no child at `next_unmatched_key_nibble`.
                     // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
                     // first (if it exists).
+                    let start_index = usize::from(next_unmatched_key_nibble) + 1;
                     iter_stack.push(IterationNode::Visited {
                         key: matched_key_nibbles.clone().into_boxed_slice(),
-                        children_iter: Box::new(
-                            as_enumerated_children_iter(branch)
-                                .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
+                        cursor: BranchChildrenCursor::with_start_index(
+                            node.clone(),
+                            start_index.min(BranchNode::MAX_CHILDREN),
                         ),
                     });
 
@@ -554,17 +615,6 @@ where
     (Ordering::Equal, unmatched_key_nibbles_iter)
 }
 
-/// Returns an iterator that returns (`pos`,`child`) for each non-empty child of `branch`,
-/// where `pos` is the position of the child in `branch`'s children array.
-fn as_enumerated_children_iter(branch: &BranchNode) -> impl Iterator<Item = (u8, Child)> + use<> {
-    branch
-        .children
-        .clone()
-        .into_iter()
-        .enumerate()
-        .filter_map(|(pos, child)| child.map(|child| (pos as u8, child)))
-}
-
 #[cfg(feature = "branch_factor_256")]
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
     nibbles.collect()
@@ -590,8 +640,11 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        noop_storage_metrics, BranchNode, ImmutableProposal, MemStore, MutableProposal, NodeStore,
+        noop_storage_metrics, BranchNode, Child, ImmutableProposal, LeafNode, LinearAddress,
+        MaybePersistedNode, MemStore, MutableProposal, Node, NodeReader, NodeStore, Path,
+        RootReader, SharedNode, TrieReader,
     };
+    use std::iter;
     use std::sync::Arc;
     use test_case::test_case;
 
@@ -601,6 +654,35 @@ mod tests {
         let nodestore = NodeStore::new_empty_proposal(memstore, noop_storage_metrics());
         Merkle::from(nodestore)
     }
+
+    #[derive(Debug)]
+    struct InMemoryTrie {
+        root: Option<SharedNode>,
+    }
+
+    impl InMemoryTrie {
+        fn new(root: SharedNode) -> Self {
+            Self { root: Some(root) }
+        }
+    }
+
+    impl NodeReader for InMemoryTrie {
+        fn read_node(&self, _addr: LinearAddress) -> Result<SharedNode, FileIoError> {
+            panic!("in-memory trie does not support address lookups")
+        }
+    }
+
+    impl RootReader for InMemoryTrie {
+        fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
+            Ok(self.root.clone())
+        }
+
+        fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
+            self.root.clone().map(MaybePersistedNode::from)
+        }
+    }
+
+    impl TrieReader for InMemoryTrie {}
 
     #[test_case(&[]; "empty key")]
     #[test_case(&[1]; "non-empty key")]
@@ -808,6 +890,62 @@ mod tests {
         assert_eq!(node.as_leaf().unwrap().value.to_vec(), vec![0x00]);
 
         assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterator_handles_unpersisted_children() {
+        let first_child_index = 0x03;
+        let first_partial_path: &[u8] = &[0x04, 0x05];
+        let second_child_index = 0x0E;
+        let second_partial_path: &[u8] = &[0x06];
+
+        let first_leaf = LeafNode {
+            partial_path: Path::from_iter(first_partial_path.iter().copied()),
+            value: vec![0x11].into_boxed_slice(),
+        };
+        let second_leaf = LeafNode {
+            partial_path: Path::from_iter(second_partial_path.iter().copied()),
+            value: vec![0x22].into_boxed_slice(),
+        };
+
+        let mut children = BranchNode::empty_children();
+        children[first_child_index as usize] = Some(Child::Node(Node::Leaf(first_leaf)));
+        children[second_child_index as usize] = Some(Child::Node(Node::Leaf(second_leaf)));
+
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children,
+        };
+        let trie = InMemoryTrie::new(SharedNode::new(Node::Branch(Box::new(branch))));
+
+        let mut iter = MerkleNodeIter::new(&trie, Cow::Borrowed(&[]));
+
+        let first_key_nibbles: Vec<u8> = iter::once(first_child_index)
+            .chain(first_partial_path.iter().copied())
+            .collect();
+        let second_key_nibbles: Vec<u8> = iter::once(second_child_index)
+            .chain(second_partial_path.iter().copied())
+            .collect();
+
+        let expected_first_key = expected_nibble_path(&first_key_nibbles);
+        let expected_second_key = expected_nibble_path(&second_key_nibbles);
+
+        let mut seen_leaf_keys = Vec::new();
+        while let Some(result) = iter.next() {
+            let (key, node) = result.expect("iteration over in-memory trie should not error");
+            if node.as_leaf().is_some() {
+                seen_leaf_keys.push(key);
+            }
+        }
+
+        assert_eq!(seen_leaf_keys.len(), 2);
+        assert!(seen_leaf_keys
+            .iter()
+            .any(|key| key.as_ref() == expected_first_key.as_ref()));
+        assert!(seen_leaf_keys
+            .iter()
+            .any(|key| key.as_ref() == expected_second_key.as_ref()));
     }
 
     /// Returns a new [Merkle] with the following key-value pairs:
