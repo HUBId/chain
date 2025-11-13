@@ -121,6 +121,24 @@ roles:
   that the correct backend and identifier are active, as documented in the
   validator tooling guide.【F:docs/validator_tooling.md†L15-L64】
 
+## Wallet keystore hardening
+
+`wallet init` now produces an encrypted keystore that records Argon2id KDF
+parameters (64 MiB memory, 3 iterations, single thread), a random salt, and the
+ChaCha20-Poly1305 nonce alongside the ciphertext. Passphrases may be supplied
+interactively, through `--passphrase-file`, `--passphrase-env`, or direct CLI
+arguments, and plaintext files are migrated on first load. Operators should:
+
+- store passphrases in dedicated secret stores (e.g., Vault) and reference them
+  via environment variables or files rather than embedding them in shell
+  history;
+- rotate passphrases when migrating keystores between hosts by re-running
+  `wallet init --force` with the new credential and distributing the refreshed
+  ciphertext;
+- ensure backups capture the entire keystore file (metadata + ciphertext) and
+  protect the passphrase copies with the same diligence as other hot wallet
+  secrets.
+
 ## Related security guidance
 
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) details the system assets,
