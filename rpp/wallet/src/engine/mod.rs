@@ -1,9 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig};
-use crate::db::{WalletStore, WalletStoreError};
+use crate::config::wallet::{PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig};
 use crate::db::{TxCacheEntry, UtxoOutpoint, UtxoRecord};
+use crate::db::{WalletStore, WalletStoreError};
 
 pub mod addresses;
 pub mod builder;
@@ -17,7 +17,7 @@ pub mod tests;
 
 pub use addresses::{AddressError, AddressManager, DerivedAddress};
 pub use builder::{BuilderError, TransactionBuilder};
-pub use fees::{FeeEstimator, FeeError};
+pub use fees::{FeeError, FeeEstimator};
 pub use policies::{PolicyEngine, PolicyViolation};
 pub use signing::{ProverError, ProverOutput, WalletProver};
 pub use utxo_sel::{CandidateUtxo, SelectionError};
@@ -43,7 +43,12 @@ impl DerivationPath {
 impl fmt::Display for DerivationPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let branch = if self.change { 1 } else { 0 };
-        write!(f, "m/{account}/{branch}/{index}", account = self.account, index = self.index)
+        write!(
+            f,
+            "m/{account}/{branch}/{index}",
+            account = self.account,
+            index = self.index
+        )
     }
 }
 
@@ -147,6 +152,8 @@ pub struct WalletEngine {
     policy_engine: PolicyEngine,
     tx_builder: TransactionBuilder,
     min_confirmations: u32,
+    pending_lock_timeout: u64,
+    tier_hooks: PolicyTierHooks,
 }
 
 impl WalletEngine {
@@ -163,7 +170,7 @@ impl WalletEngine {
             policy.internal_gap_limit,
         )?;
         let fee_estimator = FeeEstimator::new(fees);
-        let policy_engine = PolicyEngine::new(policy.min_confirmations, None);
+        let policy_engine = PolicyEngine::from_config(&policy);
         let dust_limit = policy_engine.dust_limit();
         let tx_builder = TransactionBuilder::new(dust_limit);
         Ok(Self {
@@ -173,6 +180,8 @@ impl WalletEngine {
             policy_engine,
             tx_builder,
             min_confirmations: policy.min_confirmations,
+            pending_lock_timeout: policy.pending_lock_timeout,
+            tier_hooks: policy.tier.clone(),
         })
     }
 
@@ -200,6 +209,14 @@ impl WalletEngine {
         &self.tx_builder
     }
 
+    pub fn pending_lock_timeout(&self) -> u64 {
+        self.pending_lock_timeout
+    }
+
+    pub fn tier_hooks(&self) -> &PolicyTierHooks {
+        &self.tier_hooks
+    }
+
     pub fn balance(&self) -> Result<WalletBalance, EngineError> {
         let utxos = self.store.iter_utxos()?;
         let confirmed = utxos.iter().map(|utxo| utxo.value).sum();
@@ -213,10 +230,10 @@ impl WalletEngine {
         self.store.iter_utxos().map_err(EngineError::from)
     }
 
-    pub fn list_transactions(
-        &self,
-    ) -> Result<Vec<([u8; 32], TxCacheEntry<'static>)>, EngineError> {
-        self.store.iter_tx_cache_entries().map_err(EngineError::from)
+    pub fn list_transactions(&self) -> Result<Vec<([u8; 32], TxCacheEntry<'static>)>, EngineError> {
+        self.store
+            .iter_tx_cache_entries()
+            .map_err(EngineError::from)
     }
 
     pub fn next_external_address(&self) -> Result<DerivedAddress, EngineError> {
@@ -244,20 +261,24 @@ impl WalletEngine {
             })
             .collect();
         let mut selection = utxo_sel::select_coins(&candidates, amount, self.min_confirmations)?;
-        let mut violations = Vec::new();
-        violations.extend(self.policy_engine.evaluate_selection(&selection));
-        let mut outputs = vec![DraftOutput::new(&to, amount, false)];
-        violations.extend(self.policy_engine.evaluate_outputs(&outputs));
+        let mut preflight = self.policy_engine.evaluate_selection(&selection);
         if let Some(violation) = self.policy_engine.evaluate_daily_limit(amount) {
-            violations.push(violation);
+            preflight.push(violation);
         }
-        if !violations.is_empty() {
-            return Err(EngineError::Policy(violations));
+        if !preflight.is_empty() {
+            return Err(EngineError::Policy(preflight));
         }
+        let mut outputs = vec![DraftOutput::new(&to, amount, false)];
         let total_in: u128 = selection.iter().map(|utxo| utxo.record.value).sum();
-        let mut fee = self.tx_builder.estimate_fee(selection.len(), outputs.len(), fee_rate);
+        let mut fee = self
+            .tx_builder
+            .estimate_fee(selection.len(), outputs.len(), fee_rate);
         if total_in < amount + fee {
-            return Err(BuilderError::InsufficientFunds { required: amount + fee, available: total_in }.into());
+            return Err(BuilderError::InsufficientFunds {
+                required: amount + fee,
+                available: total_in,
+            }
+            .into());
         }
         let mut change_output = None;
         let mut remainder = total_in
@@ -282,15 +303,23 @@ impl WalletEngine {
                 let change = self.address_manager.next_internal_address()?;
                 change_output = Some(DraftOutput::new(change.address, remainder, true));
             } else {
-                fee = fee.checked_add(remainder).ok_or(BuilderError::FeeOverflow)?;
+                fee = fee
+                    .checked_add(remainder)
+                    .ok_or(BuilderError::FeeOverflow)?;
                 remainder = 0;
             }
         } else {
-            fee = fee.checked_add(remainder).ok_or(BuilderError::FeeOverflow)?;
+            fee = fee
+                .checked_add(remainder)
+                .ok_or(BuilderError::FeeOverflow)?;
             remainder = 0;
         }
         if let Some(change) = change_output {
             outputs.push(change);
+        }
+        let postflight = self.policy_engine.evaluate_outputs(&outputs);
+        if !postflight.is_empty() {
+            return Err(EngineError::Policy(postflight));
         }
         let spend_model = SpendModel::Exact { amount };
         let draft = self
@@ -301,4 +330,3 @@ impl WalletEngine {
         Ok(draft)
     }
 }
-

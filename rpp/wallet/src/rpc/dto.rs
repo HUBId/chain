@@ -1,3 +1,4 @@
+use crate::config::wallet::PolicyTierHooks;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -184,6 +185,11 @@ pub struct BroadcastResponse {
 pub struct PolicyPreviewResponse {
     pub min_confirmations: u32,
     pub dust_limit: u128,
+    pub max_change_outputs: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend_limit_daily: Option<u128>,
+    pub pending_lock_timeout: u64,
+    pub tier_hooks: PolicyTierHooks,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -433,6 +439,13 @@ mod tests {
         let response = PolicyPreviewResponse {
             min_confirmations: 6,
             dust_limit: 546,
+            max_change_outputs: 2,
+            spend_limit_daily: Some(1_000),
+            pending_lock_timeout: 120,
+            tier_hooks: PolicyTierHooks {
+                enabled: true,
+                hook: Some("utxo_tier".to_string()),
+            },
         };
         roundtrip(&response);
     }

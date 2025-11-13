@@ -8,6 +8,7 @@ use super::builder::TransactionBuilder;
 use super::policies::{PolicyEngine, PolicyViolation};
 use super::utxo_sel::{select_coins, CandidateUtxo, SelectionError};
 use super::{DraftOutput, SpendModel};
+use crate::config::wallet::WalletPolicyConfig;
 use crate::db::{AddressKind, UtxoOutpoint, UtxoRecord, WalletStore};
 
 fn seeded_store() -> Arc<WalletStore> {
@@ -52,17 +53,70 @@ fn coin_selection_prefers_confirmed_and_skips_pending() {
 
 #[test]
 fn policy_engine_reports_violations() {
-    let mut engine = PolicyEngine::new(2, Some(50_000));
-    let outputs = vec![DraftOutput::new("dest", 100, false)];
+    let mut engine = PolicyEngine::new(2, 1_000, 1, Some(50_000));
+    let outputs = vec![
+        DraftOutput::new("dest", 100, false),
+        DraftOutput::new("change-a", 200, true),
+        DraftOutput::new("change-b", 200, true),
+    ];
     let utxos = vec![CandidateUtxo::new(mock_utxo(9, 0, 10_000), 0, false)];
     let mut violations = engine.evaluate_outputs(&outputs);
     violations.extend(engine.evaluate_selection(&utxos));
     if let Some(limit) = engine.evaluate_daily_limit(60_000) {
         violations.push(limit);
     }
-    assert!(violations.iter().any(|violation| matches!(violation, PolicyViolation::DustOutput { .. })));
-    assert!(violations.iter().any(|violation| matches!(violation, PolicyViolation::InsufficientConfirmations { .. })));
-    assert!(violations.iter().any(|violation| matches!(violation, PolicyViolation::DailyLimitExceeded { .. })));
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::DustOutput { .. })));
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::ChangeOutputDust { .. })));
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::ChangeOutputLimit { .. })));
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::InsufficientConfirmations { .. })));
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::DailyLimitExceeded { .. })));
+}
+
+#[test]
+fn policy_engine_enforces_dust_threshold_from_config() {
+    let config = WalletPolicyConfig {
+        dust_limit: 10_000,
+        ..WalletPolicyConfig::default()
+    };
+    let engine = PolicyEngine::from_config(&config);
+    let outputs = vec![DraftOutput::new("recipient", 5_000, false)];
+    let violations = engine.evaluate_outputs(&outputs);
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::DustOutput { threshold, .. } if *threshold == 10_000)));
+}
+
+#[test]
+fn policy_engine_limits_change_outputs() {
+    let mut engine = PolicyEngine::new(1, 1_000, 1, None);
+    let outputs = vec![
+        DraftOutput::new("dest", 2_000, false),
+        DraftOutput::new("change-a", 1_100, true),
+        DraftOutput::new("change-b", 1_100, true),
+    ];
+    let violations = engine.evaluate_outputs(&outputs);
+    assert!(violations
+        .iter()
+        .any(|violation| matches!(violation, PolicyViolation::ChangeOutputLimit { limit, observed } if *limit == 1 && *observed == 2)));
+}
+
+#[test]
+fn policy_engine_daily_limit_enforced() {
+    let engine = PolicyEngine::new(1, 500, 1, Some(10_000));
+    let violation = engine.evaluate_daily_limit(20_000);
+    assert!(
+        matches!(violation, Some(PolicyViolation::DailyLimitExceeded { limit, attempted }) if limit == 10_000 && attempted == 20_000)
+    );
 }
 
 #[test]
@@ -73,12 +127,21 @@ fn builder_emits_change_when_above_dust_threshold() {
         CandidateUtxo::new(mock_utxo(6, 0, 10_000), 3, false),
     ];
     let mut outputs = vec![DraftOutput::new("recipient", 12_000, false)];
-    let total_in: u128 = selection.iter().map(|candidate| candidate.record.value).sum();
+    let total_in: u128 = selection
+        .iter()
+        .map(|candidate| candidate.record.value)
+        .sum();
     let fee_with_change = builder.estimate_fee(selection.len(), outputs.len() + 1, 2);
     let change_value = total_in - outputs[0].value - fee_with_change;
     assert!(change_value >= builder.dust_limit());
     outputs.push(DraftOutput::new("change", change_value, true));
-    let draft = builder.assemble(selection, outputs, 2, fee_with_change, SpendModel::Exact { amount: 12_000 });
+    let draft = builder.assemble(
+        selection,
+        outputs,
+        2,
+        fee_with_change,
+        SpendModel::Exact { amount: 12_000 },
+    );
     assert_eq!(draft.outputs.len(), 2);
     assert!(draft.outputs.iter().any(|output| output.change));
 }
@@ -94,4 +157,3 @@ fn mock_utxo(seed: u8, index: u32, value: u128) -> UtxoRecord<'static> {
         None,
     )
 }
-

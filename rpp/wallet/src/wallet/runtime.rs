@@ -289,6 +289,7 @@ mod tests {
             external_gap_limit: 4,
             internal_gap_limit: 4,
             min_confirmations: 1,
+            ..WalletPolicyConfig::default()
         };
         Arc::new(
             WalletEngine::new(

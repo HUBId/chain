@@ -246,6 +246,10 @@ impl WalletRpcRouter {
         let response = PolicyPreviewResponse {
             min_confirmations: preview.min_confirmations,
             dust_limit: preview.dust_limit,
+            max_change_outputs: preview.max_change_outputs,
+            spend_limit_daily: preview.spend_limit_daily,
+            pending_lock_timeout: preview.pending_lock_timeout,
+            tier_hooks: preview.tier_hooks,
         };
         to_value(response)
     }
