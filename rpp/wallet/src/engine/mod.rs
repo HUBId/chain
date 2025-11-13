@@ -6,6 +6,7 @@ use crate::config::wallet::{PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig
 use crate::db::{
     PendingLock, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreError,
 };
+use crate::node_client::NodeClient;
 
 pub mod addresses;
 pub mod builder;
@@ -19,7 +20,7 @@ pub mod tests;
 
 pub use addresses::{AddressError, AddressManager, DerivedAddress};
 pub use builder::{BuildMetadata, BuildPlan, BuilderError, BuiltTransaction, TransactionBuilder};
-pub use fees::{FeeError, FeeEstimator};
+pub use fees::{FeeCongestionLevel, FeeError, FeeEstimateSource, FeeEstimator, FeeQuote};
 pub use policies::{PolicyEngine, PolicyViolation};
 pub use signing::{ProverError, ProverOutput, WalletProver};
 pub use utxo_sel::{
@@ -302,8 +303,10 @@ impl WalletEngine {
         to: String,
         amount: u128,
         fee_rate_override: Option<u64>,
+        node_client: Option<&dyn NodeClient>,
     ) -> Result<DraftTransaction, EngineError> {
-        let fee_rate = self.fee_estimator.resolve(fee_rate_override)?;
+        let fee_quote = self.fee_estimator.resolve(node_client, fee_rate_override)?;
+        let fee_rate = fee_quote.rate();
         let now = current_timestamp_ms();
         self.address_manager
             .release_expired_locks(now, self.pending_lock_timeout)?;

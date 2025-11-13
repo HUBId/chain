@@ -27,7 +27,9 @@ use rpp_wallet::indexer::client::{
     IndexerClientError, ListScripthashUtxosRequest, ListScripthashUtxosResponse,
     TransactionPayload, TxOutpoint,
 };
-use rpp_wallet::node_client::{ChainHead, NodeClient, NodeClientResult};
+use rpp_wallet::node_client::{
+    BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientResult,
+};
 use rpp_wallet::rpc::dto::{
     BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
     DeriveAddressResponse, JsonRpcRequest, JsonRpcResponse, SignTxParams, SignTxResponse,
@@ -602,6 +604,8 @@ impl IndexerClient for TestIndexer {
 struct RecordingNodeClient {
     submissions: Mutex<Vec<DraftTransaction>>,
     fee_rate: u64,
+    mempool_info: MempoolInfo,
+    recent_blocks: Vec<BlockFeeSummary>,
 }
 
 impl RecordingNodeClient {
@@ -636,6 +640,14 @@ impl NodeClient for RecordingNodeClient {
             uptime_proofs: Vec::new(),
             queue_weights: QueueWeightsConfig::default(),
         })
+    }
+
+    fn mempool_info(&self) -> NodeClientResult<MempoolInfo> {
+        Ok(self.mempool_info.clone())
+    }
+
+    fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>> {
+        Ok(self.recent_blocks.iter().take(limit).cloned().collect())
     }
 }
 

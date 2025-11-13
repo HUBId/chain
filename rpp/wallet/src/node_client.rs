@@ -32,17 +32,80 @@ impl fmt::Display for ChainHead {
 }
 
 /// Unified error surfaced when communicating with the execution node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NodeRejectionHint {
+    FeeRateTooLow { required: Option<u64> },
+    AlreadyKnown,
+    Conflicting,
+    MempoolFull,
+    Other(String),
+}
+
+impl fmt::Display for NodeRejectionHint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FeeRateTooLow {
+                required: Some(rate),
+            } => {
+                write!(f, "fee rate too low (required {rate} sats/vB)")
+            }
+            Self::FeeRateTooLow { required: None } => {
+                write!(f, "fee rate too low")
+            }
+            Self::AlreadyKnown => write!(f, "transaction already in mempool"),
+            Self::Conflicting => write!(f, "conflicts with existing mempool transaction"),
+            Self::MempoolFull => write!(f, "mempool full"),
+            Self::Other(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NodePolicyHint {
+    FeeRateTooLow { minimum: u64 },
+    MissingInputs,
+    DustOutput,
+    ReplacementRejected,
+    Other(String),
+}
+
+impl fmt::Display for NodePolicyHint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FeeRateTooLow { minimum } => {
+                write!(f, "fee rate below minimum policy ({minimum} sats/vB)")
+            }
+            Self::MissingInputs => write!(f, "missing transaction inputs"),
+            Self::DustOutput => write!(f, "would create dust output"),
+            Self::ReplacementRejected => write!(f, "replacement policy rejected transaction"),
+            Self::Other(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum NodeClientError {
     /// Transport-level failures such as networking errors or RPC timeouts.
     #[error("transport error: {0}")]
     Transport(#[from] AnyError),
     /// The node rejected the transaction for application-level reasons.
-    #[error("transaction rejected: {reason}")]
-    Rejected { reason: String },
+    #[error(
+        "transaction rejected: {reason}{hint}",
+        hint = NodeClientError::display_rejection_hint(.hint)
+    )]
+    Rejected {
+        reason: String,
+        hint: Option<NodeRejectionHint>,
+    },
     /// Local policy prevented the request from being accepted.
-    #[error("policy violation: {reason}")]
-    Policy { reason: String },
+    #[error(
+        "policy violation: {reason}{hint}",
+        hint = NodeClientError::display_policy_hint(.hint)
+    )]
+    Policy {
+        reason: String,
+        hint: Option<NodePolicyHint>,
+    },
 }
 
 impl NodeClientError {
@@ -50,20 +113,73 @@ impl NodeClientError {
         Self::Transport(error.into())
     }
 
+    fn display_rejection_hint(hint: &Option<NodeRejectionHint>) -> String {
+        hint.as_ref()
+            .map(|hint| format!(" (hint: {hint})"))
+            .unwrap_or_default()
+    }
+
+    fn display_policy_hint(hint: &Option<NodePolicyHint>) -> String {
+        hint.as_ref()
+            .map(|hint| format!(" (hint: {hint})"))
+            .unwrap_or_default()
+    }
+
     pub fn rejected(reason: impl Into<String>) -> Self {
         Self::Rejected {
             reason: reason.into(),
+            hint: None,
+        }
+    }
+
+    pub fn rejected_with_hint(reason: impl Into<String>, hint: NodeRejectionHint) -> Self {
+        Self::Rejected {
+            reason: reason.into(),
+            hint: Some(hint),
         }
     }
 
     pub fn policy(reason: impl Into<String>) -> Self {
         Self::Policy {
             reason: reason.into(),
+            hint: None,
+        }
+    }
+
+    pub fn policy_with_hint(reason: impl Into<String>, hint: NodePolicyHint) -> Self {
+        Self::Policy {
+            reason: reason.into(),
+            hint: Some(hint),
         }
     }
 }
 
 pub type NodeClientResult<T> = Result<T, NodeClientError>;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MempoolInfo {
+    pub tx_count: u64,
+    pub vsize_limit: u64,
+    pub vsize_in_use: u64,
+    pub min_fee_rate: Option<u64>,
+    pub max_fee_rate: Option<u64>,
+}
+
+impl MempoolInfo {
+    pub fn utilization(&self) -> f64 {
+        if self.vsize_limit == 0 {
+            return 0.0;
+        }
+        (self.vsize_in_use as f64 / self.vsize_limit as f64).min(1.0)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlockFeeSummary {
+    pub height: u64,
+    pub median_fee_rate: Option<u64>,
+    pub max_fee_rate: Option<u64>,
+}
 
 /// Abstraction over the node RPC surface consumed by the wallet.
 pub trait NodeClient: Send + Sync {
@@ -71,6 +187,8 @@ pub trait NodeClient: Send + Sync {
     fn estimate_fee(&self, confirmation_target: u16) -> NodeClientResult<u64>;
     fn chain_head(&self) -> NodeClientResult<ChainHead>;
     fn mempool_status(&self) -> NodeClientResult<MempoolStatus>;
+    fn mempool_info(&self) -> NodeClientResult<MempoolInfo>;
+    fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>>;
 }
 
 /// Simple in-memory client used in tests and local development harnesses.
@@ -79,6 +197,8 @@ pub struct StubNodeClient {
     fee_rate: u64,
     head: ChainHead,
     mempool: MempoolStatus,
+    mempool_info: MempoolInfo,
+    recent_blocks: Vec<BlockFeeSummary>,
 }
 
 impl StubNodeClient {
@@ -87,6 +207,8 @@ impl StubNodeClient {
             fee_rate,
             head,
             mempool,
+            mempool_info: MempoolInfo::default(),
+            recent_blocks: Vec::new(),
         }
     }
 
@@ -104,6 +226,16 @@ impl StubNodeClient {
         self.mempool = mempool;
         self
     }
+
+    pub fn with_mempool_info(mut self, mempool_info: MempoolInfo) -> Self {
+        self.mempool_info = mempool_info;
+        self
+    }
+
+    pub fn with_recent_blocks(mut self, blocks: Vec<BlockFeeSummary>) -> Self {
+        self.recent_blocks = blocks;
+        self
+    }
 }
 
 impl Default for StubNodeClient {
@@ -112,6 +244,14 @@ impl Default for StubNodeClient {
             fee_rate: 1,
             head: default_chain_head(),
             mempool: default_mempool_status(),
+            mempool_info: MempoolInfo {
+                tx_count: 0,
+                vsize_limit: 1_000_000,
+                vsize_in_use: 0,
+                min_fee_rate: Some(1),
+                max_fee_rate: Some(5),
+            },
+            recent_blocks: Vec::new(),
         }
     }
 }
@@ -142,6 +282,14 @@ impl NodeClient for StubNodeClient {
 
     fn mempool_status(&self) -> NodeClientResult<MempoolStatus> {
         Ok(self.mempool.clone())
+    }
+
+    fn mempool_info(&self) -> NodeClientResult<MempoolInfo> {
+        Ok(self.mempool_info.clone())
+    }
+
+    fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>> {
+        Ok(self.recent_blocks.iter().take(limit).cloned().collect())
     }
 }
 
@@ -224,6 +372,9 @@ mod tests {
         let mempool = client.mempool_status().unwrap();
         assert!(mempool.transactions.is_empty());
         assert_eq!(mempool.queue_weights, QueueWeightsConfig::default());
+        let mempool_info = client.mempool_info().unwrap();
+        assert_eq!(mempool_info.vsize_limit, 1_000_000);
+        assert_eq!(client.recent_blocks(4).unwrap().len(), 0);
     }
 
     #[test]
@@ -233,5 +384,29 @@ mod tests {
             .estimate_fee(0)
             .expect_err("zero confirmation target must fail");
         assert!(matches!(err, NodeClientError::Policy { .. }));
+    }
+
+    #[test]
+    fn rejection_hints_render_context() {
+        let err = NodeClientError::rejected_with_hint(
+            "replacement failed",
+            NodeRejectionHint::FeeRateTooLow { required: Some(12) },
+        );
+        assert_eq!(
+            format!("{err}"),
+            "transaction rejected: replacement failed (hint: fee rate too low (required 12 sats/vB))"
+        );
+    }
+
+    #[test]
+    fn policy_hints_render_context() {
+        let err = NodeClientError::policy_with_hint(
+            "policy limits",
+            NodePolicyHint::FeeRateTooLow { minimum: 5 },
+        );
+        assert_eq!(
+            format!("{err}"),
+            "policy violation: policy limits (hint: fee rate below minimum policy (5 sats/vB))"
+        );
     }
 }

@@ -19,8 +19,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::rpc::dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    JsonRpcRequest, JsonRpcResponse, PendingLockDto, PolicyPreviewResponse, RescanParams,
-    RescanResponse, SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
+    FeeCongestionDto, FeeEstimateSourceDto, JsonRpcRequest, JsonRpcResponse, PendingLockDto,
+    PolicyPreviewResponse, RescanParams, RescanResponse, SignTxParams, SignTxResponse,
+    SyncStatusResponse, JSONRPC_VERSION,
 };
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
@@ -628,6 +629,9 @@ fn render_draft_summary(draft: &CreateTxResponse) {
     println!("  Draft ID      : {}", draft.draft_id);
     println!("  Fee rate      : {} sat/vB", draft.fee_rate);
     println!("  Fee           : {}", format_amount(draft.fee));
+    if let Some(source) = &draft.fee_source {
+        println!("  Fee source    : {}", describe_fee_source(source));
+    }
     println!(
         "  Total inputs  : {}",
         format_amount(draft.total_input_value)
@@ -730,6 +734,25 @@ fn format_bool(value: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+fn describe_fee_source(source: &FeeEstimateSourceDto) -> String {
+    match source {
+        FeeEstimateSourceDto::Override => "override".to_string(),
+        FeeEstimateSourceDto::ConfigFallback => "config fallback".to_string(),
+        FeeEstimateSourceDto::Node {
+            congestion,
+            samples,
+        } => {
+            let congestion = match congestion {
+                FeeCongestionDto::Low => "low",
+                FeeCongestionDto::Moderate => "moderate",
+                FeeCongestionDto::High => "high",
+                FeeCongestionDto::Unknown => "unknown",
+            };
+            format!("node ({congestion} congestion, {samples} samples)")
+        }
     }
 }
 
@@ -1045,6 +1068,7 @@ mod tests {
             draft_id: "draft-1".to_string(),
             fee_rate: 5,
             fee: 250,
+            fee_source: Some(FeeEstimateSourceDto::Override),
             total_input_value: 5_000,
             total_output_value: 4_750,
             spend_model: DraftSpendModelDto::Exact { amount: 4_750 },

@@ -9,6 +9,10 @@ const DEFAULT_FEE_RATE: u64 = 5;
 const DEFAULT_DUST_LIMIT: u128 = 546;
 const DEFAULT_MAX_CHANGE_OUTPUTS: u32 = 1;
 const DEFAULT_PENDING_LOCK_TIMEOUT_SECS: u64 = 600;
+const DEFAULT_FEE_TARGET_CONFIRMATIONS: u16 = 3;
+const DEFAULT_HEURISTIC_MIN_FEE_RATE: u64 = 2;
+const DEFAULT_HEURISTIC_MAX_FEE_RATE: u64 = 100;
+const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
 
 /// High-level wallet configuration exposed to runtime services.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,6 +124,14 @@ pub struct WalletFeeConfig {
     pub min_sats_per_vbyte: u64,
     /// Highest allowed fee rate for submitted transactions.
     pub max_sats_per_vbyte: u64,
+    /// Preferred confirmation target used when sampling node statistics.
+    pub target_confirmations: u16,
+    /// Lower bound applied to node-derived heuristic estimates.
+    pub heuristic_min_sats_per_vbyte: u64,
+    /// Upper bound applied to node-derived heuristic estimates.
+    pub heuristic_max_sats_per_vbyte: u64,
+    /// Duration (in seconds) to cache node-derived estimates before refreshing.
+    pub cache_ttl_secs: u64,
 }
 
 impl Default for WalletFeeConfig {
@@ -128,6 +140,10 @@ impl Default for WalletFeeConfig {
             default_sats_per_vbyte: DEFAULT_FEE_RATE,
             min_sats_per_vbyte: DEFAULT_MIN_FEE_RATE,
             max_sats_per_vbyte: DEFAULT_MAX_FEE_RATE,
+            target_confirmations: DEFAULT_FEE_TARGET_CONFIRMATIONS,
+            heuristic_min_sats_per_vbyte: DEFAULT_HEURISTIC_MIN_FEE_RATE,
+            heuristic_max_sats_per_vbyte: DEFAULT_HEURISTIC_MAX_FEE_RATE,
+            cache_ttl_secs: DEFAULT_FEE_CACHE_TTL_SECS,
         }
     }
 }
@@ -179,6 +195,19 @@ mod tests {
         assert_eq!(config.fees.default_sats_per_vbyte, DEFAULT_FEE_RATE);
         assert_eq!(config.fees.min_sats_per_vbyte, DEFAULT_MIN_FEE_RATE);
         assert_eq!(config.fees.max_sats_per_vbyte, DEFAULT_MAX_FEE_RATE);
+        assert_eq!(
+            config.fees.target_confirmations,
+            DEFAULT_FEE_TARGET_CONFIRMATIONS
+        );
+        assert_eq!(
+            config.fees.heuristic_min_sats_per_vbyte,
+            DEFAULT_HEURISTIC_MIN_FEE_RATE
+        );
+        assert_eq!(
+            config.fees.heuristic_max_sats_per_vbyte,
+            DEFAULT_HEURISTIC_MAX_FEE_RATE
+        );
+        assert_eq!(config.fees.cache_ttl_secs, DEFAULT_FEE_CACHE_TTL_SECS);
         assert!(!config.prover.enabled);
         assert!(config.prover.mock_fallback);
     }
@@ -208,6 +237,10 @@ mod tests {
                 default_sats_per_vbyte: 11,
                 min_sats_per_vbyte: 5,
                 max_sats_per_vbyte: 250,
+                target_confirmations: 4,
+                heuristic_min_sats_per_vbyte: 3,
+                heuristic_max_sats_per_vbyte: 300,
+                cache_ttl_secs: 90,
             },
             prover: WalletProverConfig {
                 enabled: true,
@@ -236,6 +269,10 @@ mod tests {
         assert_eq!(restored.fees.default_sats_per_vbyte, 11);
         assert_eq!(restored.fees.min_sats_per_vbyte, 5);
         assert_eq!(restored.fees.max_sats_per_vbyte, 250);
+        assert_eq!(restored.fees.target_confirmations, 4);
+        assert_eq!(restored.fees.heuristic_min_sats_per_vbyte, 3);
+        assert_eq!(restored.fees.heuristic_max_sats_per_vbyte, 300);
+        assert_eq!(restored.fees.cache_ttl_secs, 90);
         assert!(restored.prover.enabled);
         assert!(!restored.prover.mock_fallback);
     }

@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    EmptyParams, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListTransactionsResponse,
-    ListUtxosResponse, PendingLockDto, PolicyPreviewResponse, RescanParams, RescanResponse,
-    SignTxParams, SignTxResponse, SyncStatusParams, SyncStatusResponse, TransactionEntryDto,
-    UtxoDto, JSONRPC_VERSION,
+    EmptyParams, FeeEstimateSourceDto, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    ListTransactionsResponse, ListUtxosResponse, PendingLockDto, PolicyPreviewResponse,
+    RescanParams, RescanResponse, SignTxParams, SignTxResponse, SyncStatusParams,
+    SyncStatusResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
 };
 use hex::encode as hex_encode;
 use serde::de::DeserializeOwned;
@@ -230,10 +230,15 @@ impl WalletRpcRouter {
             })
             .collect();
         let locks = self.pending_lock_dtos()?;
+        let fee_source = self
+            .wallet
+            .latest_fee_quote()
+            .map(|quote| FeeEstimateSourceDto::from(quote.source()));
         let response = CreateTxResponse {
             draft_id: draft_id.to_string(),
             fee_rate: draft.fee_rate,
             fee: draft.fee,
+            fee_source,
             total_input_value: draft.total_input_value(),
             total_output_value: draft.total_output_value(),
             spend_model: spend_model_to_dto(&draft.spend_model),
