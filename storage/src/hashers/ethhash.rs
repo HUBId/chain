@@ -199,17 +199,13 @@ impl<T: Hashable> Preimage for T {
                 // we are a leaf that is at depth 32
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => {
-                        let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
-                        let bytes_mut = BytesMut::from(bytes);
-                        match replace_hash(bytes_mut, new_hash) {
-                            Ok(result) => {
-                                rlp.append(&&*result);
-                            }
-                            Err(err) => {
-                                buf.record_error(err);
-                                return;
-                            }
+                        let new_hash = Keccak256::digest(rlp::NULL_RLP);
+                        let mut bytes_mut = BytesMut::from(bytes);
+                        if let Err(err) = replace_hash(&mut bytes_mut, new_hash.as_slice()) {
+                            buf.record_error(err);
+                            return;
                         }
+                        rlp.append(&&*bytes_mut);
                     }
                     None => {
                         rlp.append_empty_data();
@@ -293,13 +289,11 @@ impl<T: Hashable> Preimage for T {
                     };
                     trace!("replacement hash {:?}", hex::encode(&replacement_hash));
 
-                    let bytes = match replace_hash(rlp_encoded_bytes, replacement_hash) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            buf.record_error(err);
-                            return;
-                        }
-                    };
+                    let mut bytes = BytesMut::from(rlp_encoded_bytes);
+                    if let Err(err) = replace_hash(&mut bytes, replacement_hash.as_ref()) {
+                        buf.record_error(err);
+                        return;
+                    }
                     trace!("updated encoded value {:02X?}", hex::encode(&bytes));
                     bytes
                 } else {
@@ -338,38 +332,62 @@ impl<T: Hashable> Preimage for T {
 }
 
 // TODO: we could be super fancy and just plunk the correct bytes into the existing BytesMut
-fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(
-    bytes: T,
-    new_hash: U,
-) -> Result<BytesMut, TrieError> {
-    let rlp = Rlp::new(bytes.as_ref());
-    let mut list: Vec<Vec<u8>> = rlp.as_list().map_err(|err| {
-        TrieError::CorruptProof(format!("account value is not an RLP list: {err}"))
-    })?;
+fn replace_hash(bytes: &mut BytesMut, new_hash: impl AsRef<[u8]>) -> Result<(), TrieError> {
+    let new_hash = new_hash.as_ref();
+    let (start, end) = {
+        let slice = &bytes[..];
+        let rlp = Rlp::new(slice);
+        let item_count = rlp.item_count().map_err(|err| {
+            TrieError::CorruptProof(format!("account value is not an RLP list: {err}"))
+        })?;
 
-    if list.len() <= 2 {
-        return Err(TrieError::CorruptProof(format!(
-            "account value missing storage root: expected at least 3 elements, got {}",
-            list.len()
-        )));
+        if item_count <= 2 {
+            return Err(TrieError::CorruptProof(format!(
+                "account value missing storage root: expected at least 3 elements, got {}",
+                item_count
+            )));
+        }
+
+        let storage_root = rlp.at(2).map_err(|err| {
+            TrieError::CorruptProof(format!("account value missing storage root: {err}"))
+        })?;
+
+        if !storage_root.is_data() {
+            return Err(TrieError::CorruptProof(
+                "account storage root is not an RLP byte string".into(),
+            ));
+        }
+
+        let payload = storage_root.payload_info().map_err(|err| {
+            TrieError::CorruptProof(format!("account storage root is malformed: {err}"))
+        })?;
+
+        if payload.value_len != new_hash.len() {
+            return Err(TrieError::CorruptProof(format!(
+                "account storage root had unexpected length: expected {} bytes, got {}",
+                payload.value_len,
+                new_hash.len()
+            )));
+        }
+
+        let base = slice.as_ptr() as usize;
+        let raw = storage_root.as_raw().as_ptr() as usize;
+        let start = raw.checked_sub(base).ok_or_else(|| {
+            TrieError::CorruptProof("account storage root offset underflow".into())
+        })? + payload.header_len;
+        let end = start + payload.value_len;
+        (start, end)
+    };
+
+    if end > bytes.len() {
+        return Err(TrieError::CorruptProof(
+            "account storage root extends beyond payload".into(),
+        ));
     }
 
-    let replace = list
-        .get_mut(2)
-        .ok_or_else(|| TrieError::CorruptProof("account value missing storage root".into()))?;
-    *replace = Vec::from(new_hash.as_ref());
-
-    trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
-    trace!("list length was {}", list.len());
-    trace!("replacement hash {:?}", hex::encode(&new_hash));
-
-    let mut rlp = RlpStream::new_list(list.len());
-    for item in list {
-        rlp.append(&item);
-    }
-    let bytes = rlp.out();
-    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
-    Ok(BytesMut::from(&bytes[..]))
+    trace!("replacement hash {:?}", hex::encode(new_hash));
+    bytes[start..end].copy_from_slice(new_hash);
+    Ok(())
 }
 
 #[cfg(test)]

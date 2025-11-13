@@ -59,6 +59,8 @@ pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use metrics::{
     noop as noop_storage_metrics, StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
 };
+#[cfg(feature = "ethhash")]
+pub use node::branch::ethhash::{InvalidRlpLength, RlpBytes};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
     branch::{HashType, IntoHashType},

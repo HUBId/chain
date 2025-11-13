@@ -6,7 +6,7 @@ use crate::v2::api::OptionalHashKeyExt;
 
 use super::*;
 use ethereum_types::H256;
-use firewood_storage::{BranchNode, HashType, TrieHash, ValueDigest};
+use firewood_storage::{BranchNode, HashType, NibblesIterator, RlpBytes, TrieHash, ValueDigest};
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use rlp::RlpStream;
@@ -180,6 +180,165 @@ fn proof_rejects_corrupt_account_branch_multi_child() {
             children[1] = Some(HashType::Hash(TrieHash::empty()));
         },
     ));
+}
+
+#[test]
+fn proof_accepts_account_branch_with_hashed_child() {
+    let key_bytes = vec![0u8; 32];
+    let key_nibbles: Vec<u8> = NibblesIterator::new(&key_bytes).collect();
+
+    let account_nonce: u64 = 0;
+    let account_balance: u64 = 44;
+    let placeholder_storage_root = [0u8; 32];
+    let account_code_hash = [0x22u8; 32];
+
+    let account_placeholder = encode_account(
+        account_nonce,
+        account_balance,
+        &placeholder_storage_root,
+        &account_code_hash,
+    );
+
+    let child_hash = TrieHash::from([0x11u8; 32]);
+    let expected_root = compute_account_branch_root(
+        &key_nibbles,
+        account_nonce,
+        account_balance,
+        &account_code_hash,
+        child_hash.as_ref(),
+    );
+
+    let mut child_hashes = BranchNode::empty_children();
+    child_hashes[0] = Some(HashType::Hash(child_hash));
+
+    let proof = Proof::new(vec![ProofNode {
+        key: key_nibbles.clone().into_boxed_slice(),
+        partial_len: 0,
+        value_digest: Some(ValueDigest::Value(
+            account_placeholder.clone().into_boxed_slice(),
+        )),
+        child_hashes,
+    }]);
+
+    let result = proof
+        .value_digest(&key_bytes, &expected_root)
+        .expect("valid proof");
+
+    assert_eq!(
+        result,
+        Some(ValueDigest::Value(account_placeholder.as_slice()))
+    );
+}
+
+#[test]
+fn proof_accepts_account_branch_with_inline_child() {
+    let key_bytes = vec![0u8; 32];
+    let key_nibbles: Vec<u8> = NibblesIterator::new(&key_bytes).collect();
+
+    let account_nonce: u64 = 1;
+    let account_balance: u64 = 99;
+    let placeholder_storage_root = [0u8; 32];
+    let account_code_hash = [0x33u8; 32];
+
+    let account_placeholder = encode_account(
+        account_nonce,
+        account_balance,
+        &placeholder_storage_root,
+        &account_code_hash,
+    );
+
+    let encoded_path = encode_nibbles_to_eth_compact(&key_nibbles, true);
+    let inline_child_rlp = {
+        let mut stream = RlpStream::new_list(2);
+        stream.append(&encode_nibbles_to_eth_compact(&[], true));
+        stream.append(&b"v".as_slice());
+        stream.out().to_vec()
+    };
+    let inline_child_bytes = RlpBytes::try_from(inline_child_rlp.as_slice())
+        .expect("inline child payload fits into RlpBytes");
+
+    let replacement_hash = {
+        let mut stream = RlpStream::new_list(2);
+        stream.append(&encoded_path);
+        stream.append_raw(inline_child_rlp.as_slice(), 1);
+        TrieHash::from(Keccak256::digest(stream.out().as_ref()))
+    };
+
+    let expected_root = compute_account_branch_root(
+        &key_nibbles,
+        account_nonce,
+        account_balance,
+        &account_code_hash,
+        replacement_hash.as_ref(),
+    );
+
+    let mut child_hashes = BranchNode::empty_children();
+    child_hashes[0] = Some(HashType::Rlp(inline_child_bytes));
+
+    let proof = Proof::new(vec![ProofNode {
+        key: key_nibbles.clone().into_boxed_slice(),
+        partial_len: 0,
+        value_digest: Some(ValueDigest::Value(
+            account_placeholder.clone().into_boxed_slice(),
+        )),
+        child_hashes,
+    }]);
+
+    let result = proof
+        .value_digest(&key_bytes, &expected_root)
+        .expect("valid proof");
+
+    assert_eq!(
+        result,
+        Some(ValueDigest::Value(account_placeholder.as_slice()))
+    );
+}
+
+fn encode_account(nonce: u64, balance: u64, storage_root: &[u8], code_hash: &[u8]) -> Vec<u8> {
+    let mut stream = RlpStream::new_list(4);
+    stream.append(&nonce);
+    stream.append(&balance);
+    stream.append(&storage_root);
+    stream.append(&code_hash);
+    stream.out().to_vec()
+}
+
+fn compute_account_branch_root(
+    partial_path: &[u8],
+    nonce: u64,
+    balance: u64,
+    code_hash: &[u8],
+    replacement_hash: &[u8],
+) -> TrieHash {
+    let encoded_path = encode_nibbles_to_eth_compact(partial_path, true);
+    let account_with_replacement = encode_account(nonce, balance, replacement_hash, code_hash);
+    let mut stream = RlpStream::new_list(2);
+    stream.append(&encoded_path);
+    stream.append(&account_with_replacement.as_slice());
+    TrieHash::from(Keccak256::digest(stream.out().as_ref()))
+}
+
+fn encode_nibbles_to_eth_compact(nibbles: &[u8], is_leaf: bool) -> Vec<u8> {
+    debug_assert!(nibbles.iter().all(|n| *n < 16));
+
+    let mut first = if is_leaf { 0x20 } else { 0x00 };
+    let mut result = Vec::with_capacity(1 + (nibbles.len() + 1) / 2);
+
+    let mut index = 0;
+    if nibbles.len() % 2 == 1 {
+        first |= 0x10 | nibbles[0];
+        index = 1;
+    }
+    result.push(first);
+
+    while index < nibbles.len() {
+        let hi = nibbles[index];
+        let lo = nibbles[index + 1];
+        result.push((hi << 4) | lo);
+        index += 2;
+    }
+
+    result
 }
 
 #[test]

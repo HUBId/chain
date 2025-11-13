@@ -1,12 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#[cfg(feature = "ethhash")]
-use firewood_storage::{
-    node::branch::ethhash::{InvalidRlpLength, RlpBytes},
-    HashType,
-};
 use firewood_storage::{BranchNode, TrieHash, ValueDigest};
+#[cfg(feature = "ethhash")]
+use firewood_storage::{HashType, InvalidRlpLength, RlpBytes};
 use integer_encoding::VarInt;
 
 use super::{
