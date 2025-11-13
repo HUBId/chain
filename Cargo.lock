@@ -9346,6 +9346,8 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "ed25519-dalek",
+ "firewood",
+ "firewood-storage",
  "flate2",
  "hex",
  "jsonschema",

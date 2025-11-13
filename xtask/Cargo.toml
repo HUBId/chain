@@ -10,6 +10,8 @@ blake3 = "=1.8.2"
 ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
 flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"] }
 hex = "=0.4.3"
+firewood = { path = "../firewood", features = ["debug-tools"] }
+firewood-storage = { path = "../storage", features = ["test_utils"] }
 rand = { version = "=0.8.5", features = ["std"] }
 reqwest = { version = "=0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rpp-p2p = { path = "../rpp/p2p" }
