@@ -246,8 +246,9 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     }
 }
 
-#[derive(Default)]
-struct FlushStats {
+#[derive(Debug, Default)]
+#[doc(hidden)]
+pub struct FlushStats {
     bytes_written: u64,
     serialized_total: u64,
     serialized_count: u64,
@@ -338,6 +339,22 @@ impl FlushStats {
     }
 }
 
+#[doc(hidden)]
+pub trait FlushNodesBackend {
+    fn flush_nodes_backend(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError>;
+}
+
+#[cfg(feature = "io-uring")]
+pub(crate) trait SupportsIoUringFlush {
+    fn flush_nodes_io_uring(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError>;
+}
+
 impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     #[inline]
     fn record_flushed_nodes(&self, count: usize) {
@@ -374,60 +391,6 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
                 Err(current) => observed = current,
             }
         }
-    }
-
-    /// Persist all the nodes of a proposal to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
-        let mut stats = FlushStats::default();
-        let flush_start = Instant::now();
-
-        #[cfg(feature = "io-uring")]
-        let result = if let Some(this) = self.downcast_to_file_backed() {
-            this.flush_nodes_io_uring(&mut stats)
-        } else {
-            self.flush_nodes_generic(&mut stats)
-        };
-
-        #[cfg(not(feature = "io-uring"))]
-        let result = self.flush_nodes_generic(&mut stats);
-
-        let duration = flush_start.elapsed();
-        let outcome = if result.is_ok() {
-            WalFlushOutcome::Success
-        } else {
-            WalFlushOutcome::Failed
-        };
-        self.metrics.increment_wal_flushes(outcome);
-        self.metrics
-            .record_wal_flush_duration(outcome, duration.into());
-        self.metrics
-            .record_wal_flush_bytes(outcome, stats.bytes_written);
-        stats.emit_metrics();
-        result
-    }
-
-    #[cfg(feature = "io-uring")]
-    #[inline]
-    fn downcast_to_file_backed(&mut self) -> Option<&mut NodeStore<Committed, FileBacked>> {
-        /*
-         * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
-         *
-         * This is a slight hack that exists because rust trait specialization
-         * is not yet stable. If the `io-uring` feature is enabled, we attempt to
-         * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
-         * we call the specialized `flush_nodes_io_uring` method.
-         *
-         * During monomorphization, this will be completely optimized out as the
-         * type id comparison is done with constants that the compiler can resolve
-         * and use to detect dead branches.
-         */
-        let this = self as &mut dyn std::any::Any;
-        this.downcast_mut::<NodeStore<Committed, FileBacked>>()
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -489,6 +452,38 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     }
 }
 
+impl<S: WritableStorage + 'static> NodeStore<Committed, S>
+where
+    Self: FlushNodesBackend,
+{
+    /// Persist all the nodes of a proposal to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if any node cannot be written to storage.
+    #[fastrace::trace(short_name = true)]
+    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+        let mut stats = FlushStats::default();
+        let flush_start = Instant::now();
+
+        let result = self.flush_nodes_backend(&mut stats);
+
+        let duration = flush_start.elapsed();
+        let outcome = if result.is_ok() {
+            WalFlushOutcome::Success
+        } else {
+            WalFlushOutcome::Failed
+        };
+        self.metrics.increment_wal_flushes(outcome);
+        self.metrics
+            .record_wal_flush_duration(outcome, duration.into());
+        self.metrics
+            .record_wal_flush_bytes(outcome, stats.bytes_written);
+        stats.emit_metrics();
+        result
+    }
+}
+
 impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Persist the entire nodestore to storage.
     ///
@@ -501,7 +496,10 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
-    pub fn persist(&mut self) -> Result<(), FileIoError> {
+    pub fn persist(&mut self) -> Result<(), FileIoError>
+    where
+        Self: FlushNodesBackend,
+    {
         // First persist all the nodes
         self.header = self.flush_nodes()?;
 
@@ -533,7 +531,7 @@ impl NodeStore<Committed, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    fn flush_nodes_io_uring(
+    fn flush_nodes_io_uring_impl(
         &mut self,
         stats: &mut FlushStats,
     ) -> Result<NodeStoreHeader, FileIoError> {
@@ -714,6 +712,45 @@ impl NodeStore<Committed, FileBacked> {
         debug_assert!(ring.completion().is_empty());
 
         Ok(header)
+    }
+}
+
+impl FlushNodesBackend for NodeStore<Committed, crate::linear::memory::MemStore> {
+    fn flush_nodes_backend(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError> {
+        self.flush_nodes_generic(stats)
+    }
+}
+
+#[cfg(not(feature = "io-uring"))]
+impl FlushNodesBackend for NodeStore<Committed, FileBacked> {
+    fn flush_nodes_backend(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError> {
+        self.flush_nodes_generic(stats)
+    }
+}
+
+#[cfg(feature = "io-uring")]
+impl SupportsIoUringFlush for NodeStore<Committed, FileBacked> {
+    fn flush_nodes_io_uring(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError> {
+        self.flush_nodes_io_uring_impl(stats)
+    }
+}
+
+#[cfg(feature = "io-uring")]
+impl FlushNodesBackend for NodeStore<Committed, FileBacked> {
+    fn flush_nodes_backend(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError> {
+        SupportsIoUringFlush::flush_nodes_io_uring(self, stats)
     }
 }
 
@@ -1136,40 +1173,9 @@ mod tests {
 
     #[cfg(feature = "io-uring")]
     #[test]
-    fn test_downcast_to_file_backed() {
-        use nonzero_ext::nonzero;
-        use std::num::NonZero;
+    fn file_backed_supports_io_uring_flush() {
+        fn assert_supports<T: super::SupportsIoUringFlush>() {}
 
-        use crate::CacheReadStrategy;
-
-        {
-            let tf = tempfile::NamedTempFile::new().unwrap();
-            let path = tf.path().to_owned();
-
-            let fb = Arc::new(
-                FileBacked::new(
-                    path,
-                    nonzero!(10usize),
-                    nonzero!(10usize),
-                    false,
-                    true,
-                    CacheReadStrategy::WritesOnly,
-                    NonZero::new(FileBacked::DEFAULT_RING_ENTRIES).unwrap(),
-                )
-                .unwrap(),
-            );
-
-            let mut ns =
-                NodeStore::new_empty_committed(fb.clone(), noop_storage_metrics()).unwrap();
-
-            assert!(ns.downcast_to_file_backed().is_some());
-        }
-
-        {
-            let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns =
-                NodeStore::new_empty_committed(ms.clone(), noop_storage_metrics()).unwrap();
-            assert!(ns.downcast_to_file_backed().is_none());
-        }
+        assert_supports::<NodeStore<Committed, FileBacked>>();
     }
 }
