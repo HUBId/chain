@@ -528,6 +528,158 @@ fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
     Merkle { nodestore }
 }
 
+fn invalid_child_key() -> Option<Vec<u8>> {
+    u8::try_from(BranchNode::MAX_CHILDREN)
+        .ok()
+        .map(|idx| vec![idx])
+}
+
+fn assert_missing_slot_error(err: &FileIoError) {
+    let message = err.to_string();
+    assert!(
+        message.contains("missing child slot"),
+        "error message should mention missing child slot, got: {message}"
+    );
+}
+
+#[test]
+fn insert_helper_detects_out_of_bounds_child_slot() {
+    let mut merkle = create_in_memory_merkle();
+
+    if let Some(invalid_key) = invalid_child_key() {
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let node = Node::Branch(Box::new(branch));
+        let err = merkle
+            .insert_helper(node, &invalid_key, Box::<[u8]>::default())
+            .expect_err("malformed child index should return an error");
+        assert_missing_slot_error(&err);
+    } else {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let err = set_branch_child(
+            &mut branch,
+            BranchNode::MAX_CHILDREN,
+            Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::new(),
+                value: Box::default(),
+            }))),
+            "tests::insert_helper_detects_out_of_bounds_child_slot",
+        )
+        .expect_err("setting an out-of-bounds child slot should error");
+        assert_missing_slot_error(&err);
+    }
+}
+
+#[test]
+fn remove_helper_detects_out_of_bounds_child_slot() {
+    let mut merkle = create_in_memory_merkle();
+
+    if let Some(invalid_key) = invalid_child_key() {
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let node = Node::Branch(Box::new(branch));
+        let err = merkle
+            .remove_helper(node, &invalid_key)
+            .expect_err("malformed child index should return an error");
+        assert_missing_slot_error(&err);
+    } else {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let err = take_branch_child(
+            &mut branch,
+            BranchNode::MAX_CHILDREN,
+            "tests::remove_helper_detects_out_of_bounds_child_slot",
+        )
+        .expect_err("taking an out-of-bounds child slot should error");
+        assert_missing_slot_error(&err);
+    }
+}
+
+#[test]
+fn remove_prefix_helper_detects_out_of_bounds_child_slot() {
+    let mut merkle = create_in_memory_merkle();
+
+    if let Some(invalid_key) = invalid_child_key() {
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let node = Node::Branch(Box::new(branch));
+        let err = merkle
+            .remove_prefix_helper(node, &invalid_key, &mut 0)
+            .expect_err("malformed child index should return an error");
+        assert_missing_slot_error(&err);
+    } else {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let err = take_branch_child(
+            &mut branch,
+            BranchNode::MAX_CHILDREN,
+            "tests::remove_prefix_helper_detects_out_of_bounds_child_slot",
+        )
+        .expect_err("taking an out-of-bounds child slot should error");
+        assert_missing_slot_error(&err);
+    }
+}
+
+#[test]
+fn path_iter_returns_error_for_corrupt_child_slot() {
+    let mut merkle = create_in_memory_merkle();
+
+    if let Some(invalid_key) = invalid_child_key() {
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        *merkle.nodestore.root_mut() = Some(Node::Branch(Box::new(branch.clone())));
+
+        let mut iter = merkle.path_iter(&invalid_key).unwrap();
+        match iter.next() {
+            Some(Err(err)) => assert_missing_slot_error(&err),
+            _ => {
+                let err = branch_child_ref(
+                    &branch,
+                    BranchNode::MAX_CHILDREN,
+                    "tests::path_iter_returns_error_for_corrupt_child_slot",
+                )
+                .expect_err("reading an out-of-bounds child slot should error");
+                assert_missing_slot_error(&err);
+            }
+        }
+    } else {
+        let branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+        let err = branch_child_ref(
+            &branch,
+            BranchNode::MAX_CHILDREN,
+            "tests::path_iter_returns_error_for_corrupt_child_slot",
+        )
+        .expect_err("reading an out-of-bounds child slot should error");
+        assert_missing_slot_error(&err);
+    }
+}
+
 #[test]
 fn test_insert_and_get() {
     let mut merkle = create_in_memory_merkle();

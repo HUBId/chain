@@ -17,7 +17,7 @@ use firewood_storage::{
 use metrics::counter;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -27,6 +27,72 @@ pub type Key = Box<[u8]>;
 
 /// Values are boxed u8 slices
 pub type Value = Box<[u8]>;
+
+fn corrupt_child_slot_error(
+    partial_path: &Path,
+    child_index: usize,
+    context: &'static str,
+) -> FileIoError {
+    let detail = format!(
+        "corrupt trie: branch at partial path {:?} missing child slot {child_index}",
+        partial_path
+    );
+    FileIoError::from_generic_no_file(Error::new(ErrorKind::InvalidData, detail), context)
+}
+
+fn branch_child_slot<'a>(
+    branch: &'a BranchNode,
+    child_index: usize,
+    context: &'static str,
+) -> Result<&'a Option<Child>, FileIoError> {
+    branch
+        .children
+        .get(child_index)
+        .ok_or_else(|| corrupt_child_slot_error(&branch.partial_path, child_index, context))
+}
+
+fn branch_child_slot_mut<'a>(
+    branch: &'a mut BranchNode,
+    child_index: usize,
+    context: &'static str,
+) -> Result<&'a mut Option<Child>, FileIoError> {
+    if child_index < branch.children.len() {
+        Ok(&mut branch.children[child_index])
+    } else {
+        let partial_path = branch.partial_path.clone();
+        Err(corrupt_child_slot_error(
+            &partial_path,
+            child_index,
+            context,
+        ))
+    }
+}
+
+pub(crate) fn branch_child_ref<'a>(
+    branch: &'a BranchNode,
+    child_index: usize,
+    context: &'static str,
+) -> Result<Option<&'a Child>, FileIoError> {
+    Ok(branch_child_slot(branch, child_index, context)?.as_ref())
+}
+
+fn take_branch_child(
+    branch: &mut BranchNode,
+    child_index: usize,
+    context: &'static str,
+) -> Result<Option<Child>, FileIoError> {
+    Ok(branch_child_slot_mut(branch, child_index, context)?.take())
+}
+
+fn set_branch_child(
+    branch: &mut BranchNode,
+    child_index: usize,
+    child: Option<Child>,
+    context: &'static str,
+) -> Result<(), FileIoError> {
+    *branch_child_slot_mut(branch, child_index, context)? = child;
+    Ok(())
+}
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
@@ -659,7 +725,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
-                branch.update_child(child_index, Some(Child::Node(node)));
+                set_branch_child(
+                    &mut branch,
+                    child_index as usize,
+                    Some(Child::Node(node)),
+                    "merkle::insert_helper",
+                )?;
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
@@ -673,9 +744,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //    ... (key may be below)       ... (key is below)
                 match node {
                     Node::Branch(ref mut branch) => {
-                        #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
-                        {
+                        let child = match take_branch_child(
+                            branch,
+                            child_index as usize,
+                            "merkle::insert_helper",
+                        )? {
                             None => {
                                 // There is no child at this index.
                                 // Create a new leaf and put it here.
@@ -683,7 +756,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                     value,
                                     partial_path,
                                 });
-                                branch.update_child(child_index, Some(Child::Node(new_leaf)));
+                                set_branch_child(
+                                    branch,
+                                    child_index as usize,
+                                    Some(Child::Node(new_leaf)),
+                                    "merkle::insert_helper",
+                                )?;
                                 counter!("firewood.insert", "merkle"=>"below").increment(1);
                                 return Ok(node);
                             }
@@ -697,7 +775,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         };
 
                         let child = self.insert_helper(child, partial_path.as_ref(), value)?;
-                        branch.update_child(child_index, Some(Child::Node(child)));
+                        set_branch_child(
+                            branch,
+                            child_index as usize,
+                            Some(Child::Node(child)),
+                            "merkle::insert_helper",
+                        )?;
                         Ok(node)
                     }
                     Node::Leaf(ref mut leaf) => {
@@ -713,7 +796,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             partial_path,
                         });
 
-                        branch.update_child(child_index, Some(Child::Node(new_leaf)));
+                        set_branch_child(
+                            &mut branch,
+                            child_index as usize,
+                            Some(Child::Node(new_leaf)),
+                            "merkle::insert_helper",
+                        )?;
 
                         counter!("firewood.insert", "merkle"=>"split").increment(1);
                         Ok(Node::Branch(Box::new(branch)))
@@ -735,13 +823,23 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 };
 
                 node.update_partial_path(node_partial_path);
-                branch.update_child(node_index, Some(Child::Node(node)));
+                set_branch_child(
+                    &mut branch,
+                    node_index as usize,
+                    Some(Child::Node(node)),
+                    "merkle::insert_helper",
+                )?;
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
                     partial_path: key_partial_path,
                 });
-                branch.update_child(key_index, Some(Child::Node(new_leaf)));
+                set_branch_child(
+                    &mut branch,
+                    key_index as usize,
+                    Some(Child::Node(new_leaf)),
+                    "merkle::insert_helper",
+                )?;
 
                 counter!("firewood.insert", "merkle" => "split").increment(1);
                 Ok(Node::Branch(Box::new(branch)))
@@ -900,9 +998,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     // we found a non-matching leaf node, so the value does not exist
                     Node::Leaf(_) => Ok((Some(node), None)),
                     Node::Branch(ref mut branch) => {
-                        #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
-                        {
+                        let child = match take_branch_child(
+                            branch,
+                            child_index as usize,
+                            "merkle::remove_helper",
+                        )? {
                             None => {
                                 return Ok((Some(node), None));
                             }
@@ -919,9 +1019,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             self.remove_helper(child, child_partial_path.as_ref())?;
 
                         if let Some(child) = child {
-                            branch.update_child(child_index, Some(Child::Node(child)));
+                            set_branch_child(
+                                branch,
+                                child_index as usize,
+                                Some(Child::Node(child)),
+                                "merkle::remove_helper",
+                            )?;
                         } else {
-                            branch.update_child(child_index, None);
+                            set_branch_child(
+                                branch,
+                                child_index as usize,
+                                None,
+                                "merkle::remove_helper",
+                            )?;
                         }
 
                         let mut children_iter =
@@ -1079,9 +1189,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 match node {
                     Node::Leaf(_) => Ok(Some(node)),
                     Node::Branch(ref mut branch) => {
-                        #[expect(clippy::indexing_slicing)]
-                        let child = match std::mem::take(&mut branch.children[child_index as usize])
-                        {
+                        let child = match take_branch_child(
+                            branch,
+                            child_index as usize,
+                            "merkle::remove_prefix_helper",
+                        )? {
                             None => {
                                 return Ok(Some(node));
                             }
@@ -1098,9 +1210,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
 
                         if let Some(child) = child {
-                            branch.update_child(child_index, Some(Child::Node(child)));
+                            set_branch_child(
+                                branch,
+                                child_index as usize,
+                                Some(Child::Node(child)),
+                                "merkle::remove_prefix_helper",
+                            )?;
                         } else {
-                            branch.update_child(child_index, None);
+                            set_branch_child(
+                                branch,
+                                child_index as usize,
+                                None,
+                                "merkle::remove_prefix_helper",
+                            )?;
                         }
 
                         let mut children_iter =

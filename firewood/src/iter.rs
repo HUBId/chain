@@ -4,7 +4,7 @@
 mod try_extend;
 
 pub(crate) use self::try_extend::TryExtend;
-use crate::merkle::{Key, Value};
+use crate::merkle::{branch_child_ref, Key, Value};
 use crate::v2::api;
 
 use firewood_storage::{
@@ -257,8 +257,11 @@ fn get_iterator_intial_state<'a, T: TrieReader>(
                         ),
                     });
 
-                    #[expect(clippy::indexing_slicing)]
-                    let child = &branch.children[next_unmatched_key_nibble as usize];
+                    let child = branch_child_ref(
+                        branch,
+                        next_unmatched_key_nibble as usize,
+                        "iter::get_iterator_initial_state",
+                    )?;
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
                         Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
@@ -442,8 +445,17 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                     }));
                                 };
 
-                                #[expect(clippy::indexing_slicing)]
-                                let child = &branch.children[next_unmatched_key_nibble as usize];
+                                let child = match branch_child_ref(
+                                    branch,
+                                    next_unmatched_key_nibble as usize,
+                                    "iter::PathIterator",
+                                ) {
+                                    Ok(child) => child,
+                                    Err(err) => {
+                                        self.state = PathIteratorState::Exhausted;
+                                        return Some(Err(err));
+                                    }
+                                };
                                 match child {
                                     None => {
                                         // There's no child at the index of the next nibble in the key.
