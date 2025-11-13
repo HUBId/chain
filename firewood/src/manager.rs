@@ -14,10 +14,13 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::num::NonZero;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use firewood_storage::logger::{trace, warn};
-use metrics::gauge;
+use metrics::{gauge, histogram};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
@@ -25,8 +28,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    noop_storage_metrics, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    NodeStore, StorageMetricsHandle, TrieHash,
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    StorageMetricsHandle, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -71,6 +74,118 @@ pub struct ConfigManager {
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
+const WAL_FLUSH_QUEUE_DEPTH: &str = "firewood.commit.wal_flush.queue_depth";
+const WAL_FLUSH_WAIT_SECONDS: &str = "firewood.commit.wal_flush.wait_seconds";
+
+static WAL_FLUSH_DELAY_NANOS: AtomicU64 = AtomicU64::new(0);
+
+#[doc(hidden)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn set_commit_flush_delay(delay: Duration) {
+    let nanos = delay.as_nanos().min(u128::from(u64::MAX)) as u64;
+    WAL_FLUSH_DELAY_NANOS.store(nanos, Ordering::Relaxed);
+}
+
+#[doc(hidden)]
+pub fn clear_commit_flush_delay() {
+    WAL_FLUSH_DELAY_NANOS.store(0, Ordering::Relaxed);
+}
+
+fn wal_flush_delay() -> Option<Duration> {
+    match WAL_FLUSH_DELAY_NANOS.load(Ordering::Relaxed) {
+        0 => None,
+        nanos => Some(Duration::from_nanos(nanos)),
+    }
+}
+
+enum WalFlushMessage {
+    Flush {
+        nodestore: NodeStore<Committed, FileBacked>,
+        response: std::sync::mpsc::Sender<Result<NodeStore<Committed, FileBacked>, FileIoError>>,
+    },
+    Shutdown,
+}
+
+struct WalFlushExecutor {
+    sender: std::sync::mpsc::Sender<WalFlushMessage>,
+    handle: Option<thread::JoinHandle<()>>,
+    pending: AtomicUsize,
+}
+
+impl WalFlushExecutor {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let handle = thread::Builder::new()
+            .name("firewood-wal-flush".into())
+            .spawn(|| WalFlushExecutor::run(receiver))
+            .expect("failed to spawn WAL flush executor");
+        let executor = Self {
+            sender,
+            handle: Some(handle),
+            pending: AtomicUsize::new(0),
+        };
+        gauge!(WAL_FLUSH_QUEUE_DEPTH).set(0.0);
+        executor
+    }
+
+    fn run(receiver: std::sync::mpsc::Receiver<WalFlushMessage>) {
+        while let Ok(message) = receiver.recv() {
+            match message {
+                WalFlushMessage::Flush {
+                    mut nodestore,
+                    response,
+                } => {
+                    if let Some(delay) = wal_flush_delay() {
+                        thread::sleep(delay);
+                    }
+                    let result = nodestore.persist().map(|()| nodestore);
+                    let _ = response.send(result);
+                }
+                WalFlushMessage::Shutdown => break,
+            }
+        }
+    }
+
+    fn flush(
+        &self,
+        nodestore: NodeStore<Committed, FileBacked>,
+    ) -> Result<NodeStore<Committed, FileBacked>, FileIoError> {
+        let depth = self.pending.fetch_add(1, Ordering::SeqCst) + 1;
+        gauge!(WAL_FLUSH_QUEUE_DEPTH).set(depth as f64);
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        if let Err(err) = self.sender.send(WalFlushMessage::Flush {
+            nodestore,
+            response: response_tx,
+        }) {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+            gauge!(WAL_FLUSH_QUEUE_DEPTH).set((depth - 1) as f64);
+            return Err(FileIoError::from_generic_no_file(err, "wal flush enqueue"));
+        }
+
+        let start = Instant::now();
+        let result = response_rx
+            .recv()
+            .map_err(|err| FileIoError::from_generic_no_file(err, "wal flush wait"));
+        let wait = start.elapsed();
+        let remaining = self.pending.fetch_sub(1, Ordering::SeqCst) - 1;
+        gauge!(WAL_FLUSH_QUEUE_DEPTH).set(remaining as f64);
+        histogram!(WAL_FLUSH_WAIT_SECONDS).record(wait.as_secs_f64());
+        result?
+    }
+}
+
+impl Drop for WalFlushExecutor {
+    fn drop(&mut self) {
+        if self.sender.send(WalFlushMessage::Shutdown).is_ok() {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        } else if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
@@ -82,6 +197,7 @@ pub(crate) struct RevisionManager {
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     metrics: StorageMetricsHandle,
+    wal_flush: WalFlushExecutor,
 }
 
 impl fmt::Debug for RevisionManager {
@@ -160,6 +276,7 @@ impl RevisionManager {
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
             metrics,
+            wal_flush: WalFlushExecutor::new(),
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -213,7 +330,7 @@ impl RevisionManager {
             });
         }
 
-        let mut committed = proposal.as_committed(&current_revision);
+        let mut committed_store = proposal.as_committed(&current_revision);
 
         // 2. Persist delete list for this committed revision to disk for recovery
 
@@ -235,7 +352,7 @@ impl RevisionManager {
             // the compiler guarantees we are the only one using this manager.
             match Arc::try_unwrap(oldest) {
                 Ok(oldest) => {
-                    let summary = oldest.reap_deleted(&mut committed)?;
+                    let summary = oldest.reap_deleted(&mut committed_store)?;
                     if !summary.reintroduced_addresses.is_empty() {
                         let count = summary.reintroduced_addresses.len();
                         let addresses: Vec<u64> = summary
@@ -266,10 +383,10 @@ impl RevisionManager {
         // 4. Persist to disk.
         // TODO: We can probably do this in another thread, but it requires that
         // we move the header out of NodeStore, which is in a future PR.
-        committed.persist()?;
+        committed_store = self.wal_flush.flush(committed_store)?;
 
         // 5. Set last committed revision
-        let committed: CommittedRevision = committed.into();
+        let committed: CommittedRevision = committed_store.into();
         self.historical_write().push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash_write().insert(hash, committed.clone());
@@ -348,6 +465,7 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)] // Tests unwrap expected error cases when coordinating background workers.
 mod tests {
     use super::*;
+    use firewood_storage::noop_storage_metrics;
     use tempfile::NamedTempFile;
 
     #[test]
