@@ -133,6 +133,12 @@ material.
    ```shell
    cargo run --bin wallet -- init --keys-path ./keys/wallet.toml
    ```
+   The command now prompts for a wallet passphrase and confirmation. Leave the
+   prompt empty to use an empty passphrase or supply `--no-passphrase` to retain
+   legacy plaintext files (primarily for development). Non-interactive
+   deployments can provide credentials via `--passphrase-file <path>`,
+   `--passphrase-env <VAR>`, or `--passphrase <value>`.
+
    Sample output:
    ```
    Wallet initialised successfully
@@ -180,6 +186,20 @@ material.
 
 All commands honour the `--endpoint`, `--auth-token`, and `--timeout` flags, or
 the `RPP_WALLET_RPC_*` environment variables.
+
+## Encrypted keystore format
+
+Wallet keys are now stored in a versioned TOML document that wraps the legacy
+public/secret key pair in an authenticated ChaCha20-Poly1305 ciphertext. A new
+Argon2id KDF (64 MiB memory, 3 iterations, single thread) derives the 256-bit
+encryption key from the operator-supplied passphrase and a per-file random salt.
+The keystore records the KDF parameters, salt, and AEAD nonce alongside the
+ciphertext so future revisions can migrate in place.
+
+When a plaintext keystore is encountered, the runtime automatically re-encrypts
+it using the configured passphrase. Operators should rotate credentials by
+re-running `wallet init --force` or updating the passphrase inputs before
+copying the keystore to new hosts.
 
 ## Telemetry and budgets
 
