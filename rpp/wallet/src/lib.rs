@@ -34,6 +34,9 @@ pub mod config;
 /// Zugriff auf optionale Drittanbieter-Integrationen.
 pub mod vendor;
 
+/// Persistent wallet state stored in Firewood.
+pub mod db;
+
 /// Command-line helpers for wallet subsystems.
 pub mod cli;
 

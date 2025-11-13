@@ -26,7 +26,6 @@ backend-rpp-stark = []
 vendor_electrs = [
     "dep:tokio",
     "dep:sha2",
-    "dep:storage-firewood",
     "dep:rpp",
     "dep:rpp_p2p",
     "dep:parking_lot",
@@ -40,7 +39,7 @@ prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
 prover-stwo-circuits = { path = "../../prover/stwo", optional = true }
 sha2 = { version = "0.10", optional = true }
-storage-firewood = { path = "../../storage-firewood", optional = true }
+storage-firewood = { path = "../../storage-firewood" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["sync", "rt", "signal"], optional = true }
@@ -51,6 +50,9 @@ parking_lot = { version = "0.12", optional = true }
 log = "0.4"
 tracing = "0.1"
 clap = { workspace = true, features = ["derive"] }
+bincode = { version = "=1.3.3", default-features = false }
+serde_bytes = "0.11"
+thiserror = "1"
 
 [dev-dependencies]
 tempfile = "3.10"

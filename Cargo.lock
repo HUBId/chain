@@ -6797,6 +6797,7 @@ name = "rpp-wallet"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "clap",
  "firewood",
  "hex",
@@ -6811,10 +6812,12 @@ dependencies = [
  "reqwest 0.12.24",
  "rpp-p2p",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2",
  "storage-firewood",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "toml 0.8.12",
  "tracing",

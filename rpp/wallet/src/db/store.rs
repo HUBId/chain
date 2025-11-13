@@ -1,0 +1,424 @@
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
+
+use storage_firewood::kv::{FirewoodKv, Hash, KvError};
+
+use crate::db::{
+    codec::{self, Address, CodecError, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord},
+    schema,
+};
+
+/// High-level wallet facade around the Firewood key-value engine.
+pub struct WalletStore {
+    kv: Mutex<FirewoodKv>,
+}
+
+impl WalletStore {
+    /// Open or initialise a wallet store rooted at `data_dir`.
+    pub fn open(data_dir: &Path) -> Result<Self, WalletStoreError> {
+        let mut kv = FirewoodKv::open(data_dir)?;
+        initialise_schema(&mut kv)?;
+        Ok(Self { kv: Mutex::new(kv) })
+    }
+
+    /// Start a new batched write session.
+    pub fn batch(&self) -> Result<WalletStoreBatch<'_>, WalletStoreError> {
+        let guard = self.lock()?;
+        Ok(WalletStoreBatch { guard })
+    }
+
+    /// Return the currently stored schema version.
+    pub fn schema_version(&self) -> Result<u32, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let Some(bytes) = guard.get(schema::SCHEMA_VERSION_KEY) else {
+            return Ok(schema::SCHEMA_VERSION_V1);
+        };
+        drop(guard);
+        Ok(codec::decode_schema_version(&bytes)?)
+    }
+
+    /// Fetch a raw metadata value stored under the wallet namespace.
+    pub fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = meta_key(key);
+        Ok(guard.get(&key))
+    }
+
+    /// Retrieve persisted key material.
+    pub fn get_key_material(&self, label: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = key_material_key(label);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_key_material(&bytes)?))
+    }
+
+    /// Load an address entry.
+    pub fn get_address(
+        &self,
+        kind: AddressKind,
+        index: u32,
+    ) -> Result<Option<Address>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = address_key(kind, index);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_address(&bytes)?))
+    }
+
+    /// Enumerate all known addresses inside a namespace.
+    pub fn iter_addresses(
+        &self,
+        kind: AddressKind,
+    ) -> Result<Vec<(u32, Address)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = kind.namespace();
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let index = parse_u32_suffix(&key[prefix.len()..])?;
+                let address = codec::decode_address(&value)?;
+                Ok((index, address))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>();
+        drop(guard);
+        entries
+    }
+
+    /// Fetch a single UTXO record.
+    pub fn get_utxo(
+        &self,
+        outpoint: &UtxoOutpoint,
+    ) -> Result<Option<UtxoRecord<'static>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = utxo_key(outpoint);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_utxo(&bytes)?.into_owned()))
+    }
+
+    /// Iterate over all stored UTXO records.
+    pub fn iter_utxos(&self) -> Result<Vec<UtxoRecord<'static>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::UTXOS_NAMESPACE;
+        let utxos = guard
+            .scan_prefix(prefix)
+            .map(|(_, value)| codec::decode_utxo(&value).map(UtxoRecord::into_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(guard);
+        Ok(utxos)
+    }
+
+    /// Fetch a cached transaction entry by txid.
+    pub fn get_tx_cache_entry(
+        &self,
+        txid: &[u8; 32],
+    ) -> Result<Option<TxCacheEntry<'static>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = tx_cache_key(txid);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_tx_cache_entry(&bytes)?.into_owned()))
+    }
+
+    /// Iterate over cached transactions.
+    pub fn iter_tx_cache_entries(
+        &self,
+    ) -> Result<Vec<([u8; 32], TxCacheEntry<'static>)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::TX_CACHE_NAMESPACE;
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let txid = parse_txid(&key[prefix.len()..])?;
+                let entry = codec::decode_tx_cache_entry(&value)?.into_owned();
+                Ok((txid, entry))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>();
+        drop(guard);
+        entries
+    }
+
+    /// Fetch a persisted policy snapshot.
+    pub fn get_policy_snapshot(
+        &self,
+        label: &str,
+    ) -> Result<Option<PolicySnapshot>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = policy_key(label);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_policy_snapshot(&bytes)?))
+    }
+
+    /// Iterate over all stored policy snapshots.
+    pub fn iter_policy_snapshots(&self) -> Result<Vec<(String, PolicySnapshot)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::POLICIES_NAMESPACE;
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let label = std::str::from_utf8(&key[prefix.len()..])
+                    .map_err(|err| WalletStoreError::CorruptKey(err.to_string()))?
+                    .to_string();
+                let snapshot = codec::decode_policy_snapshot(&value)?;
+                Ok((label, snapshot))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>();
+        drop(guard);
+        entries
+    }
+
+    /// Fetch a checkpoint (e.g. last synced height).
+    pub fn get_checkpoint(&self, label: &str) -> Result<Option<u64>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = checkpoint_key(label);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_checkpoint(&bytes)?))
+    }
+
+    /// Iterate over stored checkpoints.
+    pub fn iter_checkpoints(&self) -> Result<Vec<(String, u64)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::CHECKPOINTS_NAMESPACE;
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let label = std::str::from_utf8(&key[prefix.len()..])
+                    .map_err(|err| WalletStoreError::CorruptKey(err.to_string()))?
+                    .to_string();
+                let height = codec::decode_checkpoint(&value)?;
+                Ok((label, height))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>();
+        drop(guard);
+        entries
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, FirewoodKv>, WalletStoreError> {
+        self.kv.lock().map_err(|_| WalletStoreError::Poisoned)
+    }
+}
+
+/// Address storage namespace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressKind {
+    External,
+    Internal,
+}
+
+impl AddressKind {
+    fn namespace(self) -> &'static [u8] {
+        match self {
+            AddressKind::External => schema::ADDR_EXTERNAL_NAMESPACE,
+            AddressKind::Internal => schema::ADDR_INTERNAL_NAMESPACE,
+        }
+    }
+}
+
+/// Wrapper around a Firewood write batch.
+pub struct WalletStoreBatch<'a> {
+    guard: MutexGuard<'a, FirewoodKv>,
+}
+
+impl<'a> WalletStoreBatch<'a> {
+    pub fn put_meta(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(meta_key(key), value.to_vec());
+    }
+
+    pub fn put_key_material(
+        &mut self,
+        label: &str,
+        material: &[u8],
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_key_material(material)?;
+        self.guard.put(key_material_key(label), value);
+        Ok(())
+    }
+
+    pub fn put_address(
+        &mut self,
+        kind: AddressKind,
+        index: u32,
+        address: &Address,
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_address(address)?;
+        self.guard.put(address_key(kind, index), value);
+        Ok(())
+    }
+
+    pub fn put_utxo(&mut self, record: &UtxoRecord<'_>) -> Result<(), WalletStoreError> {
+        let value = codec::encode_utxo(record)?;
+        self.guard.put(utxo_key(&record.outpoint), value);
+        Ok(())
+    }
+
+    pub fn delete_utxo(&mut self, outpoint: &UtxoOutpoint) {
+        self.guard.delete(&utxo_key(outpoint));
+    }
+
+    pub fn put_tx_cache_entry(
+        &mut self,
+        txid: &[u8; 32],
+        entry: &TxCacheEntry<'_>,
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_tx_cache_entry(entry)?;
+        self.guard.put(tx_cache_key(txid), value);
+        Ok(())
+    }
+
+    pub fn delete_tx_cache_entry(&mut self, txid: &[u8; 32]) {
+        self.guard.delete(&tx_cache_key(txid));
+    }
+
+    pub fn put_policy_snapshot(
+        &mut self,
+        label: &str,
+        snapshot: &PolicySnapshot,
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_policy_snapshot(snapshot)?;
+        self.guard.put(policy_key(label), value);
+        Ok(())
+    }
+
+    pub fn delete_policy_snapshot(&mut self, label: &str) {
+        self.guard.delete(&policy_key(label));
+    }
+
+    pub fn put_checkpoint(&mut self, label: &str, height: u64) -> Result<(), WalletStoreError> {
+        let value = codec::encode_checkpoint(height)?;
+        self.guard.put(checkpoint_key(label), value);
+        Ok(())
+    }
+
+    pub fn delete_checkpoint(&mut self, label: &str) {
+        self.guard.delete(&checkpoint_key(label));
+    }
+
+    pub fn commit(self) -> Result<Hash, WalletStoreError> {
+        Ok(self.guard.commit()?)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WalletStoreError {
+    #[error("storage error: {0}")]
+    Storage(#[from] KvError),
+    #[error("serialization error: {0}")]
+    Codec(#[from] CodecError),
+    #[error("synchronisation primitive poisoned")]
+    Poisoned,
+    #[error("stored schema version {stored} exceeds supported {supported}")]
+    UnsupportedSchema { stored: u32, supported: u32 },
+    #[error("corrupt key encoding: {0}")]
+    CorruptKey(String),
+}
+
+fn initialise_schema(kv: &mut FirewoodKv) -> Result<(), WalletStoreError> {
+    let stored = kv.get(schema::SCHEMA_VERSION_KEY);
+    let supported = schema::SCHEMA_VERSION_V1;
+    match stored {
+        Some(bytes) => {
+            let version = codec::decode_schema_version(&bytes)?;
+            if version > supported {
+                return Err(WalletStoreError::UnsupportedSchema {
+                    stored: version,
+                    supported,
+                });
+            }
+            if version < supported {
+                kv.put(
+                    schema::SCHEMA_VERSION_KEY.to_vec(),
+                    codec::encode_schema_version(supported)?,
+                );
+                let _ = kv.commit()?;
+            }
+        }
+        None => {
+            kv.put(
+                schema::SCHEMA_VERSION_KEY.to_vec(),
+                codec::encode_schema_version(supported)?,
+            );
+            let _ = kv.commit()?;
+        }
+    }
+    Ok(())
+}
+
+fn meta_key(key: &str) -> Vec<u8> {
+    namespaced(schema::META_NAMESPACE, key.as_bytes())
+}
+
+fn key_material_key(label: &str) -> Vec<u8> {
+    namespaced(schema::KEYS_NAMESPACE, label.as_bytes())
+}
+
+fn address_key(kind: AddressKind, index: u32) -> Vec<u8> {
+    let mut key = kind.namespace().to_vec();
+    key.extend_from_slice(&index.to_be_bytes());
+    key
+}
+
+fn utxo_key(outpoint: &UtxoOutpoint) -> Vec<u8> {
+    let mut key = schema::UTXOS_NAMESPACE.to_vec();
+    key.extend_from_slice(&outpoint.txid);
+    key.extend_from_slice(&outpoint.index.to_be_bytes());
+    key
+}
+
+fn tx_cache_key(txid: &[u8; 32]) -> Vec<u8> {
+    let mut key = schema::TX_CACHE_NAMESPACE.to_vec();
+    key.extend_from_slice(txid);
+    key
+}
+
+fn policy_key(label: &str) -> Vec<u8> {
+    namespaced(schema::POLICIES_NAMESPACE, label.as_bytes())
+}
+
+fn checkpoint_key(label: &str) -> Vec<u8> {
+    namespaced(schema::CHECKPOINTS_NAMESPACE, label.as_bytes())
+}
+
+fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+    let mut key = prefix.to_vec();
+    key.extend_from_slice(suffix);
+    key
+}
+
+fn parse_u32_suffix(bytes: &[u8]) -> Result<u32, WalletStoreError> {
+    if bytes.len() != 4 {
+        return Err(WalletStoreError::CorruptKey(format!(
+            "expected 4-byte index suffix, got {} bytes",
+            bytes.len()
+        )));
+    }
+    let mut array = [0u8; 4];
+    array.copy_from_slice(bytes);
+    Ok(u32::from_be_bytes(array))
+}
+
+fn parse_txid(bytes: &[u8]) -> Result<[u8; 32], WalletStoreError> {
+    if bytes.len() != 32 {
+        return Err(WalletStoreError::CorruptKey(format!(
+            "expected 32-byte txid suffix, got {} bytes",
+            bytes.len()
+        )));
+    }
+    let mut txid = [0u8; 32];
+    txid.copy_from_slice(bytes);
+    Ok(txid)
+}
