@@ -43,6 +43,9 @@ pub mod cli;
 /// JSON-RPC facades exposed by the wallet runtime.
 pub mod rpc;
 
+/// Indexer client abstractions and helpers.
+pub mod indexer;
+
 /// Zero Sync identity lifecycle helpers.
 pub mod zsi;
 
