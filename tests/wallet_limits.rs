@@ -5,7 +5,8 @@ use rpp_chain::errors::ChainResult;
 use rpp_chain::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp_chain::runtime::wallet::rpc::AuthToken;
 use rpp_chain::runtime::wallet::runtime::{
-    GenericWalletRuntimeHandle, NodeConnector, WalletRuntime, WalletRuntimeConfig, WalletService,
+    GenericWalletRuntimeHandle, NodeAttachment, NodeConnector, WalletRuntime,
+    WalletRuntimeConfig, WalletService,
 };
 use rpp_chain::runtime::wallet::sync::DeterministicSync;
 
@@ -23,8 +24,8 @@ impl WalletService for TestWallet {
 struct NoopConnector;
 
 impl NodeConnector<TestWallet> for NoopConnector {
-    fn attach(&self, _wallet: &TestWallet) -> ChainResult<()> {
-        Ok(())
+    fn attach(&self, _wallet: &TestWallet) -> ChainResult<NodeAttachment> {
+        Ok(NodeAttachment::default())
     }
 }
 
@@ -44,6 +45,7 @@ async fn wallet_runtime_propagates_limits() {
         config.clone(),
         Arc::clone(&metrics),
         Box::new(DeterministicSync::new("limits")),
+        None,
         Some(Box::new(NoopConnector)),
     )
     .expect("runtime start");

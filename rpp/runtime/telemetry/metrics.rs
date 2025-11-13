@@ -68,6 +68,8 @@ pub struct RuntimeMetrics {
     proofs: ProofMetrics,
     consensus_block_duration: EnumF64Histogram<ConsensusStage>,
     wallet_rpc_latency: EnumF64Histogram<WalletRpcMethod>,
+    wallet_runtime_watch_active: Histogram<u64>,
+    wallet_sync_driver_active: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
@@ -112,6 +114,16 @@ impl RuntimeMetrics {
                     .with_unit("ms")
                     .build(),
             ),
+            wallet_runtime_watch_active: meter
+                .u64_histogram("rpp.runtime.wallet.runtime.active")
+                .with_description("Samples indicating whether the wallet runtime loop is active")
+                .with_unit("1")
+                .build(),
+            wallet_sync_driver_active: meter
+                .u64_histogram("rpp.runtime.wallet.sync.active")
+                .with_description("Samples indicating whether the wallet sync driver is active")
+                .with_unit("1")
+                .build(),
             rpc_request_latency: RpcHistogram::new(
                 meter
                     .f64_histogram("rpp.runtime.rpc.request.latency")
@@ -278,6 +290,26 @@ impl RuntimeMetrics {
     /// Record the latency of a wallet RPC invocation.
     pub fn record_wallet_rpc_latency(&self, method: WalletRpcMethod, duration: Duration) {
         self.wallet_rpc_latency.record_duration(method, duration);
+    }
+
+    /// Record that the wallet runtime loop has started processing events.
+    pub fn record_wallet_runtime_watch_started(&self) {
+        self.wallet_runtime_watch_active.record(1, &[]);
+    }
+
+    /// Record that the wallet runtime loop has stopped processing events.
+    pub fn record_wallet_runtime_watch_stopped(&self) {
+        self.wallet_runtime_watch_active.record(0, &[]);
+    }
+
+    /// Record that the wallet sync driver became active.
+    pub fn record_wallet_sync_driver_started(&self) {
+        self.wallet_sync_driver_active.record(1, &[]);
+    }
+
+    /// Record that the wallet sync driver has stopped.
+    pub fn record_wallet_sync_driver_stopped(&self) {
+        self.wallet_sync_driver_active.record(0, &[]);
     }
 
     /// Record the latency and result of an RPC handler invocation.
