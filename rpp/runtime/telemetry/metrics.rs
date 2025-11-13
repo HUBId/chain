@@ -725,18 +725,86 @@ impl MetricLabel for ConsensusStage {
 }
 
 /// Wallet RPC surface area that is traced via metrics.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum WalletRpcMethod {
-    /// Fetches account or balance data.
-    GetBalance,
-    /// Retrieves historical ledger state.
-    GetHistory,
-    /// Submits a signed transaction for inclusion.
+    /// Runtime level liveness probes emitted internally.
+    RuntimeStatus,
+    /// JSON-RPC: `get_balance`.
+    JsonGetBalance,
+    /// JSON-RPC: `list_utxos`.
+    JsonListUtxos,
+    /// JSON-RPC: `list_txs`.
+    JsonListTransactions,
+    /// JSON-RPC: `derive_address`.
+    JsonDeriveAddress,
+    /// JSON-RPC: `create_tx`.
+    JsonCreateTransaction,
+    /// JSON-RPC: `sign_tx`.
+    JsonSignTransaction,
+    /// JSON-RPC: `broadcast`.
+    JsonBroadcast,
+    /// JSON-RPC: `policy_preview`.
+    JsonPolicyPreview,
+    /// JSON-RPC: `sync_status`.
+    JsonSyncStatus,
+    /// JSON-RPC: `rescan`.
+    JsonRescan,
+    /// REST: `/wallet/state/root`.
+    StateRoot,
+    /// REST: `/wallet/ui/history`.
+    UiHistory,
+    /// REST: `/wallet/ui/send/preview`.
+    UiSendPreview,
+    /// REST: `/wallet/ui/receive`.
+    UiReceive,
+    /// REST: `/wallet/ui/node`.
+    UiNode,
+    /// REST: `/wallet/account`.
+    Account,
+    /// REST: `/wallet/balance/:address`.
+    Balance,
+    /// REST: `/wallet/reputation/:address`.
+    Reputation,
+    /// REST: `/wallet/tier/:address`.
+    Tier,
+    /// REST: `/wallet/history`.
+    History,
+    /// REST: `/wallet/send/preview`.
+    SendPreview,
+    /// REST: `/wallet/tx/build`.
+    BuildTransaction,
+    /// REST: `/wallet/tx/sign`.
+    SignTransaction,
+    /// REST: `/wallet/tx/prove`.
+    ProveTransaction,
+    /// REST: `/wallet/tx/submit`.
     SubmitTransaction,
-    /// Builds or validates proof bundles.
-    BuildProof,
-    /// Performs health checking style operations.
-    Status,
+    /// REST: `/wallet/receive`.
+    ReceiveAddresses,
+    /// REST: `/wallet/node`.
+    NodeView,
+    /// REST: `/wallet/uptime/scheduler`.
+    UptimeSchedulerStatus,
+    /// REST: `/wallet/uptime/scheduler/trigger`.
+    UptimeSchedulerTrigger,
+    /// REST: `/wallet/uptime/scheduler/offload`.
+    UptimeSchedulerOffload,
+    /// REST: `/wallet/uptime/proof`.
+    UptimeProofGenerate,
+    /// REST: `/wallet/uptime/submit`.
+    UptimeSubmit,
+    /// REST: `/wallet/pipeline/dashboard`.
+    PipelineDashboard,
+    /// REST: `/wallet/pipeline/telemetry`.
+    PipelineTelemetry,
+    /// REST: `/wallet/pipeline/stream`.
+    PipelineStream,
+    /// REST: `/wallet/pipeline/wait`.
+    PipelineWait,
+    /// REST: `/wallet/pipeline/shutdown`.
+    PipelineShutdown,
+    /// Any wallet RPC that does not match a known endpoint.
+    Unknown,
 }
 
 impl MetricLabel for WalletRpcMethod {
@@ -744,11 +812,45 @@ impl MetricLabel for WalletRpcMethod {
 
     fn as_str(&self) -> &'static str {
         match self {
-            Self::GetBalance => "get_balance",
-            Self::GetHistory => "get_history",
+            Self::RuntimeStatus => "runtime_status",
+            Self::JsonGetBalance => "json_get_balance",
+            Self::JsonListUtxos => "json_list_utxos",
+            Self::JsonListTransactions => "json_list_transactions",
+            Self::JsonDeriveAddress => "json_derive_address",
+            Self::JsonCreateTransaction => "json_create_transaction",
+            Self::JsonSignTransaction => "json_sign_transaction",
+            Self::JsonBroadcast => "json_broadcast",
+            Self::JsonPolicyPreview => "json_policy_preview",
+            Self::JsonSyncStatus => "json_sync_status",
+            Self::JsonRescan => "json_rescan",
+            Self::StateRoot => "state_root",
+            Self::UiHistory => "ui_history",
+            Self::UiSendPreview => "ui_send_preview",
+            Self::UiReceive => "ui_receive",
+            Self::UiNode => "ui_node",
+            Self::Account => "account",
+            Self::Balance => "balance",
+            Self::Reputation => "reputation",
+            Self::Tier => "tier",
+            Self::History => "history",
+            Self::SendPreview => "send_preview",
+            Self::BuildTransaction => "build_transaction",
+            Self::SignTransaction => "sign_transaction",
+            Self::ProveTransaction => "prove_transaction",
             Self::SubmitTransaction => "submit_transaction",
-            Self::BuildProof => "build_proof",
-            Self::Status => "status",
+            Self::ReceiveAddresses => "receive_addresses",
+            Self::NodeView => "node_view",
+            Self::UptimeSchedulerStatus => "uptime_scheduler_status",
+            Self::UptimeSchedulerTrigger => "uptime_scheduler_trigger",
+            Self::UptimeSchedulerOffload => "uptime_scheduler_offload",
+            Self::UptimeProofGenerate => "uptime_proof_generate",
+            Self::UptimeSubmit => "uptime_submit",
+            Self::PipelineDashboard => "pipeline_dashboard",
+            Self::PipelineTelemetry => "pipeline_telemetry",
+            Self::PipelineStream => "pipeline_stream",
+            Self::PipelineWait => "pipeline_wait",
+            Self::PipelineShutdown => "pipeline_shutdown",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -1152,7 +1254,7 @@ mod tests {
             Duration::from_millis(20),
         );
         metrics.record_rpc_request(
-            RpcMethod::Wallet(WalletRpcMethod::Status),
+            RpcMethod::Wallet(WalletRpcMethod::RuntimeStatus),
             RpcResult::Success,
             Duration::from_millis(25),
         );

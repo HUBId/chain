@@ -41,7 +41,7 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     metrics.record_consensus_stage_duration(ConsensusStage::Commitment, Duration::from_millis(7));
     metrics.record_wallet_rpc_latency(WalletRpcMethod::SubmitTransaction, Duration::from_millis(5));
     metrics.record_rpc_request(
-        RpcMethod::Wallet(WalletRpcMethod::Status),
+        RpcMethod::Wallet(WalletRpcMethod::RuntimeStatus),
         RpcResult::ClientError,
         Duration::from_millis(11),
     );

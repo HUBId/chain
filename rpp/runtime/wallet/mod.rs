@@ -4,7 +4,10 @@ pub mod runtime;
 pub mod sync;
 
 pub use keys::{FileWalletKeyProvider, InMemoryWalletKeyProvider, WalletKeyProvider};
-pub use rpc::{AuthToken, AuthenticatedRpcHandler, RpcError, RpcRequest, StaticAuthenticator};
+pub use rpc::json_rpc_router;
+pub use rpc::{
+    AuthToken, AuthenticatedRpcHandler, RpcError, RpcInvocation, RpcRequest, StaticAuthenticator,
+};
 pub use runtime::{
     GenericWalletRuntimeHandle, NodeAttachment, NodeConnector, SyncDriver, WalletRuntime,
     WalletRuntimeConfig, WalletRuntimeHandle, WalletService,

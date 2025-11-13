@@ -1,11 +1,31 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::marker::PhantomData;
+use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use http::StatusCode;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::{routing::post, Json, Router};
+use parking_lot::Mutex;
+use serde_json::Value;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::errors::ChainError;
 use crate::runtime::telemetry::metrics::{RpcMethod, RpcResult, RuntimeMetrics, WalletRpcMethod};
+use crate::runtime::wallet::runtime::WalletRuntimeConfig;
+use rpp_wallet::rpc::dto::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use rpp_wallet::rpc::WalletRpcRouter;
+
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+const CODE_PARSE_ERROR: i32 = -32700;
+const CODE_INVALID_REQUEST: i32 = -32600;
+const CODE_UNAUTHORIZED: i32 = -32060;
+const CODE_RATE_LIMITED: i32 = -32061;
 
 /// Wrapper type for wallet RPC authentication tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +47,7 @@ impl AuthToken {
 #[derive(Debug)]
 pub struct RpcError {
     status: StatusCode,
+    code: i32,
     message: String,
 }
 
@@ -35,13 +56,29 @@ impl RpcError {
     pub fn unauthorized() -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
+            code: CODE_UNAUTHORIZED,
             message: "wallet RPC authentication failed".to_string(),
+        }
+    }
+
+    /// Constructs a rate limiting error when the caller exceeds the allowed
+    /// number of invocations.
+    pub fn too_many_requests() -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: CODE_RATE_LIMITED,
+            message: "wallet RPC rate limit exceeded".to_string(),
         }
     }
 
     /// Status code associated with the error.
     pub fn status(&self) -> StatusCode {
         self.status
+    }
+
+    /// JSON-RPC error code associated with the failure.
+    pub fn code(&self) -> i32 {
+        self.code
     }
 }
 
@@ -57,6 +94,12 @@ impl std::error::Error for RpcError {}
 #[derive(Clone, Debug)]
 pub struct RpcRequest<'a> {
     pub bearer_token: Option<&'a str>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RpcInvocation<'a, P> {
+    pub request: RpcRequest<'a>,
+    pub payload: P,
 }
 
 /// Strategy object responsible for authorizing wallet RPC invocations.
@@ -86,57 +129,116 @@ impl Authenticator for StaticAuthenticator {
     }
 }
 
-/// Wrapper ensuring that RPC handlers are only executed when authorized.
-pub struct AuthenticatedRpcHandler<H> {
+#[derive(Debug)]
+struct RateLimiter {
+    capacity: NonZeroU64,
+    interval: Duration,
+    state: Mutex<RateLimiterState>,
+}
+
+#[derive(Debug)]
+struct RateLimiterState {
+    window_start: Instant,
+    count: u64,
+}
+
+impl RateLimiter {
+    fn new(capacity: NonZeroU64, interval: Duration) -> Self {
+        Self {
+            capacity,
+            interval,
+            state: Mutex::new(RateLimiterState {
+                window_start: Instant::now(),
+                count: 0,
+            }),
+        }
+    }
+
+    fn try_acquire(&self) -> bool {
+        let mut state = self.state.lock();
+        let now = Instant::now();
+        if now.saturating_duration_since(state.window_start) >= self.interval {
+            state.window_start = now;
+            state.count = 0;
+        }
+
+        if state.count < self.capacity.get() {
+            state.count += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Wrapper ensuring that RPC handlers are only executed when authorized and
+/// within the configured rate limits.
+pub struct AuthenticatedRpcHandler<H, P> {
     authenticator: Arc<dyn Authenticator>,
     handler: H,
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
+    rate_limiter: Option<RateLimiter>,
+    _marker: PhantomData<fn(P)>,
 }
 
-impl<H> AuthenticatedRpcHandler<H> {
+impl<H, P> AuthenticatedRpcHandler<H, P>
+where
+    H: Send + Sync,
+{
     pub fn new(
         authenticator: impl Authenticator + 'static,
         handler: H,
         metrics: Arc<RuntimeMetrics>,
         method: WalletRpcMethod,
+        rate_limit: Option<NonZeroU64>,
     ) -> Self {
         Self {
             authenticator: Arc::new(authenticator),
             handler,
             metrics,
             method,
+            rate_limiter: rate_limit.map(|limit| RateLimiter::new(limit, RATE_LIMIT_WINDOW)),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<H, R> AuthenticatedRpcHandler<H>
+impl<H, R, P> AuthenticatedRpcHandler<H, P>
 where
-    H: Fn(RpcRequest<'_>) -> R + Send + Sync,
+    H: Fn(RpcInvocation<'_, P>) -> R + Send + Sync,
+    P: Clone,
 {
-    pub fn call(&self, request: RpcRequest<'_>) -> Result<R, RpcError> {
+    pub fn call(&self, invocation: RpcInvocation<'_, P>) -> Result<R, RpcError> {
         let start = Instant::now();
-        if !self.authenticator.authenticate(request.bearer_token) {
+        if !self
+            .authenticator
+            .authenticate(invocation.request.bearer_token)
+        {
             let duration = start.elapsed();
-            self.metrics
-                .record_wallet_rpc_latency(self.method, duration);
-            self.metrics.record_rpc_request(
-                RpcMethod::Wallet(self.method),
-                RpcResult::ClientError,
-                duration,
-            );
+            self.record_outcome(RpcResult::ClientError, duration);
             return Err(RpcError::unauthorized());
         }
-        let response = (self.handler)(request.clone());
+
+        if let Some(limiter) = &self.rate_limiter {
+            if !limiter.try_acquire() {
+                let duration = start.elapsed();
+                self.record_outcome(RpcResult::ClientError, duration);
+                return Err(RpcError::too_many_requests());
+            }
+        }
+
+        let response = (self.handler)(invocation);
         let duration = start.elapsed();
+        self.record_outcome(RpcResult::Success, duration);
+        Ok(response)
+    }
+
+    fn record_outcome(&self, result: RpcResult, duration: Duration) {
         self.metrics
             .record_wallet_rpc_latency(self.method, duration);
-        self.metrics.record_rpc_request(
-            RpcMethod::Wallet(self.method),
-            RpcResult::Success,
-            duration,
-        );
-        Ok(response)
+        self.metrics
+            .record_rpc_request(RpcMethod::Wallet(self.method), result, duration);
     }
 }
 
@@ -147,14 +249,163 @@ impl From<RpcError> for ChainError {
 }
 
 /// Convenience helper for constructing an authenticated handler from a closure.
-pub fn authenticated_handler<H, R>(
+pub fn authenticated_handler<H, P, R>(
     authenticator: impl Authenticator + 'static,
     handler: H,
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
-) -> AuthenticatedRpcHandler<H>
+    rate_limit: Option<NonZeroU64>,
+) -> AuthenticatedRpcHandler<H, P>
 where
-    H: Fn(RpcRequest<'_>) -> R + Send + Sync,
+    H: Fn(RpcInvocation<'_, P>) -> R + Send + Sync,
+    P: Clone,
 {
-    AuthenticatedRpcHandler::new(authenticator, handler, metrics, method)
+    AuthenticatedRpcHandler::new(authenticator, handler, metrics, method, rate_limit)
+}
+
+type RpcHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
+type JsonRpcHandler = AuthenticatedRpcHandler<RpcHandlerFn, JsonRpcRequest>;
+
+const JSON_RPC_METHODS: &[(&str, WalletRpcMethod)] = &[
+    ("get_balance", WalletRpcMethod::JsonGetBalance),
+    ("list_utxos", WalletRpcMethod::JsonListUtxos),
+    ("list_txs", WalletRpcMethod::JsonListTransactions),
+    ("derive_address", WalletRpcMethod::JsonDeriveAddress),
+    ("create_tx", WalletRpcMethod::JsonCreateTransaction),
+    ("sign_tx", WalletRpcMethod::JsonSignTransaction),
+    ("broadcast", WalletRpcMethod::JsonBroadcast),
+    ("policy_preview", WalletRpcMethod::JsonPolicyPreview),
+    ("sync_status", WalletRpcMethod::JsonSyncStatus),
+    ("rescan", WalletRpcMethod::JsonRescan),
+];
+
+struct WalletRpcServer {
+    handlers: HashMap<&'static str, JsonRpcHandler>,
+    fallback: JsonRpcHandler,
+}
+
+impl WalletRpcServer {
+    fn new(
+        router: Arc<WalletRpcRouter>,
+        metrics: Arc<RuntimeMetrics>,
+        config: &WalletRuntimeConfig,
+    ) -> Self {
+        let mut handlers = HashMap::new();
+        for (name, method) in JSON_RPC_METHODS {
+            let handler =
+                Self::build_handler(Arc::clone(&router), Arc::clone(&metrics), config, *method);
+            handlers.insert(*name, handler);
+        }
+        let fallback = Self::build_handler(router, metrics, config, WalletRpcMethod::Unknown);
+        Self { handlers, fallback }
+    }
+
+    fn build_handler(
+        router: Arc<WalletRpcRouter>,
+        metrics: Arc<RuntimeMetrics>,
+        config: &WalletRuntimeConfig,
+        method: WalletRpcMethod,
+    ) -> JsonRpcHandler {
+        let closure: RpcHandlerFn =
+            Arc::new(move |invocation: RpcInvocation<'_, JsonRpcRequest>| {
+                router.handle(invocation.payload)
+            });
+        authenticated_handler::<_, JsonRpcRequest, _>(
+            StaticAuthenticator::new(config.auth_token.clone()),
+            closure,
+            metrics,
+            method,
+            config.requests_per_minute,
+        )
+    }
+
+    fn handler_for(&self, method: &str) -> &JsonRpcHandler {
+        self.handlers.get(method).unwrap_or(&self.fallback)
+    }
+}
+
+pub fn json_rpc_router(
+    wallet_router: Arc<WalletRpcRouter>,
+    metrics: Arc<RuntimeMetrics>,
+    config: &WalletRuntimeConfig,
+) -> Result<Router, ChainError> {
+    let server = Arc::new(WalletRpcServer::new(
+        wallet_router,
+        Arc::clone(&metrics),
+        config,
+    ));
+    let cors = build_cors_layer(config)?;
+    Ok(Router::new()
+        .route("/rpc", post(wallet_rpc_handler))
+        .with_state(server)
+        .layer(cors))
+}
+
+async fn wallet_rpc_handler(
+    State(server): State<Arc<WalletRpcServer>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request: JsonRpcRequest = match serde_json::from_slice(&body) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return rpc_error_response(
+                StatusCode::BAD_REQUEST,
+                None,
+                CODE_PARSE_ERROR,
+                format!("invalid JSON payload: {err}"),
+            );
+        }
+    };
+
+    let id = request.id.clone();
+    let method = request.method.clone();
+    let token_owned = bearer_token(&headers);
+    let invocation = RpcInvocation {
+        request: RpcRequest {
+            bearer_token: token_owned.as_deref(),
+        },
+        payload: request,
+    };
+
+    let handler = server.handler_for(method.as_str());
+    match handler.call(invocation) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(err) => rpc_error_response(err.status(), id, err.code(), err.to_string()),
+    }
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(AUTHORIZATION)?;
+    let value = value.to_str().ok()?;
+    let prefix = "Bearer ";
+    if value.starts_with(prefix) {
+        Some(value[prefix.len()..].to_string())
+    } else {
+        None
+    }
+}
+
+fn rpc_error_response(
+    status: StatusCode,
+    id: Option<Value>,
+    code: i32,
+    message: impl Into<String>,
+) -> Response {
+    let error = JsonRpcError::new(code, message, None);
+    (status, Json(JsonRpcResponse::error(id, error))).into_response()
+}
+
+fn build_cors_layer(config: &WalletRuntimeConfig) -> Result<CorsLayer, ChainError> {
+    let layer = CorsLayer::new()
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .allow_methods([Method::POST, Method::OPTIONS]);
+    if let Some(origin) = &config.allowed_origin {
+        let value = origin.parse::<HeaderValue>().map_err(|err| {
+            ChainError::Config(format!("invalid wallet RPC allowed origin: {err}"))
+        })?;
+        Ok(layer.allow_origin(value))
+    } else {
+        Ok(layer.allow_origin(Any))
+    }
 }
