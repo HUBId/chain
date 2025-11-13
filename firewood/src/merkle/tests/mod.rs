@@ -461,16 +461,30 @@ fn assert_branch_child_is_leaf<T: TrieReader>(
             "branch should direct traversal to child nibble {expected_child_nibble:#x}"
         );
 
-        let child_item = iter
+        let mut child_item = iter
             .next()
             .expect("branch child missing from path iterator")
             .expect("failed to read child node while iterating path");
 
-        assert_eq!(
-            child_item.key_nibbles.as_ref(),
-            child_nibbles.as_slice(),
-            "child node key did not match expected key"
-        );
+        while child_item.key_nibbles.as_ref() != child_nibbles.as_slice() {
+            expect_branch(&child_item);
+            let next_expected_index = child_item.key_nibbles.len();
+            let next_expected_nibble = child_nibbles
+                .get(next_expected_index)
+                .copied()
+                .expect("child key must extend through intermediate branch");
+            assert_eq!(
+                child_item.next_nibble,
+                Some(next_expected_nibble),
+                "intermediate branch should direct traversal to child nibble {next_expected_nibble:#x}"
+            );
+
+            child_item = iter
+                .next()
+                .expect("intermediate branch missing expected child")
+                .expect("failed to read intermediate child while iterating path");
+        }
+
         expect_leaf(&child_item);
         return;
     }

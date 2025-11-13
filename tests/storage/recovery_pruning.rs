@@ -110,11 +110,10 @@ fn leaked_area_fix_enqueues_and_reuses_free_blocks() {
         .flush_freelist()
         .expect("flush freelist after recovery");
 
-    let mutable_after_fix = NodeStore::<MutableProposal, _>::new(&committed)
-        .expect("create proposal after recovery");
-    let immutable_after_fix =
-        NodeStore::<Arc<ImmutableProposal>, _>::try_from(mutable_after_fix)
-            .expect("convert repaired proposal to immutable");
+    let mutable_after_fix =
+        NodeStore::<MutableProposal, _>::new(&committed).expect("create proposal after recovery");
+    let immutable_after_fix = NodeStore::<Arc<ImmutableProposal>, _>::try_from(mutable_after_fix)
+        .expect("convert repaired proposal to immutable");
     let recommitted = immutable_after_fix.as_committed(&committed);
     recommitted
         .flush_freelist()

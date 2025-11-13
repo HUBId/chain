@@ -63,7 +63,7 @@ pub use metrics::{
 pub use node::branch::ethhash::{InvalidRlpLength, RlpBytes};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    branch::{HashType, IntoHashType},
+    branch::{BranchChildError, HashType, IntoHashType},
     BranchNode, Child, Children, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{

@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{BranchNode, Child, Children, HashType, LeafNode, Node, Path};
+use crate::{BranchNode, Children, HashType, LeafNode, Node, Path};
 use smallvec::SmallVec;
 use std::convert::TryFrom;
 use std::fmt;
@@ -47,6 +47,18 @@ pub struct HashedBranchChildren<'a> {
 impl<'a> HashedBranchChildren<'a> {
     /// Attempts to wrap the given branch, returning an error when any child lacks a hash.
     pub fn try_new(branch: &'a BranchNode) -> Result<Self, MissingChildHashError> {
+        if let Err(err) = branch.children_hashes() {
+            let child_index = err.child_index();
+            #[cfg(debug_assertions)]
+            panic!(
+                "branch child at index {child_index} is missing a hash: {:?}",
+                branch.children[child_index].as_ref()
+            );
+
+            #[cfg(not(debug_assertions))]
+            return Err(MissingChildHashError::new(child_index));
+        }
+
         for (index, child) in branch.children.iter().enumerate() {
             if let Some(child) = child {
                 if child.hash().is_none() {
@@ -255,7 +267,10 @@ impl<'a> HashableNode for HashedNodeRef<'a> {
 
     fn child_hashes(&self) -> Children<HashType> {
         match self {
-            HashedNodeRef::Branch(branch) => branch.as_ref().children_hashes(),
+            HashedNodeRef::Branch(branch) => branch
+                .as_ref()
+                .children_hashes()
+                .expect("branch children hashes validated during construction"),
             HashedNodeRef::Leaf(_) => BranchNode::empty_children(),
         }
     }
@@ -294,6 +309,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Child;
 
     fn branch_with_unhashed_child() -> BranchNode {
         let mut branch = BranchNode {
@@ -301,13 +317,15 @@ mod tests {
             value: None,
             children: BranchNode::empty_children(),
         };
-        branch.update_child(
-            0,
-            Some(Child::Node(Node::Leaf(LeafNode {
-                partial_path: Path::new(),
-                value: Box::from([]),
-            }))),
-        );
+        branch
+            .update_child(
+                0,
+                Some(Child::Node(Node::Leaf(LeafNode {
+                    partial_path: Path::new(),
+                    value: Box::from([]),
+                }))),
+            )
+            .unwrap();
         branch
     }
 

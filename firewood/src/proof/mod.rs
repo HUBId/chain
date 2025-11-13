@@ -156,7 +156,12 @@ impl Hashable for ProofNode {
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
-            branch.children_hashes()
+            branch.children_hashes().unwrap_or_else(|err| {
+                panic!(
+                    "branch child at index {} missing hash while building proof node",
+                    err.child_index()
+                )
+            })
         } else {
             BranchNode::empty_children()
         };
