@@ -532,6 +532,8 @@ PY
             xtask_features: ""
           - name: io-uring
             xtask_features: "io-uring"
+          - name: ethhash
+            xtask_features: "ethhash"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -559,6 +561,8 @@ PY
             features: "backend-rpp-stark"
           - name: io-uring
             features: "io-uring"
+          - name: ethhash
+            features: "ethhash"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -567,6 +571,8 @@ PY
         with:
           shared-key: firewood-ffi-go-${{ matrix.name }}
       - name: Build Firewood FFI static library
+        env:
+          XTASK_FEATURES: ${{ matrix.features }}
         run: |
           set -euo pipefail
           if [ -n "${{ matrix.features }}" ]; then
@@ -576,6 +582,8 @@ PY
           fi
       - name: Run Go FFI tests
         working-directory: ffi
+        env:
+          XTASK_FEATURES: ${{ matrix.features }}
         run: |
           set -euo pipefail
           go test ./...
