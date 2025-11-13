@@ -150,6 +150,18 @@ fn run_unit_suites() -> Result<()> {
     apply_feature_flags(&mut command);
     run_command(command, "unit test suite")?;
 
+    let mut empty_behaviour = Command::new("cargo");
+    empty_behaviour
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-p2p")
+        .arg("--locked")
+        .arg("--test")
+        .arg("empty_behaviour");
+    apply_feature_flags(&mut empty_behaviour);
+    run_command(empty_behaviour, "rpp-p2p empty behaviour smoke")?;
+
     run_stwo_backend_matrix_tests()?;
     run_zsi_renewal_tests()?;
     run_rpp_fail_matrix_tests()
