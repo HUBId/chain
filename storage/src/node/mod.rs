@@ -518,8 +518,9 @@ impl Node {
                         let mut child_bytes = vec![0u8; BranchNode::MAX_CHILDREN * CHILD_BYTES];
                         serialized.read_exact(&mut child_bytes)?;
 
-                        for (child, chunk) in
-                            children.iter_mut().zip(child_bytes.chunks_exact(CHILD_BYTES))
+                        for (child, chunk) in children
+                            .iter_mut()
+                            .zip(child_bytes.chunks_exact(CHILD_BYTES))
                         {
                             let (address_slice, hash_slice) = chunk.split_at(ADDRESS_BYTES);
 
@@ -797,7 +798,11 @@ than 126 bytes as the length would be encoded in multiple bytes.
         let mut serialized = Vec::new();
         node.as_bytes(AreaIndex::MIN, &mut serialized);
 
-        let header_len = 2 + if cfg!(feature = "branch_factor_256") { 1 } else { 0 };
+        let header_len = 2 + if cfg!(feature = "branch_factor_256") {
+            1
+        } else {
+            0
+        };
         let truncated_len = header_len + BranchNode::MAX_CHILDREN * size_of::<u64>() - 1;
         assert!(truncated_len < serialized.len());
 

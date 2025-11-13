@@ -168,6 +168,48 @@ fn summarize_child_node(node: &Node) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+/// Errors that occur when accessing children of a [`BranchNode`].
+pub enum BranchChildError {
+    /// Encountered a child that has not been hashed yet.
+    #[error("branch child at index {child_index} is not hashed")]
+    NotHashed {
+        /// Index of the offending child.
+        child_index: usize,
+    },
+    /// Encountered a child whose address has not been assigned yet.
+    #[error("branch child at index {child_index} does not have a persisted address")]
+    AddressUnavailable {
+        /// Index of the offending child.
+        child_index: usize,
+    },
+}
+
+impl BranchChildError {
+    #[must_use]
+    /// Returns the index of the child that triggered this error.
+    pub const fn child_index(self) -> usize {
+        match self {
+            Self::NotHashed { child_index } | Self::AddressUnavailable { child_index } => {
+                child_index
+            }
+        }
+    }
+
+    #[must_use]
+    /// Creates a [`BranchChildError::NotHashed`] for `child_index`.
+    pub const fn child_not_hashed(child_index: usize) -> Self {
+        Self::NotHashed { child_index }
+    }
+
+    #[must_use]
+    /// Creates a [`BranchChildError::AddressUnavailable`] for `child_index`.
+    pub const fn address_unavailable(child_index: usize) -> Self {
+        Self::AddressUnavailable { child_index }
+    }
+}
+
 impl Child {
     /// Return a mutable reference to the underlying Node if the child
     /// is a [`Child::Node`] variant, otherwise None.
@@ -601,35 +643,49 @@ impl BranchNode {
 
     /// Update the child at `child_index` to be `new_child_addr`.
     /// If `new_child_addr` is None, the child is removed.
-    pub fn update_child(&mut self, child_index: u8, new_child: Option<Child>) {
+    pub fn update_child(
+        &mut self,
+        child_index: u8,
+        new_child: Option<Child>,
+    ) -> Result<(), BranchChildError> {
         let child = self
             .children
             .get_mut(child_index as usize)
             .expect("child_index is in bounds");
 
         *child = new_child;
+        Ok(())
     }
 
     /// Helper to iterate over only valid children
     ///
-    /// ## Panics
+    /// # Errors
     ///
-    /// Note: This function will panic if any child is a [`Child::Node`] variant
-    /// as it is still mutable and has not been hashed yet. Unlike
-    /// [`BranchNode::children_addresses`], this will _not_ panic if the child
-    /// is an unpersisted [`Child::MaybePersisted`].
+    /// Returns [`BranchChildError::NotHashed`] if any child remains a
+    /// [`Child::Node`], meaning it has not been hashed yet. Unlike
+    /// [`BranchNode::children_addresses`], this does _not_ error on
+    /// unpersisted [`Child::MaybePersisted`] children.
     #[track_caller]
     pub(crate) fn children_iter(
         &self,
-    ) -> impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone {
-        self.children
+    ) -> Result<impl Iterator<Item = (usize, (LinearAddress, &HashType))> + Clone, BranchChildError>
+    {
+        if let Some((index, _)) = self
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| matches!(child, Some(Child::Node(_))))
+        {
+            return Err(BranchChildError::child_not_hashed(index));
+        }
+
+        Ok(self
+            .children
             .iter()
             .enumerate()
             .filter_map(|(i, child)| match child {
                 None => None,
-                Some(Child::Node(_)) => {
-                    panic!("attempted to iterate over an in-memory mutable node")
-                }
+                Some(Child::Node(_)) => None,
                 Some(Child::AddressWithHash(address, hash)) => Some((i, (*address, hash))),
                 Some(Child::MaybePersisted(maybe_persisted, hash)) => {
                     // For MaybePersisted, we need the address if it's persisted
@@ -637,7 +693,7 @@ impl BranchNode {
                         .as_linear_address()
                         .map(|addr| (i, (addr, hash)))
                 }
-            })
+            }))
     }
 
     /// Returns a set of hashes for each child that has a hash set.
@@ -645,28 +701,25 @@ impl BranchNode {
     /// The index of the hash in the returned array corresponds to the index of the child
     /// in the branch node.
     ///
-    /// ## Panics
+    /// # Errors
     ///
-    /// Note: This function will panic if any child is a [`Child::Node`] variant
-    /// as it is still mutable and has not been hashed yet.
-    ///
-    /// This is an unintentional side effect of the current implementation. Future
-    /// changes will have this check implemented structurally to prevent such panics.
+    /// Returns [`BranchChildError::NotHashed`] if any child is still stored as
+    /// an in-memory [`Child::Node`] that has not been hashed yet.
     #[must_use]
     #[track_caller]
-    pub fn children_hashes(&self) -> Children<HashType> {
+    pub fn children_hashes(&self) -> Result<Children<HashType>, BranchChildError> {
         let mut hashes = Self::empty_children();
-        for (child, slot) in self.children.iter().zip(hashes.iter_mut()) {
+        for (index, (child, slot)) in self.children.iter().zip(hashes.iter_mut()).enumerate() {
             match child {
                 None => {}
                 Some(Child::Node(_)) => {
-                    panic!("attempted to get the hash of an in-memory mutable node")
+                    return Err(BranchChildError::child_not_hashed(index));
                 }
                 Some(Child::AddressWithHash(_, hash)) => _ = slot.replace(hash.clone()),
                 Some(Child::MaybePersisted(_, hash)) => _ = slot.replace(hash.clone()),
             }
         }
-        hashes
+        Ok(hashes)
     }
 
     /// Returns a set of addresses for each child that has an address set.
@@ -674,24 +727,21 @@ impl BranchNode {
     /// The index of the address in the returned array corresponds to the index of the child
     /// in the branch node.
     ///
-    /// ## Panics
+    /// # Errors
     ///
-    /// Note: This function will panic if:
-    ///   - Any child is a [`Child::Node`] variant as it does not have an address.
-    ///   - Any child is a [`Child::MaybePersisted`] variant that is not yet
-    ///     persisted, as we do not yet know its address.
-    ///
-    /// This is an unintentional side effect of the current implementation. Future
-    /// changes will have this check implemented structurally to prevent such panics.
+    /// Returns [`BranchChildError::NotHashed`] if any child remains a
+    /// [`Child::Node`] and [`BranchChildError::AddressUnavailable`] when a
+    /// [`Child::MaybePersisted`] child has not been persisted yet and therefore
+    /// lacks an address.
     #[must_use]
     #[track_caller]
-    pub fn children_addresses(&self) -> Children<LinearAddress> {
+    pub fn children_addresses(&self) -> Result<Children<LinearAddress>, BranchChildError> {
         let mut addrs = Self::empty_children();
-        for (child, slot) in self.children.iter().zip(addrs.iter_mut()) {
+        for (index, (child, slot)) in self.children.iter().zip(addrs.iter_mut()).enumerate() {
             match child {
                 None => {}
                 Some(Child::Node(_)) => {
-                    panic!("attempted to get the address of an in-memory mutable node")
+                    return Err(BranchChildError::child_not_hashed(index));
                 }
                 Some(Child::AddressWithHash(address, _)) => _ = slot.replace(*address),
                 Some(Child::MaybePersisted(maybe_persisted, _)) => {
@@ -699,12 +749,12 @@ impl BranchNode {
                     if let Some(addr) = maybe_persisted.as_linear_address() {
                         slot.replace(addr);
                     } else {
-                        panic!("attempted to get the address of an unpersisted MaybePersistedNode")
+                        return Err(BranchChildError::address_unavailable(index));
                     }
                 }
             }
         }
-        addrs
+        Ok(addrs)
     }
 }
 
@@ -720,20 +770,24 @@ mod tests {
             children: BranchNode::empty_children(),
         };
 
-        parent.update_child(
-            0,
-            Some(Child::Node(Node::Leaf(LeafNode {
-                partial_path: Path::from([0x1, 0x2, 0x3]),
-                value: vec![0xaa, 0xbb, 0xcc].into_boxed_slice(),
-            }))),
-        );
+        parent
+            .update_child(
+                0,
+                Some(Child::Node(Node::Leaf(LeafNode {
+                    partial_path: Path::from([0x1, 0x2, 0x3]),
+                    value: vec![0xaa, 0xbb, 0xcc].into_boxed_slice(),
+                }))),
+            )
+            .unwrap();
 
         let child_branch = BranchNode {
             partial_path: Path::from([0x0a]),
             value: Some(vec![0xde, 0xad, 0xbe, 0xef].into_boxed_slice()),
             children: BranchNode::empty_children(),
         };
-        parent.update_child(1, Some(Child::Node(Node::from(child_branch))));
+        parent
+            .update_child(1, Some(Child::Node(Node::from(child_branch))))
+            .unwrap();
 
         let debug_output = format!("{:?}", parent);
 
@@ -745,6 +799,84 @@ mod tests {
             debug_output.contains("branch path=0xa"),
             "expected branch summary in {debug_output}"
         );
+    }
+
+    #[test]
+    fn children_iter_errors_on_unhashed_child() {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+
+        branch
+            .update_child(
+                0,
+                Some(Child::Node(Node::Leaf(LeafNode {
+                    partial_path: Path::new(),
+                    value: Box::from([]),
+                }))),
+            )
+            .unwrap();
+
+        let result = branch.children_iter();
+        match result {
+            Err(BranchChildError::NotHashed { child_index }) => assert_eq!(child_index, 0),
+            Err(other) => panic!("unexpected error {other:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn children_hashes_errors_on_unhashed_child() {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+
+        branch
+            .update_child(
+                1,
+                Some(Child::Node(Node::Leaf(LeafNode {
+                    partial_path: Path::new(),
+                    value: Box::from([]),
+                }))),
+            )
+            .unwrap();
+
+        let result = branch.children_hashes();
+        match result {
+            Err(BranchChildError::NotHashed { child_index }) => assert_eq!(child_index, 1),
+            Err(other) => panic!("unexpected error {other:?}"),
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn children_addresses_errors_on_unpersisted_child() {
+        let mut branch = BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        };
+
+        let child = Child::MaybePersisted(
+            MaybePersistedNode::from(SharedNode::new(Node::Leaf(LeafNode {
+                partial_path: Path::new(),
+                value: Box::from([0u8]),
+            }))),
+            HashType::empty(),
+        );
+
+        branch.update_child(2, Some(child)).unwrap();
+
+        let result = branch.children_addresses();
+        match result {
+            Err(BranchChildError::AddressUnavailable { child_index }) => assert_eq!(child_index, 2),
+            Err(other) => panic!("unexpected error {other:?}"),
+            Ok(_) => panic!("expected error"),
+        }
     }
 }
 

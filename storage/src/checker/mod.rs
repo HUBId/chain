@@ -408,7 +408,18 @@ where
         let mut errors = Vec::new();
         match node.as_ref() {
             Node::Branch(branch) => {
-                let num_children = branch.children_iter().count();
+                let children_iter = match branch.children_iter() {
+                    Ok(children) => children,
+                    Err(err) => {
+                        return Err(vec![CheckerError::MissingChildHash {
+                            path: current_path_prefix.clone(),
+                            address: subtrie_root_address,
+                            parent,
+                            child_index: err.child_index(),
+                        }]);
+                    }
+                };
+                let num_children = children_iter.clone().count();
                 {
                     // update the branch area count
                     let branch_area_count = trie_stats
@@ -434,7 +445,7 @@ where
                 }
 
                 // this is an internal node, traverse the children
-                for (nibble, (address, hash)) in branch.children_iter() {
+                for (nibble, (address, hash)) in children_iter {
                     let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
                     let mut child_path_prefix = current_path_prefix.clone();
                     child_path_prefix.0.push(nibble as u8);
