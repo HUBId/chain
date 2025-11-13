@@ -48,3 +48,14 @@ pub mod zsi;
 
 /// Wallet-facing proof helpers.
 pub mod proofs;
+
+/// Core wallet engine primitives.
+pub mod engine;
+
+/// High-level wallet facade consumed by the runtime.
+pub mod wallet;
+
+pub use engine::{
+    DraftInput, DraftOutput, DraftTransaction, DerivationPath, SpendModel, WalletBalance,
+    WalletEngine,
+};
