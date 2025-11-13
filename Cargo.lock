@@ -6797,6 +6797,7 @@ name = "rpp-wallet"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "bincode",
  "clap",
  "ed25519-dalek",
