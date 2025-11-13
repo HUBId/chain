@@ -21,7 +21,11 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::config::ElectrsConfig;
+use rpp_wallet::config::electrs::ElectrsConfig;
+use rpp_wallet::config::wallet::{
+    WalletEngineConfig as WalletEngineSettings, WalletFeeConfig as WalletFeeSettings,
+    WalletPolicyConfig as WalletPolicySettings, WalletProverConfig as WalletProverSettings,
+};
 
 use crate::consensus_engine::governance::TimetokeRewardGovernance;
 use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
@@ -2849,6 +2853,56 @@ target_validator_count = 77
     }
 
     #[test]
+    fn wallet_config_defaults_cover_engine_policy_and_fees() {
+        let config = WalletConfig::default();
+
+        assert_eq!(
+            config.wallet.engine,
+            WalletEngineSettings::default(),
+            "engine defaults should match the wallet module"
+        );
+        assert_eq!(
+            config.wallet.policy,
+            WalletPolicySettings::default(),
+            "policy defaults should match the wallet module"
+        );
+        assert_eq!(
+            config.wallet.fees,
+            WalletFeeSettings::default(),
+            "fee defaults should match the wallet module"
+        );
+        assert_eq!(
+            config.wallet.prover,
+            WalletProverSettings::default(),
+            "prover defaults should match the wallet module"
+        );
+    }
+
+    #[test]
+    fn wallet_config_validation_rejects_invalid_policy_and_fees() {
+        let mut config = WalletConfig::default();
+        config.wallet.policy.external_gap_limit = 0;
+        let error = config.validate().expect_err("gap limit must be validated");
+        match error {
+            ChainError::Config(message) => {
+                assert!(message.contains("wallet.policy.external_gap_limit"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        config.wallet.policy.external_gap_limit = 20;
+        config.wallet.fees.min_sats_per_vbyte = 5;
+        config.wallet.fees.max_sats_per_vbyte = 4;
+        let error = config.validate().expect_err("fee bounds must be validated");
+        match error {
+            ChainError::Config(message) => {
+                assert!(message.contains("wallet.fees.min_sats_per_vbyte"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn hsm_secrets_backend_reports_unavailable_error() {
         let backend = SecretsBackendConfig::Hsm(HsmKeystoreConfig::default());
         let error = backend
@@ -2908,6 +2962,10 @@ pub struct WalletServiceConfig {
     pub keys: WalletKeysConfig,
     pub budgets: WalletBudgetsConfig,
     pub rescan: WalletRescanConfig,
+    pub engine: WalletEngineSettings,
+    pub policy: WalletPolicySettings,
+    pub fees: WalletFeeSettings,
+    pub prover: WalletProverSettings,
 }
 
 impl Default for WalletServiceConfig {
@@ -2918,6 +2976,10 @@ impl Default for WalletServiceConfig {
             keys: WalletKeysConfig::default(),
             budgets: WalletBudgetsConfig::default(),
             rescan: WalletRescanConfig::default(),
+            engine: WalletEngineSettings::default(),
+            policy: WalletPolicySettings::default(),
+            fees: WalletFeeSettings::default(),
+            prover: WalletProverSettings::default(),
         }
     }
 }
@@ -3200,6 +3262,71 @@ impl Default for WalletRescanConfig {
     }
 }
 
+fn validate_wallet_engine(config: &WalletEngineSettings) -> ChainResult<()> {
+    if config.data_dir.as_os_str().is_empty() {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.engine.data_dir must not be empty".into(),
+        ));
+    }
+    if config.keystore_path.as_os_str().is_empty() {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.engine.keystore_path must not be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_policy(config: &WalletPolicySettings) -> ChainResult<()> {
+    if config.external_gap_limit == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.policy.external_gap_limit must be greater than 0".into(),
+        ));
+    }
+    if config.internal_gap_limit == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.policy.internal_gap_limit must be greater than 0".into(),
+        ));
+    }
+    if config.min_confirmations == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.policy.min_confirmations must be greater than 0".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_fees(config: &WalletFeeSettings) -> ChainResult<()> {
+    if config.min_sats_per_vbyte == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.fees.min_sats_per_vbyte must be greater than 0".into(),
+        ));
+    }
+    if config.max_sats_per_vbyte == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.fees.max_sats_per_vbyte must be greater than 0".into(),
+        ));
+    }
+    if config.min_sats_per_vbyte > config.max_sats_per_vbyte {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.fees.min_sats_per_vbyte must not exceed max_sats_per_vbyte"
+                .into(),
+        ));
+    }
+    if config.default_sats_per_vbyte < config.min_sats_per_vbyte
+        || config.default_sats_per_vbyte > config.max_sats_per_vbyte
+    {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.fees.default_sats_per_vbyte must fall within the configured min/max bounds"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_prover(_config: &WalletProverSettings) -> ChainResult<()> {
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WalletNodeRuntimeConfig {
@@ -3294,6 +3421,10 @@ impl WalletConfig {
         if let Some(parent) = self.wallet.keys.key_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        fs::create_dir_all(&self.wallet.engine.data_dir)?;
+        if let Some(parent) = self.wallet.engine.keystore_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         #[cfg(feature = "vendor_electrs")]
         self.ensure_electrs_directories()?;
         Ok(())
@@ -3304,6 +3435,10 @@ impl WalletConfig {
         self.wallet.keys.validate()?;
         self.wallet.budgets.validate()?;
         self.wallet.rescan.validate()?;
+        validate_wallet_engine(&self.wallet.engine)?;
+        validate_wallet_policy(&self.wallet.policy)?;
+        validate_wallet_fees(&self.wallet.fees)?;
+        validate_wallet_prover(&self.wallet.prover)?;
         self.wallet.auth.validate(false)?;
         if !self.node.embedded && self.node.gossip_endpoints.is_empty() {
             return Err(ChainError::Config(

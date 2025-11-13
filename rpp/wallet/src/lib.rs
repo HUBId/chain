@@ -29,7 +29,6 @@ pub use prover_stwo_backend as stwo;
 #[path = "../../rpp/chain/src/stwo_stub.rs"]
 pub mod stwo;
 
-#[cfg(feature = "vendor_electrs")]
 pub mod config;
 
 /// Zugriff auf optionale Drittanbieter-Integrationen.

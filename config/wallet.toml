@@ -28,6 +28,25 @@ auto_trigger = false
 lookback_blocks = 2880
 chunk_size = 64
 
+[wallet.engine]
+data_dir = "./data/wallet"
+keystore_path = "./data/wallet/keystore.toml"
+birthday_height = null
+
+[wallet.policy]
+external_gap_limit = 20
+internal_gap_limit = 20
+min_confirmations = 1
+
+[wallet.fees]
+default_sats_per_vbyte = 5
+min_sats_per_vbyte = 1
+max_sats_per_vbyte = 200
+
+[wallet.prover]
+enabled = false
+mock_fallback = true
+
 [node]
 embedded = false
 gossip_endpoints = ["/ip4/127.0.0.1/tcp/7600"]
