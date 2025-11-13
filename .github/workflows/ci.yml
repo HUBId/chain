@@ -522,16 +522,26 @@ PY
           path: artifacts/runtime-smoke
 
   firewood-unit:
-    name: Firewood unit feature matrix
+    name: Firewood unit feature matrix (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            xtask_features: ""
+          - name: io-uring
+            xtask_features: "io-uring"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: firewood-unit
+          shared-key: firewood-unit-${{ matrix.name }}
       - name: Run Firewood unit tests across branch factors
+        env:
+          XTASK_FEATURES: ${{ matrix.xtask_features }}
         run: |
           set -euo pipefail
           cargo xtask test-firewood
@@ -547,6 +557,8 @@ PY
             features: ""
           - name: backend-rpp-stark
             features: "backend-rpp-stark"
+          - name: io-uring
+            features: "io-uring"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -579,6 +591,8 @@ PY
             features: ""
           - name: backend-rpp-stark
             features: "backend-rpp-stark"
+          - name: io-uring
+            features: "io-uring"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

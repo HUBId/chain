@@ -254,6 +254,17 @@ fn run_firewood_feature_matrix() -> Result<()> {
         .arg("--locked");
     run_command(default, "firewood unit tests (default branch factor)")?;
 
+    let mut io_uring = Command::new("cargo");
+    io_uring
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("firewood")
+        .arg("--locked")
+        .arg("--features")
+        .arg("io-uring");
+    run_command(io_uring, "firewood unit tests (io-uring)")?;
+
     let mut branch_factor_256 = Command::new("cargo");
     branch_factor_256
         .current_dir(&root)
