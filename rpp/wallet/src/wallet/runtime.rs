@@ -106,7 +106,19 @@ impl WalletSyncCoordinator {
     }
 
     pub fn latest_status(&self) -> Option<SyncStatus> {
-        lock_state(&self.state).last_status.clone()
+        let state = lock_state(&self.state);
+        state.last_status.as_ref().map(|status| {
+            let mut status = status.clone();
+            if let Some(pending) = state.pending_rescan {
+                let upper = status
+                    .checkpoints
+                    .resume_height
+                    .unwrap_or(status.latest_height)
+                    .max(pending);
+                status.pending_ranges.push((pending, upper));
+            }
+            status
+        })
     }
 
     pub fn last_error(&self) -> Option<WalletSyncError> {
@@ -356,7 +368,7 @@ mod tests {
             assert!(recorded.contains(&10));
         }
         if let Some(status) = coordinator.latest_status() {
-            assert!(matches!(status.pending_range, Some((10, 11))));
+            assert_eq!(status.pending_ranges, vec![(10, 11)]);
         } else {
             panic!("missing sync status");
         }

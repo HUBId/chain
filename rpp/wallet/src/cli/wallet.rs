@@ -23,7 +23,7 @@ use crate::rpc::dto::{
     GetPolicyResponse, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, PendingLockDto,
     PolicyPreviewResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
     RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, JSONRPC_VERSION,
+    SyncCheckpointDto, SyncModeDto, SyncStatusResponse, JSONRPC_VERSION,
 };
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
@@ -421,19 +421,48 @@ impl SyncCommand {
         let status = client.sync_status().await?;
         println!("Synchronisation status\n");
         println!("  Syncing           : {}", format_bool(status.syncing));
+        if let Some(mode) = status.mode.as_ref() {
+            println!("  Mode              : {}", format_sync_mode(mode));
+        }
         if let Some(height) = status.latest_height {
             println!("  Latest height     : {height}");
         }
-        if let Some(range) = status.pending_range {
-            println!("  Pending range     : {} → {}", range.0, range.1);
+        if !status.pending_ranges.is_empty() {
+            for (index, range) in status.pending_ranges.iter().enumerate() {
+                let label = if index == 0 {
+                    "  Pending ranges   :"
+                } else {
+                    "                     "
+                };
+                println!("{label} {} → {}", range.0, range.1);
+            }
         }
         if let Some(scripthashes) = status.scanned_scripthashes {
             println!("  Scanned scripts   : {scripthashes}");
+        }
+        if let Some(ts) = status.last_rescan_timestamp {
+            println!("  Last rescan (ts)  : {ts}");
+        }
+        if let Some(checkpoints) = status.checkpoints.as_ref() {
+            if let Some(ts) = checkpoints.last_full_rescan_ts {
+                println!("  Last full rescan  : {ts}");
+            }
+            if let Some(ts) = checkpoints.last_compact_scan_ts {
+                println!("  Last compact scan : {ts}");
+            }
         }
         if let Some(error) = status.last_error {
             println!("  Last error        : {error}");
         }
         Ok(())
+    }
+}
+
+fn format_sync_mode(mode: &SyncModeDto) -> String {
+    match mode {
+        SyncModeDto::Full { start_height } => format!("full (from {start_height})"),
+        SyncModeDto::Resume { from_height } => format!("resume (from {from_height})"),
+        SyncModeDto::Rescan { from_height } => format!("rescan (from {from_height})"),
     }
 }
 
