@@ -7,7 +7,9 @@ use crate::db::{PendingLock, TxCacheEntry, UtxoRecord, WalletStore};
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
-use crate::engine::{DraftTransaction, EngineError, SpendModel, WalletBalance, WalletEngine};
+use crate::engine::{
+    DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
+};
 use crate::indexer::IndexerClient;
 use crate::node_client::{ChainHead, NodeClient, NodeClientError};
 use crate::proof_backend::Blake2sHasher;
@@ -104,7 +106,9 @@ impl Wallet {
         amount: u128,
         fee_rate: Option<u64>,
     ) -> Result<DraftTransaction, WalletError> {
-        Ok(self.engine.create_draft(to, amount, fee_rate)?)
+        Ok(self
+            .engine
+            .create_draft(to, amount, fee_rate, Some(self.node_client.as_ref()))?)
     }
 
     pub fn pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
@@ -186,6 +190,10 @@ impl Wallet {
 
     pub fn engine_handle(&self) -> Arc<WalletEngine> {
         Arc::clone(&self.engine)
+    }
+
+    pub fn latest_fee_quote(&self) -> Option<FeeQuote> {
+        self.engine.fee_estimator().last_quote()
     }
 
     pub fn start_sync_coordinator(

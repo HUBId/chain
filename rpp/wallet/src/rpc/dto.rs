@@ -1,10 +1,11 @@
 use crate::config::wallet::PolicyTierHooks;
+use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonRpcRequest {
     #[serde(default)]
     pub jsonrpc: Option<String>,
@@ -102,7 +103,7 @@ pub struct ListTransactionsResponse {
     pub entries: Vec<TransactionEntryDto>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeriveAddressParams {
     #[serde(default)]
     pub change: bool,
@@ -113,7 +114,7 @@ pub struct DeriveAddressResponse {
     pub address: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateTxParams {
     pub to: String,
     pub amount: u128,
@@ -158,6 +159,8 @@ pub struct CreateTxResponse {
     pub draft_id: String,
     pub fee_rate: u64,
     pub fee: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_source: Option<FeeEstimateSourceDto>,
     pub total_input_value: u128,
     pub total_output_value: u128,
     pub spend_model: DraftSpendModelDto,
@@ -166,7 +169,54 @@ pub struct CreateTxResponse {
     pub locks: Vec<PendingLockDto>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FeeEstimateSourceDto {
+    Override,
+    Node {
+        congestion: FeeCongestionDto,
+        samples: usize,
+    },
+    ConfigFallback,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeeCongestionDto {
+    Low,
+    Moderate,
+    High,
+    Unknown,
+}
+
+impl From<&FeeEstimateSource> for FeeEstimateSourceDto {
+    fn from(source: &FeeEstimateSource) -> Self {
+        match source {
+            FeeEstimateSource::Override => FeeEstimateSourceDto::Override,
+            FeeEstimateSource::ConfigFallback => FeeEstimateSourceDto::ConfigFallback,
+            FeeEstimateSource::Node {
+                congestion,
+                samples,
+            } => FeeEstimateSourceDto::Node {
+                congestion: (*congestion).into(),
+                samples: *samples,
+            },
+        }
+    }
+}
+
+impl From<FeeCongestionLevel> for FeeCongestionDto {
+    fn from(level: FeeCongestionLevel) -> Self {
+        match level {
+            FeeCongestionLevel::Low => FeeCongestionDto::Low,
+            FeeCongestionLevel::Moderate => FeeCongestionDto::Moderate,
+            FeeCongestionLevel::High => FeeCongestionDto::High,
+            FeeCongestionLevel::Unknown => FeeCongestionDto::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SignTxParams {
     pub draft_id: String,
 }
@@ -182,7 +232,7 @@ pub struct SignTxResponse {
     pub locks: Vec<PendingLockDto>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BroadcastParams {
     pub draft_id: String,
 }
@@ -205,7 +255,7 @@ pub struct PolicyPreviewResponse {
     pub tier_hooks: PolicyTierHooks,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncStatusParams;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -221,7 +271,7 @@ pub struct SyncStatusResponse {
     pub last_error: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RescanParams {
     pub from_height: u64,
 }
@@ -391,6 +441,7 @@ mod tests {
             draft_id: "draft1".to_string(),
             fee_rate: 2,
             fee: 4,
+            fee_source: None,
             total_input_value: 104,
             total_output_value: 100,
             spend_model: DraftSpendModelDto::Exact { amount: 100 },
