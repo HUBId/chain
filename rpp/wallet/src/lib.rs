@@ -52,6 +52,9 @@ pub mod proofs;
 /// Core wallet engine primitives.
 pub mod engine;
 
+/// Abstractions over execution node connectivity.
+pub mod node_client;
+
 /// High-level wallet facade consumed by the runtime.
 pub mod wallet;
 
@@ -59,3 +62,4 @@ pub use engine::{
     DraftInput, DraftOutput, DraftTransaction, DerivationPath, SpendModel, WalletBalance,
     WalletEngine,
 };
+pub use node_client::{ChainHead, NodeClient, NodeClientError, StubNodeClient};

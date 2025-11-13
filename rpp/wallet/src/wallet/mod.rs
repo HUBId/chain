@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use anyhow::Result as AnyResult;
-
 use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
 use crate::db::{TxCacheEntry, UtxoRecord, WalletStore};
-use crate::engine::signing::{build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver};
+use crate::engine::signing::{
+    build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
+};
 use crate::engine::{DraftTransaction, EngineError, WalletBalance, WalletEngine};
+use crate::node_client::{ChainHead, NodeClient, NodeClientError};
+use rpp::runtime::node::MempoolStatus;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
@@ -14,12 +16,7 @@ pub enum WalletError {
     #[error("prover error: {0}")]
     Prover(#[from] EngineProverError),
     #[error("node error: {0}")]
-    Node(#[from] anyhow::Error),
-}
-
-pub trait NodeClient: Send + Sync {
-    fn broadcast(&self, draft: &DraftTransaction) -> AnyResult<()>;
-    fn rescan(&self) -> AnyResult<()>;
+    Node(#[from] NodeClientError),
 }
 
 pub struct Wallet {
@@ -90,13 +87,20 @@ impl Wallet {
     }
 
     pub fn broadcast(&self, draft: &DraftTransaction) -> Result<(), WalletError> {
-        self.node_client.broadcast(draft)?;
+        self.node_client.submit_tx(draft)?;
         Ok(())
     }
 
-    pub fn rescan(&self) -> Result<(), WalletError> {
-        self.node_client.rescan()?;
-        Ok(())
+    pub fn estimate_fee(&self, confirmation_target: u16) -> Result<u64, WalletError> {
+        Ok(self.node_client.estimate_fee(confirmation_target)?)
+    }
+
+    pub fn chain_head(&self) -> Result<ChainHead, WalletError> {
+        Ok(self.node_client.chain_head()?)
+    }
+
+    pub fn mempool_status(&self) -> Result<MempoolStatus, WalletError> {
+        Ok(self.node_client.mempool_status()?)
     }
 
     pub fn store(&self) -> Arc<WalletStore> {
@@ -107,4 +111,3 @@ impl Wallet {
         &self.engine
     }
 }
-
