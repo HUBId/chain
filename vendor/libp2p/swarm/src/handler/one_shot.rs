@@ -20,7 +20,7 @@
 
 use std::{
     error,
-    fmt::Debug,
+    fmt,
     task::{Context, Poll},
     time::Duration,
 };
@@ -37,7 +37,6 @@ use crate::{
 };
 
 /// A [`ConnectionHandler`] that opens a new substream for each request.
-// TODO: Debug
 pub struct OneShotHandler<TInbound, TOutbound, TEvent>
 where
     TOutbound: OutboundUpgradeSend,
@@ -52,6 +51,20 @@ where
     dial_negotiated: u32,
     /// The configuration container for the handler
     config: OneShotHandlerConfig,
+}
+
+impl<TInbound, TOutbound, TEvent> fmt::Debug for OneShotHandler<TInbound, TOutbound, TEvent>
+where
+    TOutbound: OutboundUpgradeSend,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OneShotHandler")
+            .field("dial_queue_len", &self.dial_queue.len())
+            .field("dial_negotiated", &self.dial_negotiated)
+            .field("pending_requests", &self.pending_requests())
+            .field("config", &self.config)
+            .finish()
+    }
 }
 
 impl<TInbound, TOutbound, TEvent> OneShotHandler<TInbound, TOutbound, TEvent>
@@ -115,12 +128,12 @@ where
 impl<TInbound, TOutbound, TEvent> ConnectionHandler for OneShotHandler<TInbound, TOutbound, TEvent>
 where
     TInbound: InboundUpgradeSend + Send + 'static,
-    TOutbound: Debug + OutboundUpgradeSend,
+    TOutbound: fmt::Debug + OutboundUpgradeSend,
     TInbound::Output: Into<TEvent>,
     TOutbound::Output: Into<TEvent>,
     TOutbound::Error: error::Error + Send + 'static,
     SubstreamProtocol<TInbound, ()>: Clone,
-    TEvent: Debug + Send + 'static,
+    TEvent: fmt::Debug + Send + 'static,
 {
     type FromBehaviour = TOutbound;
     type ToBehaviour = Result<TEvent, StreamUpgradeError<TOutbound::Error>>;
@@ -209,5 +222,31 @@ impl Default for OneShotHandlerConfig {
             outbound_substream_timeout: Duration::from_secs(10),
             max_dial_negotiated: 8,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libp2p_core::upgrade::DeniedUpgrade;
+
+    #[test]
+    fn debug_includes_queue_and_pending_counts() {
+        let mut handler = OneShotHandler::<DeniedUpgrade, DeniedUpgrade, ()>::new(
+            SubstreamProtocol::new(DeniedUpgrade, ()),
+            OneShotHandlerConfig {
+                outbound_substream_timeout: Duration::from_secs(5),
+                max_dial_negotiated: 3,
+            },
+        );
+
+        handler.send_request(DeniedUpgrade);
+        handler.send_request(DeniedUpgrade);
+
+        let debug = format!("{:?}", handler);
+
+        assert!(debug.contains("dial_queue_len: 2"));
+        assert!(debug.contains("pending_requests: 2"));
+        assert!(debug.contains("max_dial_negotiated: 3"));
     }
 }
