@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 #[cfg(feature = "ethhash")]
-use firewood_storage::node::branch::ethhash::RlpBytes;
+use firewood_storage::RlpBytes;
 use firewood_storage::ValueDigest;
 use integer_encoding::VarInt;
 
