@@ -35,7 +35,7 @@ prover-stwo-simd = [
 prover-mock = [
     "prover-backend-interface/prover-mock",
     "rpp-consensus/prover-mock",
-    "rpp-wallet?/prover-mock",
+    "rpp-wallet/prover-mock",
 ]
 backend-plonky3 = [
     "dep:p3-air",
@@ -57,11 +57,8 @@ backend-plonky3-gpu = [
     "plonky3-backend/plonky3-gpu",
     "prover-backend-interface/backend-plonky3-gpu",
 ]
-backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet?/backend-rpp-stark"]
-vendor_electrs = [
-    "dep:rpp-wallet",
-    "rpp-wallet/vendor_electrs",
-]
+backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet/backend-rpp-stark"]
+vendor_electrs = ["rpp-wallet/vendor_electrs"]
 
 [dependencies]
 anyhow = "=1.0.100"
@@ -95,7 +92,7 @@ rpp-crypto-vrf = { path = "../crypto-vrf" }
 rpp-p2p = { path = "../p2p" }
 rpp-identity-tree = { path = "../identity-tree" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
-rpp-wallet = { path = "../wallet", default-features = false, optional = true }
+rpp-wallet = { path = "../wallet", default-features = false }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 semver = "=1.0.27"
