@@ -6,7 +6,14 @@ use crate::v2::api::OptionalHashKeyExt;
 
 use super::*;
 use ethereum_types::H256;
-use firewood_storage::{BranchNode, HashType, NibblesIterator, RlpBytes, TrieHash, ValueDigest};
+use std::convert::TryFrom;
+use std::sync::Arc;
+
+use firewood_storage::{
+    noop_storage_metrics, BranchNode, Child, HashType, ImmutableProposal, LeafNode,
+    MaybePersistedNode, MemStore, NibblesIterator, Node, NodeStore, Path, RlpBytes, SharedNode,
+    TrieHash, ValueDigest,
+};
 use hash_db::Hasher;
 use plain_hasher::PlainHasher;
 use rlp::RlpStream;
@@ -291,6 +298,87 @@ fn proof_accepts_account_branch_with_inline_child() {
     assert_eq!(
         result,
         Some(ValueDigest::Value(account_placeholder.as_slice()))
+    );
+}
+
+#[test]
+fn account_branch_with_missing_persisted_child_address_is_rejected() {
+    let storage = Arc::new(MemStore::new(Vec::new()));
+    let mut proposal = NodeStore::new_empty_proposal(storage, noop_storage_metrics());
+
+    let mut account_branch = BranchNode {
+        partial_path: Path::from(vec![0u8; 64]),
+        value: None,
+        children: BranchNode::empty_children(),
+    };
+
+    let unpersisted_leaf = Node::Leaf(LeafNode {
+        partial_path: Path::new(),
+        value: vec![0u8].into_boxed_slice(),
+    });
+    let maybe_child = MaybePersistedNode::from(SharedNode::new(unpersisted_leaf));
+
+    account_branch.children[0] = Some(Child::MaybePersisted(
+        maybe_child,
+        HashType::from(TrieHash::empty()),
+    ));
+
+    proposal
+        .root_mut()
+        .replace(Node::Branch(Box::new(account_branch)));
+
+    let err = NodeStore::<Arc<ImmutableProposal>, MemStore>::try_from(proposal)
+        .expect_err("corrupt account branch should fail hashing");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("corrupt proof"),
+        "expected corrupt proof error, got: {message}"
+    );
+    assert!(
+        message.contains("missing persisted address"),
+        "error message should mention missing address, got: {message}"
+    );
+}
+
+#[test]
+fn account_branch_with_multiple_unhashed_children_is_rejected() {
+    let storage = Arc::new(MemStore::new(Vec::new()));
+    let mut proposal = NodeStore::new_empty_proposal(storage, noop_storage_metrics());
+
+    let mut account_branch = BranchNode {
+        partial_path: Path::from(vec![0u8; 64]),
+        value: None,
+        children: BranchNode::empty_children(),
+    };
+
+    let leaf_a = Node::Leaf(LeafNode {
+        partial_path: Path::from(vec![0u8]),
+        value: vec![1u8].into_boxed_slice(),
+    });
+    let leaf_b = Node::Leaf(LeafNode {
+        partial_path: Path::from(vec![1u8]),
+        value: vec![2u8].into_boxed_slice(),
+    });
+
+    account_branch.children[0] = Some(Child::Node(leaf_a));
+    account_branch.children[1] = Some(Child::Node(leaf_b));
+
+    proposal
+        .root_mut()
+        .replace(Node::Branch(Box::new(account_branch)));
+
+    let err = NodeStore::<Arc<ImmutableProposal>, MemStore>::try_from(proposal)
+        .expect_err("corrupt account branch should fail hashing");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("corrupt proof"),
+        "expected corrupt proof error, got: {message}"
+    );
+    assert!(
+        message.contains("unhashed children"),
+        "error message should mention multiple unhashed children, got: {message}"
     );
 }
 
