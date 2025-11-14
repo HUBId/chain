@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::from_slice;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{
     apply_meta, compute_checksums, decode_payload, decrypt_envelope, resolve_backup_path,

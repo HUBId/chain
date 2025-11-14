@@ -32,6 +32,7 @@ pub mod stwo;
 pub mod config;
 
 /// Zugriff auf optionale Drittanbieter-Integrationen.
+#[cfg(feature = "runtime")]
 pub mod vendor;
 
 /// Wallet backup and restore helpers.
@@ -48,6 +49,12 @@ pub mod cli;
 
 /// JSON-RPC facades exposed by the wallet runtime.
 pub mod rpc;
+
+/// Multisig configuration and registry helpers.
+pub mod multisig;
+
+/// Runtime integration shims and stubs.
+pub mod runtime;
 
 #[cfg(feature = "wallet_gui")]
 pub mod ui;
@@ -71,7 +78,7 @@ pub mod node_client;
 pub mod wallet;
 
 pub use engine::{
-    DerivationPath, DraftInput, DraftOutput, DraftTransaction, SpendModel, WalletBalance,
-    WalletEngine,
+    DerivationPath, DraftBundle, DraftInput, DraftOutput, DraftTransaction, SpendModel,
+    WalletBalance, WalletEngine,
 };
 pub use node_client::{ChainHead, NodeClient, NodeClientError, StubNodeClient};

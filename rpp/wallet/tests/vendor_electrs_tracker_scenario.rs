@@ -1,4 +1,8 @@
-#![cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+#![cfg(all(
+    feature = "runtime",
+    feature = "backend-rpp-stark",
+    feature = "vendor_electrs"
+))]
 
 use std::fs;
 use std::path::{Path, PathBuf};

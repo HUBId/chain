@@ -13,13 +13,17 @@ use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
 use crate::engine::{
-    DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
+    DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
 };
 use crate::indexer::IndexerClient;
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
+use crate::multisig::{
+    clear_cosigner_registry, clear_scope, load_cosigner_registry, load_scope,
+    store_cosigner_registry, store_scope, CosignerRegistry, MultisigError, MultisigScope,
+};
 use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::Blake2sHasher;
-use rpp::runtime::node::MempoolStatus;
+use crate::runtime::node::MempoolStatus;
 
 mod runtime;
 
@@ -37,6 +41,8 @@ pub enum WalletError {
     Sync(#[from] WalletSyncError),
     #[error("watch-only restriction: {0}")]
     WatchOnly(#[from] WatchOnlyError),
+    #[error("multisig error: {0}")]
+    Multisig(#[from] MultisigError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -257,10 +263,58 @@ impl Wallet {
         to: String,
         amount: u128,
         fee_rate: Option<u64>,
-    ) -> Result<DraftTransaction, WalletError> {
+    ) -> Result<DraftBundle, WalletError> {
         Ok(self
             .engine
             .create_draft(to, amount, fee_rate, Some(self.node_client.as_ref()))?)
+    }
+
+    pub fn multisig_scope(&self) -> Result<Option<MultisigScope>, WalletError> {
+        load_scope(&self.store)
+            .map_err(MultisigError::from)
+            .map_err(WalletError::from)
+    }
+
+    pub fn set_multisig_scope(
+        &self,
+        scope: Option<MultisigScope>,
+    ) -> Result<Option<MultisigScope>, WalletError> {
+        let mut batch = self.store.batch().map_err(store_error)?;
+        let previous = self.multisig_scope()?;
+        match scope {
+            Some(scope) => {
+                store_scope(&mut batch, &scope)
+                    .map_err(MultisigError::from)
+                    .map_err(WalletError::from)?;
+            }
+            None => clear_scope(&mut batch),
+        }
+        batch.commit().map_err(store_error)?;
+        Ok(previous)
+    }
+
+    pub fn cosigner_registry(&self) -> Result<Option<CosignerRegistry>, WalletError> {
+        load_cosigner_registry(&self.store)
+            .map_err(MultisigError::from)
+            .map_err(WalletError::from)
+    }
+
+    pub fn set_cosigner_registry(
+        &self,
+        registry: Option<CosignerRegistry>,
+    ) -> Result<Option<CosignerRegistry>, WalletError> {
+        let mut batch = self.store.batch().map_err(store_error)?;
+        let previous = self.cosigner_registry()?;
+        match registry {
+            Some(registry) => {
+                store_cosigner_registry(&mut batch, &registry)
+                    .map_err(MultisigError::from)
+                    .map_err(WalletError::from)?;
+            }
+            None => clear_cosigner_registry(&mut batch),
+        }
+        batch.commit().map_err(store_error)?;
+        Ok(previous)
     }
 
     pub fn pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
@@ -490,8 +544,13 @@ mod tests {
 
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
     use crate::db::{UtxoOutpoint, UtxoRecord};
+    use crate::engine::signing::ProverError;
     use crate::engine::WalletEngine;
     use crate::modes::watch_only::WatchOnlyRecord;
+    use crate::multisig::{
+        store_cosigner_registry, store_scope, Cosigner, CosignerRegistry, MultisigError,
+        MultisigScope,
+    };
     use crate::node_client::{NodeClient, StubNodeClient};
     use crate::wallet::WatchOnlyError;
 
@@ -527,6 +586,24 @@ mod tests {
                     witness_bytes: 0,
                     duration_ms: sleep.as_millis() as u64,
                 })
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct InstantWalletProver;
+
+    impl WalletProver for InstantWalletProver {
+        fn backend(&self) -> &'static str {
+            "instant"
+        }
+
+        fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
+            Ok(ProverOutput {
+                backend: "instant".into(),
+                proof: None,
+                witness_bytes: 0,
+                duration_ms: 0,
             })
         }
     }
@@ -573,6 +650,15 @@ mod tests {
         wallet
             .create_draft("wallet.recipient".into(), amount, None)
             .expect("draft")
+            .draft
+    }
+
+    fn fingerprint(byte: u8) -> String {
+        let chunk = format!("{:02x}", byte);
+        std::iter::repeat(chunk)
+            .take(32)
+            .collect::<Vec<_>>()
+            .join("")
     }
 
     fn runtime_guard() -> tokio::runtime::Runtime {
@@ -765,6 +851,74 @@ mod tests {
         ));
         assert!(wallet.pending_locks().expect("locks after").is_empty());
         drop(tempdir);
+    }
+
+    #[test]
+    fn create_draft_includes_multisig_metadata() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 80_000);
+        {
+            let mut batch = store.batch().expect("batch");
+            let scope = MultisigScope::new(2, 3).expect("scope");
+            store_scope(&mut batch, &scope).expect("store scope");
+            let registry = CosignerRegistry::new(vec![
+                Cosigner::new(fingerprint(0x11), Some("https://a")).expect("cosigner"),
+                Cosigner::new(fingerprint(0x22), None).expect("cosigner"),
+            ])
+            .expect("registry");
+            store_cosigner_registry(&mut batch, &registry).expect("store registry");
+            batch.commit().expect("commit");
+        }
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            Arc::new(InstantWalletProver::default()),
+            Arc::clone(&node_client),
+        );
+
+        let bundle = wallet
+            .create_draft("wallet.recipient".into(), 30_000, None)
+            .expect("bundle");
+        let metadata = bundle.metadata.multisig.expect("multisig metadata");
+        assert_eq!(metadata.scope.threshold(), 2);
+        assert_eq!(metadata.scope.participants(), 3);
+        assert_eq!(metadata.cosigners.len(), 2);
+    }
+
+    #[test]
+    fn create_draft_requires_cosigners_for_multisig() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 70_000);
+        {
+            let mut batch = store.batch().expect("batch");
+            let scope = MultisigScope::new(2, 3).expect("scope");
+            store_scope(&mut batch, &scope).expect("store scope");
+            batch.commit().expect("commit");
+        }
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            Arc::new(InstantWalletProver::default()),
+            Arc::clone(&node_client),
+        );
+
+        let err = wallet
+            .create_draft("wallet.recipient".into(), 25_000, None)
+            .expect_err("missing cosigners");
+        assert!(matches!(
+            err,
+            WalletError::Multisig(MultisigError::MissingCosigners)
+        ));
     }
 
     #[test]

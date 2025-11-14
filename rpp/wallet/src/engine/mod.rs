@@ -7,6 +7,7 @@ use crate::db::{
     PendingLock, PendingLockMetadata, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore,
     WalletStoreError,
 };
+use crate::multisig::{load_cosigner_registry, load_scope, MultisigDraftMetadata, MultisigError};
 use crate::node_client::NodeClient;
 
 pub mod addresses;
@@ -123,6 +124,12 @@ impl DraftTransaction {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftBundle {
+    pub draft: DraftTransaction,
+    pub metadata: BuildMetadata,
+}
+
 /// Aggregated wallet balance numbers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WalletBalance {
@@ -151,6 +158,8 @@ pub enum EngineError {
     Builder(#[from] BuilderError),
     #[error("policy violations: {0:?}")]
     Policy(Vec<PolicyViolation>),
+    #[error("multisig error: {0}")]
+    Multisig(#[from] MultisigError),
 }
 
 /// High-level coordinator gluing the wallet engine modules together.
@@ -318,7 +327,7 @@ impl WalletEngine {
         amount: u128,
         fee_rate_override: Option<u64>,
         node_client: Option<&dyn NodeClient>,
-    ) -> Result<DraftTransaction, EngineError> {
+    ) -> Result<DraftBundle, EngineError> {
         let fee_quote = self.fee_estimator.resolve(node_client, fee_rate_override)?;
         let fee_rate = fee_quote.rate();
         let now = current_timestamp_ms();
@@ -364,7 +373,7 @@ impl WalletEngine {
         if !postflight.is_empty() {
             return Err(EngineError::Policy(postflight));
         }
-        let built = self.tx_builder.finalize(
+        let mut built = self.tx_builder.finalize(
             Some(selection),
             outputs,
             fee_rate,
@@ -372,14 +381,28 @@ impl WalletEngine {
             spend_model,
             metadata,
         )?;
-        let draft = built.transaction;
+        let scope = load_scope(&self.store).map_err(MultisigError::from)?;
+        if let Some(scope) = scope {
+            let registry = load_cosigner_registry(&self.store).map_err(MultisigError::from)?;
+            let cosigners = registry
+                .map(|registry| registry.to_vec())
+                .unwrap_or_default();
+            if scope.requires_collaboration() && cosigners.is_empty() {
+                return Err(EngineError::Multisig(MultisigError::MissingCosigners));
+            }
+            built.metadata.multisig = Some(MultisigDraftMetadata { scope, cosigners });
+        }
+        let mut draft = built.transaction;
         self.address_manager.lock_inputs(
             draft.inputs.iter().map(|input| &input.outpoint),
             None,
             now,
             None,
         )?;
-        Ok(draft)
+        Ok(DraftBundle {
+            draft,
+            metadata: built.metadata,
+        })
     }
 }
 

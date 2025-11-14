@@ -12,16 +12,20 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastResponse, CreateTxParams,
-    CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto,
-    DraftSpendModelDto, EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto,
-    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
-    PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse,
-    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
-    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto,
-    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
-    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
+    BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastRawParams, BroadcastRawResponse,
+    BroadcastResponse, CosignerDto, CreateTxParams, CreateTxResponse, DeriveAddressParams,
+    DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto, EmptyParams,
+    EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetCosignersResponse,
+    GetMultisigScopeResponse, GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    ListPendingLocksResponse, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
+    MultisigDraftMetadataDto, MultisigExportParams, MultisigExportResponse, MultisigScopeDto,
+    PendingLockDto, PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams,
+    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
+    SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
+    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 use error::WalletRpcErrorCode;
 use hex::encode as hex_encode;
@@ -36,11 +40,12 @@ use crate::backup::{
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{
-    BuilderError, DraftTransaction, EngineError, FeeError, ProverError, SelectionError, SpendModel,
-    WalletBalance,
+    BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
+    SelectionError, SpendModel, WalletBalance,
 };
 use crate::indexer::scanner::{SyncMode, SyncStatus};
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
+use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
 use crate::node_client::{
     BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
 };
@@ -53,6 +58,7 @@ use zeroize::Zeroizing;
 #[derive(Clone, Debug)]
 struct DraftState {
     draft: DraftTransaction,
+    metadata: BuildMetadata,
     prover_output: Option<ProverOutput>,
 }
 
@@ -199,6 +205,26 @@ impl WalletRpcRouter {
                 let params: BroadcastRawParams = parse_params(params)?;
                 self.broadcast_raw(params.tx_hex)
             }
+            "multisig.get_scope" => {
+                parse_params::<EmptyParams>(params)?;
+                self.multisig_get_scope()
+            }
+            "multisig.set_scope" => {
+                let params: SetMultisigScopeParams = parse_params(params)?;
+                self.multisig_set_scope(params)
+            }
+            "multisig.get_cosigners" => {
+                parse_params::<EmptyParams>(params)?;
+                self.multisig_get_cosigners()
+            }
+            "multisig.set_cosigners" => {
+                let params: SetCosignersParams = parse_params(params)?;
+                self.multisig_set_cosigners(params)
+            }
+            "multisig.export" => {
+                let params: MultisigExportParams = parse_params(params)?;
+                self.multisig_export(params)
+            }
             "policy_preview" => {
                 parse_params::<EmptyParams>(params)?;
                 let preview = self.wallet.policy_preview();
@@ -323,16 +349,13 @@ impl WalletRpcRouter {
             amount,
             fee_rate,
         } = params;
-        let draft = self.wallet_call(self.wallet.create_draft(to, amount, fee_rate))?;
-        let draft_id = self.store_draft(draft.clone())?;
-        self.respond_draft(&draft_id, &draft)
+        let bundle = self.wallet_call(self.wallet.create_draft(to, amount, fee_rate))?;
+        let draft_id = self.store_draft(bundle.clone())?;
+        self.respond_draft(&draft_id, &bundle)
     }
 
-    fn respond_draft(
-        &self,
-        draft_id: &str,
-        draft: &DraftTransaction,
-    ) -> Result<Value, RouterError> {
+    fn respond_draft(&self, draft_id: &str, bundle: &DraftBundle) -> Result<Value, RouterError> {
+        let draft = &bundle.draft;
         let inputs = draft
             .inputs
             .iter()
@@ -357,6 +380,11 @@ impl WalletRpcRouter {
             .wallet
             .latest_fee_quote()
             .map(|quote| FeeEstimateSourceDto::from(quote.source()));
+        let multisig = bundle
+            .metadata
+            .multisig
+            .as_ref()
+            .map(MultisigDraftMetadataDto::from);
         let response = CreateTxResponse {
             draft_id: draft_id.to_string(),
             fee_rate: draft.fee_rate,
@@ -368,8 +396,62 @@ impl WalletRpcRouter {
             inputs,
             outputs,
             locks,
+            multisig,
         };
         to_value(response)
+    }
+
+    fn multisig_get_scope(&self) -> Result<Value, RouterError> {
+        let scope = self.wallet_call(self.wallet.multisig_scope())?;
+        let dto = scope.as_ref().map(MultisigScopeDto::from);
+        to_value(GetMultisigScopeResponse { scope: dto })
+    }
+
+    fn multisig_set_scope(&self, params: SetMultisigScopeParams) -> Result<Value, RouterError> {
+        let scope = params.scope.map(scope_from_dto).transpose()?;
+        self.wallet_call(self.wallet.set_multisig_scope(scope))?;
+        let updated = self.wallet_call(self.wallet.multisig_scope())?;
+        let dto = updated.as_ref().map(MultisigScopeDto::from);
+        to_value(SetMultisigScopeResponse { scope: dto })
+    }
+
+    fn multisig_get_cosigners(&self) -> Result<Value, RouterError> {
+        let registry = self.wallet_call(self.wallet.cosigner_registry())?;
+        let cosigners = registry
+            .as_ref()
+            .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
+            .unwrap_or_default();
+        to_value(GetCosignersResponse { cosigners })
+    }
+
+    fn multisig_set_cosigners(&self, params: SetCosignersParams) -> Result<Value, RouterError> {
+        if params.cosigners.is_empty() {
+            return Err(RouterError::InvalidParams(
+                "cosigners list cannot be empty".to_string(),
+            ));
+        }
+        let registry = registry_from_dtos(params.cosigners)?;
+        self.wallet_call(self.wallet.set_cosigner_registry(Some(registry)))?;
+        let registry = self.wallet_call(self.wallet.cosigner_registry())?;
+        let cosigners = registry
+            .as_ref()
+            .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
+            .unwrap_or_default();
+        to_value(SetCosignersResponse { cosigners })
+    }
+
+    fn multisig_export(&self, params: MultisigExportParams) -> Result<Value, RouterError> {
+        let draft_id = params.draft_id;
+        let drafts = self.lock_drafts()?;
+        let metadata = drafts
+            .get(&draft_id)
+            .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?
+            .metadata
+            .multisig
+            .clone();
+        drop(drafts);
+        let metadata = metadata.as_ref().map(MultisigDraftMetadataDto::from);
+        to_value(MultisigExportResponse { draft_id, metadata })
     }
 
     fn estimate_fee(&self, params: EstimateFeeParams) -> Result<Value, RouterError> {
@@ -681,14 +763,15 @@ impl WalletRpcRouter {
         to_value(watch_only_status_to_dto(status))
     }
 
-    fn store_draft(&self, draft: DraftTransaction) -> Result<String, RouterError> {
+    fn store_draft(&self, bundle: DraftBundle) -> Result<String, RouterError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let identifier = format!("{id:016x}");
         let mut drafts = self.lock_drafts()?;
         drafts.insert(
             identifier.clone(),
             DraftState {
-                draft,
+                draft: bundle.draft,
+                metadata: bundle.metadata,
                 prover_output: None,
             },
         );
@@ -823,6 +906,11 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
         WalletError::Node(node) => node_error_to_json(node),
         WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
         WalletError::WatchOnly(watch_only) => watch_only_error_to_json(watch_only),
+        WalletError::Multisig(multisig) => json_error(
+            WalletRpcErrorCode::InvalidParams,
+            multisig.to_string(),
+            Some(json!({ "kind": "multisig" })),
+        ),
     }
 }
 
@@ -884,7 +972,30 @@ fn engine_error_to_json(error: &EngineError) -> JsonRpcError {
             error.to_string(),
             Some(json!({ "kind": "address", "message": address.to_string() })),
         ),
+        EngineError::Multisig(multisig) => json_error(
+            WalletRpcErrorCode::InvalidParams,
+            multisig.to_string(),
+            Some(json!({ "kind": "multisig" })),
+        ),
     }
+}
+
+fn scope_from_dto(dto: MultisigScopeDto) -> Result<MultisigScope, RouterError> {
+    MultisigScope::new(dto.threshold, dto.participants)
+        .map_err(|err| RouterError::InvalidParams(err.to_string()))
+}
+
+fn registry_from_dtos(dtos: Vec<CosignerDto>) -> Result<CosignerRegistry, RouterError> {
+    let cosigners = dtos
+        .into_iter()
+        .map(cosigner_from_dto)
+        .collect::<Result<Vec<_>, _>>()?;
+    CosignerRegistry::new(cosigners).map_err(|err| RouterError::InvalidParams(err.to_string()))
+}
+
+fn cosigner_from_dto(dto: CosignerDto) -> Result<Cosigner, RouterError> {
+    Cosigner::new(dto.fingerprint, dto.endpoint)
+        .map_err(|err| RouterError::InvalidParams(err.to_string()))
 }
 
 fn selection_error_to_json(error: &SelectionError) -> JsonRpcError {
@@ -1261,6 +1372,13 @@ mod tests {
                 "watch-sign".to_string(),
                 DraftState {
                     draft: draft.clone(),
+                    metadata: BuildMetadata {
+                        selection: None,
+                        change_outputs: 0,
+                        change_folded_into_fee: false,
+                        estimated_vbytes: 0,
+                        multisig: None,
+                    },
                     prover_output: None,
                 },
             );
@@ -1268,6 +1386,13 @@ mod tests {
                 "watch-broadcast".to_string(),
                 DraftState {
                     draft,
+                    metadata: BuildMetadata {
+                        selection: None,
+                        change_outputs: 0,
+                        change_folded_into_fee: false,
+                        estimated_vbytes: 0,
+                        multisig: None,
+                    },
                     prover_output: None,
                 },
             );
@@ -1475,7 +1600,7 @@ mod tests {
             self.inner.chain_head()
         }
 
-        fn mempool_status(&self) -> NodeClientResult<rpp::runtime::node::MempoolStatus> {
+        fn mempool_status(&self) -> NodeClientResult<crate::runtime::node::MempoolStatus> {
             self.inner.mempool_status()
         }
 
@@ -1615,6 +1740,13 @@ mod tests {
                 draft_id.clone(),
                 DraftState {
                     draft: draft.clone(),
+                    metadata: BuildMetadata {
+                        selection: None,
+                        change_outputs: 0,
+                        change_folded_into_fee: false,
+                        estimated_vbytes: 0,
+                        multisig: None,
+                    },
                     prover_output: Some(ProverOutput {
                         backend: "test".to_string(),
                         proof: None,

@@ -1,5 +1,6 @@
 use crate::config::wallet::PolicyTierHooks;
 use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
+use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -256,6 +257,8 @@ pub struct CreateTxResponse {
     pub inputs: Vec<DraftInputDto>,
     pub outputs: Vec<DraftOutputDto>,
     pub locks: Vec<PendingLockDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multisig: Option<MultisigDraftMetadataDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -322,6 +325,55 @@ pub struct SignTxResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultisigScopeDto {
+    pub threshold: u8,
+    pub participants: u8,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CosignerDto {
+    pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultisigDraftMetadataDto {
+    pub scope: MultisigScopeDto,
+    pub cosigners: Vec<CosignerDto>,
+}
+
+impl From<&MultisigDraftMetadata> for MultisigDraftMetadataDto {
+    fn from(metadata: &MultisigDraftMetadata) -> Self {
+        Self {
+            scope: MultisigScopeDto {
+                threshold: metadata.scope.threshold(),
+                participants: metadata.scope.participants(),
+            },
+            cosigners: metadata.cosigners.iter().map(CosignerDto::from).collect(),
+        }
+    }
+}
+
+impl From<&Cosigner> for CosignerDto {
+    fn from(value: &Cosigner) -> Self {
+        Self {
+            fingerprint: value.fingerprint.clone(),
+            endpoint: value.endpoint.clone(),
+        }
+    }
+}
+
+impl From<&MultisigScope> for MultisigScopeDto {
+    fn from(scope: &MultisigScope) -> Self {
+        Self {
+            threshold: scope.threshold(),
+            participants: scope.participants(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BroadcastParams {
     pub draft_id: String,
 }
@@ -341,6 +393,51 @@ pub struct BroadcastRawParams {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BroadcastRawResponse {
     pub accepted: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetMultisigScopeResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MultisigScopeDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetMultisigScopeParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MultisigScopeDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetMultisigScopeResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<MultisigScopeDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetCosignersResponse {
+    pub cosigners: Vec<CosignerDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetCosignersParams {
+    pub cosigners: Vec<CosignerDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetCosignersResponse {
+    pub cosigners: Vec<CosignerDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultisigExportParams {
+    pub draft_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultisigExportResponse {
+    pub draft_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<MultisigDraftMetadataDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

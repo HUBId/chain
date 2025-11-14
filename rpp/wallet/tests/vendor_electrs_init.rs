@@ -1,4 +1,4 @@
-#![cfg(feature = "vendor_electrs")]
+#![cfg(all(feature = "runtime", feature = "vendor_electrs"))]
 
 use std::fs;
 use std::path::Path;

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::to_vec_pretty;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{
     compute_checksums, format_backup_name, gather_meta, gather_policies, BackupError,

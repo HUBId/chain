@@ -386,7 +386,9 @@ mod tests {
                 Ok(ChainHead::new(0, [0u8; 32]))
             }
 
-            fn mempool_status(&self) -> Result<rpp::runtime::node::MempoolStatus, NodeClientError> {
+            fn mempool_status(
+                &self,
+            ) -> Result<crate::runtime::node::MempoolStatus, NodeClientError> {
                 Err(NodeClientError::network(anyhow!("boom")))
             }
 

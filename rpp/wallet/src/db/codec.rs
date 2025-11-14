@@ -6,7 +6,7 @@ use serde_bytes::ByteBuf;
 use thiserror::Error;
 
 use crate::db::schema;
-use crate::modes::watch_only::WatchOnlyRecord;
+pub use crate::modes::watch_only::WatchOnlyRecord;
 
 /// Canonical wallet address representation.
 pub type Address = String;
@@ -182,63 +182,63 @@ impl PolicySnapshot {
 }
 
 pub fn encode_address(address: &Address) -> Result<Vec<u8>, CodecError> {
-    options().serialize(address)
+    Ok(options().serialize(address)?)
 }
 
 pub fn decode_address(bytes: &[u8]) -> Result<Address, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_utxo(record: &UtxoRecord<'_>) -> Result<Vec<u8>, CodecError> {
-    options().serialize(record)
+    Ok(options().serialize(record)?)
 }
 
 pub fn decode_utxo<'a>(bytes: &'a [u8]) -> Result<UtxoRecord<'a>, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_tx_cache_entry(entry: &TxCacheEntry<'_>) -> Result<Vec<u8>, CodecError> {
-    options().serialize(entry)
+    Ok(options().serialize(entry)?)
 }
 
 pub fn decode_tx_cache_entry<'a>(bytes: &'a [u8]) -> Result<TxCacheEntry<'a>, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_watch_only(record: &WatchOnlyRecord) -> Result<Vec<u8>, CodecError> {
-    options().serialize(record)
+    Ok(options().serialize(record)?)
 }
 
 pub fn decode_watch_only(bytes: &[u8]) -> Result<WatchOnlyRecord, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_policy_snapshot(snapshot: &PolicySnapshot) -> Result<Vec<u8>, CodecError> {
-    options().serialize(snapshot)
+    Ok(options().serialize(snapshot)?)
 }
 
 pub fn decode_policy_snapshot(bytes: &[u8]) -> Result<PolicySnapshot, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_schema_version(version: u32) -> Result<Vec<u8>, CodecError> {
-    options().serialize(&version)
+    Ok(options().serialize(&version)?)
 }
 
 pub fn decode_schema_version(bytes: &[u8]) -> Result<u32, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_checkpoint(height: u64) -> Result<Vec<u8>, CodecError> {
-    options().serialize(&height)
+    Ok(options().serialize(&height)?)
 }
 
 pub fn decode_checkpoint(bytes: &[u8]) -> Result<u64, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 pub fn encode_key_material(material: &[u8]) -> Result<Vec<u8>, CodecError> {
-    options().serialize(&ByteBuf::from(material))
+    Ok(options().serialize(&ByteBuf::from(material))?)
 }
 
 pub fn decode_key_material(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
@@ -247,11 +247,11 @@ pub fn decode_key_material(bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
 }
 
 pub fn encode_pending_lock(lock: &PendingLock) -> Result<Vec<u8>, CodecError> {
-    options().serialize(lock)
+    Ok(options().serialize(lock)?)
 }
 
 pub fn decode_pending_lock(bytes: &[u8]) -> Result<PendingLock, CodecError> {
-    options().deserialize(bytes)
+    Ok(options().deserialize(bytes)?)
 }
 
 #[cfg(test)]

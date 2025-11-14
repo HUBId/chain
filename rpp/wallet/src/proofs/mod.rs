@@ -1,4 +1,14 @@
-use crate::errors::{ChainError, ChainResult};
+use thiserror::Error;
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ChainError {
+    #[error("config error: {0}")]
+    Config(String),
+    #[error("transaction error: {0}")]
+    Transaction(String),
+}
+
+pub type ChainResult<T> = Result<T, ChainError>;
 
 #[cfg(feature = "prover-stwo")]
 use crate::reputation::Tier;
