@@ -33,6 +33,9 @@ fn main() -> iced::Result {
         /// Optional wallet configuration file path surfaced in the UI.
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
+        /// Interval (in seconds) used when polling sync status updates.
+        #[arg(long, value_name = "SECONDS", default_value = "5")]
+        sync_interval: u64,
     }
 
     let options = Options::parse();
@@ -51,6 +54,7 @@ fn main() -> iced::Result {
     let flags = WalletGuiFlags {
         client,
         config_path: options.config,
+        sync_poll_interval: Duration::from_secs(options.sync_interval.max(1)),
     };
 
     ui::launch(flags)
