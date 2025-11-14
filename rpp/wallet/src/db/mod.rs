@@ -1,4 +1,5 @@
 pub mod codec;
+pub(crate) mod migrations;
 pub mod schema;
 pub mod store;
 
@@ -24,11 +25,11 @@ mod tests {
     fn store_initialises_schema_marker() {
         let dir = tempdir().expect("tempdir");
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V1);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V2);
     }
 
     #[test]
-    fn store_migrates_schema_to_v1() {
+    fn store_migrates_schema_to_v2() {
         let dir = tempdir().expect("tempdir");
         {
             let mut kv = storage_firewood::kv::FirewoodKv::open(dir.path()).expect("open kv");
@@ -39,7 +40,7 @@ mod tests {
             kv.commit().expect("commit");
         }
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V1);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V2);
     }
 
     #[test]

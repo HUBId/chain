@@ -1,19 +1,25 @@
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use storage_firewood::kv::{FirewoodKv, Hash, KvError};
+use storage_firewood::{
+    column_family::ColumnFamily,
+    kv::{FirewoodKv, Hash, KvError},
+};
 
 use crate::db::{
     codec::{
         self, Address, CodecError, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
         UtxoRecord,
     },
-    schema,
+    migrations, schema,
 };
 
 /// High-level wallet facade around the Firewood key-value engine.
 pub struct WalletStore {
     kv: Mutex<FirewoodKv>,
+    pending_locks_cf: ColumnFamily,
+    prover_meta_cf: ColumnFamily,
+    checkpoints_cf: ColumnFamily,
 }
 
 impl WalletStore {
@@ -21,7 +27,15 @@ impl WalletStore {
     pub fn open(data_dir: &Path) -> Result<Self, WalletStoreError> {
         let mut kv = FirewoodKv::open(data_dir)?;
         initialise_schema(&mut kv)?;
-        Ok(Self { kv: Mutex::new(kv) })
+        let pending_locks_cf = open_extension(&kv, schema::EXTENSION_PENDING_LOCKS)?;
+        let prover_meta_cf = open_extension(&kv, schema::EXTENSION_PROVER_META)?;
+        let checkpoints_cf = open_extension(&kv, schema::EXTENSION_CHECKPOINTS)?;
+        Ok(Self {
+            kv: Mutex::new(kv),
+            pending_locks_cf,
+            prover_meta_cf,
+            checkpoints_cf,
+        })
     }
 
     /// Start a new batched write session.
@@ -34,10 +48,40 @@ impl WalletStore {
     pub fn schema_version(&self) -> Result<u32, WalletStoreError> {
         let mut guard = self.lock()?;
         let Some(bytes) = guard.get(schema::SCHEMA_VERSION_KEY) else {
-            return Ok(schema::SCHEMA_VERSION_V1);
+            return Ok(schema::SCHEMA_VERSION_LATEST);
         };
         drop(guard);
         Ok(codec::decode_schema_version(&bytes)?)
+    }
+
+    /// Column family storing pending lock extension state.
+    pub fn pending_locks_extension(&self) -> ColumnFamily {
+        self.pending_locks_cf.clone()
+    }
+
+    /// Column family storing prover metadata artifacts.
+    pub fn prover_meta_extension(&self) -> ColumnFamily {
+        self.prover_meta_cf.clone()
+    }
+
+    /// Column family holding checkpoint exports.
+    pub fn checkpoints_extension(&self) -> ColumnFamily {
+        self.checkpoints_cf.clone()
+    }
+
+    /// Fetch the recorded timestamp for the last rescan request.
+    pub fn last_rescan_timestamp(&self) -> Result<Option<u64>, WalletStoreError> {
+        self.get_meta_timestamp(schema::META_LAST_RESCAN_TS_KEY)
+    }
+
+    /// Fetch the timestamp when the fee cache was last refreshed.
+    pub fn fee_cache_fetched_at(&self) -> Result<Option<u64>, WalletStoreError> {
+        self.get_meta_timestamp(schema::META_FEE_CACHE_FETCHED_TS_KEY)
+    }
+
+    /// Fetch the timestamp indicating when the fee cache expires.
+    pub fn fee_cache_expires_at(&self) -> Result<Option<u64>, WalletStoreError> {
+        self.get_meta_timestamp(schema::META_FEE_CACHE_EXPIRES_TS_KEY)
     }
 
     /// Fetch a raw metadata value stored under the wallet namespace.
@@ -240,6 +284,16 @@ impl WalletStore {
     fn lock(&self) -> Result<MutexGuard<'_, FirewoodKv>, WalletStoreError> {
         self.kv.lock().map_err(|_| WalletStoreError::Poisoned)
     }
+
+    fn get_meta_timestamp(&self, key: &str) -> Result<Option<u64>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = meta_key(key);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_checkpoint(&bytes)?))
+    }
 }
 
 /// Address storage namespace.
@@ -266,6 +320,31 @@ pub struct WalletStoreBatch<'a> {
 impl<'a> WalletStoreBatch<'a> {
     pub fn put_meta(&mut self, key: &str, value: &[u8]) {
         self.guard.put(meta_key(key), value.to_vec());
+    }
+
+    pub fn delete_meta(&mut self, key: &str) {
+        self.guard.delete(&meta_key(key));
+    }
+
+    pub fn set_last_rescan_timestamp(
+        &mut self,
+        timestamp: Option<u64>,
+    ) -> Result<(), WalletStoreError> {
+        self.write_meta_timestamp(schema::META_LAST_RESCAN_TS_KEY, timestamp)
+    }
+
+    pub fn set_fee_cache_fetched_at(
+        &mut self,
+        timestamp: Option<u64>,
+    ) -> Result<(), WalletStoreError> {
+        self.write_meta_timestamp(schema::META_FEE_CACHE_FETCHED_TS_KEY, timestamp)
+    }
+
+    pub fn set_fee_cache_expires_at(
+        &mut self,
+        timestamp: Option<u64>,
+    ) -> Result<(), WalletStoreError> {
+        self.write_meta_timestamp(schema::META_FEE_CACHE_EXPIRES_TS_KEY, timestamp)
     }
 
     pub fn put_key_material(
@@ -350,6 +429,21 @@ impl<'a> WalletStoreBatch<'a> {
     pub fn commit(self) -> Result<Hash, WalletStoreError> {
         Ok(self.guard.commit()?)
     }
+
+    fn write_meta_timestamp(
+        &mut self,
+        key: &str,
+        timestamp: Option<u64>,
+    ) -> Result<(), WalletStoreError> {
+        match timestamp {
+            Some(value) => {
+                let encoded = codec::encode_checkpoint(value)?;
+                self.guard.put(meta_key(key), encoded);
+            }
+            None => self.delete_meta(key),
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -368,33 +462,43 @@ pub enum WalletStoreError {
 
 fn initialise_schema(kv: &mut FirewoodKv) -> Result<(), WalletStoreError> {
     let stored = kv.get(schema::SCHEMA_VERSION_KEY);
-    let supported = schema::SCHEMA_VERSION_V1;
-    match stored {
-        Some(bytes) => {
-            let version = codec::decode_schema_version(&bytes)?;
-            if version > supported {
-                return Err(WalletStoreError::UnsupportedSchema {
-                    stored: version,
-                    supported,
-                });
-            }
-            if version < supported {
-                kv.put(
-                    schema::SCHEMA_VERSION_KEY.to_vec(),
-                    codec::encode_schema_version(supported)?,
-                );
-                let _ = kv.commit()?;
-            }
-        }
-        None => {
-            kv.put(
-                schema::SCHEMA_VERSION_KEY.to_vec(),
-                codec::encode_schema_version(supported)?,
-            );
-            let _ = kv.commit()?;
-        }
+    let supported = schema::SCHEMA_VERSION_LATEST;
+    let mut version = match stored {
+        Some(bytes) => codec::decode_schema_version(&bytes)?,
+        None => 0,
+    };
+
+    if version > supported {
+        return Err(WalletStoreError::UnsupportedSchema {
+            stored: version,
+            supported,
+        });
+    }
+
+    let mut mutated = false;
+
+    if version < schema::SCHEMA_VERSION_V2 {
+        mutated |= migrations::v2::apply(kv)?;
+        version = schema::SCHEMA_VERSION_V2;
+    }
+
+    if stored.is_none() || version != supported {
+        kv.put(
+            schema::SCHEMA_VERSION_KEY.to_vec(),
+            codec::encode_schema_version(supported)?,
+        );
+        mutated = true;
+    }
+
+    if mutated {
+        let _ = kv.commit()?;
     }
     Ok(())
+}
+
+fn open_extension(kv: &FirewoodKv, name: &str) -> Result<ColumnFamily, WalletStoreError> {
+    ColumnFamily::open(kv.base_dir(), name)
+        .map_err(|err| WalletStoreError::Storage(KvError::Io(err)))
 }
 
 fn meta_key(key: &str) -> Vec<u8> {
