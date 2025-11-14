@@ -2991,6 +2991,8 @@ pub struct WalletConfig {
     pub wallet: WalletServiceConfig,
     #[serde(default)]
     pub node: WalletNodeRuntimeConfig,
+    #[serde(default)]
+    pub gui: WalletGuiConfig,
     #[cfg(feature = "vendor_electrs")]
     #[serde(default = "default_wallet_electrs_config")]
     pub electrs: Option<ElectrsConfig>,
@@ -3564,6 +3566,7 @@ impl Default for WalletConfig {
                 embedded: false,
                 gossip_endpoints: vec!["/ip4/127.0.0.1/tcp/7600".to_string()],
             },
+            gui: WalletGuiConfig::default(),
             #[cfg(feature = "vendor_electrs")]
             electrs: default_wallet_electrs_config(),
         }
@@ -3587,6 +3590,59 @@ fn extract_tcp_port(multiaddr: &str) -> Option<u16> {
 #[cfg(feature = "vendor_electrs")]
 fn default_wallet_electrs_config() -> Option<ElectrsConfig> {
     Some(ElectrsConfig::default())
+}
+
+const WALLET_GUI_DEFAULT_POLL_INTERVAL_MS: u64 = 5_000;
+const WALLET_GUI_MIN_POLL_INTERVAL_MS: u64 = 1_000;
+const WALLET_GUI_DEFAULT_MAX_HISTORY_ROWS: u32 = 20;
+const WALLET_GUI_MIN_HISTORY_ROWS: u32 = 5;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletGuiConfig {
+    pub poll_interval_ms: u64,
+    pub max_history_rows: u32,
+    pub theme: WalletGuiTheme,
+    pub confirm_clipboard: bool,
+    pub telemetry_opt_in: bool,
+}
+
+impl WalletGuiConfig {
+    pub fn sanitized(mut self) -> Self {
+        if self.poll_interval_ms < WALLET_GUI_MIN_POLL_INTERVAL_MS {
+            self.poll_interval_ms = WALLET_GUI_MIN_POLL_INTERVAL_MS;
+        }
+        if self.max_history_rows < WALLET_GUI_MIN_HISTORY_ROWS {
+            self.max_history_rows = WALLET_GUI_DEFAULT_MAX_HISTORY_ROWS;
+        }
+        self
+    }
+}
+
+impl Default for WalletGuiConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_ms: WALLET_GUI_DEFAULT_POLL_INTERVAL_MS,
+            max_history_rows: WALLET_GUI_DEFAULT_MAX_HISTORY_ROWS,
+            theme: WalletGuiTheme::System,
+            confirm_clipboard: true,
+            telemetry_opt_in: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletGuiTheme {
+    System,
+    Light,
+    Dark,
+}
+
+impl Default for WalletGuiTheme {
+    fn default() -> Self {
+        WalletGuiTheme::System
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
