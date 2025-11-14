@@ -11,6 +11,7 @@ use crate::rpc::dto::{
 
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::{modal, ConfirmDialog};
+use crate::ui::telemetry;
 
 const RECENT_BLOCK_SAMPLE: u32 = 8;
 
@@ -73,6 +74,13 @@ impl RescanPrompt {
             RescanPrompt::Explicit { height } => {
                 format!("Start rescan from block height {height}?")
             }
+        }
+    }
+
+    fn metric_label(&self) -> &'static str {
+        match self {
+            RescanPrompt::Birthday { .. } => "birthday",
+            RescanPrompt::Explicit { .. } => "explicit",
         }
     }
 }
@@ -224,8 +232,11 @@ impl State {
                 };
                 self.rescan_inflight = true;
                 self.feedback = None;
+                let origin = prompt.metric_label();
+                telemetry::global().record_rescan_trigger(origin);
                 let params = prompt.params();
                 commands::rpc(
+                    "rescan",
                     client,
                     move |client| async move { client.rescan(&params).await },
                     |result| Message::RescanSubmitted(result),
@@ -269,6 +280,7 @@ impl State {
                 self.release_inflight = true;
                 self.feedback = None;
                 commands::rpc(
+                    "release_pending_locks",
                     client,
                     |client| async move { client.release_pending_locks().await },
                     |result| Message::ReleaseLocksSubmitted(result),
@@ -591,6 +603,7 @@ impl State {
         self.pending_locks.set_loading();
         self.refresh_pending += 1;
         commands.push(commands::rpc(
+            "list_pending_locks",
             client.clone(),
             |client| async move { client.list_pending_locks().await },
             map_pending_locks,
@@ -599,6 +612,7 @@ impl State {
         self.mempool_info.set_loading();
         self.refresh_pending += 1;
         commands.push(commands::rpc(
+            "mempool_info",
             client.clone(),
             |client| async move { client.mempool_info().await },
             Message::MempoolInfoLoaded,
@@ -607,6 +621,7 @@ impl State {
         self.recent_blocks.set_loading();
         self.refresh_pending += 1;
         commands.push(commands::rpc(
+            "recent_blocks",
             client.clone(),
             move |client| async move { client.recent_blocks(RECENT_BLOCK_SAMPLE).await },
             map_recent_blocks,
@@ -615,6 +630,7 @@ impl State {
         self.telemetry.set_loading();
         self.refresh_pending += 1;
         commands.push(commands::rpc(
+            "telemetry_counters",
             client,
             |client| async move { client.telemetry_counters().await },
             Message::TelemetryLoaded,

@@ -18,6 +18,26 @@ following sections:
 Future phases will expand on these sections with deployment playbooks and
 component-specific tuning guidance.
 
+## GUI telemetry opt-in
+
+The iced-based wallet GUI only publishes telemetry when operators explicitly
+enable the opt-in flag. Add the following to the `[wallet.gui]` section of
+`config/wallet.toml` (or the corresponding profile override) to turn on the
+instruments:
+
+```toml
+[wallet.gui]
+telemetry_opt_in = true
+```
+
+The same flag is persisted in the GUI preferences file
+(`wallet-gui-settings.toml`) alongside theme and polling overrides.【F:rpp/wallet/src/config/wallet.rs†L200-L227】【F:rpp/wallet/src/ui/preferences.rs†L23-L71】
+When enabled, the UI emits histogram and counter events—such as
+`ui.rpc.latency_ms`, `ui.send.steps`, `ui.rescan.triggered`, and
+`ui.errors.by_code`—through the workspace metrics facade. These signals remain
+dormant whenever the opt-in is unset, ensuring no telemetry leaves the operator
+workstation by default.【F:rpp/wallet/src/ui/telemetry.rs†L1-L220】
+
 ## Phase 1 JSON-RPC reference
 
 ### Transport, authentication, and limits

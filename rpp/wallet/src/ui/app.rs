@@ -26,6 +26,7 @@ use super::error_map::{describe_rpc_error, technical_details};
 use super::preferences::{self, Preferences, ThemePreference};
 use super::routes::{self, NavigationIntent, Route};
 use super::tabs::{dashboard, history, node, receive, send, settings};
+use super::telemetry;
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -779,6 +780,7 @@ impl Model {
         self.receive
             .set_clipboard_opt_in(sanitized.clipboard_allowed());
         self.settings.set_preferences(sanitized.clone());
+        telemetry::global().set_opt_in(sanitized.telemetry_opt_in);
         self.preferences = sanitized;
     }
 }
@@ -968,13 +970,16 @@ impl AsyncAction {
                 Message::KeystoreStatusDetected,
             ),
             AsyncAction::Unlock { passphrase } => commands::rpc(
+                "unlock_wallet",
                 client,
                 move |client| unlock_wallet(client, passphrase),
                 |result| Message::UnlockCompleted(result.map_err(AppError::from)),
             ),
-            AsyncAction::FetchSyncStatus => commands::rpc(client, poll_sync_status, |result| {
-                Message::SyncStatusLoaded(result.map_err(AppError::from))
-            }),
+            AsyncAction::FetchSyncStatus => {
+                commands::rpc("sync_status", client, poll_sync_status, |result| {
+                    Message::SyncStatusLoaded(result.map_err(AppError::from))
+                })
+            }
             AsyncAction::PersistPreferences { path, preferences } => Command::perform(
                 store_preferences(path, preferences),
                 Message::PreferencesStored,

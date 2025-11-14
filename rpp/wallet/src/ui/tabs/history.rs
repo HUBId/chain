@@ -567,6 +567,7 @@ impl State {
         self.entries.set_loading();
         self.last_request = Some(params.clone());
         commands::rpc(
+            "list_txs",
             client,
             move |client| async move { client.list_transactions_filtered(&params).await },
             map_history,

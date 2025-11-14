@@ -9,6 +9,7 @@ pub mod error_map;
 pub mod preferences;
 pub mod routes;
 pub mod tabs;
+pub mod telemetry;
 
 pub use app::WalletApp;
 

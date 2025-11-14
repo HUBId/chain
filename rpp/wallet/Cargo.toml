@@ -60,6 +60,7 @@ zeroize = "1.8"
 iced = { version = "0.12.1", optional = true, features = ["tokio", "qr_code"] }
 arboard = { version = "3.4", optional = true }
 qrcode = { version = "0.13", optional = true }
+metrics = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"

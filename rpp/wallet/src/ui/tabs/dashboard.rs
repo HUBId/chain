@@ -132,6 +132,7 @@ impl State {
     fn load_balance(&mut self, client: WalletRpcClient) -> Command<Message> {
         self.balance.set_loading();
         commands::rpc(
+            "get_balance",
             client,
             |client| async move { client.get_balance().await },
             map_balance,
@@ -141,6 +142,7 @@ impl State {
     fn load_transactions(&mut self, client: WalletRpcClient) -> Command<Message> {
         self.transactions.set_loading();
         commands::rpc(
+            "list_txs",
             client,
             |client| async move { client.list_transactions().await },
             map_transactions,
