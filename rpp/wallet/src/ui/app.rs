@@ -24,7 +24,7 @@ use super::components::{
 };
 use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
-use super::tabs::dashboard;
+use super::tabs::{dashboard, receive};
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -47,6 +47,7 @@ pub enum Message {
     Navigate(Route),
     KeyboardShortcut(NavigationIntent),
     Dashboard(dashboard::Message),
+    Receive(receive::Message),
     DismissError,
     Shutdown,
 }
@@ -118,6 +119,7 @@ impl Application for WalletApp {
                         self.model.sync_inflight = false;
                         self.model.passphrase_input.clear();
                         self.model.dashboard.reset();
+                        self.model.receive.reset();
                     }
                     Err(error) => {
                         self.model.set_session_locked();
@@ -181,6 +183,14 @@ impl Application for WalletApp {
                 }
                 update.push(command.map(Message::Dashboard));
             }
+            Message::Receive(message) => {
+                let command = self
+                    .model
+                    .receive
+                    .update(self.model.client.clone(), message)
+                    .map(Message::Receive);
+                update.push(command);
+            }
             Message::DismissError => {
                 self.model.global_error = None;
             }
@@ -197,13 +207,23 @@ impl Application for WalletApp {
             self.model.queue_async(AsyncAction::FetchSyncStatus);
         }
 
-        if self.model.session.is_unlocked() && self.model.active_route == Route::Overview {
-            let command = self
-                .model
-                .dashboard
-                .activate(self.model.client.clone())
-                .map(Message::Dashboard);
-            update.push(command);
+        if self.model.session.is_unlocked() {
+            if self.model.active_route == Route::Overview {
+                let command = self
+                    .model
+                    .dashboard
+                    .activate(self.model.client.clone())
+                    .map(Message::Dashboard);
+                update.push(command);
+            }
+            if self.model.active_route == Route::Receive {
+                let command = self
+                    .model
+                    .receive
+                    .activate(self.model.client.clone())
+                    .map(Message::Receive);
+                update.push(command);
+            }
         }
 
         update.push(self.model.dispatch_next_async());
@@ -361,6 +381,7 @@ impl WalletApp {
 
         let content = match self.model.active_route {
             Route::Overview => self.model.dashboard.view().map(Message::Dashboard),
+            Route::Receive => self.model.receive.view().map(Message::Receive),
             _ => text("Tab content coming soon...").size(16).into(),
         };
 
@@ -379,6 +400,14 @@ impl WalletApp {
                 .dashboard
                 .activate(self.model.client.clone())
                 .map(Message::Dashboard);
+            update.push(command);
+        }
+        if self.model.active_route == Route::Receive {
+            let command = self
+                .model
+                .receive
+                .activate(self.model.client.clone())
+                .map(Message::Receive);
             update.push(command);
         }
     }
@@ -422,6 +451,7 @@ struct Model {
     passphrase_input: String,
     keystore_path: Option<PathBuf>,
     dashboard: dashboard::State,
+    receive: receive::State,
 }
 
 impl Model {
@@ -441,6 +471,7 @@ impl Model {
             passphrase_input: String::new(),
             keystore_path: None,
             dashboard: dashboard::State::default(),
+            receive: receive::State::default(),
         }
     }
 
@@ -470,6 +501,7 @@ impl Model {
 
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
         self.dashboard.reset();
+        self.receive.reset();
         if status.locked {
             self.session = SessionState::Locked(LockedSession {
                 keystore_present: status.present,
@@ -485,6 +517,7 @@ impl Model {
 
     fn set_session_locked(&mut self) {
         self.dashboard.reset();
+        self.receive.reset();
         let present = self
             .keystore_path
             .as_ref()
@@ -499,6 +532,7 @@ impl Model {
 
     fn set_session_unlocking(&mut self) {
         self.dashboard.reset();
+        self.receive.reset();
         let present = self
             .keystore_path
             .as_ref()
