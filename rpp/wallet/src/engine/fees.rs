@@ -383,18 +383,18 @@ mod tests {
             }
 
             fn mempool_status(&self) -> Result<rpp::runtime::node::MempoolStatus, NodeClientError> {
-                Err(NodeClientError::transport(anyhow!("boom")))
+                Err(NodeClientError::network(anyhow!("boom")))
             }
 
             fn mempool_info(&self) -> Result<MempoolInfo, NodeClientError> {
-                Err(NodeClientError::transport(anyhow!("boom")))
+                Err(NodeClientError::network(anyhow!("boom")))
             }
 
             fn recent_blocks(
                 &self,
                 _limit: usize,
             ) -> Result<Vec<BlockFeeSummary>, NodeClientError> {
-                Err(NodeClientError::transport(anyhow!("boom")))
+                Err(NodeClientError::network(anyhow!("boom")))
             }
         }
 
