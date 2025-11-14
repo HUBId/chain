@@ -869,4 +869,50 @@ mod tests {
         assert!(prefs.clipboard_allowed());
         assert!(state.take_dirty_preferences().is_none());
     }
+
+    #[test]
+    fn telemetry_toggle_reverts_on_failure() {
+        let mut state = State::default();
+        state.set_preferences(Preferences::default());
+        state.preferences.telemetry_opt_in = false;
+
+        let _command = state.update(dummy_client(), Message::ToggleTelemetry(true));
+        assert!(state.telemetry_inflight);
+        assert_eq!(state.telemetry_pending, Some((false, true)));
+
+        let error = RpcCallError::Timeout(Duration::from_secs(2));
+        let _ = state.update(dummy_client(), Message::TelemetryUpdated(Err(error)));
+        assert!(!state.telemetry_inflight);
+        assert_eq!(state.preferences.telemetry_opt_in, false);
+        assert!(state
+            .telemetry_error
+            .as_ref()
+            .expect("telemetry error recorded")
+            .contains("2"));
+    }
+
+    #[test]
+    fn passphrase_change_requires_matching_inputs() {
+        let mut state = State::default();
+        state.keystore_present = true;
+        state.keystore_locked = false;
+        state.keystore_modal = Some(KeystoreModal::Passphrase(PassphraseForm::default()));
+
+        let _ = state.update(
+            dummy_client(),
+            Message::PassphraseChanged(PassphraseField::New, "secret".into()),
+        );
+        let _ = state.update(
+            dummy_client(),
+            Message::PassphraseChanged(PassphraseField::Confirm, "mismatch".into()),
+        );
+        let _ = state.update(dummy_client(), Message::SubmitPassphraseChange);
+
+        if let Some(KeystoreModal::Passphrase(form)) = &state.keystore_modal {
+            assert_eq!(form.error.as_deref(), Some("Passphrases do not match."));
+        } else {
+            panic!("passphrase modal should remain open");
+        }
+        assert!(!state.keystore_inflight);
+    }
 }

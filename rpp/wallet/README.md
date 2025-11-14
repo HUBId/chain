@@ -27,3 +27,15 @@ The crate ships with feature-gated prover integrations. Enable them via `cargo`:
 * `prover-stwo-simd` – STWO backend with SIMD acceleration; implies `prover-stwo`.
 
 Refer to `Cargo.toml` for the complete flag graph and dependency list.【F:rpp/wallet/Cargo.toml†L7-L23】
+
+### GUI unit tests
+
+The iced wallet UI models and state machines are only compiled when the
+`wallet_gui` feature flag is enabled. Run their unit tests explicitly with:
+
+```
+cargo test -p rpp-wallet --features wallet_gui
+```
+
+The CI `cargo xtask test-unit` entry point also enables `wallet_gui` to cover
+these suites.【F:xtask/src/main.rs†L138-L171】

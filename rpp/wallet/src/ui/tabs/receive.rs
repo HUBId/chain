@@ -425,7 +425,6 @@ fn format_rpc_error(error: &RpcCallError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::command::Action;
     use std::time::Duration;
 
     fn dummy_client() -> WalletRpcClient {
@@ -474,14 +473,52 @@ mod tests {
         );
         assert!(state.pending_clipboard.is_some());
         assert!(!state.clipboard_opt_in);
-        assert!(command.into_iter().next().is_none());
+        assert!(command.actions().is_empty());
 
         let command = state.update(client, Message::ClipboardOptInConfirmed);
         assert!(state.clipboard_opt_in);
         assert!(state.pending_clipboard.is_none());
 
-        let actions: Vec<_> = command.into_iter().collect();
-        assert!(matches!(actions.as_slice(),
-            [Action::Clipboard(clipboard::Action::Copy(value))] if value == "addr1"));
+        let actions = command.actions();
+        assert_eq!(actions.len(), 1);
+        let debug = format!("{:?}", actions[0]);
+        assert!(debug.contains("Action::Clipboard"));
+        assert!(debug.contains("addr1"));
+    }
+
+    #[test]
+    fn activate_triggers_address_fetch() {
+        let mut state = State::default();
+        let _command = state.activate(dummy_client());
+        assert!(matches!(state.current, Snapshot::Loading));
+    }
+
+    #[test]
+    fn clipboard_rejection_clears_pending_request() {
+        let client = dummy_client();
+        let mut state = State::default();
+        state.update(
+            client.clone(),
+            Message::CurrentAddressLoaded(Ok(response("addr1"))),
+        );
+
+        let _ = state.update(
+            client.clone(),
+            Message::CopyToClipboard(ClipboardTarget::Address),
+        );
+        assert!(state.pending_clipboard.is_some());
+
+        let command = state.update(client, Message::ClipboardOptInRejected);
+        assert!(state.pending_clipboard.is_none());
+        assert!(command.actions().is_empty());
+    }
+
+    #[test]
+    fn load_error_sets_snapshot_failure() {
+        let mut state = State::default();
+        state.current = Snapshot::Loading;
+        let error = RpcCallError::Timeout(Duration::from_secs(4));
+        state.update(dummy_client(), Message::CurrentAddressLoaded(Err(error)));
+        assert!(matches!(state.current, Snapshot::Error(message) if message.contains("4")));
     }
 }

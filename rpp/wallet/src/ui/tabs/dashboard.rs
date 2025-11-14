@@ -381,4 +381,37 @@ mod tests {
         assert!(matches!(state.balance, Snapshot::Loading));
         assert!(matches!(state.transactions, Snapshot::Loading));
     }
+
+    #[test]
+    fn activate_refreshes_idle_snapshots() {
+        let mut state = State::default();
+        let _command = state.activate(dummy_client());
+        assert!(matches!(state.balance, Snapshot::Loading));
+        assert!(matches!(state.transactions, Snapshot::Loading));
+    }
+
+    #[test]
+    fn sync_status_without_changes_does_not_trigger_reload() {
+        let mut state = State::default();
+        let status = sample_sync_status();
+        state.sync_status = Some(status.clone());
+        state.balance.set_loaded(BalanceResponse {
+            confirmed: 1,
+            pending: 0,
+            total: 1,
+        });
+        state.transactions.set_loaded(Vec::new());
+
+        let _command = state.update(dummy_client(), Message::SyncStatusUpdated(status));
+
+        assert!(matches!(state.balance, Snapshot::Loaded(_)));
+        assert!(matches!(state.transactions, Snapshot::Loaded(_)));
+    }
+
+    #[test]
+    fn navigate_to_history_routes_correctly() {
+        let mut state = State::default();
+        let (_command, route) = state.update(dummy_client(), Message::NavigateToHistory);
+        assert_eq!(route, Some(Route::Activity));
+    }
 }

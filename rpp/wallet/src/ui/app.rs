@@ -896,6 +896,121 @@ impl ErrorNotification {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn mock_client() -> WalletRpcClient {
+        WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, Duration::from_secs(1))
+            .expect("construct mock client")
+    }
+
+    fn build_app() -> WalletApp {
+        let flags = WalletGuiFlags {
+            client: mock_client(),
+            config_path: None,
+            sync_poll_interval: Duration::from_secs(1),
+        };
+        let (app, _cmd) = WalletApp::new(flags);
+        app
+    }
+
+    fn drive_to_unlocked(app: &mut WalletApp) {
+        let config = WalletConfig::default();
+        let prefs = Preferences::default();
+        app.update(Message::ConfigLoaded(Ok(config)));
+        app.update(Message::PreferencesLoaded(Ok(prefs)));
+        app.update(Message::KeystoreStatusDetected(Ok(KeystoreStatus {
+            locked: true,
+            present: true,
+        })));
+        app.update(Message::PassphraseChanged("secret".into()));
+        app.update(Message::PassphraseSubmitted);
+        app.update(Message::UnlockCompleted(Ok(())));
+    }
+
+    #[test]
+    fn unlock_flow_transitions_through_states() {
+        let mut app = build_app();
+
+        app.update(Message::ConfigLoaded(Ok(WalletConfig::default())));
+        app.update(Message::PreferencesLoaded(Ok(Preferences::default())));
+
+        app.update(Message::KeystoreStatusDetected(Ok(KeystoreStatus {
+            locked: true,
+            present: true,
+        })));
+        assert!(matches!(app.model.session, SessionState::Locked(_)));
+
+        app.update(Message::PassphraseChanged("hunter2".into()));
+        assert_eq!(app.model.passphrase_input, "hunter2");
+
+        app.update(Message::PassphraseSubmitted);
+        assert!(matches!(app.model.session, SessionState::Unlocking(_)));
+        assert!(app.model.passphrase_input.is_empty());
+
+        app.update(Message::UnlockCompleted(Ok(())));
+        assert!(app.model.session.is_unlocked());
+        assert!(app.model.sync_status.is_none());
+        assert!(app.model.sync_inflight);
+    }
+
+    #[test]
+    fn sync_tick_schedules_status_refresh() {
+        let mut app = build_app();
+        drive_to_unlocked(&mut app);
+
+        let status = SyncStatusResponse {
+            syncing: false,
+            mode: None,
+            latest_height: Some(42),
+            scanned_scripthashes: None,
+            pending_ranges: Vec::new(),
+            checkpoints: None,
+            last_rescan_timestamp: None,
+            last_error: None,
+            node_issue: None,
+            hints: Vec::new(),
+        };
+        app.update(Message::SyncStatusLoaded(Ok(status)));
+        assert!(!app.model.sync_inflight);
+
+        app.model.active_route = Route::Node;
+        app.update(Message::SyncTick);
+
+        assert!(app.model.sync_inflight);
+        assert!(app.model.node.refresh_inflight);
+    }
+
+    #[test]
+    fn sync_status_error_surfaces_global_banner() {
+        let mut app = build_app();
+        drive_to_unlocked(&mut app);
+        app.model.sync_inflight = true;
+
+        app.update(Message::SyncStatusLoaded(Err(AppError::new("sync failed"))));
+
+        assert!(app.model.global_error.is_some());
+        assert!(!app.model.sync_inflight);
+
+        app.update(Message::DismissError);
+        assert!(app.model.global_error.is_none());
+    }
+
+    #[test]
+    fn navigation_intents_update_active_route() {
+        let mut app = build_app();
+        drive_to_unlocked(&mut app);
+
+        app.update(Message::KeyboardShortcut(NavigationIntent::Next));
+        assert_eq!(app.model.active_route, Route::Activity);
+
+        app.update(Message::KeyboardShortcut(NavigationIntent::Previous));
+        assert_eq!(app.model.active_route, Route::Overview);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct KeystoreStatus {
     locked: bool,
