@@ -955,19 +955,40 @@ fn render_locks(locks: &[PendingLockDto]) {
     }
     println!("\n  Locks:");
     println!(
-        "    {:<68} {:>16} {:>64}",
-        "Outpoint", "Locked at (ms)", "Spending txid"
+        "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>64}",
+        "Outpoint",
+        "Locked at (ms)",
+        "Backend",
+        "Witness (B)",
+        "Proof (B)",
+        "Duration (ms)",
+        "Spending txid"
     );
     for PendingLockDto {
         utxo_txid,
         utxo_index,
         locked_at_ms,
         spending_txid,
+        backend,
+        witness_bytes,
+        proof_bytes,
+        prove_duration_ms,
     } in locks
     {
         let outpoint = format!("{}:{}", utxo_txid, utxo_index);
         let spending = spending_txid.clone().unwrap_or_else(|| "-".to_string());
-        println!("    {:<68} {:>16} {:>64}", outpoint, locked_at_ms, spending);
+        let backend = if backend.is_empty() {
+            "-".to_string()
+        } else {
+            backend.clone()
+        };
+        let proof = proof_bytes
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>64}",
+            outpoint, locked_at_ms, backend, witness_bytes, proof, prove_duration_ms, spending
+        );
     }
 }
 

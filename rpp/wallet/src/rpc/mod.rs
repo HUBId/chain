@@ -565,6 +565,10 @@ impl From<PendingLock> for PendingLockDto {
             utxo_index: lock.outpoint.index,
             locked_at_ms: lock.locked_at_ms,
             spending_txid: lock.spending_txid.map(hex_encode),
+            backend: lock.metadata.backend,
+            witness_bytes: lock.metadata.witness_bytes,
+            prove_duration_ms: lock.metadata.prove_duration_ms,
+            proof_bytes: lock.metadata.proof_bytes,
         }
     }
 }

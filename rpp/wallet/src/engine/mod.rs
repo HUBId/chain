@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig};
 use crate::db::{
-    PendingLock, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreError,
+    PendingLock, PendingLockMetadata, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore,
+    WalletStoreError,
 };
 use crate::node_client::NodeClient;
 
@@ -274,12 +275,13 @@ impl WalletEngine {
         &self,
         inputs: I,
         txid: [u8; 32],
+        metadata: Option<PendingLockMetadata>,
     ) -> Result<Vec<PendingLock>, EngineError>
     where
         I: IntoIterator<Item = &'a UtxoOutpoint>,
     {
         self.address_manager
-            .attach_lock_txid(inputs, txid)
+            .attach_lock_txid(inputs, txid, metadata)
             .map_err(EngineError::from)
     }
 
@@ -375,6 +377,7 @@ impl WalletEngine {
             draft.inputs.iter().map(|input| &input.outpoint),
             None,
             now,
+            None,
         )?;
         Ok(draft)
     }
