@@ -68,6 +68,7 @@ prover-stwo-simd = [
     "rpp-node/prover-stwo-simd",
     "prover_stwo_backend/prover-stwo-simd",
 ]
+wallet_gui = ["rpp-wallet/wallet_gui"]
 backend-plonky3 = [
     "rpp-chain/backend-plonky3",
     "rpp-node/backend-plonky3",

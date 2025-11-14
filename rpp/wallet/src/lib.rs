@@ -43,6 +43,9 @@ pub mod cli;
 /// JSON-RPC facades exposed by the wallet runtime.
 pub mod rpc;
 
+#[cfg(feature = "wallet_gui")]
+pub mod ui;
+
 /// Indexer client abstractions and helpers.
 pub mod indexer;
 
@@ -62,7 +65,7 @@ pub mod node_client;
 pub mod wallet;
 
 pub use engine::{
-    DraftInput, DraftOutput, DraftTransaction, DerivationPath, SpendModel, WalletBalance,
+    DerivationPath, DraftInput, DraftOutput, DraftTransaction, SpendModel, WalletBalance,
     WalletEngine,
 };
 pub use node_client::{ChainHead, NodeClient, NodeClientError, StubNodeClient};

@@ -26,6 +26,7 @@ backend-rpp-stark = []
 vendor_electrs = ["dep:sha2", "dep:rpp_p2p", "dep:parking_lot"]
 vendor_electrs_telemetry = []
 vendor_electrs_test_support = ["vendor_electrs"]
+wallet_gui = ["dep:iced", "dep:arboard", "dep:qrcode"]
 
 [dependencies]
 anyhow = "1"
@@ -56,6 +57,9 @@ ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rpassword = "7.3"
 zeroize = "1.8"
+iced = { version = "0.12.1", optional = true, features = ["tokio", "qr_code"] }
+arboard = { version = "3.4", optional = true }
+qrcode = { version = "0.13", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"
@@ -64,4 +68,9 @@ uuid = { version = "1", features = ["v4"] }
 opentelemetry = "=0.30.0"
 opentelemetry_sdk = "=0.30.0"
 prover_mock_backend = { path = "../zk/prover_mock_backend" }
+
+[[bin]]
+name = "rpp-wallet-gui"
+path = "src/ui/main.rs"
+required-features = ["wallet_gui"]
 

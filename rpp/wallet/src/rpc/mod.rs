@@ -1,5 +1,6 @@
 //! JSON-RPC facades for wallet subsystems.
 
+pub mod client;
 pub mod dto;
 pub mod error;
 pub mod zsi;
