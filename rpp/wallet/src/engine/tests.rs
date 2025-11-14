@@ -11,7 +11,7 @@ use super::utxo_sel::{
 };
 use super::{DraftOutput, SpendModel};
 use crate::config::wallet::WalletPolicyConfig;
-use crate::db::{AddressKind, UtxoOutpoint, UtxoRecord, WalletStore};
+use crate::db::{AddressKind, PendingLockMetadata, UtxoOutpoint, UtxoRecord, WalletStore};
 
 fn seeded_store() -> Arc<WalletStore> {
     let dir = tempdir().expect("tempdir");
@@ -40,18 +40,20 @@ fn address_manager_tracks_and_releases_locks() {
     let manager = AddressManager::new(Arc::clone(&store), [3u8; 32], 2, 2).expect("manager");
     let outpoint = UtxoOutpoint::new([1u8; 32], 0);
     manager
-        .lock_inputs([&outpoint], None, 1_000)
+        .lock_inputs([&outpoint], None, 1_000, None)
         .expect("lock inputs");
     assert!(manager.is_outpoint_pending(&outpoint));
     let locks = manager.pending_locks().expect("pending locks");
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].outpoint, outpoint);
 
+    let metadata = PendingLockMetadata::new("mock".into(), 16, 8, Some(256));
     manager
-        .attach_lock_txid([&outpoint], [9u8; 32])
+        .attach_lock_txid([&outpoint], [9u8; 32], Some(metadata.clone()))
         .expect("attach txid");
     let updated = manager.pending_locks().expect("locks after attach");
     assert_eq!(updated[0].spending_txid, Some([9u8; 32]));
+    assert_eq!(updated[0].metadata, metadata);
 
     let expired = manager
         .release_expired_locks(2_500, 1)
@@ -60,7 +62,7 @@ fn address_manager_tracks_and_releases_locks() {
     assert!(manager.pending_locks().expect("locks").is_empty());
 
     manager
-        .lock_inputs([&outpoint], Some([4u8; 32]), 5_000)
+        .lock_inputs([&outpoint], Some([4u8; 32]), 5_000, None)
         .expect("lock again");
     let released = manager.release_inputs([&outpoint]).expect("release inputs");
     assert_eq!(released.len(), 1);

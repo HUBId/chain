@@ -166,12 +166,20 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         draft.locks[0].spending_txid.is_none(),
         "draft lock should not yet reference a spending txid",
     );
+    assert!(draft.locks[0].backend.is_empty());
+    assert_eq!(draft.locks[0].witness_bytes, 0);
+    assert_eq!(draft.locks[0].prove_duration_ms, 0);
+    assert!(draft.locks[0].proof_bytes.is_none());
 
     let listed_locks: ListPendingLocksResponse =
         rpc_call(&client, &endpoint, "list_pending_locks", None)
             .await
             .context("list pending locks")?;
     assert_eq!(listed_locks.locks.len(), 1);
+    assert!(listed_locks.locks[0].backend.is_empty());
+    assert_eq!(listed_locks.locks[0].witness_bytes, 0);
+    assert_eq!(listed_locks.locks[0].prove_duration_ms, 0);
+    assert!(listed_locks.locks[0].proof_bytes.is_none());
 
     let sign_params = SignTxParams {
         draft_id: draft.draft_id.clone(),
@@ -197,6 +205,13 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     assert!(
         signed.locks[0].spending_txid.is_some(),
         "signing should assign a spending txid to the lock",
+    );
+    assert_eq!(signed.locks[0].backend, signed.backend);
+    assert_eq!(signed.locks[0].witness_bytes, signed.witness_bytes as u64);
+    assert_eq!(signed.locks[0].prove_duration_ms, signed.duration_ms);
+    assert_eq!(
+        signed.locks[0].proof_bytes,
+        signed.proof_size.map(|size| size as u64)
     );
 
     let broadcast_params = BroadcastParams {
@@ -488,6 +503,7 @@ async fn wallet_cli_commands_render_expected_output() -> Result<()> {
         String::from_utf8(locks_list_output.stdout).context("decode wallet locks list stdout")?;
     assert!(locks_list_stdout.contains("Pending locks"));
     assert!(locks_list_stdout.contains("Locks:"));
+    assert!(locks_list_stdout.contains("Backend"));
 
     let sign_output = Command::cargo_bin("wallet")?
         .args([

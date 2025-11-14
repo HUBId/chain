@@ -3,7 +3,9 @@ use std::sync::Arc;
 use ed25519_dalek::{PublicKey, SecretKey};
 use std::convert::TryInto;
 
-use crate::db::{AddressKind, PendingLock, UtxoOutpoint, WalletStore, WalletStoreError};
+use crate::db::{
+    AddressKind, PendingLock, PendingLockMetadata, UtxoOutpoint, WalletStore, WalletStoreError,
+};
 use crate::proof_backend::Blake2sHasher;
 
 use super::DerivationPath;
@@ -92,6 +94,7 @@ impl AddressManager {
         inputs: I,
         spending_txid: Option<[u8; 32]>,
         locked_at_ms: u64,
+        metadata: Option<PendingLockMetadata>,
     ) -> Result<Vec<PendingLock>, AddressError>
     where
         I: IntoIterator<Item = &'a UtxoOutpoint>,
@@ -103,7 +106,10 @@ impl AddressManager {
         let mut batch = self.store.batch()?;
         let mut locks = Vec::with_capacity(inputs.len());
         for outpoint in &inputs {
-            let lock = PendingLock::new(outpoint.clone(), locked_at_ms, spending_txid);
+            let mut lock = PendingLock::new(outpoint.clone(), locked_at_ms, spending_txid);
+            if let Some(metadata) = metadata.as_ref() {
+                lock.metadata = metadata.clone();
+            }
             batch.put_pending_lock(&lock)?;
             locks.push(lock);
         }
@@ -115,6 +121,7 @@ impl AddressManager {
         &self,
         inputs: I,
         spending_txid: [u8; 32],
+        metadata: Option<PendingLockMetadata>,
     ) -> Result<Vec<PendingLock>, AddressError>
     where
         I: IntoIterator<Item = &'a UtxoOutpoint>,
@@ -127,6 +134,9 @@ impl AddressManager {
         for outpoint in &inputs {
             if let Some(mut lock) = self.store.get_pending_lock(outpoint)? {
                 lock.spending_txid = Some(spending_txid);
+                if let Some(metadata) = metadata.as_ref() {
+                    lock.metadata = metadata.clone();
+                }
                 updated.push(lock);
             }
         }

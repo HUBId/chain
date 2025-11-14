@@ -105,6 +105,36 @@ impl<'a> TxCacheEntry<'a> {
     }
 }
 
+/// Auxiliary metadata captured for a pending lock.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingLockMetadata {
+    #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
+    pub witness_bytes: u64,
+    #[serde(default)]
+    pub prove_duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub proof_bytes: Option<u64>,
+}
+
+impl PendingLockMetadata {
+    pub fn new(
+        backend: String,
+        witness_bytes: u64,
+        prove_duration_ms: u64,
+        proof_bytes: Option<u64>,
+    ) -> Self {
+        Self {
+            backend,
+            witness_bytes,
+            prove_duration_ms,
+            proof_bytes,
+        }
+    }
+}
+
 /// Metadata describing a pending lock entry held by the wallet.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingLock {
@@ -112,6 +142,8 @@ pub struct PendingLock {
     pub locked_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spending_txid: Option<[u8; 32]>,
+    #[serde(default)]
+    pub metadata: PendingLockMetadata,
 }
 
 impl PendingLock {
@@ -120,7 +152,13 @@ impl PendingLock {
             outpoint,
             locked_at_ms,
             spending_txid,
+            metadata: PendingLockMetadata::default(),
         }
+    }
+
+    pub fn with_metadata(mut self, metadata: PendingLockMetadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
@@ -243,11 +281,13 @@ mod tests {
 
     #[test]
     fn pending_lock_roundtrip() {
+        let metadata = PendingLockMetadata::new("mock".into(), 42, 1_000, Some(512));
         let lock = PendingLock::new(
             UtxoOutpoint::new([2u8; 32], 11),
             1_650_000_000_000,
             Some([9u8; 32]),
-        );
+        )
+        .with_metadata(metadata);
         let encoded = encode_pending_lock(&lock).expect("encode lock");
         let decoded = decode_pending_lock(&encoded).expect("decode lock");
         assert_eq!(decoded, lock);

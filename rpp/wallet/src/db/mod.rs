@@ -2,7 +2,10 @@ pub mod codec;
 pub mod schema;
 pub mod store;
 
-pub use codec::{Address, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord};
+pub use codec::{
+    Address, PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
+    UtxoRecord,
+};
 pub use store::{AddressKind, WalletStore, WalletStoreBatch, WalletStoreError};
 
 #[cfg(test)]

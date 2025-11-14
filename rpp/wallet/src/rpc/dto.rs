@@ -144,6 +144,15 @@ pub struct PendingLockDto {
     pub locked_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spending_txid: Option<String>,
+    #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
+    pub witness_bytes: u64,
+    #[serde(default)]
+    pub prove_duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub proof_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -564,6 +573,10 @@ mod tests {
                 utxo_index: 0,
                 locked_at_ms: 1234,
                 spending_txid: None,
+                backend: "mock".into(),
+                witness_bytes: 1,
+                prove_duration_ms: 2,
+                proof_bytes: None,
             }],
         };
         roundtrip(&response);
@@ -690,6 +703,10 @@ mod tests {
                 utxo_index: 1,
                 locked_at_ms: 2,
                 spending_txid: Some("cc".into()),
+                backend: "mock".into(),
+                witness_bytes: 42,
+                prove_duration_ms: 7,
+                proof_bytes: Some(128),
             }],
         };
         roundtrip(&list);

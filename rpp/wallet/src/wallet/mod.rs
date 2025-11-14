@@ -5,7 +5,8 @@ use crate::config::wallet::{
     PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig, WalletProverConfig,
 };
 use crate::db::{
-    PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord, WalletStore, WalletStoreError,
+    PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoRecord, WalletStore,
+    WalletStoreError,
 };
 use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
@@ -173,8 +174,21 @@ impl Wallet {
         match self.prover.prove(draft) {
             Ok(output) => {
                 let txid = lock_fingerprint(draft);
-                self.engine
-                    .attach_locks_to_txid(draft.inputs.iter().map(|input| &input.outpoint), txid)?;
+                let proof_bytes = output
+                    .proof
+                    .as_ref()
+                    .map(|bytes| bytes.as_slice().len() as u64);
+                let metadata = PendingLockMetadata::new(
+                    output.backend.clone(),
+                    output.witness_bytes as u64,
+                    output.duration_ms,
+                    proof_bytes,
+                );
+                self.engine.attach_locks_to_txid(
+                    draft.inputs.iter().map(|input| &input.outpoint),
+                    txid,
+                    Some(metadata),
+                )?;
                 Ok(output)
             }
             Err(err) => {
