@@ -9,7 +9,8 @@ use super::dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse,
     GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsResponse, ListUtxosResponse, PolicyPreviewResponse, ReleasePendingLocksParams,
+    ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
+    ListUtxosResponse, PolicyPreviewResponse, ReleasePendingLocksParams,
     ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
     SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
@@ -122,6 +123,14 @@ impl WalletRpcClient {
         &self,
     ) -> Result<ListTransactionsResponse, WalletRpcClientError> {
         self.call("list_txs", Option::<Value>::None).await
+    }
+
+    /// Lists transaction history entries using the provided filters.
+    pub async fn list_transactions_filtered(
+        &self,
+        params: &ListTransactionsParams,
+    ) -> Result<ListTransactionsPageResponse, WalletRpcClientError> {
+        self.call("list_txs", Some(params)).await
     }
 
     /// Derives a new address, optionally from the change branch.

@@ -104,6 +104,79 @@ pub struct ListTransactionsResponse {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListTransactionsParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<TransactionDirectionDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<TransactionConfirmationDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_timestamp_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_timestamp_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionDirectionDto {
+    Incoming,
+    Outgoing,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionConfirmationDto {
+    Pending,
+    Confirmed,
+    Pruned,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionHistoryStatusDto {
+    Pending,
+    Confirmed,
+    Pruned,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransactionPartyDto {
+    pub address: String,
+    pub value: u128,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransactionHistoryEntryDto {
+    pub txid: String,
+    pub timestamp_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmations: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee: Option<u128>,
+    pub direction: TransactionDirectionDto,
+    pub status: TransactionHistoryStatusDto,
+    #[serde(default)]
+    pub inputs: Vec<TransactionPartyDto>,
+    #[serde(default)]
+    pub outputs: Vec<TransactionPartyDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListTransactionsPageResponse {
+    pub entries: Vec<TransactionHistoryEntryDto>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeriveAddressParams {
     #[serde(default)]
     pub change: bool,
