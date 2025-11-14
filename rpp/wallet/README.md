@@ -39,3 +39,25 @@ cargo test -p rpp-wallet --features wallet_gui
 
 The CI `cargo xtask test-unit` entry point also enables `wallet_gui` to cover
 these suites.【F:xtask/src/main.rs†L138-L171】
+
+## Phase 3: GUI available (`wallet_gui`)
+
+Phase 3 ships the optional iced-based GUI behind the `wallet_gui` feature flag.
+See [Wallet Phase 3 – GUI Guide](../../docs/wallet_phase3_gui.md) for the MVU
+architecture, tab flows, security affordances, error handling, and telemetry
+coverage.【F:docs/wallet_phase3_gui.md†L1-L169】 Highlights for operators:
+
+* **Feature flags** – Build with `--features "wallet_gui telemetry"` to enable
+  the graphical shell and event reporting. Omit `telemetry` if metrics are not
+  required.【F:docs/wallet_phase3_gui.md†L129-L141】
+* **Launch command** – Start the GUI from the repo root with
+  `cargo run -p rpp-wallet --features wallet_gui -- gui` after configuring the
+  `[wallet.gui]` section in `config/wallet.toml`.【F:docs/wallet_phase3_gui.md†L133-L137】【F:config/wallet.toml†L1-L55】
+* **Capabilities** – Multi-tab experience for overview, send, and prover
+  workflows with policy-aware validation and prover progress tracking.【F:docs/wallet_phase3_gui.md†L60-L116】
+* **Limitations** – The GUI depends on the existing JSON-RPC service, does not
+  support hot policy edits, and inherits Phase 2 restart requirements after
+  config changes.【F:docs/wallet_phase3_gui.md†L35-L56】【F:config/wallet.toml†L1-L55】
+* **Validation** – Run GUI-focused tests via
+  `cargo test -p rpp-wallet --features wallet_gui -- ui` or rely on
+  `cargo xtask test-unit`, which already enables the flag.【F:docs/wallet_phase3_gui.md†L139-L147】【F:xtask/src/main.rs†L138-L171】
