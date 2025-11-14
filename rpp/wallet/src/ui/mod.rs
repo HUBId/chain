@@ -7,6 +7,7 @@ pub mod commands;
 pub mod components;
 pub mod error_map;
 pub mod routes;
+pub mod tabs;
 
 pub use app::WalletApp;
 

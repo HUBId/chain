@@ -24,6 +24,7 @@ use super::components::{
 };
 use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
+use super::tabs::dashboard;
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -45,6 +46,7 @@ pub enum Message {
     SyncStatusLoaded(Result<SyncStatusResponse, AppError>),
     Navigate(Route),
     KeyboardShortcut(NavigationIntent),
+    Dashboard(dashboard::Message),
     DismissError,
     Shutdown,
 }
@@ -115,6 +117,7 @@ impl Application for WalletApp {
                         self.model.sync_status = None;
                         self.model.sync_inflight = false;
                         self.model.passphrase_input.clear();
+                        self.model.dashboard.reset();
                     }
                     Err(error) => {
                         self.model.set_session_locked();
@@ -133,7 +136,17 @@ impl Application for WalletApp {
                 self.model.mark_async_complete();
                 match result {
                     Ok(status) => {
+                        let status_clone = status.clone();
                         self.model.sync_status = Some(status);
+                        let (command, route) = self.model.dashboard.update(
+                            self.model.client.clone(),
+                            dashboard::Message::SyncStatusUpdated(status_clone),
+                        );
+                        if let Some(route) = route {
+                            self.model.active_route = route;
+                            self.route_changed(&mut update);
+                        }
+                        update.push(command.map(Message::Dashboard));
                     }
                     Err(error) => self.model.push_error(error),
                 }
@@ -141,18 +154,33 @@ impl Application for WalletApp {
             }
             Message::Navigate(route) => {
                 self.model.active_route = route;
+                self.route_changed(&mut update);
             }
             Message::KeyboardShortcut(intent) => match intent {
                 NavigationIntent::Activate(route) => {
                     self.model.active_route = route;
+                    self.route_changed(&mut update);
                 }
                 NavigationIntent::Next => {
                     self.model.active_route = self.model.active_route.next();
+                    self.route_changed(&mut update);
                 }
                 NavigationIntent::Previous => {
                     self.model.active_route = self.model.active_route.previous();
+                    self.route_changed(&mut update);
                 }
             },
+            Message::Dashboard(message) => {
+                let (command, route) = self
+                    .model
+                    .dashboard
+                    .update(self.model.client.clone(), message);
+                if let Some(route) = route {
+                    self.model.active_route = route;
+                    self.route_changed(&mut update);
+                }
+                update.push(command.map(Message::Dashboard));
+            }
             Message::DismissError => {
                 self.model.global_error = None;
             }
@@ -167,6 +195,15 @@ impl Application for WalletApp {
         {
             self.model.sync_inflight = true;
             self.model.queue_async(AsyncAction::FetchSyncStatus);
+        }
+
+        if self.model.session.is_unlocked() && self.model.active_route == Route::Overview {
+            let command = self
+                .model
+                .dashboard
+                .activate(self.model.client.clone())
+                .map(Message::Dashboard);
+            update.push(command);
         }
 
         update.push(self.model.dispatch_next_async());
@@ -317,15 +354,33 @@ impl WalletApp {
             .width(Length::Fill);
 
         if let Some(status) = &self.model.sync_status {
-            column = column.push(sync_status_summary(status));
+            if self.model.active_route != Route::Overview {
+                column = column.push(sync_status_summary(status));
+            }
         }
 
-        column = column.push(text("Tab content coming soon...").size(16));
+        let content = match self.model.active_route {
+            Route::Overview => self.model.dashboard.view().map(Message::Dashboard),
+            _ => text("Tab content coming soon...").size(16).into(),
+        };
+
+        column = column.push(content);
 
         container(column)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    fn route_changed(&mut self, update: &mut Update) {
+        if self.model.active_route == Route::Overview {
+            let command = self
+                .model
+                .dashboard
+                .activate(self.model.client.clone())
+                .map(Message::Dashboard);
+            update.push(command);
+        }
     }
 }
 
@@ -366,6 +421,7 @@ struct Model {
     global_error: Option<ErrorNotification>,
     passphrase_input: String,
     keystore_path: Option<PathBuf>,
+    dashboard: dashboard::State,
 }
 
 impl Model {
@@ -384,6 +440,7 @@ impl Model {
             global_error: None,
             passphrase_input: String::new(),
             keystore_path: None,
+            dashboard: dashboard::State::default(),
         }
     }
 
@@ -412,6 +469,7 @@ impl Model {
     }
 
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
+        self.dashboard.reset();
         if status.locked {
             self.session = SessionState::Locked(LockedSession {
                 keystore_present: status.present,
@@ -426,6 +484,7 @@ impl Model {
     }
 
     fn set_session_locked(&mut self) {
+        self.dashboard.reset();
         let present = self
             .keystore_path
             .as_ref()
@@ -439,6 +498,7 @@ impl Model {
     }
 
     fn set_session_unlocking(&mut self) {
+        self.dashboard.reset();
         let present = self
             .keystore_path
             .as_ref()
