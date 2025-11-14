@@ -386,6 +386,79 @@ pub struct ReleasePendingLocksResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupMetadataDto {
+    pub version: u32,
+    pub schema_checksum: String,
+    pub created_at_ms: u64,
+    pub has_keystore: bool,
+    pub policy_entries: usize,
+    pub meta_entries: usize,
+    pub include_checksums: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupExportParams {
+    pub passphrase: String,
+    pub confirmation: String,
+    #[serde(default)]
+    pub metadata_only: bool,
+    #[serde(default = "default_include_checksums")]
+    pub include_checksums: bool,
+}
+
+fn default_include_checksums() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupExportResponse {
+    pub path: String,
+    pub metadata: BackupMetadataDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BackupValidationModeDto {
+    DryRun,
+    Full,
+}
+
+impl Default for BackupValidationModeDto {
+    fn default() -> Self {
+        BackupValidationModeDto::Full
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupValidateParams {
+    pub name: String,
+    pub passphrase: String,
+    #[serde(default)]
+    pub mode: BackupValidationModeDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupValidateResponse {
+    pub metadata: BackupMetadataDto,
+    pub has_keystore: bool,
+    pub policy_count: usize,
+    pub meta_entries: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupImportParams {
+    pub name: String,
+    pub passphrase: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupImportResponse {
+    pub metadata: BackupMetadataDto,
+    pub restored_keystore: bool,
+    pub restored_policy: bool,
+    pub rescan_from_height: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MempoolInfoResponse {
     pub tx_count: u64,
     pub vsize_limit: u64,

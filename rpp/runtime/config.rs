@@ -3275,6 +3275,11 @@ fn validate_wallet_engine(config: &WalletEngineSettings) -> ChainResult<()> {
             "wallet configuration wallet.engine.keystore_path must not be empty".into(),
         ));
     }
+    if config.backup_path.as_os_str().is_empty() {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.engine.backup_path must not be empty".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -3448,6 +3453,7 @@ impl WalletConfig {
         if let Some(parent) = self.wallet.engine.keystore_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        fs::create_dir_all(&self.wallet.engine.backup_path)?;
         #[cfg(feature = "vendor_electrs")]
         self.ensure_electrs_directories()?;
         Ok(())

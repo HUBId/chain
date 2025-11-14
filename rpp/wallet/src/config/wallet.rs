@@ -52,6 +52,8 @@ pub struct WalletEngineConfig {
     pub data_dir: PathBuf,
     /// Path to the persisted keystore bundle used by the wallet engine.
     pub keystore_path: PathBuf,
+    /// Directory storing encrypted wallet backup archives.
+    pub backup_path: PathBuf,
     /// Optional birthday height used when bootstrapping from checkpoints.
     pub birthday_height: Option<u64>,
 }
@@ -61,6 +63,7 @@ impl Default for WalletEngineConfig {
         Self {
             data_dir: PathBuf::from("./data/wallet"),
             keystore_path: PathBuf::from("./data/wallet/keystore.toml"),
+            backup_path: PathBuf::from("./data/wallet/backups"),
             birthday_height: None,
         }
     }

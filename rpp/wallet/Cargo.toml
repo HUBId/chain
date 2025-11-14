@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.79"
 
 [features]
-default = ["prover-mock"]
+default = ["prover-mock", "backup"]
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",
@@ -27,6 +27,7 @@ vendor_electrs = ["dep:sha2", "dep:rpp_p2p", "dep:parking_lot"]
 vendor_electrs_telemetry = []
 vendor_electrs_test_support = ["vendor_electrs"]
 wallet_gui = ["dep:iced", "dep:arboard", "dep:qrcode"]
+backup = ["dep:sha2"]
 
 [dependencies]
 anyhow = "1"

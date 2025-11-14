@@ -38,6 +38,7 @@ use rpp_wallet::rpc::dto::{
     SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
+use rpp_wallet::wallet::WalletPaths;
 use rpp_wallet::wallet::{Wallet, WalletSyncCoordinator};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -619,6 +620,8 @@ impl WorkflowFixture {
             internal_gap_limit: 4,
             min_confirmations: 1,
         };
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Arc::new(
             Wallet::new(
                 Arc::clone(&store),
@@ -627,6 +630,7 @@ impl WorkflowFixture {
                 WalletFeeConfig::default(),
                 WalletProverConfig::default(),
                 node.clone(),
+                WalletPaths::new(keystore, backup),
             )
             .context("construct wallet instance")?,
         );

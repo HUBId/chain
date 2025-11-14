@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,12 +46,33 @@ pub struct PolicyPreview {
     pub tier_hooks: PolicyTierHooks,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WalletPaths {
+    pub keystore: PathBuf,
+    pub backup: PathBuf,
+}
+
+impl WalletPaths {
+    pub fn new(keystore: PathBuf, backup: PathBuf) -> Self {
+        Self { keystore, backup }
+    }
+
+    pub fn for_data_dir(base: &Path) -> Self {
+        Self {
+            keystore: base.join("keystore.toml"),
+            backup: base.join("backups"),
+        }
+    }
+}
+
 pub struct Wallet {
     store: Arc<WalletStore>,
     engine: Arc<WalletEngine>,
     node_client: Arc<dyn NodeClient>,
     prover: Arc<dyn WalletProver>,
     identifier: String,
+    keystore_path: PathBuf,
+    backup_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -75,6 +97,7 @@ impl Wallet {
         fees: WalletFeeConfig,
         prover_config: WalletProverConfig,
         node_client: Arc<dyn NodeClient>,
+        paths: WalletPaths,
     ) -> Result<Self, WalletError> {
         let engine = Arc::new(WalletEngine::new(
             Arc::clone(&store),
@@ -84,12 +107,15 @@ impl Wallet {
         )?);
         let prover = build_wallet_prover(&prover_config)?;
         let identifier = engine.identifier();
+        let WalletPaths { keystore, backup } = paths;
         Ok(Self {
             store,
             engine,
             node_client,
             prover,
             identifier,
+            keystore_path: keystore,
+            backup_path: backup,
         })
     }
 
@@ -252,6 +278,14 @@ impl Wallet {
 
     pub fn store(&self) -> Arc<WalletStore> {
         Arc::clone(&self.store)
+    }
+
+    pub fn keystore_path(&self) -> &PathBuf {
+        &self.keystore_path
+    }
+
+    pub fn backup_dir(&self) -> &PathBuf {
+        &self.backup_path
     }
 
     pub fn engine(&self) -> &WalletEngine {
@@ -430,6 +464,8 @@ mod tests {
         let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
         let mut config = WalletProverConfig::default();
         config.max_witness_bytes = 1_000_000;
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [3u8; 32],
@@ -437,6 +473,7 @@ mod tests {
             fees,
             config,
             Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
 
@@ -480,6 +517,8 @@ mod tests {
         config.enabled = true;
         config.mock_fallback = false;
         config.job_timeout_secs = 30;
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [5u8; 32],
@@ -487,6 +526,7 @@ mod tests {
             fees,
             config,
             Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
 
@@ -562,6 +602,8 @@ mod tests {
         let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
         let mut config = WalletProverConfig::default();
         config.max_witness_bytes = 1;
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [9u8; 32],
@@ -569,6 +611,7 @@ mod tests {
             fees,
             config,
             Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
 
@@ -602,6 +645,8 @@ mod tests {
         config.enabled = true;
         config.mock_fallback = false;
         config.max_witness_bytes = 1;
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [11u8; 32],
@@ -609,6 +654,7 @@ mod tests {
             fees,
             config,
             Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
 
