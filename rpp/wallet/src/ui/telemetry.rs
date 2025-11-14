@@ -48,7 +48,7 @@ impl UiTelemetry {
             return;
         }
         let value = duration.as_secs_f64() * 1_000.0;
-        histogram!("ui.rpc.latency_ms", value, "method" => method, "result" => "ok");
+        histogram!("ui.rpc.latency_ms", "method" => method, "result" => "ok").record(value);
     }
 
     pub fn record_rpc_timeout(&self, method: &'static str, timeout: Duration) {
@@ -56,12 +56,7 @@ impl UiTelemetry {
             return;
         }
         let value = timeout.as_secs_f64() * 1_000.0;
-        histogram!(
-            "ui.rpc.latency_ms",
-            value,
-            "method" => method,
-            "result" => "timeout"
-        );
+        histogram!("ui.rpc.latency_ms", "method" => method, "result" => "timeout").record(value);
     }
 
     pub fn record_rpc_client_error(
@@ -78,21 +73,21 @@ impl UiTelemetry {
         if let Some(code) = labels.code.as_deref() {
             histogram!(
                 "ui.rpc.latency_ms",
-                value,
                 "method" => method,
                 "result" => "error",
                 "error_kind" => labels.kind,
                 "code" => code
-            );
-            counter!("ui.errors.by_code", 1, "code" => code);
+            )
+            .record(value);
+            counter!("ui.errors.by_code", "code" => code).increment(1);
         } else {
             histogram!(
                 "ui.rpc.latency_ms",
-                value,
                 "method" => method,
                 "result" => "error",
                 "error_kind" => labels.kind
-            );
+            )
+            .record(value);
         }
     }
 
@@ -100,7 +95,7 @@ impl UiTelemetry {
         if !self.opted_in() {
             return;
         }
-        counter!("ui.send.steps", 1, "stage" => stage, "outcome" => "success");
+        counter!("ui.send.steps", "stage" => stage, "outcome" => "success").increment(1);
     }
 
     pub fn record_send_step_failure(&self, stage: &'static str, error: &RpcCallError) {
@@ -109,31 +104,26 @@ impl UiTelemetry {
         }
         match rpc_failure_labels(error) {
             RpcFailure::Timeout => {
-                counter!(
-                    "ui.send.steps",
-                    1,
-                    "stage" => stage,
-                    "outcome" => "timeout"
-                );
+                counter!("ui.send.steps", "stage" => stage, "outcome" => "timeout").increment(1);
             }
             RpcFailure::Client { kind, code } => {
                 if let Some(code) = code.as_deref() {
                     counter!(
                         "ui.send.steps",
-                        1,
                         "stage" => stage,
                         "outcome" => "error",
                         "error_kind" => kind,
                         "code" => code
-                    );
+                    )
+                    .increment(1);
                 } else {
                     counter!(
                         "ui.send.steps",
-                        1,
                         "stage" => stage,
                         "outcome" => "error",
                         "error_kind" => kind
-                    );
+                    )
+                    .increment(1);
                 }
             }
         }
@@ -143,7 +133,7 @@ impl UiTelemetry {
         if !self.opted_in() {
             return;
         }
-        counter!("ui.rescan.triggered", 1, "origin" => origin);
+        counter!("ui.rescan.triggered", "origin" => origin).increment(1);
     }
 }
 

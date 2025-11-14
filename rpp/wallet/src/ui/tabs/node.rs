@@ -796,4 +796,25 @@ mod tests {
         // Ensure a command was produced to drive the refresh RPCs.
         let _ = command;
     }
+
+    #[test]
+    fn syncing_status_blocks_new_rescan_requests() {
+        let mut state = State::default();
+        state.sync_status = Some(SyncStatusResponse {
+            syncing: true,
+            mode: Some(SyncModeDto::Rescan { from_height: 5 }),
+            latest_height: None,
+            scanned_scripthashes: None,
+            pending_ranges: vec![(0, 10)],
+            checkpoints: None,
+            last_rescan_timestamp: None,
+            last_error: None,
+            node_issue: None,
+            hints: Vec::new(),
+        });
+
+        let command = state.update(dummy_client(), Message::RequestRescanFromHeight);
+        assert!(state.pending_rescan.is_none());
+        assert!(command.actions().is_empty());
+    }
 }

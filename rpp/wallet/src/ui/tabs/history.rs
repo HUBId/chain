@@ -965,4 +965,14 @@ mod tests {
         let _ = state.update(dummy_client(), Message::ToggleDetails("tx2".to_string()));
         assert_eq!(state.selected_txid(), None);
     }
+
+    #[test]
+    fn load_error_sets_banner_and_snapshot() {
+        let mut state = State::default();
+        state.entries = Snapshot::Loading;
+        let error = RpcCallError::Timeout(Duration::from_secs(4));
+        let _ = state.update(dummy_client(), Message::TransactionsLoaded(Err(error)));
+        assert!(matches!(state.entries, Snapshot::Error(message) if message.contains("4")));
+        assert!(state.error_banner.is_some());
+    }
 }

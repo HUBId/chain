@@ -89,6 +89,25 @@ fn integration_feature_list() -> String {
     }
 }
 
+fn wallet_gui_feature_list() -> String {
+    let raw = env::var("XTASK_FEATURES").unwrap_or_default();
+    let mut features: Vec<String> = raw
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .filter_map(|segment| {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect();
+    if !features.iter().any(|feature| feature == "wallet_gui") {
+        features.push("wallet_gui".to_string());
+    }
+    features.join(",")
+}
+
 fn apply_integration_feature_flags(command: &mut Command) {
     let no_defaults = env::var("XTASK_NO_DEFAULT_FEATURES")
         .map(|value| !value.trim().is_empty())
@@ -162,9 +181,34 @@ fn run_unit_suites() -> Result<()> {
     apply_feature_flags(&mut empty_behaviour);
     run_command(empty_behaviour, "rpp-p2p empty behaviour smoke")?;
 
+    run_wallet_gui_tests()?;
     run_stwo_backend_matrix_tests()?;
     run_zsi_renewal_tests()?;
     run_rpp_fail_matrix_tests()
+}
+
+fn run_wallet_gui_tests() -> Result<()> {
+    let root = workspace_root();
+
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-wallet")
+        .arg("--locked");
+
+    if env::var("XTASK_NO_DEFAULT_FEATURES")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        command.arg("--no-default-features");
+    }
+
+    let features = wallet_gui_feature_list();
+    command.arg("--features").arg(features);
+
+    run_command(command, "wallet GUI unit tests")
 }
 
 fn run_stwo_backend_matrix_tests() -> Result<()> {

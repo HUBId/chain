@@ -1009,4 +1009,50 @@ mod tests {
         assert!(!state.can_create_draft());
         assert!(state.error_banner.is_some());
     }
+
+    #[test]
+    fn submit_preview_requires_recipient_and_amount() {
+        let mut state = State::default();
+        let _command = state.update(dummy_client(), Message::SubmitPreview);
+        let banner = state.error_banner.expect("error banner visible");
+        assert_eq!(banner.summary, "Recipient address is required.");
+
+        state.recipient_input = "addr1".into();
+        let _command = state.update(dummy_client(), Message::SubmitPreview);
+        let banner = state.error_banner.expect("amount validation banner");
+        assert_eq!(banner.summary, "Amount is required.");
+    }
+
+    #[test]
+    fn create_draft_requires_fee_rate() {
+        let mut state = State::default();
+        state.recipient_input = "addr1".into();
+        state.amount_input = "1000".into();
+        state.policy_preview = RequestState::Success(sample_preview());
+
+        let _command = state.update(dummy_client(), Message::CreateDraft);
+        let banner = state.error_banner.expect("fee rate validation banner");
+        assert_eq!(
+            banner.summary,
+            "Fee rate must be provided before creating a draft."
+        );
+    }
+
+    #[test]
+    fn sign_draft_moves_signature_to_loading() {
+        let mut state = State::default();
+        state.draft = RequestState::Success(sample_draft());
+        let _command = state.update(dummy_client(), Message::SignDraft);
+        assert!(matches!(state.signature, RequestState::Loading));
+    }
+
+    #[test]
+    fn broadcast_error_sets_failure_banner() {
+        let mut state = State::default();
+        state.signature = RequestState::Success(sample_signature());
+        let error = RpcCallError::Timeout(Duration::from_secs(2));
+        let _command = state.update(dummy_client(), Message::DraftBroadcast(Err(error)));
+        assert!(matches!(state.broadcast, RequestState::Failure(_)));
+        assert!(state.error_banner.is_some());
+    }
 }
