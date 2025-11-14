@@ -1,5 +1,6 @@
 # NOTE: Restart the wallet runtime after editing this file; live reload is not supported.
 # Phase 2 policy/fee/prover settings are documented in docs/wallet_phase2_policies_prover.md.
+# Phase 3 GUI settings are documented in docs/wallet_phase3_gui.md.
 data_dir = "./data"
 
 [wallet.keys]
@@ -23,6 +24,20 @@ ca_certificate = null
 submit_transaction_per_minute = 120
 proof_generation_per_minute = 60
 pipeline_depth = 64
+
+# GUI presentation options. Enable by building with `--features wallet_gui` and
+# see docs/wallet_phase3_gui.md for MVU architecture, tab flows, and telemetry.
+#
+# Example:
+# [wallet.gui]
+# theme = "dark"           # Supported: "dark", "light"
+# auto_lock_secs = 300      # Inactivity lock timeout (matches security UX doc)
+# clipboard_auto_clear = true
+#
+[wallet.gui]
+theme = "dark"
+auto_lock_secs = 300
+clipboard_auto_clear = true
 
 # Controls automatic lookback rescans and the batch size used when replaying history.
 # See docs/wallet_phase2_policies_prover.md for CLI overrides.
