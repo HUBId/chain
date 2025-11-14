@@ -2,11 +2,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::engine::WalletEngine;
 use crate::indexer::client::IndexerClient;
 use crate::indexer::scanner::{ScannerError, SyncStatus, WalletScanner};
+use crate::node_client::NodeClientError;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum WalletSyncError {
@@ -29,6 +30,8 @@ struct StatusState {
     is_syncing: bool,
     pending_resume: bool,
     pending_rescan: Option<u64>,
+    node_issue: Option<String>,
+    node_hints: Vec<String>,
 }
 
 pub struct WalletSyncCoordinator {
@@ -117,6 +120,12 @@ impl WalletSyncCoordinator {
                     .max(pending);
                 status.pending_ranges.push((pending, upper));
             }
+            if let Some(issue) = &state.node_issue {
+                status.node_issue = Some(issue.clone());
+            }
+            if !state.node_hints.is_empty() {
+                status.hints.extend(state.node_hints.clone());
+            }
             status
         })
     }
@@ -136,6 +145,26 @@ impl WalletSyncCoordinator {
             handle.await.map_err(|_| WalletSyncError::Stopped)?;
         }
         Ok(())
+    }
+
+    pub fn record_node_failure(&self, error: &NodeClientError) {
+        let message = error.user_message();
+        let hints = error.hints();
+        warn!(
+            code = error.phase2_code(),
+            %message,
+            ?hints,
+            "wallet node interaction failed"
+        );
+        let mut guard = lock_state(&self.state);
+        guard.node_issue = Some(message);
+        guard.node_hints = hints;
+    }
+
+    pub fn clear_node_failure(&self) {
+        let mut guard = lock_state(&self.state);
+        guard.node_issue = None;
+        guard.node_hints.clear();
     }
 }
 
@@ -211,6 +240,9 @@ fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncStatus, Wal
         Ok(status) => {
             guard.last_status = Some(status.clone());
             guard.last_error = None;
+            // Successful sync clears previously recorded node hints.
+            guard.node_issue = None;
+            guard.node_hints.clear();
         }
         Err(error) => {
             guard.last_error = Some(error.clone());
@@ -228,6 +260,8 @@ mod tests {
         GetScripthashStatusResponse, GetTransactionRequest, GetTransactionResponse, IndexedHeader,
         IndexerClientError, ListScripthashUtxosRequest, ListScripthashUtxosResponse,
     };
+    use crate::indexer::scanner::{SyncCheckpoints, SyncMode};
+    use crate::node_client::NodeRejectionHint;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
@@ -372,6 +406,51 @@ mod tests {
         } else {
             panic!("missing sync status");
         }
+
+        coordinator.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn node_failures_surface_hints_in_status() {
+        let engine = test_engine();
+        let indexer = CountingIndexer::new();
+        let coordinator =
+            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+
+        {
+            let mut guard = coordinator.state.lock().unwrap();
+            guard.last_status = Some(SyncStatus {
+                latest_height: 0,
+                mode: SyncMode::Resume { from_height: 0 },
+                scanned_scripthashes: 0,
+                pending_ranges: Vec::new(),
+                checkpoints: SyncCheckpoints::default(),
+                hints: Vec::new(),
+                node_issue: None,
+            });
+        }
+
+        let error = NodeClientError::rejected_with_hint(
+            "fee",
+            NodeRejectionHint::FeeRateTooLow { required: Some(21) },
+        );
+        coordinator.record_node_failure(&error);
+        let status = coordinator.latest_status().expect("status with node hint");
+        assert_eq!(
+            status.node_issue,
+            Some("node rejected transaction (fee rate too low (required 21 sats/vB))".to_string())
+        );
+        assert_eq!(
+            status.hints,
+            vec!["Increase the fee rate to at least 21 sats/vB and retry.".to_string()]
+        );
+
+        coordinator.clear_node_failure();
+        let cleared = coordinator
+            .latest_status()
+            .expect("status after clearing node hint");
+        assert!(cleared.node_issue.is_none());
+        assert!(cleared.hints.is_empty());
 
         coordinator.shutdown().await.expect("shutdown");
     }

@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{DraftTransaction, SpendModel, WalletBalance};
-use crate::indexer::scanner::{SyncCheckpoints, SyncMode, SyncStatus};
+use crate::indexer::scanner::{SyncMode, SyncStatus};
 use crate::node_client::NodeClientError;
 use crate::wallet::{PolicyPreview, Wallet, WalletError, WalletSyncCoordinator, WalletSyncError};
 
@@ -53,6 +53,8 @@ pub trait SyncHandle: Send + Sync {
     fn latest_status(&self) -> Option<SyncStatus>;
     fn last_error(&self) -> Option<WalletSyncError>;
     fn request_rescan(&self, from_height: u64) -> Result<bool, WalletSyncError>;
+    fn record_node_failure(&self, _error: &NodeClientError) {}
+    fn clear_node_failure(&self) {}
 }
 
 impl SyncHandle for WalletSyncCoordinator {
@@ -71,6 +73,14 @@ impl SyncHandle for WalletSyncCoordinator {
     fn request_rescan(&self, from_height: u64) -> Result<bool, WalletSyncError> {
         WalletSyncCoordinator::request_rescan(self, from_height)
     }
+
+    fn record_node_failure(&self, error: &NodeClientError) {
+        WalletSyncCoordinator::record_node_failure(self, error);
+    }
+
+    fn clear_node_failure(&self) {
+        WalletSyncCoordinator::clear_node_failure(self);
+    }
 }
 
 pub struct WalletRpcRouter {
@@ -87,6 +97,33 @@ impl WalletRpcRouter {
             drafts: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             sync,
+        }
+    }
+
+    fn record_node_failure(&self, error: &NodeClientError) {
+        if let Some(sync) = &self.sync {
+            sync.record_node_failure(error);
+        }
+    }
+
+    fn clear_node_failure(&self) {
+        if let Some(sync) = &self.sync {
+            sync.clear_node_failure();
+        }
+    }
+
+    fn wallet_call<T>(&self, result: Result<T, WalletError>) -> Result<T, RouterError> {
+        match result {
+            Ok(value) => {
+                self.clear_node_failure();
+                Ok(value)
+            }
+            Err(WalletError::Node(error)) => {
+                self.record_node_failure(&error);
+                Err(RouterError::Node(error))
+            }
+            Err(WalletError::Sync(sync)) => Err(RouterError::Sync(sync)),
+            Err(other) => Err(RouterError::Wallet(other)),
         }
     }
 
@@ -138,11 +175,7 @@ impl WalletRpcRouter {
             }
             "create_tx" => {
                 let params: CreateTxParams = parse_params(params)?;
-                let draft = self
-                    .wallet
-                    .create_draft(params.to, params.amount, params.fee_rate)?;
-                let draft_id = self.store_draft(draft.clone())?;
-                self.respond_draft(&draft_id, &draft)
+                self.create_tx(params)
             }
             "sign_tx" => {
                 let params: SignTxParams = parse_params(params)?;
@@ -168,11 +201,7 @@ impl WalletRpcRouter {
             }
             "estimate_fee" => {
                 let params: EstimateFeeParams = parse_params(params)?;
-                let fee_rate = self.wallet.estimate_fee(params.confirmation_target)?;
-                to_value(EstimateFeeResponse {
-                    confirmation_target: params.confirmation_target,
-                    fee_rate,
-                })
+                self.estimate_fee(params)
             }
             "list_pending_locks" => {
                 parse_params::<EmptyParams>(params)?;
@@ -234,6 +263,17 @@ impl WalletRpcRouter {
         to_value(ListTransactionsResponse { entries: mapped })
     }
 
+    fn create_tx(&self, params: CreateTxParams) -> Result<Value, RouterError> {
+        let CreateTxParams {
+            to,
+            amount,
+            fee_rate,
+        } = params;
+        let draft = self.wallet_call(self.wallet.create_draft(to, amount, fee_rate))?;
+        let draft_id = self.store_draft(draft.clone())?;
+        self.respond_draft(&draft_id, &draft)
+    }
+
     fn respond_draft(
         &self,
         draft_id: &str,
@@ -276,6 +316,17 @@ impl WalletRpcRouter {
             locks,
         };
         to_value(response)
+    }
+
+    fn estimate_fee(&self, params: EstimateFeeParams) -> Result<Value, RouterError> {
+        let EstimateFeeParams {
+            confirmation_target,
+        } = params;
+        let fee_rate = self.wallet_call(self.wallet.estimate_fee(confirmation_target))?;
+        to_value(EstimateFeeResponse {
+            confirmation_target,
+            fee_rate,
+        })
     }
 
     fn respond_policy_preview(&self, preview: PolicyPreview) -> Result<Value, RouterError> {
@@ -323,6 +374,8 @@ impl WalletRpcRouter {
             pending_ranges,
             checkpoints,
             last_rescan_timestamp,
+            node_issue,
+            hints,
         ) = if let Some(status) = status {
             (
                 Some(match status.mode {
@@ -342,9 +395,11 @@ impl WalletRpcRouter {
                     last_targeted_rescan_ts: status.checkpoints.last_targeted_rescan_ts,
                 }),
                 status.checkpoints.last_targeted_rescan_ts,
+                status.node_issue.clone(),
+                status.hints.clone(),
             )
         } else {
-            (None, None, None, Vec::new(), None, None)
+            (None, None, None, Vec::new(), None, None, None, Vec::new())
         };
         let last_error = sync.last_error().map(|error| error.to_string());
         let response = SyncStatusResponse {
@@ -356,6 +411,8 @@ impl WalletRpcRouter {
             checkpoints,
             last_rescan_timestamp,
             last_error,
+            node_issue,
+            hints,
         };
         to_value(response)
     }
@@ -424,7 +481,7 @@ impl WalletRpcRouter {
         if state.prover_output.is_none() {
             return Err(RouterError::DraftUnsigned(draft_id));
         }
-        self.wallet.broadcast(&state.draft)?;
+        self.wallet_call(self.wallet.broadcast(&state.draft))?;
         let locks = self.pending_lock_dtos()?;
         to_value(BroadcastResponse {
             draft_id,
@@ -491,7 +548,7 @@ impl RouterError {
                 JsonRpcError::new(CODE_WALLET_ERROR, error.to_string(), None)
             }
             RouterError::Sync(error) => JsonRpcError::new(CODE_SYNC_ERROR, error.to_string(), None),
-            RouterError::Node(error) => JsonRpcError::new(CODE_NODE_ERROR, error.to_string(), None),
+            RouterError::Node(error) => node_error_to_json(&error),
             RouterError::MissingDraft(draft_id) => JsonRpcError::new(
                 CODE_DRAFT_NOT_FOUND,
                 "draft not found",
@@ -517,6 +574,20 @@ impl RouterError {
             }
         }
     }
+}
+
+fn node_error_to_json(error: &NodeClientError) -> JsonRpcError {
+    let mut data = serde_json::Map::new();
+    data.insert("phase2_code".to_string(), json!(error.phase2_code()));
+    let hints = error.hints();
+    if !hints.is_empty() {
+        data.insert("hints".to_string(), json!(hints));
+    }
+    JsonRpcError::new(
+        CODE_NODE_ERROR,
+        error.user_message(),
+        Some(Value::Object(data)),
+    )
 }
 
 impl From<WalletError> for RouterError {
@@ -585,9 +656,16 @@ fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
 mod tests {
     use super::*;
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+    use crate::db::UtxoOutpoint;
     use crate::db::WalletStore;
-    use crate::node_client::StubNodeClient;
+    use crate::engine::{DraftInput, DraftOutput, SpendModel};
+    use crate::indexer::scanner::SyncCheckpoints;
+    use crate::node_client::{
+        BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
+        NodeRejectionHint, StubNodeClient,
+    };
     use serde_json::json;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
@@ -644,6 +722,94 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingSync {
+        status: Option<SyncStatus>,
+        syncing: bool,
+        issues: Mutex<Vec<String>>,
+        hints: Mutex<Vec<String>>,
+    }
+
+    impl RecordingSync {
+        fn issues(&self) -> Vec<String> {
+            self.issues.lock().unwrap().clone()
+        }
+
+        fn hints(&self) -> Vec<String> {
+            self.hints.lock().unwrap().clone()
+        }
+    }
+
+    impl SyncHandle for RecordingSync {
+        fn is_syncing(&self) -> bool {
+            self.syncing
+        }
+
+        fn latest_status(&self) -> Option<SyncStatus> {
+            self.status.clone()
+        }
+
+        fn last_error(&self) -> Option<WalletSyncError> {
+            None
+        }
+
+        fn request_rescan(&self, _from_height: u64) -> Result<bool, WalletSyncError> {
+            Ok(false)
+        }
+
+        fn record_node_failure(&self, error: &NodeClientError) {
+            self.issues.lock().unwrap().push(error.user_message());
+            self.hints.lock().unwrap().extend(error.hints());
+        }
+
+        fn clear_node_failure(&self) {
+            self.issues.lock().unwrap().clear();
+            self.hints.lock().unwrap().clear();
+        }
+    }
+
+    #[derive(Clone)]
+    struct RejectingNodeClient {
+        inner: StubNodeClient,
+    }
+
+    impl RejectingNodeClient {
+        fn new() -> Self {
+            Self {
+                inner: StubNodeClient::default(),
+            }
+        }
+    }
+
+    impl NodeClient for RejectingNodeClient {
+        fn submit_tx(&self, _draft: &DraftTransaction) -> NodeClientResult<()> {
+            Err(NodeClientError::rejected_with_hint(
+                "mempool rejection",
+                NodeRejectionHint::FeeRateTooLow { required: Some(25) },
+            ))
+        }
+
+        fn estimate_fee(&self, confirmation_target: u16) -> NodeClientResult<u64> {
+            self.inner.estimate_fee(confirmation_target)
+        }
+
+        fn chain_head(&self) -> NodeClientResult<ChainHead> {
+            self.inner.chain_head()
+        }
+
+        fn mempool_status(&self) -> NodeClientResult<rpp::runtime::node::MempoolStatus> {
+            self.inner.mempool_status()
+        }
+
+        fn mempool_info(&self) -> NodeClientResult<MempoolInfo> {
+            self.inner.mempool_info()
+        }
+
+        fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>> {
+            self.inner.recent_blocks(limit)
+        }
+    }
+
     #[test]
     fn router_rejects_out_of_range_rescan() {
         let status = SyncStatus {
@@ -655,6 +821,8 @@ mod tests {
                 resume_height: Some(10),
                 ..SyncCheckpoints::default()
             },
+            hints: Vec::new(),
+            node_issue: None,
         };
         let sync = Arc::new(StubSync {
             status: Some(status),
@@ -670,5 +838,99 @@ mod tests {
         let response = router.handle(request);
         let error = response.error.expect("error");
         assert_eq!(error.code, CODE_RESCAN_OUT_OF_RANGE);
+    }
+
+    #[test]
+    fn node_error_conversion_adds_phase2_metadata() {
+        let error = NodeClientError::rejected_with_hint(
+            "policy",
+            NodeRejectionHint::FeeRateTooLow { required: Some(15) },
+        );
+        let json_error = super::node_error_to_json(&error);
+        assert_eq!(json_error.code, CODE_NODE_ERROR);
+        assert_eq!(
+            json_error.message,
+            "node rejected transaction (fee rate too low (required 15 sats/vB))"
+        );
+        let data = json_error.data.expect("phase2 metadata");
+        assert_eq!(data["phase2_code"], json!("FEE_TOO_LOW"));
+        assert_eq!(
+            data["hints"],
+            json!(["Increase the fee rate to at least 15 sats/vB and retry."])
+        );
+    }
+
+    #[test]
+    fn broadcast_rejection_exposes_phase2_code() {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            [0u8; 32],
+            WalletPolicyConfig::default(),
+            WalletFeeConfig::default(),
+            WalletProverConfig::default(),
+            Arc::new(RejectingNodeClient::new()),
+        )
+        .expect("wallet");
+        let sync = Arc::new(RecordingSync::default());
+        let router = WalletRpcRouter::new(Arc::new(wallet), Some(sync.clone()));
+
+        let draft = DraftTransaction {
+            inputs: vec![DraftInput {
+                outpoint: UtxoOutpoint::new([1u8; 32], 0),
+                value: 10_000,
+                confirmations: 1,
+            }],
+            outputs: vec![DraftOutput::new("addr", 9_000, false)],
+            fee_rate: 1,
+            fee: 1_000,
+            spend_model: SpendModel::Exact { amount: 9_000 },
+        };
+        let draft_id = "deadbeef".to_string();
+        {
+            let mut drafts = router.drafts.lock().unwrap();
+            drafts.insert(
+                draft_id.clone(),
+                DraftState {
+                    draft: draft.clone(),
+                    prover_output: Some(ProverOutput {
+                        backend: "test".to_string(),
+                        proof: None,
+                        witness_bytes: 0,
+                        duration_ms: 0,
+                    }),
+                },
+            );
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "broadcast".to_string(),
+            params: Some(json!({ "draft_id": draft_id })),
+        };
+        let response = router.handle(request);
+        let error = response.error.expect("error");
+        assert_eq!(error.code, CODE_NODE_ERROR);
+        assert_eq!(
+            error.message,
+            "node rejected transaction (fee rate too low (required 25 sats/vB))"
+        );
+        let data = error.data.expect("metadata");
+        assert_eq!(data["phase2_code"], json!("FEE_TOO_LOW"));
+        assert_eq!(
+            data["hints"],
+            json!(["Increase the fee rate to at least 25 sats/vB and retry."])
+        );
+        assert_eq!(
+            sync.issues(),
+            vec!["node rejected transaction (fee rate too low (required 25 sats/vB))".to_string()]
+        );
+        assert_eq!(
+            sync.hints(),
+            vec!["Increase the fee rate to at least 25 sats/vB and retry.".to_string()]
+        );
+        let _persist = dir.into_path();
     }
 }

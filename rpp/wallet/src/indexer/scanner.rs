@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,20 +7,20 @@ use hex::FromHexError;
 use thiserror::Error;
 
 use crate::db::{
-    checkpoints::{
-        birthday_height, last_compact_scan_ts, last_full_rescan_ts, last_scan_ts,
-        last_targeted_rescan_ts, persist_birthday_height, persist_last_compact_scan_ts,
-        persist_last_full_rescan_ts, persist_last_scan_ts, persist_last_targeted_rescan_ts,
-        persist_resume_height, resume_height,
-    },
     AddressKind, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreBatch,
     WalletStoreError,
 };
 use crate::engine::{AddressError, WalletEngine};
+use crate::indexer::checkpoints::{
+    birthday_height, last_compact_scan_ts, last_full_rescan_ts, last_scan_ts,
+    last_targeted_rescan_ts, persist_birthday_height, persist_last_compact_scan_ts,
+    persist_last_full_rescan_ts, persist_last_scan_ts, persist_last_targeted_rescan_ts,
+    persist_resume_height, resume_height,
+};
 
 use super::client::{
-    GetHeadersRequest, GetHeadersResponse, GetScripthashStatusRequest, IndexedUtxo, IndexerClient,
-    IndexerClientError, ListScripthashUtxosRequest, TransactionPayload,
+    GetHeadersRequest, GetScripthashStatusRequest, IndexerClient, IndexerClientError,
+    ListScripthashUtxosRequest, TransactionPayload,
 };
 
 const DEFAULT_DISCOVERY_BATCH: usize = 16;
@@ -46,6 +46,10 @@ pub struct SyncStatus {
     pub pending_ranges: Vec<(u64, u64)>,
     /// Snapshot of the persisted checkpoints after the scan.
     pub checkpoints: SyncCheckpoints,
+    /// Optional human friendly hints surfaced by the runtime.
+    pub hints: Vec<String>,
+    /// Sanitised description of the latest node-facing error, if any.
+    pub node_issue: Option<String>,
 }
 
 /// Overall mode executed during a wallet scan.
@@ -167,6 +171,8 @@ impl WalletScanner {
             scanned_scripthashes,
             pending_ranges,
             checkpoints,
+            hints: Vec::new(),
+            node_issue: None,
         })
     }
 
@@ -391,10 +397,13 @@ struct TrackedAddress {
 mod tests {
     use super::*;
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig};
-    use crate::db::checkpoints;
     use crate::db::WalletStore;
     use crate::engine::AddressManager;
-    use crate::indexer::client::{GetTransactionRequest, IndexedHeader, TxOutpoint};
+    use crate::indexer::checkpoints;
+    use crate::indexer::client::{
+        self, GetTransactionRequest, IndexedHeader, IndexedUtxo, TxOutpoint,
+    };
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
     use tempfile::tempdir;
 
@@ -627,20 +636,20 @@ mod tests {
         fn get_scripthash_status(
             &self,
             request: &GetScripthashStatusRequest,
-        ) -> Result<super::client::GetScripthashStatusResponse, IndexerClientError> {
+        ) -> Result<client::GetScripthashStatusResponse, IndexerClientError> {
             let status = self
                 .statuses
                 .lock()
                 .unwrap()
                 .contains(&request.scripthash)
                 .then(|| hex::encode(request.scripthash));
-            Ok(super::client::GetScripthashStatusResponse::new(status))
+            Ok(client::GetScripthashStatusResponse::new(status))
         }
 
         fn list_scripthash_utxos(
             &self,
             request: &ListScripthashUtxosRequest,
-        ) -> Result<super::client::ListScripthashUtxosResponse, IndexerClientError> {
+        ) -> Result<client::ListScripthashUtxosResponse, IndexerClientError> {
             let utxos = self
                 .utxos
                 .lock()
@@ -648,20 +657,20 @@ mod tests {
                 .get(&request.scripthash)
                 .cloned()
                 .unwrap_or_default();
-            Ok(super::client::ListScripthashUtxosResponse::new(utxos))
+            Ok(client::ListScripthashUtxosResponse::new(utxos))
         }
 
         fn get_transaction(
             &self,
             request: &GetTransactionRequest,
-        ) -> Result<super::client::GetTransactionResponse, IndexerClientError> {
+        ) -> Result<client::GetTransactionResponse, IndexerClientError> {
             let tx = self
                 .transactions
                 .lock()
                 .unwrap()
                 .get(&request.txid)
                 .cloned();
-            Ok(super::client::GetTransactionResponse::new(tx))
+            Ok(client::GetTransactionResponse::new(tx))
         }
     }
 }

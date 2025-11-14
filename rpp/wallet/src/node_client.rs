@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use anyhow::Error as AnyError;
 use rpp::runtime::config::QueueWeightsConfig;
@@ -86,43 +87,45 @@ impl fmt::Display for NodePolicyHint {
 #[derive(Debug, Error)]
 pub enum NodeClientError {
     /// Transport-level failures such as networking errors or RPC timeouts.
-    #[error("transport error: {0}")]
-    Transport(#[from] AnyError),
+    #[error("node unavailable: {message}")]
+    Network {
+        message: String,
+        #[source]
+        source: Option<Arc<AnyError>>,
+    },
     /// The node rejected the transaction for application-level reasons.
-    #[error(
-        "transaction rejected: {reason}{hint}",
-        hint = NodeClientError::display_rejection_hint(.hint)
-    )]
+    #[error("transaction rejected by node")]
     Rejected {
         reason: String,
         hint: Option<NodeRejectionHint>,
     },
     /// Local policy prevented the request from being accepted.
-    #[error(
-        "policy violation: {reason}{hint}",
-        hint = NodeClientError::display_policy_hint(.hint)
-    )]
+    #[error("transaction rejected by node policy")]
     Policy {
         reason: String,
         hint: Option<NodePolicyHint>,
     },
+    /// Aggregated statistics (fee estimates, mempool info) were unavailable.
+    #[error("node statistics unavailable: {message}")]
+    StatsUnavailable {
+        kind: NodeStatsKind,
+        message: String,
+    },
 }
 
 impl NodeClientError {
-    pub fn transport(error: impl Into<AnyError>) -> Self {
-        Self::Transport(error.into())
+    pub fn network(error: impl Into<AnyError>) -> Self {
+        Self::Network {
+            message: "execution node unreachable".to_string(),
+            source: Some(Arc::new(error.into())),
+        }
     }
 
-    fn display_rejection_hint(hint: &Option<NodeRejectionHint>) -> String {
-        hint.as_ref()
-            .map(|hint| format!(" (hint: {hint})"))
-            .unwrap_or_default()
-    }
-
-    fn display_policy_hint(hint: &Option<NodePolicyHint>) -> String {
-        hint.as_ref()
-            .map(|hint| format!(" (hint: {hint})"))
-            .unwrap_or_default()
+    pub fn network_with_message(message: impl Into<String>, source: Option<AnyError>) -> Self {
+        Self::Network {
+            message: message.into(),
+            source: source.map(|err| Arc::new(err)),
+        }
     }
 
     pub fn rejected(reason: impl Into<String>) -> Self {
@@ -150,6 +153,128 @@ impl NodeClientError {
         Self::Policy {
             reason: reason.into(),
             hint: Some(hint),
+        }
+    }
+
+    pub fn stats_unavailable(kind: NodeStatsKind) -> Self {
+        Self::StatsUnavailable {
+            kind,
+            message: format!("node {kind} statistics unavailable"),
+        }
+    }
+
+    pub fn stats_unavailable_with_message(kind: NodeStatsKind, message: impl Into<String>) -> Self {
+        Self::StatsUnavailable {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn phase2_code(&self) -> &'static str {
+        match self {
+            NodeClientError::Network { .. } => "NODE_UNAVAILABLE",
+            NodeClientError::Rejected { hint, .. } => {
+                if Self::is_fee_too_low_rejection(hint.as_ref()) {
+                    "FEE_TOO_LOW"
+                } else {
+                    "NODE_REJECTED"
+                }
+            }
+            NodeClientError::Policy { hint, .. } => {
+                if Self::is_fee_too_low_policy(hint.as_ref()) {
+                    "FEE_TOO_LOW"
+                } else {
+                    "NODE_POLICY"
+                }
+            }
+            NodeClientError::StatsUnavailable { .. } => "NODE_STATS_UNAVAILABLE",
+        }
+    }
+
+    pub fn user_message(&self) -> String {
+        match self {
+            NodeClientError::Network { message, .. } => message.clone(),
+            NodeClientError::Rejected { hint, .. } => {
+                if let Some(hint) = hint {
+                    format!("node rejected transaction ({hint})")
+                } else {
+                    "node rejected transaction".to_string()
+                }
+            }
+            NodeClientError::Policy { hint, .. } => {
+                if let Some(hint) = hint {
+                    format!("node policy rejected transaction ({hint})")
+                } else {
+                    "node policy rejected transaction".to_string()
+                }
+            }
+            NodeClientError::StatsUnavailable { message, .. } => message.clone(),
+        }
+    }
+
+    pub fn hints(&self) -> Vec<String> {
+        match self {
+            NodeClientError::Network { .. } => {
+                vec!["Verify the node connection and retry the request.".to_string()]
+            }
+            NodeClientError::Rejected { hint, .. } => {
+                if let Some(NodeRejectionHint::FeeRateTooLow {
+                    required: Some(rate),
+                }) = hint
+                {
+                    vec![format!(
+                        "Increase the fee rate to at least {rate} sats/vB and retry."
+                    )]
+                } else if let Some(NodeRejectionHint::FeeRateTooLow { required: None }) = hint {
+                    vec!["Increase the fee rate before retrying.".to_string()]
+                } else {
+                    vec![
+                        "Inspect node policy and retry after addressing the rejection reason."
+                            .to_string(),
+                    ]
+                }
+            }
+            NodeClientError::Policy { hint, .. } => {
+                if let Some(NodePolicyHint::FeeRateTooLow { minimum }) = hint {
+                    vec![format!(
+                        "Increase the fee rate above the node minimum of {minimum} sats/vB."
+                    )]
+                } else {
+                    vec!["Adjust the draft to satisfy node policy and retry.".to_string()]
+                }
+            }
+            NodeClientError::StatsUnavailable { kind, .. } => vec![format!(
+                "Retry once the node has refreshed {kind} statistics."
+            )],
+        }
+    }
+
+    fn is_fee_too_low_rejection(hint: Option<&NodeRejectionHint>) -> bool {
+        match hint {
+            Some(NodeRejectionHint::FeeRateTooLow { .. }) => true,
+            Some(NodeRejectionHint::Other(reason)) => reason.to_lowercase().contains("fee"),
+            _ => false,
+        }
+    }
+
+    fn is_fee_too_low_policy(hint: Option<&NodePolicyHint>) -> bool {
+        matches!(hint, Some(NodePolicyHint::FeeRateTooLow { .. }))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeStatsKind {
+    MempoolInfo,
+    RecentBlocks,
+    FeeEstimate,
+}
+
+impl fmt::Display for NodeStatsKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeStatsKind::MempoolInfo => write!(f, "mempool info"),
+            NodeStatsKind::RecentBlocks => write!(f, "recent blocks"),
+            NodeStatsKind::FeeEstimate => write!(f, "fee estimates"),
         }
     }
 }
@@ -338,10 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn transport_error_display() {
-        let err = NodeClientError::transport(anyhow!("boom"));
-        assert!(matches!(err, NodeClientError::Transport(_)));
-        assert_eq!(format!("{err}"), "transport error: boom");
+    fn network_error_reports_phase2_code() {
+        let err = NodeClientError::network(anyhow!("boom"));
+        assert!(matches!(err, NodeClientError::Network { .. }));
+        assert_eq!(err.phase2_code(), "NODE_UNAVAILABLE");
+        assert_eq!(err.user_message(), "execution node unreachable");
+        assert_eq!(
+            err.hints(),
+            vec!["Verify the node connection and retry the request.".to_string()]
+        );
     }
 
     #[test]
@@ -392,9 +522,14 @@ mod tests {
             "replacement failed",
             NodeRejectionHint::FeeRateTooLow { required: Some(12) },
         );
+        assert_eq!(err.phase2_code(), "FEE_TOO_LOW");
         assert_eq!(
-            format!("{err}"),
-            "transaction rejected: replacement failed (hint: fee rate too low (required 12 sats/vB))"
+            err.user_message(),
+            "node rejected transaction (fee rate too low (required 12 sats/vB))"
+        );
+        assert_eq!(
+            err.hints(),
+            vec!["Increase the fee rate to at least 12 sats/vB and retry.".to_string()]
         );
     }
 
@@ -404,9 +539,14 @@ mod tests {
             "policy limits",
             NodePolicyHint::FeeRateTooLow { minimum: 5 },
         );
+        assert_eq!(err.phase2_code(), "FEE_TOO_LOW");
         assert_eq!(
-            format!("{err}"),
-            "policy violation: policy limits (hint: fee rate below minimum policy (5 sats/vB))"
+            err.user_message(),
+            "node policy rejected transaction (fee rate below minimum policy (5 sats/vB))"
+        );
+        assert_eq!(
+            err.hints(),
+            vec!["Increase the fee rate above the node minimum of 5 sats/vB.".to_string()]
         );
     }
 }
