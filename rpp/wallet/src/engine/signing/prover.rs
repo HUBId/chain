@@ -407,3 +407,89 @@ fn wallet_address_from_public_key(key: &ed25519_dalek::VerifyingKey) -> String {
     let hash: [u8; 32] = Blake2sHasher::hash(key.as_bytes()).into();
     hex::encode(hash)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::wallet::WalletProverConfig;
+    use crate::db::UtxoOutpoint;
+    use crate::engine::{DraftInput, DraftOutput, DraftTransaction, SpendModel};
+
+    fn sample_draft() -> DraftTransaction {
+        DraftTransaction {
+            inputs: vec![DraftInput {
+                outpoint: UtxoOutpoint::new([1u8; 32], 0),
+                value: 50_000,
+                confirmations: 1,
+            }],
+            outputs: vec![DraftOutput::new("receiver", 10_000, false)],
+            fee_rate: 1,
+            fee: 1_000,
+            spend_model: SpendModel::Exact { amount: 10_000 },
+        }
+    }
+
+    #[test]
+    fn run_job_aborts_when_timeout_is_exceeded() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("runtime");
+        let _guard = runtime.enter();
+
+        let mut config = WalletProverConfig::default();
+        config.job_timeout_secs = 1;
+        config.max_concurrency = 1;
+        let manager = ProverJobManager::new(&config);
+
+        let result = manager.run_job(|| {
+            std::thread::sleep(Duration::from_millis(1_500));
+            Ok(ProverOutput {
+                backend: "timeout".into(),
+                proof: None,
+                witness_bytes: 0,
+                duration_ms: 0,
+            })
+        });
+
+        assert!(matches!(result, Err(ProverError::Timeout(1))));
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn mock_prover_rejects_witnesses_over_configured_cap() {
+        let mut config = WalletProverConfig::default();
+        config.max_witness_bytes = 1;
+        let prover = MockWalletProver::new(&config);
+        let draft = sample_draft();
+
+        let err = prover.prove(&draft).expect_err("witness too large");
+        assert!(matches!(
+            err,
+            ProverError::WitnessTooLarge {
+                size: _,
+                limit
+            } if limit == 1
+        ));
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn stwo_prover_rejects_witnesses_over_configured_cap() {
+        let mut config = WalletProverConfig::default();
+        config.max_witness_bytes = 1;
+        config.enabled = true;
+        config.mock_fallback = false;
+        let prover = StwoWalletProver::new(&config).expect("stwo prover");
+        let draft = sample_draft();
+
+        let err = prover.prove(&draft).expect_err("witness too large");
+        assert!(matches!(
+            err,
+            ProverError::WitnessTooLarge {
+                size: _,
+                limit
+            } if limit == 1
+        ));
+    }
+}
