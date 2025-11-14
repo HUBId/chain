@@ -24,7 +24,7 @@ use super::components::{
 };
 use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
-use super::tabs::{dashboard, history, receive, send};
+use super::tabs::{dashboard, history, node, receive, send};
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -48,6 +48,7 @@ pub enum Message {
     KeyboardShortcut(NavigationIntent),
     Dashboard(dashboard::Message),
     History(history::Message),
+    Node(node::Message),
     Receive(receive::Message),
     Send(send::Message),
     DismissError,
@@ -82,6 +83,7 @@ impl Application for WalletApp {
                 match result {
                     Ok(config) => {
                         self.model.keystore_path = Some(config.engine.keystore_path.clone());
+                        self.model.node.set_config(Some(config.clone()));
                         self.model.config = Some(config);
                         self.model.queue_async(AsyncAction::DetectKeystore {
                             keystore_path: self.model.keystore_path.clone(),
@@ -89,6 +91,7 @@ impl Application for WalletApp {
                     }
                     Err(error) => {
                         self.model.push_error(error);
+                        self.model.node.set_config(None);
                         self.model.queue_async(AsyncAction::DetectKeystore {
                             keystore_path: None,
                         });
@@ -122,6 +125,7 @@ impl Application for WalletApp {
                         self.model.passphrase_input.clear();
                         self.model.dashboard.reset();
                         self.model.history.reset();
+                        self.model.node.reset();
                         self.model.receive.reset();
                         self.model.send.reset();
                     }
@@ -137,22 +141,40 @@ impl Application for WalletApp {
                     self.model.sync_inflight = true;
                     self.model.queue_async(AsyncAction::FetchSyncStatus);
                 }
+                if self.model.active_route == Route::Node {
+                    let command = self
+                        .model
+                        .node
+                        .update(self.model.client.clone(), node::Message::Refresh)
+                        .map(Message::Node);
+                    update.push(command);
+                }
             }
             Message::SyncStatusLoaded(result) => {
                 self.model.mark_async_complete();
                 match result {
                     Ok(status) => {
-                        let status_clone = status.clone();
+                        let dashboard_status = status.clone();
+                        let node_status = status.clone();
                         self.model.sync_status = Some(status);
                         let (command, route) = self.model.dashboard.update(
                             self.model.client.clone(),
-                            dashboard::Message::SyncStatusUpdated(status_clone),
+                            dashboard::Message::SyncStatusUpdated(dashboard_status),
                         );
+                        let node_command = self
+                            .model
+                            .node
+                            .update(
+                                self.model.client.clone(),
+                                node::Message::SyncStatusUpdated(node_status),
+                            )
+                            .map(Message::Node);
                         if let Some(route) = route {
                             self.model.active_route = route;
                             self.route_changed(&mut update);
                         }
                         update.push(command.map(Message::Dashboard));
+                        update.push(node_command);
                     }
                     Err(error) => self.model.push_error(error),
                 }
@@ -193,6 +215,14 @@ impl Application for WalletApp {
                     .history
                     .update(self.model.client.clone(), message)
                     .map(Message::History);
+                update.push(command);
+            }
+            Message::Node(message) => {
+                let command = self
+                    .model
+                    .node
+                    .update(self.model.client.clone(), message)
+                    .map(Message::Node);
                 update.push(command);
             }
             Message::Receive(message) => {
@@ -420,7 +450,7 @@ impl WalletApp {
             Route::Activity => self.model.history.view().map(Message::History),
             Route::Receive => self.model.receive.view().map(Message::Receive),
             Route::Send => self.model.send.view().map(Message::Send),
-            _ => text("Tab content coming soon...").size(16).into(),
+            Route::Node => self.model.node.view().map(Message::Node),
         };
 
         column = column.push(content);
@@ -462,6 +492,14 @@ impl WalletApp {
                 .send
                 .activate(self.model.client.clone())
                 .map(Message::Send);
+            update.push(command);
+        }
+        if self.model.active_route == Route::Node {
+            let command = self
+                .model
+                .node
+                .activate(self.model.client.clone())
+                .map(Message::Node);
             update.push(command);
         }
     }
@@ -506,6 +544,7 @@ struct Model {
     keystore_path: Option<PathBuf>,
     dashboard: dashboard::State,
     history: history::State,
+    node: node::State,
     receive: receive::State,
     send: send::State,
 }
@@ -528,6 +567,7 @@ impl Model {
             keystore_path: None,
             dashboard: dashboard::State::default(),
             history: history::State::default(),
+            node: node::State::default(),
             receive: receive::State::default(),
             send: send::State::default(),
         }
@@ -560,6 +600,7 @@ impl Model {
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
         self.dashboard.reset();
         self.history.reset();
+        self.node.reset();
         self.receive.reset();
         self.send.reset();
         if status.locked {
@@ -578,6 +619,7 @@ impl Model {
     fn set_session_locked(&mut self) {
         self.dashboard.reset();
         self.history.reset();
+        self.node.reset();
         self.receive.reset();
         self.send.reset();
         let present = self
@@ -595,6 +637,7 @@ impl Model {
     fn set_session_unlocking(&mut self) {
         self.dashboard.reset();
         self.history.reset();
+        self.node.reset();
         self.receive.reset();
         self.send.reset();
         let present = self

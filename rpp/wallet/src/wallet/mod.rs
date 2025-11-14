@@ -15,7 +15,7 @@ use crate::engine::{
     DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
 };
 use crate::indexer::IndexerClient;
-use crate::node_client::{ChainHead, NodeClient, NodeClientError};
+use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::Blake2sHasher;
 use rpp::runtime::node::MempoolStatus;
 
@@ -51,6 +51,18 @@ pub struct Wallet {
     node_client: Arc<dyn NodeClient>,
     prover: Arc<dyn WalletProver>,
     identifier: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TelemetryCounter {
+    pub name: String,
+    pub value: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TelemetryCounters {
+    pub enabled: bool,
+    pub counters: Vec<TelemetryCounter>,
 }
 
 impl Wallet {
@@ -224,6 +236,18 @@ impl Wallet {
 
     pub fn mempool_status(&self) -> Result<MempoolStatus, WalletError> {
         Ok(self.node_client.mempool_status()?)
+    }
+
+    pub fn mempool_info(&self) -> Result<MempoolInfo, WalletError> {
+        Ok(self.node_client.mempool_info()?)
+    }
+
+    pub fn recent_blocks(&self, limit: usize) -> Result<Vec<BlockFeeSummary>, WalletError> {
+        Ok(self.node_client.recent_blocks(limit)?)
+    }
+
+    pub fn telemetry_counters(&self) -> TelemetryCounters {
+        TelemetryCounters::default()
     }
 
     pub fn store(&self) -> Arc<WalletStore> {

@@ -7,7 +7,7 @@ pub enum Route {
     Activity,
     Receive,
     Send,
-    Settings,
+    Node,
 }
 
 impl Route {
@@ -17,7 +17,7 @@ impl Route {
         Route::Activity,
         Route::Receive,
         Route::Send,
-        Route::Settings,
+        Route::Node,
     ];
 
     /// Human readable title rendered in the UI.
@@ -27,7 +27,7 @@ impl Route {
             Route::Activity => "Activity",
             Route::Receive => "Receive",
             Route::Send => "Send",
-            Route::Settings => "Settings",
+            Route::Node => "Node",
         }
     }
 
@@ -38,7 +38,7 @@ impl Route {
             Route::Activity => 1,
             Route::Receive => 2,
             Route::Send => 3,
-            Route::Settings => 4,
+            Route::Node => 4,
         }
     }
 
@@ -120,13 +120,13 @@ fn digit_shortcut(key: Key<&str>) -> Option<Route> {
         Key::Character("2") => Some(Route::Activity),
         Key::Character("3") => Some(Route::Receive),
         Key::Character("4") => Some(Route::Send),
-        Key::Character("5") => Some(Route::Settings),
+        Key::Character("5") => Some(Route::Node),
         Key::Named(named) => match named {
             Named::Numpad1 => Some(Route::Overview),
             Named::Numpad2 => Some(Route::Activity),
             Named::Numpad3 => Some(Route::Receive),
             Named::Numpad4 => Some(Route::Send),
-            Named::Numpad5 => Some(Route::Settings),
+            Named::Numpad5 => Some(Route::Node),
             _ => None,
         },
         _ => None,

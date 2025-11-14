@@ -10,15 +10,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use dto::{
-    BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
-    DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetPolicyResponse,
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsResponse, ListUtxosResponse, PendingLockDto, PolicyPreviewResponse,
-    PolicySnapshotDto, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TransactionEntryDto,
-    UtxoDto, JSONRPC_VERSION,
+    BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastResponse, CreateTxParams,
+    CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto,
+    DraftSpendModelDto, EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto,
+    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
+    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
+    PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse,
+    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
+    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto,
+    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
+    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, JSONRPC_VERSION,
 };
 use error::WalletRpcErrorCode;
 use hex::encode as hex_encode;
@@ -33,8 +34,13 @@ use crate::engine::{
     WalletBalance,
 };
 use crate::indexer::scanner::{SyncMode, SyncStatus};
-use crate::node_client::{NodeClientError, NodePolicyHint, NodeRejectionHint};
-use crate::wallet::{PolicyPreview, Wallet, WalletError, WalletSyncCoordinator, WalletSyncError};
+use crate::node_client::{
+    BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
+};
+use crate::wallet::{
+    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletSyncCoordinator,
+    WalletSyncError,
+};
 
 #[derive(Clone, Debug)]
 struct DraftState {
@@ -83,6 +89,8 @@ pub struct WalletRpcRouter {
     next_id: AtomicU64,
     sync: Option<Arc<dyn SyncHandle>>,
 }
+
+const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
 
 impl WalletRpcRouter {
     pub fn new(wallet: Arc<Wallet>, sync: Option<Arc<dyn SyncHandle>>) -> Self {
@@ -205,6 +213,22 @@ impl WalletRpcRouter {
                 let _params: ReleasePendingLocksParams = parse_params(params)?;
                 let released = self.wallet.release_pending_locks()?;
                 self.respond_released_locks(released)
+            }
+            "mempool_info" => {
+                parse_params::<EmptyParams>(params)?;
+                let info = self.wallet.mempool_info()?;
+                self.respond_mempool_info(info)
+            }
+            "recent_blocks" => {
+                let params: RecentBlocksParams = parse_params(params)?;
+                let requested = params.limit.unwrap_or(DEFAULT_RECENT_BLOCK_LIMIT as u32);
+                let limit = requested.clamp(1, 32) as usize;
+                let blocks = self.wallet.recent_blocks(limit)?;
+                self.respond_recent_blocks(blocks)
+            }
+            "telemetry_counters" => {
+                parse_params::<EmptyParams>(params)?;
+                self.respond_telemetry_counters()
             }
             "sync_status" => {
                 parse_params::<SyncStatusParams>(params)?;
@@ -356,6 +380,20 @@ impl WalletRpcRouter {
     fn respond_released_locks(&self, locks: Vec<PendingLock>) -> Result<Value, RouterError> {
         let released = locks.into_iter().map(PendingLockDto::from).collect();
         to_value(ReleasePendingLocksResponse { released })
+    }
+
+    fn respond_mempool_info(&self, info: MempoolInfo) -> Result<Value, RouterError> {
+        to_value(MempoolInfoResponse::from(info))
+    }
+
+    fn respond_recent_blocks(&self, blocks: Vec<BlockFeeSummary>) -> Result<Value, RouterError> {
+        let blocks = blocks.into_iter().map(BlockFeeSummaryDto::from).collect();
+        to_value(RecentBlocksResponse { blocks })
+    }
+
+    fn respond_telemetry_counters(&self) -> Result<Value, RouterError> {
+        let counters = telemetry_counters_to_dto(self.wallet.telemetry_counters());
+        to_value(counters)
     }
 
     fn respond_sync_status(&self) -> Result<Value, RouterError> {
@@ -867,6 +905,37 @@ impl From<PendingLock> for PendingLockDto {
             proof_bytes: lock.metadata.proof_bytes,
         }
     }
+}
+
+impl From<MempoolInfo> for MempoolInfoResponse {
+    fn from(info: MempoolInfo) -> Self {
+        Self {
+            tx_count: info.tx_count,
+            vsize_limit: info.vsize_limit,
+            vsize_in_use: info.vsize_in_use,
+            min_fee_rate: info.min_fee_rate,
+            max_fee_rate: info.max_fee_rate,
+        }
+    }
+}
+
+impl From<BlockFeeSummary> for BlockFeeSummaryDto {
+    fn from(summary: BlockFeeSummary) -> Self {
+        Self {
+            height: summary.height,
+            median_fee_rate: summary.median_fee_rate,
+            max_fee_rate: summary.max_fee_rate,
+        }
+    }
+}
+
+fn telemetry_counters_to_dto(counters: TelemetryCounters) -> TelemetryCountersResponse {
+    let TelemetryCounters { enabled, counters } = counters;
+    let counters = counters
+        .into_iter()
+        .map(|TelemetryCounter { name, value }| TelemetryCounterDto { name, value })
+        .collect();
+    TelemetryCountersResponse { enabled, counters }
 }
 
 fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {

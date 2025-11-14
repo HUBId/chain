@@ -10,9 +10,10 @@ use super::dto::{
     DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse,
     GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
-    ListUtxosResponse, PolicyPreviewResponse, ReleasePendingLocksParams,
-    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
-    SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
+    ListUtxosResponse, MempoolInfoResponse, PolicyPreviewResponse, RecentBlocksParams,
+    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncStatusResponse, TelemetryCountersResponse, JSONRPC_VERSION,
 };
 use super::error::WalletRpcErrorCode;
 
@@ -211,6 +212,27 @@ impl WalletRpcClient {
     ) -> Result<ReleasePendingLocksResponse, WalletRpcClientError> {
         self.call("release_pending_locks", Some(ReleasePendingLocksParams))
             .await
+    }
+
+    /// Returns aggregate mempool statistics from the connected node.
+    pub async fn mempool_info(&self) -> Result<MempoolInfoResponse, WalletRpcClientError> {
+        self.call("mempool_info", Option::<Value>::None).await
+    }
+
+    /// Returns fee-related metadata for the most recent blocks.
+    pub async fn recent_blocks(
+        &self,
+        limit: u32,
+    ) -> Result<RecentBlocksResponse, WalletRpcClientError> {
+        let params = RecentBlocksParams { limit: Some(limit) };
+        self.call("recent_blocks", Some(&params)).await
+    }
+
+    /// Fetches the latest sampled telemetry counters, if available.
+    pub async fn telemetry_counters(
+        &self,
+    ) -> Result<TelemetryCountersResponse, WalletRpcClientError> {
+        self.call("telemetry_counters", Option::<Value>::None).await
     }
 
     /// Fetches the latest sync status snapshot.
