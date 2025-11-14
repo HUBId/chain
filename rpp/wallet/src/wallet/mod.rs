@@ -291,3 +291,314 @@ fn current_timestamp_ms() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::borrow::Cow;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tempfile::tempdir;
+
+    use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+    use crate::db::{UtxoOutpoint, UtxoRecord};
+    use crate::engine::WalletEngine;
+    use crate::node_client::{NodeClient, StubNodeClient};
+
+    struct SleepyWalletProver {
+        jobs: ProverJobManager,
+        sleep: Duration,
+    }
+
+    impl SleepyWalletProver {
+        fn new(timeout_secs: u64, sleep: Duration) -> Self {
+            let mut config = WalletProverConfig::default();
+            config.job_timeout_secs = timeout_secs;
+            config.max_concurrency = 1;
+            Self {
+                jobs: ProverJobManager::new(&config),
+                sleep,
+            }
+        }
+    }
+
+    impl WalletProver for SleepyWalletProver {
+        fn backend(&self) -> &'static str {
+            "sleepy"
+        }
+
+        fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
+            let sleep = self.sleep;
+            self.jobs.run_job(move || {
+                std::thread::sleep(sleep);
+                Ok(ProverOutput {
+                    backend: "sleepy".into(),
+                    proof: None,
+                    witness_bytes: 0,
+                    duration_ms: sleep.as_millis() as u64,
+                })
+            })
+        }
+    }
+
+    fn seed_store_with_utxo(store: &Arc<WalletStore>, value: u128) {
+        let mut batch = store.batch().expect("wallet batch");
+        let utxo = UtxoRecord::new(
+            UtxoOutpoint::new([42u8; 32], 0),
+            "wallet.utxo".into(),
+            value,
+            Cow::Owned(vec![]),
+            Some(1),
+        );
+        batch.put_utxo(&utxo).expect("insert utxo");
+        batch.commit().expect("commit utxo");
+    }
+
+    fn sample_wallet_configs() -> (WalletPolicyConfig, WalletFeeConfig) {
+        (WalletPolicyConfig::default(), WalletFeeConfig::default())
+    }
+
+    fn build_wallet_with_prover(
+        store: Arc<WalletStore>,
+        policy: WalletPolicyConfig,
+        fees: WalletFeeConfig,
+        prover: Arc<dyn WalletProver>,
+        node_client: Arc<dyn NodeClient>,
+    ) -> Wallet {
+        let engine = Arc::new(
+            WalletEngine::new(Arc::clone(&store), [7u8; 32], policy, fees).expect("engine"),
+        );
+        let identifier = engine.identifier();
+        Wallet {
+            store,
+            engine,
+            node_client,
+            prover,
+            identifier,
+        }
+    }
+
+    fn make_draft(wallet: &Wallet, amount: u128) -> DraftTransaction {
+        wallet
+            .create_draft("wallet.recipient".into(), amount, None)
+            .expect("draft")
+    }
+
+    fn runtime_guard() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("runtime")
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn mock_backend_records_metadata_on_pending_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 50_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut config = WalletProverConfig::default();
+        config.max_witness_bytes = 1_000_000;
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            [3u8; 32],
+            policy,
+            fees,
+            config,
+            Arc::clone(&node_client),
+        )
+        .expect("wallet");
+
+        let draft = make_draft(&wallet, 10_000);
+        let locks_before = wallet.pending_locks().expect("locks");
+        assert!(!locks_before.is_empty());
+
+        let output = wallet.sign_and_prove(&draft).expect("mock prove");
+        assert_eq!(output.backend, "mock");
+        assert!(output.proof.is_some());
+
+        let locks = wallet.pending_locks().expect("locks after prove");
+        assert_eq!(locks.len(), locks_before.len());
+        let proof_bytes = output
+            .proof
+            .as_ref()
+            .map(|bytes| bytes.as_ref().len() as u64);
+        assert!(locks.iter().all(|lock| {
+            lock.spending_txid.is_some()
+                && lock.metadata.backend == "mock"
+                && lock.metadata.witness_bytes == output.witness_bytes as u64
+                && lock.metadata.prove_duration_ms == output.duration_ms
+                && lock.metadata.proof_bytes == proof_bytes
+        }));
+        drop(tempdir);
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn stwo_backend_records_metadata_on_pending_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 75_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut config = WalletProverConfig::default();
+        config.enabled = true;
+        config.mock_fallback = false;
+        config.job_timeout_secs = 30;
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            [5u8; 32],
+            policy,
+            fees,
+            config,
+            Arc::clone(&node_client),
+        )
+        .expect("wallet");
+
+        let draft = make_draft(&wallet, 15_000);
+        let locks_before = wallet.pending_locks().expect("locks");
+        assert!(!locks_before.is_empty());
+
+        let output = wallet.sign_and_prove(&draft).expect("stwo prove");
+        assert_eq!(output.backend, "stwo");
+        assert!(output.proof.is_some());
+
+        let locks = wallet.pending_locks().expect("locks after prove");
+        assert_eq!(locks.len(), locks_before.len());
+        let proof_bytes = output
+            .proof
+            .as_ref()
+            .map(|bytes| bytes.as_ref().len() as u64);
+        assert!(locks.iter().all(|lock| {
+            lock.spending_txid.is_some()
+                && lock.metadata.backend == "stwo"
+                && lock.metadata.witness_bytes == output.witness_bytes as u64
+                && lock.metadata.prove_duration_ms == output.duration_ms
+                && lock.metadata.proof_bytes == proof_bytes
+        }));
+        drop(tempdir);
+    }
+
+    #[test]
+    fn timed_out_job_releases_pending_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 60_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let prover: Arc<dyn WalletProver> =
+            Arc::new(SleepyWalletProver::new(1, Duration::from_millis(1_500)));
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            prover,
+            Arc::clone(&node_client),
+        );
+
+        let draft = make_draft(&wallet, 20_000);
+        assert!(!wallet.pending_locks().expect("locks before").is_empty());
+
+        let err = wallet.sign_and_prove(&draft).expect_err("timeout error");
+        assert!(matches!(
+            err,
+            WalletError::Prover(ProverError::Timeout(secs)) if secs == 1
+        ));
+
+        assert!(wallet.pending_locks().expect("locks after").is_empty());
+        drop(tempdir);
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn mock_backend_rejects_large_witnesses_and_releases_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 55_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut config = WalletProverConfig::default();
+        config.max_witness_bytes = 1;
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            [9u8; 32],
+            policy,
+            fees,
+            config,
+            Arc::clone(&node_client),
+        )
+        .expect("wallet");
+
+        let draft = make_draft(&wallet, 12_000);
+        assert!(!wallet.pending_locks().expect("locks before").is_empty());
+
+        let err = wallet
+            .sign_and_prove(&draft)
+            .expect_err("witness too large");
+        assert!(matches!(
+            err,
+            WalletError::Prover(ProverError::WitnessTooLarge { limit, .. }) if limit == 1
+        ));
+        assert!(wallet.pending_locks().expect("locks after").is_empty());
+        drop(tempdir);
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn stwo_backend_rejects_large_witnesses_and_releases_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 65_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut config = WalletProverConfig::default();
+        config.enabled = true;
+        config.mock_fallback = false;
+        config.max_witness_bytes = 1;
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            [11u8; 32],
+            policy,
+            fees,
+            config,
+            Arc::clone(&node_client),
+        )
+        .expect("wallet");
+
+        let draft = make_draft(&wallet, 18_000);
+        assert!(!wallet.pending_locks().expect("locks before").is_empty());
+
+        let err = wallet
+            .sign_and_prove(&draft)
+            .expect_err("witness too large");
+        assert!(matches!(
+            err,
+            WalletError::Prover(ProverError::WitnessTooLarge { limit, .. }) if limit == 1
+        ));
+        assert!(wallet.pending_locks().expect("locks after").is_empty());
+        drop(tempdir);
+    }
+}
