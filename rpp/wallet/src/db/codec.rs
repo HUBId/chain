@@ -311,8 +311,8 @@ mod tests {
 
     #[test]
     fn schema_roundtrip() {
-        let encoded = encode_schema_version(schema::SCHEMA_VERSION_V1).expect("encode schema");
+        let encoded = encode_schema_version(schema::SCHEMA_VERSION_LATEST).expect("encode schema");
         let decoded = decode_schema_version(&encoded).expect("decode schema");
-        assert_eq!(decoded, schema::SCHEMA_VERSION_V1);
+        assert_eq!(decoded, schema::SCHEMA_VERSION_LATEST);
     }
 }
