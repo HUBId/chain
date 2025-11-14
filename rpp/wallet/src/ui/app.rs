@@ -6,7 +6,7 @@ use iced::event;
 use iced::executor::Default;
 use iced::keyboard;
 use iced::time;
-use iced::widget::{button, column, container, row, text, text_input, Space};
+use iced::widget::{button, column, container, row, text, text_input};
 use iced::window;
 use iced::{Alignment, Application, Command, Element, Event, Length, Subscription, Theme};
 use serde::Deserialize;
@@ -18,10 +18,14 @@ use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::SyncStatusResponse;
 use crate::rpc::error::WalletRpcErrorCode;
 
+use super::commands::{self, RpcCallError};
+use super::components::{
+    error_banner, modal, progress_bar as progress_bar_view, ErrorBannerState, ProgressBarState,
+};
+use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
 use super::WalletGuiFlags;
 
-const DEFAULT_MODAL_WIDTH: f32 = 420.0;
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Top-level iced [`Application`] coordinating wallet UI state.
@@ -79,7 +83,7 @@ impl Application for WalletApp {
                         });
                     }
                     Err(error) => {
-                        self.model.push_error(error.message.clone());
+                        self.model.push_error(error);
                         self.model.queue_async(AsyncAction::DetectKeystore {
                             keystore_path: None,
                         });
@@ -90,7 +94,7 @@ impl Application for WalletApp {
                 self.model.mark_async_complete();
                 match result {
                     Ok(status) => self.model.apply_keystore_status(status),
-                    Err(error) => self.model.push_error(error.message),
+                    Err(error) => self.model.push_error(error),
                 }
             }
             Message::PassphraseChanged(value) => {
@@ -115,7 +119,7 @@ impl Application for WalletApp {
                     Err(error) => {
                         self.model.set_session_locked();
                         self.model.passphrase_input.clear();
-                        self.model.push_error(error.message);
+                        self.model.push_error(error);
                     }
                 }
             }
@@ -131,7 +135,7 @@ impl Application for WalletApp {
                     Ok(status) => {
                         self.model.sync_status = Some(status);
                     }
-                    Err(error) => self.model.push_error(error.message),
+                    Err(error) => self.model.push_error(error),
                 }
                 self.model.sync_inflight = false;
             }
@@ -174,7 +178,7 @@ impl Application for WalletApp {
         let mut layout = column![header].spacing(16).padding(20);
 
         if let Some(error) = &self.model.global_error {
-            layout = layout.push(error_banner(error));
+            layout = layout.push(error_banner(error.banner_state(), Message::DismissError));
         }
 
         layout = layout.push(self.view_navigation());
@@ -289,9 +293,14 @@ impl WalletApp {
             "Waiting for keystore availability..."
         };
 
+        let progress = progress_bar_view(ProgressBarState {
+            progress: if session.keystore_present { 0.5 } else { 0.2 },
+            label: Some(message),
+        });
+
         let content = column![
             text("Unlocking").size(24),
-            text(message).size(16),
+            progress,
             button(text("Cancel"))
                 .on_press(Message::Shutdown)
                 .padding(10),
@@ -354,7 +363,7 @@ struct Model {
     sync_poll_interval: Duration,
     sync_status: Option<SyncStatusResponse>,
     sync_inflight: bool,
-    global_error: Option<String>,
+    global_error: Option<ErrorNotification>,
     passphrase_input: String,
     keystore_path: Option<PathBuf>,
 }
@@ -398,8 +407,8 @@ impl Model {
         self.async_inflight = false;
     }
 
-    fn push_error(&mut self, message: String) {
-        self.global_error = Some(message);
+    fn push_error(&mut self, error: AppError) {
+        self.global_error = Some(ErrorNotification::from(error));
     }
 
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
@@ -454,43 +463,111 @@ impl Model {
 #[derive(Debug, Clone)]
 struct AppError {
     message: String,
+    detail: Option<String>,
 }
 
 impl AppError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            detail: None,
         }
+    }
+
+    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
     }
 }
 
 impl From<WalletRpcClientError> for AppError {
     fn from(value: WalletRpcClientError) -> Self {
-        Self::new(value.to_string())
+        match value {
+            WalletRpcClientError::Rpc {
+                code,
+                message,
+                details,
+                ..
+            } => {
+                let description = describe_rpc_error(&code, details.as_ref());
+                let mut extra = Vec::new();
+                if let Some(mapped) = description.technical.clone() {
+                    extra.push(mapped);
+                }
+                if let Some(technical) = technical_details(&message, details.as_ref()) {
+                    extra.push(technical);
+                }
+                let detail = if extra.is_empty() {
+                    None
+                } else {
+                    Some(extra.join("\n"))
+                };
+                let mut error = AppError::new(description.headline);
+                error.detail = detail;
+                error
+            }
+            other => AppError::new(other.to_string()),
+        }
+    }
+}
+
+impl From<RpcCallError> for AppError {
+    fn from(value: RpcCallError) -> Self {
+        match value {
+            RpcCallError::Timeout(duration) => AppError::new(format!(
+                "Wallet RPC request timed out after {}s",
+                duration.as_secs()
+            )),
+            RpcCallError::Client(error) => AppError::from(error),
+        }
     }
 }
 
 impl From<std::io::Error> for AppError {
     fn from(value: std::io::Error) -> Self {
-        Self::new(value.to_string())
+        AppError::new(value.to_string())
     }
 }
 
 impl From<toml::de::Error> for AppError {
     fn from(value: toml::de::Error) -> Self {
-        Self::new(value.to_string())
+        AppError::new(value.to_string())
     }
 }
 
 impl From<serde_json::Error> for AppError {
     fn from(value: serde_json::Error) -> Self {
-        Self::new(value.to_string())
+        AppError::new(value.to_string())
     }
 }
 
 impl From<tokio::task::JoinError> for AppError {
     fn from(value: tokio::task::JoinError) -> Self {
-        Self::new(value.to_string())
+        AppError::new(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ErrorNotification {
+    message: String,
+    detail: Option<String>,
+}
+
+impl From<AppError> for ErrorNotification {
+    fn from(value: AppError) -> Self {
+        Self {
+            message: value.message,
+            detail: value.detail,
+        }
+    }
+}
+
+impl ErrorNotification {
+    fn banner_state(&self) -> ErrorBannerState<'_> {
+        ErrorBannerState {
+            message: &self.message,
+            detail: self.detail.as_deref(),
+        }
     }
 }
 
@@ -550,12 +627,14 @@ impl AsyncAction {
                 detect_keystore_status(client, keystore_path),
                 Message::KeystoreStatusDetected,
             ),
-            AsyncAction::Unlock { passphrase } => {
-                Command::perform(unlock_wallet(client, passphrase), Message::UnlockCompleted)
-            }
-            AsyncAction::FetchSyncStatus => {
-                Command::perform(poll_sync_status(client), Message::SyncStatusLoaded)
-            }
+            AsyncAction::Unlock { passphrase } => commands::rpc(
+                client,
+                move |client| unlock_wallet(client, passphrase),
+                |result| Message::UnlockCompleted(result.map_err(AppError::from)),
+            ),
+            AsyncAction::FetchSyncStatus => commands::rpc(client, poll_sync_status, |result| {
+                Message::SyncStatusLoaded(result.map_err(AppError::from))
+            }),
         }
     }
 }
@@ -612,45 +691,27 @@ async fn detect_keystore_status(
     }
 }
 
-async fn unlock_wallet(client: WalletRpcClient, passphrase: String) -> Result<(), AppError> {
+async fn unlock_wallet(
+    client: WalletRpcClient,
+    passphrase: String,
+) -> Result<(), WalletRpcClientError> {
     #[derive(serde::Serialize)]
-    struct UnlockParams<'a> {
-        passphrase: &'a str,
+    struct UnlockParams {
+        passphrase: String,
     }
 
+    let params = UnlockParams { passphrase };
+
     client
-        .request(
-            "unlock_wallet",
-            Some(UnlockParams {
-                passphrase: passphrase.as_str(),
-            }),
-        )
+        .request("unlock_wallet", Some(params))
         .await
         .map(|_| ())
-        .map_err(AppError::from)
 }
 
-async fn poll_sync_status(client: WalletRpcClient) -> Result<SyncStatusResponse, AppError> {
-    client.sync_status().await.map_err(AppError::from)
-}
-
-fn error_banner(message: &str) -> Element<Message> {
-    let dismiss = button(text("Dismiss"))
-        .on_press(Message::DismissError)
-        .padding(8);
-    container(
-        row![
-            text(message).size(16),
-            Space::with_width(Length::Fill),
-            dismiss
-        ]
-        .spacing(12)
-        .align_items(Alignment::Center),
-    )
-    .style(iced::theme::Container::Box)
-    .padding(12)
-    .width(Length::Fill)
-    .into()
+async fn poll_sync_status(
+    client: WalletRpcClient,
+) -> Result<SyncStatusResponse, WalletRpcClientError> {
+    client.sync_status().await
 }
 
 fn sync_status_summary(status: &SyncStatusResponse) -> Element<Message> {
@@ -677,30 +738,4 @@ fn sync_status_summary(status: &SyncStatusResponse) -> Element<Message> {
     .padding(12)
     .width(Length::Shrink)
     .into()
-}
-
-fn modal(content: iced::widget::Column<Message>) -> Element<Message> {
-    let modal = container(content)
-        .padding(24)
-        .width(Length::Fixed(DEFAULT_MODAL_WIDTH))
-        .style(iced::theme::Container::Box);
-
-    let layout = column![
-        Space::with_height(Length::Fill),
-        row![
-            Space::with_width(Length::Fill),
-            modal,
-            Space::with_width(Length::Fill)
-        ],
-        Space::with_height(Length::Fill),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .spacing(0)
-    .align_items(Alignment::Center);
-
-    container(layout)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
 }

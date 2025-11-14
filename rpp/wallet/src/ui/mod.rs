@@ -3,6 +3,9 @@ use iced::Settings;
 use crate::rpc::client::WalletRpcClient;
 
 mod app;
+pub mod commands;
+pub mod components;
+pub mod error_map;
 pub mod routes;
 
 pub use app::WalletApp;
