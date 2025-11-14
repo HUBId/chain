@@ -6,6 +6,7 @@ mod app;
 pub mod commands;
 pub mod components;
 pub mod error_map;
+pub mod preferences;
 pub mod routes;
 pub mod tabs;
 

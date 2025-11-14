@@ -142,6 +142,13 @@ impl State {
         Command::none()
     }
 
+    pub fn set_clipboard_opt_in(&mut self, enabled: bool) {
+        self.clipboard_opt_in = enabled;
+        if !enabled {
+            self.pending_clipboard = None;
+        }
+    }
+
     pub fn update(&mut self, client: WalletRpcClient, message: Message) -> Command<Message> {
         match message {
             Message::LoadCurrentAddress | Message::RotateAddress => {
