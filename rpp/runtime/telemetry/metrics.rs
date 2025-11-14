@@ -68,6 +68,10 @@ pub struct RuntimeMetrics {
     proofs: ProofMetrics,
     consensus_block_duration: EnumF64Histogram<ConsensusStage>,
     wallet_rpc_latency: EnumF64Histogram<WalletRpcMethod>,
+    wallet_fee_estimate_latency: Histogram<f64>,
+    wallet_prover_job_duration: Histogram<f64>,
+    wallet_rescan_duration: Histogram<f64>,
+    wallet_broadcast_rejected: Counter<u64>,
     wallet_runtime_watch_active: Histogram<u64>,
     wallet_sync_driver_active: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
@@ -114,6 +118,26 @@ impl RuntimeMetrics {
                     .with_unit("ms")
                     .build(),
             ),
+            wallet_fee_estimate_latency: meter
+                .f64_histogram("rpp.runtime.wallet.fee.estimate.latency_ms")
+                .with_description("Latency of wallet fee estimation requests in milliseconds")
+                .with_unit("ms")
+                .build(),
+            wallet_prover_job_duration: meter
+                .f64_histogram("rpp.runtime.wallet.prover.job.duration_ms")
+                .with_description("Duration of wallet prover jobs in milliseconds")
+                .with_unit("ms")
+                .build(),
+            wallet_rescan_duration: meter
+                .f64_histogram("rpp.runtime.wallet.scan.rescan.duration_ms")
+                .with_description("Latency of wallet rescan scheduling requests in milliseconds")
+                .with_unit("ms")
+                .build(),
+            wallet_broadcast_rejected: meter
+                .u64_counter("rpp.runtime.wallet.broadcast.rejected")
+                .with_description("Total wallet transaction broadcast rejections grouped by reason")
+                .with_unit("1")
+                .build(),
             wallet_runtime_watch_active: meter
                 .u64_histogram("rpp.runtime.wallet.runtime.active")
                 .with_description("Samples indicating whether the wallet runtime loop is active")
@@ -290,6 +314,40 @@ impl RuntimeMetrics {
     /// Record the latency of a wallet RPC invocation.
     pub fn record_wallet_rpc_latency(&self, method: WalletRpcMethod, duration: Duration) {
         self.wallet_rpc_latency.record_duration(method, duration);
+    }
+
+    /// Record the latency of wallet fee estimation requests.
+    pub fn record_wallet_fee_estimate_latency(&self, duration: Duration) {
+        self.wallet_fee_estimate_latency
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &[]);
+    }
+
+    /// Record the duration of a wallet prover job grouped by backend and result.
+    pub fn record_wallet_prover_job_duration(
+        &self,
+        backend: &str,
+        proof_generated: bool,
+        duration: Duration,
+    ) {
+        let attributes = [
+            KeyValue::new("backend", backend.to_string()),
+            KeyValue::new("proof_generated", proof_generated),
+        ];
+        self.wallet_prover_job_duration
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record the time taken to schedule a wallet rescan along with its outcome.
+    pub fn record_wallet_rescan_duration(&self, scheduled: bool, duration: Duration) {
+        let attributes = [KeyValue::new("scheduled", scheduled)];
+        self.wallet_rescan_duration
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Increment the wallet broadcast rejection counter grouped by reason.
+    pub fn record_wallet_broadcast_rejected(&self, reason: &str) {
+        let attributes = [KeyValue::new("reason", reason.to_string())];
+        self.wallet_broadcast_rejected.add(1, &attributes);
     }
 
     /// Record that the wallet runtime loop has started processing events.
@@ -1273,6 +1331,10 @@ mod tests {
             RpcResult::Success,
             Duration::from_millis(25),
         );
+        metrics.record_wallet_fee_estimate_latency(Duration::from_millis(21));
+        metrics.record_wallet_prover_job_duration("mock", true, Duration::from_millis(22));
+        metrics.record_wallet_rescan_duration(true, Duration::from_millis(23));
+        metrics.record_wallet_broadcast_rejected("NODE_REJECTED");
         metrics.record_wal_flush_duration(WalFlushOutcome::Success, Duration::from_millis(30));
         metrics.record_wal_flush_bytes(WalFlushOutcome::Success, 512);
         metrics.increment_wal_flushes(WalFlushOutcome::Success);
@@ -1342,6 +1404,22 @@ mod tests {
         assert_eq!(
             seen.get("rpp.runtime.wallet.rpc_latency"),
             Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.fee.estimate.latency_ms"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.prover.job.duration_ms"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.scan.rescan.duration_ms"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.broadcast.rejected"),
+            Some(&"1".to_string())
         );
         assert_eq!(
             seen.get("rpp.runtime.storage.wal_flush.duration"),
