@@ -22,23 +22,13 @@ use rpp_wallet::rpc::dto::{
     BroadcastResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, RescanResponse,
     SignTxResponse,
 };
+use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use rpp_wallet::rpc::WalletRpcRouter;
 
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const CODE_PARSE_ERROR: i32 = -32700;
-const CODE_INVALID_REQUEST: i32 = -32600;
-const CODE_METHOD_NOT_FOUND: i32 = -32601;
-const CODE_INVALID_PARAMS: i32 = -32602;
-const CODE_INTERNAL_ERROR: i32 = -32603;
 const CODE_UNAUTHORIZED: i32 = -32060;
 const CODE_RATE_LIMITED: i32 = -32061;
-const CODE_WALLET_ERROR: i32 = -32010;
-const CODE_SYNC_ERROR: i32 = -32020;
-const CODE_NODE_ERROR: i32 = -32030;
-const CODE_DRAFT_NOT_FOUND: i32 = -32040;
-const CODE_DRAFT_UNSIGNED: i32 = -32041;
-const CODE_SYNC_UNAVAILABLE: i32 = -32050;
-const CODE_RESCAN_OUT_OF_RANGE: i32 = -32051;
 
 /// Wrapper type for wallet RPC authentication tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,34 +322,34 @@ fn extract_broadcast_rejection_reason(response: &JsonRpcResponse) -> Option<Stri
 }
 
 fn broadcast_reason_from_error(error: &JsonRpcError) -> String {
+    if let Some(code) = rpc_error_code_from_error(error) {
+        return code.as_str().into_owned();
+    }
     match error.code {
-        CODE_NODE_ERROR => {
-            phase2_code_from_error(error).unwrap_or_else(|| "NODE_ERROR".to_string())
-        }
-        CODE_WALLET_ERROR => "WALLET_ERROR".to_string(),
-        CODE_SYNC_ERROR => "SYNC_ERROR".to_string(),
-        CODE_DRAFT_NOT_FOUND => "MISSING_DRAFT".to_string(),
-        CODE_DRAFT_UNSIGNED => "DRAFT_UNSIGNED".to_string(),
-        CODE_INVALID_PARAMS => "INVALID_PARAMS".to_string(),
-        CODE_INVALID_REQUEST => "INVALID_REQUEST".to_string(),
-        CODE_METHOD_NOT_FOUND => "METHOD_NOT_FOUND".to_string(),
-        CODE_INTERNAL_ERROR => "INTERNAL_ERROR".to_string(),
         CODE_RATE_LIMITED => "RATE_LIMITED".to_string(),
         CODE_UNAUTHORIZED => "UNAUTHORIZED".to_string(),
         CODE_PARSE_ERROR => "PARSE_ERROR".to_string(),
-        CODE_SYNC_UNAVAILABLE => "SYNC_UNAVAILABLE".to_string(),
-        CODE_RESCAN_OUT_OF_RANGE => "RESCAN_OUT_OF_RANGE".to_string(),
-        _ => "UNKNOWN".to_string(),
+        other => format!("JSON_RPC_{other}"),
     }
 }
 
 fn phase2_code_from_error(error: &JsonRpcError) -> Option<String> {
-    match &error.data {
-        Some(Value::Object(map)) => map
-            .get("phase2_code")
-            .and_then(|value| value.as_str().map(ToString::to_string)),
-        _ => None,
-    }
+    error
+        .data
+        .as_ref()
+        .and_then(|value| value.get("details"))
+        .or_else(|| error.data.as_ref())
+        .and_then(|value| value.get("phase2_code"))
+        .and_then(|value| value.as_str().map(ToString::to_string))
+}
+
+fn rpc_error_code_from_error(error: &JsonRpcError) -> Option<WalletRpcErrorCode> {
+    error
+        .data
+        .as_ref()
+        .and_then(|value| value.get("code"))
+        .and_then(|value| value.as_str())
+        .map(WalletRpcErrorCode::from)
 }
 
 const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[

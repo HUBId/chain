@@ -54,6 +54,31 @@ Feature flags:
 * `prover-mock` (default) – lightweight mock circuit for dev/test.
 * `prover-stwo` / `prover-stwo-simd` – full STWO backend, optionally with SIMD acceleration.【F:rpp/wallet/Cargo.toml†L7-L23】
 
+## Wallet RPC error codes
+
+Wallet RPC responses now embed a stable Phase 2 error code in `error.data.code` alongside
+structured diagnostics under `error.data.details`. External clients can key off the string
+values below while still surfacing the human-readable `message` field. Core codes include:
+
+| Code | Description | Details payload |
+| --- | --- | --- |
+| `WALLET_POLICY_VIOLATION` | Draft violates configured policy limits (confirmations, dust, daily spend). | `violations[]` entries explaining each breach. |
+| `PENDING_LOCK_CONFLICT` | Not enough unlocked UTXOs to satisfy the draft because other drafts hold locks. | `required`, `total_available` (or `available`). |
+| `FEE_TOO_LOW` | Fee rate below wallet minimum or rejected by the node; hints advise the minimum bump. | `minimum`/`required`, optional node `hint`, `hints[]`, `phase2_code`. |
+| `FEE_TOO_HIGH` | Requested fee rate exceeds the configured ceiling. | `requested`, `maximum`. |
+| `PROVER_TIMEOUT` | Wallet prover exceeded `job_timeout_secs` and abandoned the proof. | `timeout_secs`. |
+| `PROVER_FAILED` | Prover backend/serialization/runtime error (mock or STWO). | `kind`, `message`. |
+| `WITNESS_TOO_LARGE` | Witness size breached the configured limit. | `size_bytes`, `limit_bytes`. |
+| `RESCAN_IN_PROGRESS` | A targeted rescan is already queued; new requests report the pending start height. | `requested`, `pending_from`. |
+| `RESCAN_OUT_OF_RANGE` | Requested rescan starts above the latest indexed height. | `requested`, `latest`. |
+| `SYNC_UNAVAILABLE` | RPC invoked without a running sync coordinator. | *(empty)* |
+| `NODE_UNAVAILABLE` / `NODE_REJECTED` / `NODE_POLICY` | Execution node errors (network failure, mempool rejection, policy rejection). | `phase2_code`, `reason`, structured `hint`, `hints[]`. |
+| `DRAFT_NOT_FOUND` / `DRAFT_UNSIGNED` | Draft lifecycle errors exposed by the CLI and RPC. | `draft_id`. |
+
+Clients can also encounter standard JSON-RPC codes (`INVALID_PARAMS`, `METHOD_NOT_FOUND`, etc.).
+Those use the same envelope, letting scripts branch on the code string while operators read the
+friendly CLI messaging.
+
 ## Troubleshooting Phase 2 errors
 
 ### Fee rate too low

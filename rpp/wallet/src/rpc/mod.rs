@@ -1,6 +1,7 @@
 //! JSON-RPC facades for wallet subsystems.
 
 pub mod dto;
+pub mod error;
 pub mod zsi;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use dto::{
     SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TransactionEntryDto,
     UtxoDto, JSONRPC_VERSION,
 };
+use error::WalletRpcErrorCode;
 use hex::encode as hex_encode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -25,22 +27,13 @@ use serde_json::{json, Value};
 
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
-use crate::engine::{DraftTransaction, SpendModel, WalletBalance};
+use crate::engine::{
+    BuilderError, DraftTransaction, EngineError, FeeError, ProverError, SelectionError, SpendModel,
+    WalletBalance,
+};
 use crate::indexer::scanner::{SyncMode, SyncStatus};
-use crate::node_client::NodeClientError;
+use crate::node_client::{NodeClientError, NodePolicyHint, NodeRejectionHint};
 use crate::wallet::{PolicyPreview, Wallet, WalletError, WalletSyncCoordinator, WalletSyncError};
-
-const CODE_INVALID_REQUEST: i32 = -32600;
-const CODE_METHOD_NOT_FOUND: i32 = -32601;
-const CODE_INVALID_PARAMS: i32 = -32602;
-const CODE_INTERNAL_ERROR: i32 = -32603;
-const CODE_WALLET_ERROR: i32 = -32010;
-const CODE_SYNC_ERROR: i32 = -32020;
-const CODE_NODE_ERROR: i32 = -32030;
-const CODE_DRAFT_NOT_FOUND: i32 = -32040;
-const CODE_DRAFT_UNSIGNED: i32 = -32041;
-const CODE_SYNC_UNAVAILABLE: i32 = -32050;
-const CODE_RESCAN_OUT_OF_RANGE: i32 = -32051;
 
 #[derive(Clone, Debug)]
 struct DraftState {
@@ -436,7 +429,7 @@ impl WalletRpcRouter {
             ));
         };
 
-        if let Some(status) = status {
+        if let Some(ref status) = status {
             if target_height > status.latest_height {
                 return Err(RouterError::RescanOutOfRange {
                     requested: target_height,
@@ -445,6 +438,15 @@ impl WalletRpcRouter {
             }
         }
         let scheduled = sync.request_rescan(target_height)?;
+        if !scheduled {
+            let pending_from = status
+                .as_ref()
+                .and_then(|value| value.pending_ranges.first().map(|(start, _)| *start));
+            return Err(RouterError::RescanInProgress {
+                requested: target_height,
+                pending_from,
+            });
+        }
         to_value(RescanResponse {
             scheduled,
             from_height: target_height,
@@ -525,7 +527,14 @@ enum RouterError {
     MissingDraft(String),
     DraftUnsigned(String),
     SyncUnavailable,
-    RescanOutOfRange { requested: u64, latest: u64 },
+    RescanOutOfRange {
+        requested: u64,
+        latest: u64,
+    },
+    RescanInProgress {
+        requested: u64,
+        pending_from: Option<u64>,
+    },
     StatePoisoned,
     Serialization(String),
 }
@@ -534,60 +543,275 @@ impl RouterError {
     fn into_json_error(self) -> JsonRpcError {
         match self {
             RouterError::InvalidRequest(message) => {
-                JsonRpcError::new(CODE_INVALID_REQUEST, message, None)
+                json_error(WalletRpcErrorCode::InvalidRequest, message, None)
             }
-            RouterError::MethodNotFound(method) => JsonRpcError::new(
-                CODE_METHOD_NOT_FOUND,
+            RouterError::MethodNotFound(method) => json_error(
+                WalletRpcErrorCode::MethodNotFound,
                 format!("method `{method}` not found"),
-                None,
+                Some(json!({ "method": method })),
             ),
             RouterError::InvalidParams(message) => {
-                JsonRpcError::new(CODE_INVALID_PARAMS, message, None)
+                json_error(WalletRpcErrorCode::InvalidParams, message, None)
             }
-            RouterError::Wallet(error) => {
-                JsonRpcError::new(CODE_WALLET_ERROR, error.to_string(), None)
-            }
-            RouterError::Sync(error) => JsonRpcError::new(CODE_SYNC_ERROR, error.to_string(), None),
+            RouterError::Wallet(error) => wallet_error_to_json(&error),
+            RouterError::Sync(error) => wallet_sync_error_to_json(&error),
             RouterError::Node(error) => node_error_to_json(&error),
-            RouterError::MissingDraft(draft_id) => JsonRpcError::new(
-                CODE_DRAFT_NOT_FOUND,
+            RouterError::MissingDraft(draft_id) => json_error(
+                WalletRpcErrorCode::DraftNotFound,
                 "draft not found",
                 Some(json!({ "draft_id": draft_id })),
             ),
-            RouterError::DraftUnsigned(draft_id) => JsonRpcError::new(
-                CODE_DRAFT_UNSIGNED,
+            RouterError::DraftUnsigned(draft_id) => json_error(
+                WalletRpcErrorCode::DraftUnsigned,
                 "draft must be signed before broadcasting",
                 Some(json!({ "draft_id": draft_id })),
             ),
-            RouterError::SyncUnavailable => JsonRpcError::new(
-                CODE_SYNC_UNAVAILABLE,
+            RouterError::SyncUnavailable => json_error(
+                WalletRpcErrorCode::SyncUnavailable,
                 "wallet sync coordinator not configured",
                 None,
             ),
-            RouterError::RescanOutOfRange { requested, latest } => JsonRpcError::new(
-                CODE_RESCAN_OUT_OF_RANGE,
+            RouterError::RescanOutOfRange { requested, latest } => json_error(
+                WalletRpcErrorCode::RescanOutOfRange,
                 "rescan height is outside the indexed range",
                 Some(json!({ "requested": requested, "latest": latest })),
             ),
-            RouterError::StatePoisoned | RouterError::Serialization(_) => {
-                JsonRpcError::new(CODE_INTERNAL_ERROR, "wallet router internal error", None)
-            }
+            RouterError::RescanInProgress {
+                requested,
+                pending_from,
+            } => json_error(
+                WalletRpcErrorCode::RescanInProgress,
+                "wallet rescan already scheduled",
+                Some(json!({ "requested": requested, "pending_from": pending_from })),
+            ),
+            RouterError::StatePoisoned | RouterError::Serialization(_) => json_error(
+                WalletRpcErrorCode::InternalError,
+                "wallet router internal error",
+                None,
+            ),
         }
     }
 }
 
+fn json_error(
+    code: WalletRpcErrorCode,
+    message: impl Into<String>,
+    details: Option<Value>,
+) -> JsonRpcError {
+    let payload = code.data_payload(details);
+    JsonRpcError::new(code.as_i32(), message.into(), Some(payload))
+}
+
+fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
+    match error {
+        WalletError::Engine(engine) => engine_error_to_json(engine),
+        WalletError::Prover(prover) => prover_error_to_json(prover),
+        WalletError::Node(node) => node_error_to_json(node),
+        WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
+    }
+}
+
+fn wallet_sync_error_to_json(error: &WalletSyncError) -> JsonRpcError {
+    match error {
+        WalletSyncError::Scanner(inner) => json_error(
+            WalletRpcErrorCode::SyncError,
+            inner.to_string(),
+            Some(json!({ "kind": "scanner" })),
+        ),
+        WalletSyncError::Stopped => json_error(
+            WalletRpcErrorCode::SyncError,
+            error.to_string(),
+            Some(json!({ "kind": "stopped" })),
+        ),
+    }
+}
+
+fn engine_error_to_json(error: &EngineError) -> JsonRpcError {
+    match error {
+        EngineError::Policy(violations) => json_error(
+            WalletRpcErrorCode::WalletPolicyViolation,
+            "wallet policy violation",
+            Some(json!({ "violations": violations })),
+        ),
+        EngineError::Fee(fee) => fee_error_to_json(fee),
+        EngineError::Selection(selection) => selection_error_to_json(selection),
+        EngineError::Builder(builder) => builder_error_to_json(builder),
+        EngineError::Store(store) => json_error(
+            WalletRpcErrorCode::EngineFailure,
+            error.to_string(),
+            Some(json!({ "kind": "store", "message": store.to_string() })),
+        ),
+        EngineError::Address(address) => json_error(
+            WalletRpcErrorCode::EngineFailure,
+            error.to_string(),
+            Some(json!({ "kind": "address", "message": address.to_string() })),
+        ),
+    }
+}
+
+fn selection_error_to_json(error: &SelectionError) -> JsonRpcError {
+    match error {
+        SelectionError::InsufficientFunds {
+            required,
+            confirmed_available,
+            total_available,
+        } => json_error(
+            WalletRpcErrorCode::PendingLockConflict,
+            error.to_string(),
+            Some(json!({
+                "required": required,
+                "confirmed_available": confirmed_available,
+                "total_available": total_available,
+            })),
+        ),
+    }
+}
+
+fn builder_error_to_json(error: &BuilderError) -> JsonRpcError {
+    match error {
+        BuilderError::InsufficientFunds {
+            required,
+            available,
+        } => json_error(
+            WalletRpcErrorCode::PendingLockConflict,
+            error.to_string(),
+            Some(json!({ "required": required, "available": available })),
+        ),
+        BuilderError::FeeOverflow => json_error(
+            WalletRpcErrorCode::EngineFailure,
+            error.to_string(),
+            Some(json!({ "kind": "fee_overflow" })),
+        ),
+        BuilderError::MissingSelection => json_error(
+            WalletRpcErrorCode::EngineFailure,
+            error.to_string(),
+            Some(json!({ "kind": "missing_selection" })),
+        ),
+    }
+}
+
+fn fee_error_to_json(error: &FeeError) -> JsonRpcError {
+    match error {
+        FeeError::BelowMinimum { requested, minimum } => json_error(
+            WalletRpcErrorCode::FeeTooLow,
+            error.to_string(),
+            Some(json!({ "requested": requested, "minimum": minimum })),
+        ),
+        FeeError::AboveMaximum { requested, maximum } => json_error(
+            WalletRpcErrorCode::FeeTooHigh,
+            error.to_string(),
+            Some(json!({ "requested": requested, "maximum": maximum })),
+        ),
+        FeeError::Node(node) => node_error_to_json(node),
+    }
+}
+
+fn prover_error_to_json(error: &ProverError) -> JsonRpcError {
+    match error {
+        ProverError::Timeout(timeout) => json_error(
+            WalletRpcErrorCode::ProverTimeout,
+            error.to_string(),
+            Some(json!({ "timeout_secs": timeout })),
+        ),
+        ProverError::Cancelled => {
+            json_error(WalletRpcErrorCode::ProverCancelled, error.to_string(), None)
+        }
+        ProverError::WitnessTooLarge { size, limit } => json_error(
+            WalletRpcErrorCode::WitnessTooLarge,
+            error.to_string(),
+            Some(json!({ "size_bytes": size, "limit_bytes": limit })),
+        ),
+        ProverError::Backend(inner) => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "backend", "message": inner.to_string() })),
+        ),
+        ProverError::Serialization(message) => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "serialization", "message": message })),
+        ),
+        ProverError::Unsupported(backend) => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "unsupported", "backend": backend })),
+        ),
+        ProverError::Runtime(message) => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "runtime", "message": message })),
+        ),
+    }
+}
+
 fn node_error_to_json(error: &NodeClientError) -> JsonRpcError {
-    let mut data = serde_json::Map::new();
-    data.insert("phase2_code".to_string(), json!(error.phase2_code()));
+    let phase2 = error.phase2_code();
+    let mut details = serde_json::Map::new();
+    details.insert("phase2_code".to_string(), json!(phase2));
+    let code = match error {
+        NodeClientError::Network { message, .. } => {
+            details.insert("message".to_string(), json!(message));
+            WalletRpcErrorCode::NodeUnavailable
+        }
+        NodeClientError::Rejected { reason, hint } => {
+            details.insert("reason".to_string(), json!(reason));
+            if let Some(hint) = hint {
+                details.insert("hint".to_string(), node_rejection_hint_to_json(hint));
+            }
+            if phase2 == "FEE_TOO_LOW" {
+                WalletRpcErrorCode::FeeTooLow
+            } else {
+                WalletRpcErrorCode::NodeRejected
+            }
+        }
+        NodeClientError::Policy { reason, hint } => {
+            details.insert("reason".to_string(), json!(reason));
+            if let Some(hint) = hint {
+                details.insert("hint".to_string(), node_policy_hint_to_json(hint));
+            }
+            if phase2 == "FEE_TOO_LOW" {
+                WalletRpcErrorCode::FeeTooLow
+            } else {
+                WalletRpcErrorCode::NodePolicy
+            }
+        }
+        NodeClientError::StatsUnavailable { kind, message } => {
+            details.insert("message".to_string(), json!(message));
+            details.insert("stats_kind".to_string(), json!(kind.to_string()));
+            WalletRpcErrorCode::NodeStatsUnavailable
+        }
+    };
     let hints = error.hints();
     if !hints.is_empty() {
-        data.insert("hints".to_string(), json!(hints));
+        details.insert("hints".to_string(), json!(hints));
     }
-    JsonRpcError::new(
-        CODE_NODE_ERROR,
-        error.user_message(),
-        Some(Value::Object(data)),
-    )
+    json_error(code, error.user_message(), Some(Value::Object(details)))
+}
+
+fn node_rejection_hint_to_json(hint: &NodeRejectionHint) -> Value {
+    match hint {
+        NodeRejectionHint::FeeRateTooLow { required } => json!({
+            "kind": "fee_rate_too_low",
+            "required": required,
+        }),
+        NodeRejectionHint::AlreadyKnown => json!({ "kind": "already_known" }),
+        NodeRejectionHint::Conflicting => json!({ "kind": "conflicting" }),
+        NodeRejectionHint::MempoolFull => json!({ "kind": "mempool_full" }),
+        NodeRejectionHint::Other(reason) => json!({ "kind": "other", "reason": reason }),
+    }
+}
+
+fn node_policy_hint_to_json(hint: &NodePolicyHint) -> Value {
+    match hint {
+        NodePolicyHint::FeeRateTooLow { minimum } => json!({
+            "kind": "fee_rate_too_low",
+            "minimum": minimum,
+        }),
+        NodePolicyHint::MissingInputs => json!({ "kind": "missing_inputs" }),
+        NodePolicyHint::DustOutput => json!({ "kind": "dust_output" }),
+        NodePolicyHint::ReplacementRejected => json!({ "kind": "replacement_rejected" }),
+        NodePolicyHint::Other(reason) => json!({ "kind": "other", "reason": reason }),
+    }
 }
 
 impl From<WalletError> for RouterError {
@@ -654,6 +878,7 @@ fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
 
 #[cfg(test)]
 mod tests {
+    use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
     use crate::db::UtxoOutpoint;
@@ -695,7 +920,10 @@ mod tests {
         };
         let response = router.handle(request);
         let error = response.error.expect("error");
-        assert_eq!(error.code, CODE_DRAFT_NOT_FOUND);
+        assert_eq!(error.code, WalletRpcErrorCode::DraftNotFound.as_i32());
+        let data = error.data.expect("error data");
+        assert_eq!(data["code"], json!("DRAFT_NOT_FOUND"));
+        assert_eq!(data["details"]["draft_id"], json!("deadbeef"));
     }
 
     #[derive(Clone)]
@@ -837,7 +1065,44 @@ mod tests {
         };
         let response = router.handle(request);
         let error = response.error.expect("error");
-        assert_eq!(error.code, CODE_RESCAN_OUT_OF_RANGE);
+        assert_eq!(error.code, WalletRpcErrorCode::RescanOutOfRange.as_i32());
+        let data = error.data.expect("error data");
+        assert_eq!(data["code"], json!("RESCAN_OUT_OF_RANGE"));
+        assert_eq!(data["details"]["requested"], json!(25));
+        assert_eq!(data["details"]["latest"], json!(10));
+    }
+
+    #[test]
+    fn router_reports_rescan_in_progress() {
+        let status = SyncStatus {
+            latest_height: 24,
+            mode: SyncMode::Rescan { from_height: 12 },
+            scanned_scripthashes: 4,
+            pending_ranges: vec![(6, 12)],
+            checkpoints: SyncCheckpoints {
+                resume_height: Some(20),
+                ..SyncCheckpoints::default()
+            },
+            hints: Vec::new(),
+            node_issue: None,
+        };
+        let mut recording = RecordingSync::default();
+        recording.status = Some(status);
+        let sync = Arc::new(recording);
+        let router = build_router(Some(sync));
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "rescan".to_string(),
+            params: Some(json!({ "from_height": 8 })),
+        };
+        let response = router.handle(request);
+        let error = response.error.expect("error");
+        assert_eq!(error.code, WalletRpcErrorCode::RescanInProgress.as_i32());
+        let data = error.data.expect("error data");
+        assert_eq!(data["code"], json!("RESCAN_IN_PROGRESS"));
+        assert_eq!(data["details"]["requested"], json!(8));
+        assert_eq!(data["details"]["pending_from"], json!(6));
     }
 
     #[test]
@@ -847,15 +1112,16 @@ mod tests {
             NodeRejectionHint::FeeRateTooLow { required: Some(15) },
         );
         let json_error = super::node_error_to_json(&error);
-        assert_eq!(json_error.code, CODE_NODE_ERROR);
+        assert_eq!(json_error.code, WalletRpcErrorCode::FeeTooLow.as_i32());
         assert_eq!(
             json_error.message,
             "node rejected transaction (fee rate too low (required 15 sats/vB))"
         );
         let data = json_error.data.expect("phase2 metadata");
-        assert_eq!(data["phase2_code"], json!("FEE_TOO_LOW"));
+        assert_eq!(data["code"], json!("FEE_TOO_LOW"));
+        assert_eq!(data["details"]["phase2_code"], json!("FEE_TOO_LOW"));
         assert_eq!(
-            data["hints"],
+            data["details"]["hints"],
             json!(["Increase the fee rate to at least 15 sats/vB and retry."])
         );
     }
@@ -912,15 +1178,16 @@ mod tests {
         };
         let response = router.handle(request);
         let error = response.error.expect("error");
-        assert_eq!(error.code, CODE_NODE_ERROR);
+        assert_eq!(error.code, WalletRpcErrorCode::FeeTooLow.as_i32());
         assert_eq!(
             error.message,
             "node rejected transaction (fee rate too low (required 25 sats/vB))"
         );
         let data = error.data.expect("metadata");
-        assert_eq!(data["phase2_code"], json!("FEE_TOO_LOW"));
+        assert_eq!(data["code"], json!("FEE_TOO_LOW"));
+        assert_eq!(data["details"]["phase2_code"], json!("FEE_TOO_LOW"));
         assert_eq!(
-            data["hints"],
+            data["details"]["hints"],
             json!(["Increase the fee rate to at least 25 sats/vB and retry."])
         );
         assert_eq!(
