@@ -24,7 +24,7 @@ use super::components::{
 };
 use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
-use super::tabs::{dashboard, receive, send};
+use super::tabs::{dashboard, history, receive, send};
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -47,6 +47,7 @@ pub enum Message {
     Navigate(Route),
     KeyboardShortcut(NavigationIntent),
     Dashboard(dashboard::Message),
+    History(history::Message),
     Receive(receive::Message),
     Send(send::Message),
     DismissError,
@@ -120,6 +121,7 @@ impl Application for WalletApp {
                         self.model.sync_inflight = false;
                         self.model.passphrase_input.clear();
                         self.model.dashboard.reset();
+                        self.model.history.reset();
                         self.model.receive.reset();
                         self.model.send.reset();
                     }
@@ -185,6 +187,14 @@ impl Application for WalletApp {
                 }
                 update.push(command.map(Message::Dashboard));
             }
+            Message::History(message) => {
+                let command = self
+                    .model
+                    .history
+                    .update(self.model.client.clone(), message)
+                    .map(Message::History);
+                update.push(command);
+            }
             Message::Receive(message) => {
                 let command = self
                     .model
@@ -224,6 +234,14 @@ impl Application for WalletApp {
                     .dashboard
                     .activate(self.model.client.clone())
                     .map(Message::Dashboard);
+                update.push(command);
+            }
+            if self.model.active_route == Route::Activity {
+                let command = self
+                    .model
+                    .history
+                    .activate(self.model.client.clone())
+                    .map(Message::History);
                 update.push(command);
             }
             if self.model.active_route == Route::Receive {
@@ -399,6 +417,7 @@ impl WalletApp {
 
         let content = match self.model.active_route {
             Route::Overview => self.model.dashboard.view().map(Message::Dashboard),
+            Route::Activity => self.model.history.view().map(Message::History),
             Route::Receive => self.model.receive.view().map(Message::Receive),
             Route::Send => self.model.send.view().map(Message::Send),
             _ => text("Tab content coming soon...").size(16).into(),
@@ -419,6 +438,14 @@ impl WalletApp {
                 .dashboard
                 .activate(self.model.client.clone())
                 .map(Message::Dashboard);
+            update.push(command);
+        }
+        if self.model.active_route == Route::Activity {
+            let command = self
+                .model
+                .history
+                .activate(self.model.client.clone())
+                .map(Message::History);
             update.push(command);
         }
         if self.model.active_route == Route::Receive {
@@ -478,6 +505,7 @@ struct Model {
     passphrase_input: String,
     keystore_path: Option<PathBuf>,
     dashboard: dashboard::State,
+    history: history::State,
     receive: receive::State,
     send: send::State,
 }
@@ -499,6 +527,7 @@ impl Model {
             passphrase_input: String::new(),
             keystore_path: None,
             dashboard: dashboard::State::default(),
+            history: history::State::default(),
             receive: receive::State::default(),
             send: send::State::default(),
         }
@@ -530,6 +559,7 @@ impl Model {
 
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
         self.dashboard.reset();
+        self.history.reset();
         self.receive.reset();
         self.send.reset();
         if status.locked {
@@ -547,6 +577,7 @@ impl Model {
 
     fn set_session_locked(&mut self) {
         self.dashboard.reset();
+        self.history.reset();
         self.receive.reset();
         self.send.reset();
         let present = self
@@ -563,6 +594,7 @@ impl Model {
 
     fn set_session_unlocking(&mut self) {
         self.dashboard.reset();
+        self.history.reset();
         self.receive.reset();
         self.send.reset();
         let present = self
