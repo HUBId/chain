@@ -24,7 +24,7 @@ use super::components::{
 };
 use super::error_map::{describe_rpc_error, technical_details};
 use super::routes::{self, NavigationIntent, Route};
-use super::tabs::{dashboard, receive};
+use super::tabs::{dashboard, receive, send};
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -48,6 +48,7 @@ pub enum Message {
     KeyboardShortcut(NavigationIntent),
     Dashboard(dashboard::Message),
     Receive(receive::Message),
+    Send(send::Message),
     DismissError,
     Shutdown,
 }
@@ -120,6 +121,7 @@ impl Application for WalletApp {
                         self.model.passphrase_input.clear();
                         self.model.dashboard.reset();
                         self.model.receive.reset();
+                        self.model.send.reset();
                     }
                     Err(error) => {
                         self.model.set_session_locked();
@@ -191,6 +193,14 @@ impl Application for WalletApp {
                     .map(Message::Receive);
                 update.push(command);
             }
+            Message::Send(message) => {
+                let command = self
+                    .model
+                    .send
+                    .update(self.model.client.clone(), message)
+                    .map(Message::Send);
+                update.push(command);
+            }
             Message::DismissError => {
                 self.model.global_error = None;
             }
@@ -222,6 +232,14 @@ impl Application for WalletApp {
                     .receive
                     .activate(self.model.client.clone())
                     .map(Message::Receive);
+                update.push(command);
+            }
+            if self.model.active_route == Route::Send {
+                let command = self
+                    .model
+                    .send
+                    .activate(self.model.client.clone())
+                    .map(Message::Send);
                 update.push(command);
             }
         }
@@ -382,6 +400,7 @@ impl WalletApp {
         let content = match self.model.active_route {
             Route::Overview => self.model.dashboard.view().map(Message::Dashboard),
             Route::Receive => self.model.receive.view().map(Message::Receive),
+            Route::Send => self.model.send.view().map(Message::Send),
             _ => text("Tab content coming soon...").size(16).into(),
         };
 
@@ -408,6 +427,14 @@ impl WalletApp {
                 .receive
                 .activate(self.model.client.clone())
                 .map(Message::Receive);
+            update.push(command);
+        }
+        if self.model.active_route == Route::Send {
+            let command = self
+                .model
+                .send
+                .activate(self.model.client.clone())
+                .map(Message::Send);
             update.push(command);
         }
     }
@@ -452,6 +479,7 @@ struct Model {
     keystore_path: Option<PathBuf>,
     dashboard: dashboard::State,
     receive: receive::State,
+    send: send::State,
 }
 
 impl Model {
@@ -472,6 +500,7 @@ impl Model {
             keystore_path: None,
             dashboard: dashboard::State::default(),
             receive: receive::State::default(),
+            send: send::State::default(),
         }
     }
 
@@ -502,6 +531,7 @@ impl Model {
     fn apply_keystore_status(&mut self, status: KeystoreStatus) {
         self.dashboard.reset();
         self.receive.reset();
+        self.send.reset();
         if status.locked {
             self.session = SessionState::Locked(LockedSession {
                 keystore_present: status.present,
@@ -518,6 +548,7 @@ impl Model {
     fn set_session_locked(&mut self) {
         self.dashboard.reset();
         self.receive.reset();
+        self.send.reset();
         let present = self
             .keystore_path
             .as_ref()
@@ -533,6 +564,7 @@ impl Model {
     fn set_session_unlocking(&mut self) {
         self.dashboard.reset();
         self.receive.reset();
+        self.send.reset();
         let present = self
             .keystore_path
             .as_ref()
