@@ -6,14 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::dto::{
-    BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
-    DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse,
-    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
-    ListUtxosResponse, MempoolInfoResponse, PolicyPreviewResponse, RecentBlocksParams,
-    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, TelemetryCountersResponse, JSONRPC_VERSION,
+    BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
+    BackupValidateParams, BackupValidateResponse, BalanceResponse, BroadcastParams,
+    BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
+    DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse, GetPolicyResponse, JsonRpcError,
+    JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, ListTransactionsPageResponse,
+    ListTransactionsParams, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
+    PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
+    SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse, JSONRPC_VERSION,
 };
 use super::error::WalletRpcErrorCode;
 
@@ -212,6 +213,30 @@ impl WalletRpcClient {
     ) -> Result<ReleasePendingLocksResponse, WalletRpcClientError> {
         self.call("release_pending_locks", Some(ReleasePendingLocksParams))
             .await
+    }
+
+    /// Exports an encrypted wallet backup archive.
+    pub async fn backup_export(
+        &self,
+        params: &BackupExportParams,
+    ) -> Result<BackupExportResponse, WalletRpcClientError> {
+        self.call("backup.export", Some(params)).await
+    }
+
+    /// Validates an encrypted wallet backup archive.
+    pub async fn backup_validate(
+        &self,
+        params: &BackupValidateParams,
+    ) -> Result<BackupValidateResponse, WalletRpcClientError> {
+        self.call("backup.validate", Some(params)).await
+    }
+
+    /// Imports an encrypted wallet backup archive.
+    pub async fn backup_import(
+        &self,
+        params: &BackupImportParams,
+    ) -> Result<BackupImportResponse, WalletRpcClientError> {
+        self.call("backup.import", Some(params)).await
     }
 
     /// Returns aggregate mempool statistics from the connected node.

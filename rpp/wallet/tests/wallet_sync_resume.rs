@@ -20,7 +20,7 @@ use rpp_wallet::indexer::client::{
     TransactionPayload, TxOutpoint,
 };
 use rpp_wallet::node_client::{ChainHead, NodeClient, NodeClientResult};
-use rpp_wallet::wallet::Wallet;
+use rpp_wallet::wallet::{Wallet, WalletPaths};
 
 const RESUME_HEIGHT_LABEL: &str = "indexer::resume_height";
 const LAST_SCAN_TS_LABEL: &str = "indexer::last_scan_ts";
@@ -206,6 +206,8 @@ impl SyncSetup {
             internal_gap_limit: 4,
             min_confirmations: 1,
         };
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [7u8; 32],
@@ -213,6 +215,7 @@ impl SyncSetup {
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
             Arc::new(TestNodeClient::default()),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
         let deposit_address = wallet.derive_address(false).expect("address");

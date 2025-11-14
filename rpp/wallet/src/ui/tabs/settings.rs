@@ -1,13 +1,18 @@
 use iced::widget::{button, checkbox, column, container, horizontal_rule, row, text, text_input};
 use iced::{Alignment, Command, Element, Length};
+use zeroize::Zeroize;
 
 use crate::config::WalletConfig;
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
-use crate::rpc::dto::{GetPolicyResponse, PolicySnapshotDto, SetPolicyParams, SetPolicyResponse};
+use crate::rpc::dto::{
+    BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
+    BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
+    GetPolicyResponse, PolicySnapshotDto, SetPolicyParams, SetPolicyResponse,
+};
 use crate::rpc::error::WalletRpcErrorCode;
 
 use crate::ui::commands::{self, RpcCallError};
-use crate::ui::components::{modal, ConfirmDialog};
+use crate::ui::components::modal;
 use crate::ui::preferences::{Preferences, ThemePreference};
 use crate::ui::telemetry;
 
@@ -82,16 +87,98 @@ struct PassphraseForm {
 
 impl PassphraseForm {
     fn reset(&mut self) {
+        self.new_passphrase.zeroize();
         self.new_passphrase.clear();
+        self.confirm_passphrase.zeroize();
         self.confirm_passphrase.clear();
         self.error = None;
     }
 }
 
 #[derive(Debug, Clone)]
-enum KeystoreModal {
-    Passphrase(PassphraseForm),
-    Export,
+struct BackupExportForm {
+    passphrase: PassphraseForm,
+    metadata_only: bool,
+    include_checksums: bool,
+}
+
+impl Default for BackupExportForm {
+    fn default() -> Self {
+        Self {
+            passphrase: PassphraseForm::default(),
+            metadata_only: false,
+            include_checksums: true,
+        }
+    }
+}
+
+impl BackupExportForm {
+    fn reset(&mut self) {
+        self.passphrase.reset();
+        self.metadata_only = false;
+        self.include_checksums = true;
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct BackupValidateForm {
+    name: String,
+    passphrase: String,
+    dry_run: bool,
+    error: Option<String>,
+}
+
+impl BackupValidateForm {
+    fn reset(&mut self) {
+        self.name.clear();
+        self.passphrase.zeroize();
+        self.passphrase.clear();
+        self.dry_run = false;
+        self.error = None;
+    }
+
+    fn clear_passphrase(&mut self) {
+        self.passphrase.zeroize();
+        self.passphrase.clear();
+        self.error = None;
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct BackupImportForm {
+    name: String,
+    passphrase: String,
+    error: Option<String>,
+}
+
+impl BackupImportForm {
+    fn reset(&mut self) {
+        self.name.clear();
+        self.passphrase.zeroize();
+        self.passphrase.clear();
+        self.error = None;
+    }
+
+    fn clear_passphrase(&mut self) {
+        self.passphrase.zeroize();
+        self.passphrase.clear();
+        self.error = None;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BackupOutcome {
+    title: String,
+    metadata: BackupMetadataDto,
+    details: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+enum Modal {
+    ChangePassphrase(PassphraseForm),
+    BackupExport(BackupExportForm),
+    BackupValidate(BackupValidateForm),
+    BackupImport(BackupImportForm),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -113,9 +200,14 @@ pub struct State {
     keystore_present: bool,
     keystore_locked: bool,
     keystore_inflight: bool,
+    backup_inflight: bool,
     keystore_feedback: Option<String>,
     keystore_error: Option<String>,
-    keystore_modal: Option<KeystoreModal>,
+    backup_error: Option<String>,
+    backup_outcome: Option<BackupOutcome>,
+    backup_pending_name: Option<String>,
+    backup_pending_mode: Option<BackupValidationModeDto>,
+    modal: Option<Modal>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,13 +226,26 @@ pub enum Message {
     ToggleTelemetry(bool),
     TelemetryUpdated(Result<bool, RpcCallError>),
     ShowPassphraseModal,
-    ShowExportModal,
-    DismissKeystoreModal,
+    ShowBackupExportModal,
+    ShowBackupValidateModal,
+    ShowBackupImportModal,
+    DismissModal,
     PassphraseChanged(PassphraseField, String),
+    BackupExportMetadataOnlyChanged(bool),
+    BackupExportChecksumsChanged(bool),
+    BackupValidateNameChanged(String),
+    BackupValidatePassphraseChanged(String),
+    BackupValidateModeChanged(bool),
+    BackupImportNameChanged(String),
+    BackupImportPassphraseChanged(String),
     SubmitPassphraseChange,
     PassphraseChangeCompleted(Result<(), RpcCallError>),
-    ConfirmKeystoreExport,
-    KeystoreExported(Result<String, RpcCallError>),
+    SubmitBackupExport,
+    BackupExported(Result<BackupExportResponse, RpcCallError>),
+    SubmitBackupValidation,
+    BackupValidated(Result<BackupValidateResponse, RpcCallError>),
+    SubmitBackupImport,
+    BackupImported(Result<BackupImportResponse, RpcCallError>),
 }
 
 impl State {
@@ -158,9 +263,14 @@ impl State {
         self.clipboard_feedback = None;
         self.theme_feedback = None;
         self.keystore_inflight = false;
+        self.backup_inflight = false;
         self.keystore_feedback = None;
         self.keystore_error = None;
-        self.keystore_modal = None;
+        self.backup_error = None;
+        self.backup_outcome = None;
+        self.backup_pending_name = None;
+        self.backup_pending_mode = None;
+        self.dismiss_modal();
         if self.policy_statements.is_empty() {
             self.policy_statements.push(String::new());
         }
@@ -284,27 +394,97 @@ impl State {
             }
             Message::ShowPassphraseModal => {
                 if self.keystore_present && !self.keystore_locked {
-                    self.keystore_modal =
-                        Some(KeystoreModal::Passphrase(PassphraseForm::default()));
+                    self.modal = Some(Modal::ChangePassphrase(PassphraseForm::default()));
                 }
                 Command::none()
             }
-            Message::ShowExportModal => {
+            Message::ShowBackupExportModal => {
                 if self.keystore_present && !self.keystore_locked {
-                    self.keystore_modal = Some(KeystoreModal::Export);
+                    self.modal = Some(Modal::BackupExport(BackupExportForm::default()));
                 }
                 Command::none()
             }
-            Message::DismissKeystoreModal => {
-                self.keystore_modal = None;
+            Message::ShowBackupValidateModal => {
+                if !self.keystore_locked {
+                    self.modal = Some(Modal::BackupValidate(BackupValidateForm::default()));
+                }
+                Command::none()
+            }
+            Message::ShowBackupImportModal => {
+                if !self.keystore_locked {
+                    self.modal = Some(Modal::BackupImport(BackupImportForm::default()));
+                }
+                Command::none()
+            }
+            Message::DismissModal => {
+                self.dismiss_modal();
                 Command::none()
             }
             Message::PassphraseChanged(field, value) => {
-                if let Some(KeystoreModal::Passphrase(form)) = &mut self.keystore_modal {
-                    match field {
-                        PassphraseField::New => form.new_passphrase = value,
-                        PassphraseField::Confirm => form.confirm_passphrase = value,
+                if let Some(modal) = self.modal.as_mut() {
+                    match modal {
+                        Modal::ChangePassphrase(form) => {
+                            match field {
+                                PassphraseField::New => form.new_passphrase = value,
+                                PassphraseField::Confirm => form.confirm_passphrase = value,
+                            }
+                            form.error = None;
+                        }
+                        Modal::BackupExport(form) => {
+                            let passphrase = &mut form.passphrase;
+                            match field {
+                                PassphraseField::New => passphrase.new_passphrase = value,
+                                PassphraseField::Confirm => passphrase.confirm_passphrase = value,
+                            }
+                            passphrase.error = None;
+                        }
+                        _ => {}
                     }
+                }
+                Command::none()
+            }
+            Message::BackupExportMetadataOnlyChanged(value) => {
+                if let Some(Modal::BackupExport(form)) = self.modal.as_mut() {
+                    form.metadata_only = value;
+                }
+                Command::none()
+            }
+            Message::BackupExportChecksumsChanged(value) => {
+                if let Some(Modal::BackupExport(form)) = self.modal.as_mut() {
+                    form.include_checksums = value;
+                }
+                Command::none()
+            }
+            Message::BackupValidateNameChanged(value) => {
+                if let Some(Modal::BackupValidate(form)) = self.modal.as_mut() {
+                    form.name = value;
+                    form.error = None;
+                }
+                Command::none()
+            }
+            Message::BackupValidatePassphraseChanged(value) => {
+                if let Some(Modal::BackupValidate(form)) = self.modal.as_mut() {
+                    form.passphrase = value;
+                    form.error = None;
+                }
+                Command::none()
+            }
+            Message::BackupValidateModeChanged(value) => {
+                if let Some(Modal::BackupValidate(form)) = self.modal.as_mut() {
+                    form.dry_run = value;
+                }
+                Command::none()
+            }
+            Message::BackupImportNameChanged(value) => {
+                if let Some(Modal::BackupImport(form)) = self.modal.as_mut() {
+                    form.name = value;
+                    form.error = None;
+                }
+                Command::none()
+            }
+            Message::BackupImportPassphraseChanged(value) => {
+                if let Some(Modal::BackupImport(form)) = self.modal.as_mut() {
+                    form.passphrase = value;
                     form.error = None;
                 }
                 Command::none()
@@ -314,19 +494,31 @@ impl State {
                 self.apply_passphrase_result(result);
                 Command::none()
             }
-            Message::ConfirmKeystoreExport => self.export_keystore(client),
-            Message::KeystoreExported(result) => {
-                self.apply_keystore_export(result);
+            Message::SubmitBackupExport => self.submit_backup_export(client),
+            Message::BackupExported(result) => {
+                self.apply_backup_export(result);
+                Command::none()
+            }
+            Message::SubmitBackupValidation => self.submit_backup_validation(client),
+            Message::BackupValidated(result) => {
+                self.apply_backup_validation(result);
+                Command::none()
+            }
+            Message::SubmitBackupImport => self.submit_backup_import(client),
+            Message::BackupImported(result) => {
+                self.apply_backup_import(result);
                 Command::none()
             }
         }
     }
 
     pub fn view(&self) -> Element<Message> {
-        if let Some(modal_state) = &self.keystore_modal {
+        if let Some(modal_state) = &self.modal {
             let content = match modal_state {
-                KeystoreModal::Passphrase(form) => passphrase_modal(form),
-                KeystoreModal::Export => export_modal(),
+                Modal::ChangePassphrase(form) => passphrase_modal(form),
+                Modal::BackupExport(form) => export_modal(form),
+                Modal::BackupValidate(form) => validate_modal(form),
+                Modal::BackupImport(form) => import_modal(form),
             };
             return modal(content);
         }
@@ -341,6 +533,8 @@ impl State {
         content = content.push(self.preferences_section());
         content = content.push(horizontal_rule(1));
         content = content.push(self.keystore_section());
+        content = content.push(horizontal_rule(1));
+        content = content.push(self.backup_section());
 
         container(content).width(Length::Fill).into()
     }
@@ -352,6 +546,20 @@ impl State {
         } else {
             None
         }
+    }
+
+    fn dismiss_modal(&mut self) {
+        if let Some(modal) = self.modal.as_mut() {
+            match modal {
+                Modal::ChangePassphrase(form) => form.reset(),
+                Modal::BackupExport(form) => form.reset(),
+                Modal::BackupValidate(form) => form.reset(),
+                Modal::BackupImport(form) => form.reset(),
+            }
+        }
+        self.backup_pending_name = None;
+        self.backup_pending_mode = None;
+        self.modal = None;
     }
 
     fn load_policy(&mut self, client: WalletRpcClient) -> Command<Message> {
@@ -459,7 +667,7 @@ impl State {
         if self.keystore_inflight {
             return Command::none();
         }
-        let Some(KeystoreModal::Passphrase(form)) = &mut self.keystore_modal else {
+        let Some(Modal::ChangePassphrase(form)) = self.modal.as_mut() else {
             return Command::none();
         };
         if form.new_passphrase.is_empty() {
@@ -474,6 +682,7 @@ impl State {
         self.keystore_error = None;
         self.keystore_feedback = None;
         let passphrase = std::mem::take(&mut form.new_passphrase);
+        form.confirm_passphrase.zeroize();
         form.confirm_passphrase.clear();
         commands::rpc(
             "keystore.passphrase_update",
@@ -488,41 +697,238 @@ impl State {
         match result {
             Ok(()) => {
                 self.keystore_feedback = Some("Passphrase updated.".into());
-                self.keystore_modal = None;
+                self.dismiss_modal();
             }
             Err(error) => {
                 self.keystore_error = Some(format_rpc_error(&error));
-                if let Some(KeystoreModal::Passphrase(form)) = &mut self.keystore_modal {
+                if let Some(Modal::ChangePassphrase(form)) = self.modal.as_mut() {
                     form.reset();
                 }
             }
         }
     }
 
-    fn export_keystore(&mut self, client: WalletRpcClient) -> Command<Message> {
-        if self.keystore_inflight {
+    fn submit_backup_export(&mut self, client: WalletRpcClient) -> Command<Message> {
+        if self.backup_inflight {
             return Command::none();
         }
-        self.keystore_inflight = true;
-        self.keystore_error = None;
-        self.keystore_feedback = None;
+        let Some(Modal::BackupExport(form)) = self.modal.as_mut() else {
+            return Command::none();
+        };
+        let passphrase = &mut form.passphrase;
+        if passphrase.new_passphrase.is_empty() {
+            passphrase.error = Some("Passphrase must not be empty.".into());
+            return Command::none();
+        }
+        if passphrase.new_passphrase != passphrase.confirm_passphrase {
+            passphrase.error = Some("Passphrases do not match.".into());
+            return Command::none();
+        }
+        self.backup_inflight = true;
+        self.backup_error = None;
+        self.backup_outcome = None;
+        self.backup_pending_name = None;
+        self.backup_pending_mode = None;
+        let params = BackupExportParams {
+            passphrase: std::mem::take(&mut passphrase.new_passphrase),
+            confirmation: std::mem::take(&mut passphrase.confirm_passphrase),
+            metadata_only: form.metadata_only,
+            include_checksums: form.include_checksums,
+        };
+        passphrase.error = None;
         commands::rpc(
             "backup.export",
             client,
-            |client| async move { export_keystore_bundle(client).await },
-            Message::KeystoreExported,
+            move |client| {
+                let mut params = params;
+                async move {
+                    let result = client.backup_export(&params).await;
+                    params.passphrase.zeroize();
+                    params.confirmation.zeroize();
+                    result
+                }
+            },
+            Message::BackupExported,
         )
     }
 
-    fn apply_keystore_export(&mut self, result: Result<String, RpcCallError>) {
-        self.keystore_inflight = false;
+    fn apply_backup_export(&mut self, result: Result<BackupExportResponse, RpcCallError>) {
+        self.backup_inflight = false;
+        self.backup_pending_name = None;
+        self.backup_pending_mode = None;
         match result {
-            Ok(path) => {
-                self.keystore_feedback = Some(format!("Keystore exported to {path}"));
-                self.keystore_modal = None;
+            Ok(response) => {
+                self.backup_error = None;
+                self.backup_outcome = Some(BackupOutcome {
+                    title: format!("Backup exported to {}", response.path),
+                    metadata: response.metadata,
+                    details: Vec::new(),
+                });
+                self.dismiss_modal();
             }
             Err(error) => {
-                self.keystore_error = Some(format_rpc_error(&error));
+                self.backup_error = Some(format_rpc_error(&error));
+                if let Some(Modal::BackupExport(form)) = self.modal.as_mut() {
+                    form.passphrase.reset();
+                }
+            }
+        }
+    }
+
+    fn submit_backup_validation(&mut self, client: WalletRpcClient) -> Command<Message> {
+        if self.backup_inflight {
+            return Command::none();
+        }
+        let Some(Modal::BackupValidate(form)) = self.modal.as_mut() else {
+            return Command::none();
+        };
+        let name = form.name.trim();
+        if name.is_empty() {
+            form.error = Some("Backup name must not be empty.".into());
+            return Command::none();
+        }
+        if form.passphrase.is_empty() {
+            form.error = Some("Passphrase must not be empty.".into());
+            return Command::none();
+        }
+        self.backup_inflight = true;
+        self.backup_error = None;
+        self.backup_outcome = None;
+        let mode = if form.dry_run {
+            BackupValidationModeDto::DryRun
+        } else {
+            BackupValidationModeDto::Full
+        };
+        let params = BackupValidateParams {
+            name: name.to_string(),
+            passphrase: std::mem::take(&mut form.passphrase),
+            mode: mode.clone(),
+        };
+        self.backup_pending_name = Some(params.name.clone());
+        self.backup_pending_mode = Some(mode);
+        form.error = None;
+        commands::rpc(
+            "backup.validate",
+            client,
+            move |client| {
+                let mut params = params;
+                async move {
+                    let result = client.backup_validate(&params).await;
+                    params.passphrase.zeroize();
+                    result
+                }
+            },
+            Message::BackupValidated,
+        )
+    }
+
+    fn apply_backup_validation(&mut self, result: Result<BackupValidateResponse, RpcCallError>) {
+        self.backup_inflight = false;
+        let name = self.backup_pending_name.take();
+        let mode = self.backup_pending_mode.take();
+        match result {
+            Ok(response) => {
+                self.backup_error = None;
+                let mut details = Vec::new();
+                if let Some(mode) = mode {
+                    let label = match mode {
+                        BackupValidationModeDto::DryRun => {
+                            "Validation mode: Dry run (checksums skipped)".to_string()
+                        }
+                        BackupValidationModeDto::Full => "Validation mode: Full".to_string(),
+                    };
+                    details.push(label);
+                }
+                let title = name
+                    .map(|name| format!("Backup {name} validated."))
+                    .unwrap_or_else(|| "Backup validated.".into());
+                self.backup_outcome = Some(BackupOutcome {
+                    title,
+                    metadata: response.metadata,
+                    details,
+                });
+                self.dismiss_modal();
+            }
+            Err(error) => {
+                self.backup_error = Some(format_rpc_error(&error));
+                if let Some(Modal::BackupValidate(form)) = self.modal.as_mut() {
+                    form.clear_passphrase();
+                }
+            }
+        }
+    }
+
+    fn submit_backup_import(&mut self, client: WalletRpcClient) -> Command<Message> {
+        if self.backup_inflight {
+            return Command::none();
+        }
+        let Some(Modal::BackupImport(form)) = self.modal.as_mut() else {
+            return Command::none();
+        };
+        let name = form.name.trim();
+        if name.is_empty() {
+            form.error = Some("Backup name must not be empty.".into());
+            return Command::none();
+        }
+        if form.passphrase.is_empty() {
+            form.error = Some("Passphrase must not be empty.".into());
+            return Command::none();
+        }
+        self.backup_inflight = true;
+        self.backup_error = None;
+        self.backup_outcome = None;
+        self.backup_pending_mode = None;
+        let params = BackupImportParams {
+            name: name.to_string(),
+            passphrase: std::mem::take(&mut form.passphrase),
+        };
+        self.backup_pending_name = Some(params.name.clone());
+        form.error = None;
+        commands::rpc(
+            "backup.import",
+            client,
+            move |client| {
+                let mut params = params;
+                async move {
+                    let result = client.backup_import(&params).await;
+                    params.passphrase.zeroize();
+                    result
+                }
+            },
+            Message::BackupImported,
+        )
+    }
+
+    fn apply_backup_import(&mut self, result: Result<BackupImportResponse, RpcCallError>) {
+        self.backup_inflight = false;
+        let name = self.backup_pending_name.take();
+        self.backup_pending_mode = None;
+        match result {
+            Ok(response) => {
+                self.backup_error = None;
+                let details = vec![
+                    format!(
+                        "Restored keystore: {}",
+                        format_bool(response.restored_keystore)
+                    ),
+                    format!("Restored policy: {}", format_bool(response.restored_policy)),
+                    format!("Rescan from height: {}", response.rescan_from_height),
+                ];
+                let title = name
+                    .map(|name| format!("Backup {name} imported."))
+                    .unwrap_or_else(|| "Backup imported.".into());
+                self.backup_outcome = Some(BackupOutcome {
+                    title,
+                    metadata: response.metadata,
+                    details,
+                });
+                self.dismiss_modal();
+            }
+            Err(error) => {
+                self.backup_error = Some(format_rpc_error(&error));
+                if let Some(Modal::BackupImport(form)) = self.modal.as_mut() {
+                    form.clear_passphrase();
+                }
             }
         }
     }
@@ -698,14 +1104,7 @@ impl State {
                     .on_press(Message::ShowPassphraseModal)
                     .padding(8)
             };
-            let export_button = if self.keystore_inflight {
-                button(text("Export keystore")).padding(8)
-            } else {
-                button(text("Export keystore"))
-                    .on_press(Message::ShowExportModal)
-                    .padding(8)
-            };
-            let mut actions = row![change_button, export_button].spacing(8);
+            let mut actions = row![change_button].spacing(8);
             if self.keystore_inflight {
                 actions = actions.push(text("Processing...").size(16));
             }
@@ -717,6 +1116,67 @@ impl State {
         }
         if let Some(error) = &self.keystore_error {
             column = column.push(text(format!("Keystore operation failed: {error}")));
+        }
+
+        container(column).width(Length::Fill).into()
+    }
+
+    fn backup_section(&self) -> Element<Message> {
+        let mut column = column![text("Backups").size(20)].spacing(12);
+
+        if let Some(config) = &self.config {
+            column = column.push(text(format!(
+                "Backup directory: {}",
+                config.engine.backup_path.display()
+            )));
+        }
+
+        let export_disabled =
+            self.backup_inflight || self.keystore_locked || !self.keystore_present;
+        let validate_disabled = self.backup_inflight || self.keystore_locked;
+        let import_disabled = self.backup_inflight || self.keystore_locked;
+
+        let export_button = if export_disabled {
+            button(text("Export backup")).padding(8)
+        } else {
+            button(text("Export backup"))
+                .on_press(Message::ShowBackupExportModal)
+                .padding(8)
+        };
+        let validate_button = if validate_disabled {
+            button(text("Validate backup")).padding(8)
+        } else {
+            button(text("Validate backup"))
+                .on_press(Message::ShowBackupValidateModal)
+                .padding(8)
+        };
+        let import_button = if import_disabled {
+            button(text("Import backup")).padding(8)
+        } else {
+            button(text("Import backup"))
+                .on_press(Message::ShowBackupImportModal)
+                .padding(8)
+        };
+
+        let mut actions = row![export_button, validate_button, import_button].spacing(8);
+        if self.backup_inflight {
+            actions = actions.push(text("Processing...").size(16));
+        }
+        column = column.push(actions);
+
+        if let Some(outcome) = &self.backup_outcome {
+            let mut summary = column![text(outcome.title.clone())].spacing(4);
+            for line in metadata_lines(&outcome.metadata) {
+                summary = summary.push(text(line));
+            }
+            for detail in &outcome.details {
+                summary = summary.push(text(detail.clone()));
+            }
+            column = column.push(summary.into());
+        }
+
+        if let Some(error) = &self.backup_error {
+            column = column.push(text(format!("Backup operation failed: {error}")));
         }
 
         container(column).width(Length::Fill).into()
@@ -754,7 +1214,7 @@ fn passphrase_modal<'a>(form: &'a PassphraseForm) -> iced::widget::Column<'a, Me
     }
 
     let actions = row![
-        button(text("Cancel")).on_press(Message::DismissKeystoreModal),
+        button(text("Cancel")).on_press(Message::DismissModal),
         button(text("Update")).on_press(Message::SubmitPassphraseChange),
     ]
     .spacing(8);
@@ -762,16 +1222,102 @@ fn passphrase_modal<'a>(form: &'a PassphraseForm) -> iced::widget::Column<'a, Me
     content.push(actions)
 }
 
-fn export_modal() -> iced::widget::Column<'static, Message> {
-    let dialog = ConfirmDialog {
-        title: "Export keystore?",
-        body: "Export the encrypted keystore bundle to disk?",
-        confirm_label: "Export",
-        cancel_label: "Cancel",
-        on_confirm: Message::ConfirmKeystoreExport,
-        on_cancel: Message::DismissKeystoreModal,
-    };
-    column![dialog.view()]
+fn export_modal<'a>(form: &'a BackupExportForm) -> iced::widget::Column<'a, Message> {
+    let mut content = column![text("Export encrypted backup").size(20)]
+        .spacing(12)
+        .align_items(Alignment::Center);
+
+    let passphrase = &form.passphrase;
+    content = content.push(
+        text_input("Backup passphrase", &passphrase.new_passphrase)
+            .on_input(|value| Message::PassphraseChanged(PassphraseField::New, value))
+            .password(),
+    );
+    content = content.push(
+        text_input("Confirm passphrase", &passphrase.confirm_passphrase)
+            .on_input(|value| Message::PassphraseChanged(PassphraseField::Confirm, value))
+            .password(),
+    );
+
+    content = content.push(
+        checkbox("Export metadata only (skip keystore)", form.metadata_only)
+            .on_toggle(Message::BackupExportMetadataOnlyChanged),
+    );
+    content = content.push(
+        checkbox("Include component checksums", form.include_checksums)
+            .on_toggle(Message::BackupExportChecksumsChanged),
+    );
+
+    if let Some(error) = &passphrase.error {
+        content = content.push(text(error.clone()));
+    }
+
+    let actions = row![
+        button(text("Cancel")).on_press(Message::DismissModal),
+        button(text("Export")).on_press(Message::SubmitBackupExport),
+    ]
+    .spacing(8);
+
+    content.push(actions)
+}
+
+fn validate_modal<'a>(form: &'a BackupValidateForm) -> iced::widget::Column<'a, Message> {
+    let mut content = column![text("Validate encrypted backup").size(20)]
+        .spacing(12)
+        .align_items(Alignment::Center);
+
+    content = content
+        .push(text_input("Backup name", &form.name).on_input(Message::BackupValidateNameChanged));
+    content = content.push(
+        text_input("Backup passphrase", &form.passphrase)
+            .on_input(Message::BackupValidatePassphraseChanged)
+            .password(),
+    );
+    content = content.push(
+        checkbox(
+            "Dry-run validation (skip checksum verification)",
+            form.dry_run,
+        )
+        .on_toggle(Message::BackupValidateModeChanged),
+    );
+
+    if let Some(error) = &form.error {
+        content = content.push(text(error.clone()));
+    }
+
+    let actions = row![
+        button(text("Cancel")).on_press(Message::DismissModal),
+        button(text("Validate")).on_press(Message::SubmitBackupValidation),
+    ]
+    .spacing(8);
+
+    content.push(actions)
+}
+
+fn import_modal<'a>(form: &'a BackupImportForm) -> iced::widget::Column<'a, Message> {
+    let mut content = column![text("Import encrypted backup").size(20)]
+        .spacing(12)
+        .align_items(Alignment::Center);
+
+    content = content
+        .push(text_input("Backup name", &form.name).on_input(Message::BackupImportNameChanged));
+    content = content.push(
+        text_input("Backup passphrase", &form.passphrase)
+            .on_input(Message::BackupImportPassphraseChanged)
+            .password(),
+    );
+
+    if let Some(error) = &form.error {
+        content = content.push(text(error.clone()));
+    }
+
+    let actions = row![
+        button(text("Cancel")).on_press(Message::DismissModal),
+        button(text("Import")).on_press(Message::SubmitBackupImport),
+    ]
+    .spacing(8);
+
+    content.push(actions)
 }
 
 async fn change_keystore_passphrase(
@@ -783,24 +1329,14 @@ async fn change_keystore_passphrase(
         passphrase: String,
     }
 
-    let params = Params { passphrase };
+    let mut params = Params { passphrase };
 
-    client
+    let result = client
         .request("keystore.passphrase_update", Some(&params))
         .await
-        .map(|_| ())
-}
-
-async fn export_keystore_bundle(client: WalletRpcClient) -> Result<String, WalletRpcClientError> {
-    #[derive(serde::Deserialize)]
-    struct Response {
-        path: String,
-    }
-
-    let response: Response = client
-        .call("backup.export", Option::<serde_json::Value>::None)
-        .await?;
-    Ok(response.path)
+        .map(|_| ());
+    params.passphrase.zeroize();
+    result
 }
 
 fn extract_policy_violations(error: &RpcCallError) -> Vec<String> {
@@ -829,6 +1365,29 @@ fn format_rpc_error(error: &RpcCallError) -> String {
         }
         RpcCallError::Client(inner) => inner.to_string(),
     }
+}
+
+fn format_bool(value: bool) -> &'static str {
+    if value {
+        "Yes"
+    } else {
+        "No"
+    }
+}
+
+fn metadata_lines(metadata: &BackupMetadataDto) -> Vec<String> {
+    vec![
+        format!("Version: {}", metadata.version),
+        format!("Created at (ms): {}", metadata.created_at_ms),
+        format!("Schema checksum: {}", metadata.schema_checksum),
+        format!("Includes keystore: {}", format_bool(metadata.has_keystore)),
+        format!("Policy entries: {}", metadata.policy_entries),
+        format!("Metadata entries: {}", metadata.meta_entries),
+        format!(
+            "Includes checksums: {}",
+            format_bool(metadata.include_checksums)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -896,7 +1455,7 @@ mod tests {
         let mut state = State::default();
         state.keystore_present = true;
         state.keystore_locked = false;
-        state.keystore_modal = Some(KeystoreModal::Passphrase(PassphraseForm::default()));
+        state.modal = Some(Modal::ChangePassphrase(PassphraseForm::default()));
 
         let _ = state.update(
             dummy_client(),
@@ -908,11 +1467,39 @@ mod tests {
         );
         let _ = state.update(dummy_client(), Message::SubmitPassphraseChange);
 
-        if let Some(KeystoreModal::Passphrase(form)) = &state.keystore_modal {
+        if let Some(Modal::ChangePassphrase(form)) = &state.modal {
             assert_eq!(form.error.as_deref(), Some("Passphrases do not match."));
         } else {
             panic!("passphrase modal should remain open");
         }
         assert!(!state.keystore_inflight);
+    }
+
+    #[test]
+    fn backup_export_requires_matching_passphrase() {
+        let mut state = State::default();
+        state.keystore_present = true;
+        state.keystore_locked = false;
+        state.modal = Some(Modal::BackupExport(BackupExportForm::default()));
+
+        let _ = state.update(
+            dummy_client(),
+            Message::PassphraseChanged(PassphraseField::New, "secret".into()),
+        );
+        let _ = state.update(
+            dummy_client(),
+            Message::PassphraseChanged(PassphraseField::Confirm, "mismatch".into()),
+        );
+        let _ = state.update(dummy_client(), Message::SubmitBackupExport);
+
+        if let Some(Modal::BackupExport(form)) = &state.modal {
+            assert_eq!(
+                form.passphrase.error.as_deref(),
+                Some("Passphrases do not match.")
+            );
+        } else {
+            panic!("export modal should remain open");
+        }
+        assert!(!state.backup_inflight);
     }
 }

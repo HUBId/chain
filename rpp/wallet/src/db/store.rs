@@ -91,6 +91,23 @@ impl WalletStore {
         Ok(guard.get(&key))
     }
 
+    /// Enumerate all metadata entries stored under the wallet namespace.
+    pub fn iter_meta(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::META_NAMESPACE;
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let label = std::str::from_utf8(&key[prefix.len()..])
+                    .map_err(|err| WalletStoreError::CorruptKey(err.to_string()))?
+                    .to_string();
+                Ok((label, value))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>()?;
+        drop(guard);
+        Ok(entries)
+    }
+
     /// Retrieve persisted key material.
     pub fn get_key_material(&self, label: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
         let mut guard = self.lock()?;

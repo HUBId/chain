@@ -17,6 +17,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
+    BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
+    BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
     CreateTxParams, CreateTxResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
     FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto, RescanParams, SetPolicyParams,
     SyncModeDto, SyncStatusResponse,
@@ -416,6 +418,13 @@ impl InitCommand {
             })?;
         }
 
+        fs::create_dir_all(&paths.engine_backup_dir).with_context(|| {
+            format!(
+                "failed to create backup directory at {}",
+                paths.engine_backup_dir.display()
+            )
+        })?;
+
         if let Some(parent) = paths.keys_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create keys directory at {}", parent.display())
@@ -450,6 +459,7 @@ impl InitCommand {
         println!("Wallet initialised successfully\n");
         println!("  Data directory : {}", paths.engine_data_dir.display());
         println!("  Keystore path   : {}", paths.engine_keystore.display());
+        println!("  Backup dir      : {}", paths.engine_backup_dir.display());
         println!("  Keys path       : {}", paths.keys_path.display());
         println!(
             "  Public key      : {}",
@@ -852,6 +862,147 @@ impl SendBroadcastCommand {
 }
 
 #[derive(Debug, Args)]
+pub struct BackupCommand {
+    #[command(subcommand)]
+    pub command: BackupSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BackupSubcommand {
+    /// Export an encrypted wallet backup archive.
+    Export(BackupExportCommand),
+    /// Validate an encrypted wallet backup archive.
+    Validate(BackupValidateCommand),
+    /// Import an encrypted wallet backup archive and schedule a rescan.
+    Import(BackupImportCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct BackupExportCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Export only metadata and policies without bundling the keystore.
+    #[arg(long)]
+    pub metadata_only: bool,
+    /// Skip computing component checksums for the archive.
+    #[arg(long)]
+    pub skip_checksums: bool,
+}
+
+impl BackupExportCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let passphrase = Zeroizing::new(
+            prompt_password("Enter backup passphrase: ")
+                .context("failed to read backup passphrase")?,
+        );
+        let confirmation = Zeroizing::new(
+            prompt_password("Confirm backup passphrase: ")
+                .context("failed to read backup passphrase confirmation")?,
+        );
+        if passphrase.as_ref() != confirmation.as_ref() {
+            return Err(WalletCliError::Other(anyhow!("passphrases did not match")));
+        }
+
+        let mut params = BackupExportParams {
+            passphrase: (*passphrase).clone(),
+            confirmation: (*confirmation).clone(),
+            metadata_only: self.metadata_only,
+            include_checksums: !self.skip_checksums,
+        };
+        let response: BackupExportResponse = client.backup_export(&params).await?;
+        params.passphrase.zeroize();
+        params.confirmation.zeroize();
+
+        println!("Backup exported\n");
+        println!("  Path             : {}", response.path);
+        render_backup_metadata(&response.metadata);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct BackupValidateCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Name of the backup file located under the configured backup directory.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+    /// Perform a dry-run validation without verifying checksums.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+impl BackupValidateCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let passphrase = Zeroizing::new(
+            prompt_password("Enter backup passphrase: ")
+                .context("failed to read backup passphrase")?,
+        );
+        let mut params = BackupValidateParams {
+            name: self.name.clone(),
+            passphrase: (*passphrase).clone(),
+            mode: if self.dry_run {
+                BackupValidationModeDto::DryRun
+            } else {
+                BackupValidationModeDto::Full
+            },
+        };
+        let response: BackupValidateResponse = client.backup_validate(&params).await?;
+        params.passphrase.zeroize();
+
+        println!("Backup validation\n");
+        render_backup_metadata(&response.metadata);
+        println!(
+            "  Contains keystore : {}",
+            format_bool(response.has_keystore)
+        );
+        println!("  Policy entries    : {}", response.policy_count);
+        println!("  Metadata entries  : {}", response.meta_entries);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct BackupImportCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Name of the backup file located under the configured backup directory.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+}
+
+impl BackupImportCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let passphrase = Zeroizing::new(
+            prompt_password("Enter backup passphrase: ")
+                .context("failed to read backup passphrase")?,
+        );
+        let mut params = BackupImportParams {
+            name: self.name.clone(),
+            passphrase: (*passphrase).clone(),
+        };
+        let response: BackupImportResponse = client.backup_import(&params).await?;
+        params.passphrase.zeroize();
+
+        println!("Backup import completed\n");
+        render_backup_metadata(&response.metadata);
+        println!(
+            "  Restored keystore : {}",
+            format_bool(response.restored_keystore)
+        );
+        println!(
+            "  Restored policy   : {}",
+            format_bool(response.restored_policy)
+        );
+        println!("  Rescan from       : {}", response.rescan_from_height);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
 pub struct RescanCommand {
     #[command(flatten)]
     pub rpc: RpcOptions,
@@ -901,6 +1052,8 @@ pub enum WalletCommand {
     Locks(LocksCommand),
     /// Manage transaction drafts.
     Send(SendCommand),
+    /// Manage encrypted wallet backups.
+    Backup(BackupCommand),
     /// Trigger a historical rescan.
     Rescan(RescanCommand),
 }
@@ -931,9 +1084,30 @@ impl WalletCommand {
                 SendSubcommand::Sign(cmd) => cmd.execute().await,
                 SendSubcommand::Broadcast(cmd) => cmd.execute().await,
             },
+            WalletCommand::Backup(BackupCommand { command }) => match command {
+                BackupSubcommand::Export(cmd) => cmd.execute().await,
+                BackupSubcommand::Validate(cmd) => cmd.execute().await,
+                BackupSubcommand::Import(cmd) => cmd.execute().await,
+            },
             WalletCommand::Rescan(cmd) => cmd.execute().await,
         }
     }
+}
+
+fn render_backup_metadata(metadata: &BackupMetadataDto) {
+    println!("  Version           : {}", metadata.version);
+    println!("  Schema checksum   : {}", metadata.schema_checksum);
+    println!("  Created at (ms)   : {}", metadata.created_at_ms);
+    println!(
+        "  Includes keystore : {}",
+        format_bool(metadata.has_keystore)
+    );
+    println!("  Policy entries    : {}", metadata.policy_entries);
+    println!("  Metadata entries  : {}", metadata.meta_entries);
+    println!(
+        "  Includes checksums: {}",
+        format_bool(metadata.include_checksums)
+    );
 }
 
 fn render_draft_summary(draft: &CreateTxResponse) {
@@ -1273,6 +1447,7 @@ impl WalletFile {
             keys_path: self.wallet.keys.key_path,
             engine_data_dir: self.wallet.engine.data_dir,
             engine_keystore: self.wallet.engine.keystore_path,
+            engine_backup_dir: self.wallet.engine.backup_path,
         }
     }
 }
@@ -1305,6 +1480,8 @@ struct WalletEngineSection {
     data_dir: PathBuf,
     #[serde(default = "default_engine_keystore")]
     keystore_path: PathBuf,
+    #[serde(default = "default_engine_backup_dir")]
+    backup_path: PathBuf,
 }
 
 impl Default for WalletEngineSection {
@@ -1312,6 +1489,7 @@ impl Default for WalletEngineSection {
         Self {
             data_dir: default_engine_data_dir(),
             keystore_path: default_engine_keystore(),
+            backup_path: default_engine_backup_dir(),
         }
     }
 }
@@ -1321,6 +1499,7 @@ struct ConfigPaths {
     keys_path: PathBuf,
     engine_data_dir: PathBuf,
     engine_keystore: PathBuf,
+    engine_backup_dir: PathBuf,
 }
 
 impl Default for ConfigPaths {
@@ -1329,6 +1508,7 @@ impl Default for ConfigPaths {
             keys_path: default_keys_path(),
             engine_data_dir: default_engine_data_dir(),
             engine_keystore: default_engine_keystore(),
+            engine_backup_dir: default_engine_backup_dir(),
         }
     }
 }
@@ -1343,6 +1523,10 @@ fn default_engine_data_dir() -> PathBuf {
 
 fn default_engine_keystore() -> PathBuf {
     PathBuf::from("./data/wallet/keystore.toml")
+}
+
+fn default_engine_backup_dir() -> PathBuf {
+    PathBuf::from("./data/wallet/backups")
 }
 
 #[cfg(test)]
@@ -1389,6 +1573,26 @@ mod tests {
                 assert_eq!(cmd.to, "wallet1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh");
                 assert_eq!(cmd.amount, 1_500);
                 assert_eq!(cmd.fee_rate, Some(5));
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_backup_export_command() {
+        let cli = TestCli::parse_from([
+            "wallet",
+            "backup",
+            "export",
+            "--metadata-only",
+            "--skip-checksums",
+        ]);
+        match cli.command {
+            WalletCommand::Backup(BackupCommand {
+                command: BackupSubcommand::Export(cmd),
+            }) => {
+                assert!(cmd.metadata_only);
+                assert!(cmd.skip_checksums);
             }
             other => panic!("parsed unexpected command: {other:?}"),
         }

@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use dto::{
+    BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
+    BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
     BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastResponse, CreateTxParams,
     CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto,
     DraftSpendModelDto, EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto,
@@ -27,6 +29,10 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::backup::{
+    backup_export, backup_import, backup_validate, BackupError, BackupExportOptions,
+    BackupImportOutcome, BackupValidationMode,
+};
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{
@@ -38,9 +44,10 @@ use crate::node_client::{
     BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
 };
 use crate::wallet::{
-    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletSyncCoordinator,
-    WalletSyncError,
+    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletPaths,
+    WalletSyncCoordinator, WalletSyncError,
 };
+use zeroize::Zeroizing;
 
 #[derive(Clone, Debug)]
 struct DraftState {
@@ -237,6 +244,18 @@ impl WalletRpcRouter {
             "rescan" => {
                 let params: RescanParams = parse_params(params)?;
                 self.handle_rescan(params)
+            }
+            "backup.export" => {
+                let params: BackupExportParams = parse_params(params)?;
+                self.handle_backup_export(params)
+            }
+            "backup.validate" => {
+                let params: BackupValidateParams = parse_params(params)?;
+                self.handle_backup_validate(params)
+            }
+            "backup.import" => {
+                let params: BackupImportParams = parse_params(params)?;
+                self.handle_backup_import(params)
             }
             _ => Err(RouterError::MethodNotFound(method.to_string())),
         }
@@ -492,6 +511,90 @@ impl WalletRpcRouter {
         })
     }
 
+    fn handle_backup_export(&self, params: BackupExportParams) -> Result<Value, RouterError> {
+        let BackupExportParams {
+            passphrase,
+            confirmation,
+            metadata_only,
+            include_checksums,
+        } = params;
+        let passphrase = Zeroizing::new(passphrase.into_bytes());
+        let confirmation = Zeroizing::new(confirmation.into_bytes());
+        let options = BackupExportOptions {
+            metadata_only,
+            include_checksums,
+        };
+        let store = self.wallet.store();
+        let result = backup_export(
+            store.as_ref(),
+            self.wallet.keystore_path(),
+            self.wallet.backup_dir(),
+            passphrase,
+            confirmation,
+            options,
+        )
+        .map_err(RouterError::Backup)?;
+        let response = BackupExportResponse {
+            path: result.path.to_string_lossy().to_string(),
+            metadata: metadata_to_dto(&result.metadata),
+        };
+        to_value(response)
+    }
+
+    fn handle_backup_validate(&self, params: BackupValidateParams) -> Result<Value, RouterError> {
+        let BackupValidateParams {
+            name,
+            passphrase,
+            mode,
+        } = params;
+        let passphrase = Zeroizing::new(passphrase.into_bytes());
+        let mode = match mode {
+            BackupValidationModeDto::DryRun => BackupValidationMode::DryRun,
+            BackupValidationModeDto::Full => BackupValidationMode::Full,
+        };
+        let store = self.wallet.store();
+        let validation = backup_validate(
+            store.as_ref(),
+            self.wallet.backup_dir(),
+            &name,
+            passphrase,
+            mode,
+        )
+        .map_err(RouterError::Backup)?;
+        let response = BackupValidateResponse {
+            metadata: metadata_to_dto(&validation.metadata),
+            has_keystore: validation.has_keystore,
+            policy_count: validation.policy_count,
+            meta_entries: validation.meta_entries,
+        };
+        to_value(response)
+    }
+
+    fn handle_backup_import(&self, params: BackupImportParams) -> Result<Value, RouterError> {
+        let BackupImportParams { name, passphrase } = params;
+        let passphrase = Zeroizing::new(passphrase.into_bytes());
+        let store = self.wallet.store();
+        let outcome = backup_import(
+            store.as_ref(),
+            self.wallet.keystore_path(),
+            self.wallet.backup_dir(),
+            &name,
+            passphrase,
+        )
+        .map_err(RouterError::Backup)?;
+        let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
+        let _ = sync
+            .request_rescan(outcome.rescan_from)
+            .map_err(RouterError::Sync)?;
+        let response = BackupImportResponse {
+            metadata: metadata_to_dto(&outcome.metadata),
+            restored_keystore: outcome.restored_keystore,
+            restored_policy: outcome.restored_policy,
+            rescan_from_height: outcome.rescan_from,
+        };
+        to_value(response)
+    }
+
     fn sign_draft(&self, draft_id: String) -> Result<Value, RouterError> {
         let mut drafts = self.lock_drafts()?;
         let state = drafts
@@ -563,6 +666,7 @@ enum RouterError {
     Wallet(WalletError),
     Sync(WalletSyncError),
     Node(NodeClientError),
+    Backup(BackupError),
     MissingDraft(String),
     DraftUnsigned(String),
     SyncUnavailable,
@@ -595,6 +699,7 @@ impl RouterError {
             RouterError::Wallet(error) => wallet_error_to_json(&error),
             RouterError::Sync(error) => wallet_sync_error_to_json(&error),
             RouterError::Node(error) => node_error_to_json(&error),
+            RouterError::Backup(error) => backup_error_to_json(&error),
             RouterError::MissingDraft(draft_id) => json_error(
                 WalletRpcErrorCode::DraftNotFound,
                 "draft not found",
@@ -648,6 +753,14 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
         WalletError::Node(node) => node_error_to_json(node),
         WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
     }
+}
+
+fn backup_error_to_json(error: &BackupError) -> JsonRpcError {
+    json_error(
+        WalletRpcErrorCode::Custom("BACKUP_ERROR".into()),
+        error.to_string(),
+        None,
+    )
 }
 
 fn wallet_sync_error_to_json(error: &WalletSyncError) -> JsonRpcError {
@@ -938,6 +1051,18 @@ fn telemetry_counters_to_dto(counters: TelemetryCounters) -> TelemetryCountersRe
     TelemetryCountersResponse { enabled, counters }
 }
 
+fn metadata_to_dto(metadata: &crate::backup::BackupMetadata) -> BackupMetadataDto {
+    BackupMetadataDto {
+        version: metadata.version,
+        schema_checksum: metadata.schema_checksum.clone(),
+        created_at_ms: metadata.created_at_ms,
+        has_keystore: metadata.has_keystore,
+        policy_entries: metadata.policy_entries,
+        meta_entries: metadata.meta_entries,
+        include_checksums: metadata.include_checksums,
+    }
+}
+
 fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
     PolicySnapshotDto {
         revision: snapshot.revision,
@@ -966,6 +1091,8 @@ mod tests {
     fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [0u8; 32],
@@ -973,6 +1100,7 @@ mod tests {
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
             Arc::new(StubNodeClient::default()),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
         let _persist = dir.into_path();
@@ -1200,6 +1328,8 @@ mod tests {
     fn broadcast_rejection_exposes_phase2_code() {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
             [0u8; 32],
@@ -1207,6 +1337,7 @@ mod tests {
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
             Arc::new(RejectingNodeClient::new()),
+            WalletPaths::new(keystore, backup),
         )
         .expect("wallet");
         let sync = Arc::new(RecordingSync::default());
