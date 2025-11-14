@@ -385,6 +385,50 @@ pub struct ReleasePendingLocksResponse {
     pub released: Vec<PendingLockDto>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MempoolInfoResponse {
+    pub tx_count: u64,
+    pub vsize_limit: u64,
+    pub vsize_in_use: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_fee_rate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fee_rate: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecentBlocksParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockFeeSummaryDto {
+    pub height: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_fee_rate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fee_rate: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecentBlocksResponse {
+    pub blocks: Vec<BlockFeeSummaryDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TelemetryCounterDto {
+    pub name: String,
+    pub value: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TelemetryCountersResponse {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counters: Vec<TelemetryCounterDto>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncStatusParams;
 
@@ -793,5 +837,43 @@ mod tests {
         roundtrip(&release);
         let params = ReleasePendingLocksParams;
         roundtrip(&params);
+    }
+
+    #[test]
+    fn mempool_info_roundtrip() {
+        let response = MempoolInfoResponse {
+            tx_count: 42,
+            vsize_limit: 1_000_000,
+            vsize_in_use: 250_000,
+            min_fee_rate: Some(1),
+            max_fee_rate: Some(10),
+        };
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn recent_blocks_roundtrip() {
+        let params = RecentBlocksParams { limit: Some(8) };
+        roundtrip(&params);
+        let response = RecentBlocksResponse {
+            blocks: vec![BlockFeeSummaryDto {
+                height: 100,
+                median_fee_rate: Some(12),
+                max_fee_rate: Some(24),
+            }],
+        };
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn telemetry_counters_roundtrip() {
+        let response = TelemetryCountersResponse {
+            enabled: true,
+            counters: vec![TelemetryCounterDto {
+                name: "proofs".into(),
+                value: 5,
+            }],
+        };
+        roundtrip(&response);
     }
 }
