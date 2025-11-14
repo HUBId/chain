@@ -20,11 +20,12 @@ use crate::rpc::dto::{
     BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
     DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
     EstimateFeeParams, EstimateFeeResponse, FeeCongestionDto, FeeEstimateSourceDto,
-    GetPolicyResponse, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, PendingLockDto,
-    PolicyPreviewResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncCheckpointDto, SyncModeDto, SyncStatusResponse, JSONRPC_VERSION,
+    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
+    PendingLockDto, PolicyPreviewResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse,
+    RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncModeDto, SyncStatusResponse, JSONRPC_VERSION,
 };
+use crate::rpc::error::WalletRpcErrorCode;
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
 
@@ -34,12 +35,214 @@ pub enum WalletCliError {
     InvalidEndpoint(String),
     #[error("wallet RPC transport error: {0}")]
     Transport(String),
-    #[error("wallet RPC error ({code}): {message}")]
-    RpcError { code: i32, message: String },
+    #[error("wallet RPC error [{code}]: {friendly}")]
+    RpcError {
+        code: WalletRpcErrorCode,
+        friendly: String,
+        message: String,
+        json_code: i32,
+        details: Option<Value>,
+    },
     #[error("wallet RPC returned an empty response")]
     EmptyResponse,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+fn interpret_rpc_error(error: JsonRpcError) -> WalletCliError {
+    let (code, details) = rpc_error_payload(&error);
+    let friendly = friendly_message(&code, &error.message, details.as_ref());
+    WalletCliError::RpcError {
+        code,
+        friendly,
+        message: error.message,
+        json_code: error.code,
+        details,
+    }
+}
+
+fn rpc_error_payload(error: &JsonRpcError) -> (WalletRpcErrorCode, Option<Value>) {
+    if let Some(Value::Object(map)) = &error.data {
+        let code = map
+            .get("code")
+            .and_then(|value| value.as_str())
+            .map(WalletRpcErrorCode::from)
+            .unwrap_or_else(|| WalletRpcErrorCode::Custom(format!("JSON_RPC_{}", error.code)));
+        let details = map.get("details").cloned();
+        (code, details)
+    } else {
+        (
+            WalletRpcErrorCode::Custom(format!("JSON_RPC_{}", error.code)),
+            None,
+        )
+    }
+}
+
+fn friendly_message(
+    code: &WalletRpcErrorCode,
+    rpc_message: &str,
+    details: Option<&Value>,
+) -> String {
+    match code {
+        WalletRpcErrorCode::WalletPolicyViolation => {
+            if let Some(count) = details
+                .and_then(|value| value.get("violations"))
+                .and_then(|value| value.as_array())
+                .map(|array| array.len())
+            {
+                format!("Draft violates {count} wallet policy rule(s); review the violation list.")
+            } else {
+                "Draft violates wallet policy rules.".to_string()
+            }
+        }
+        WalletRpcErrorCode::FeeTooLow => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                if let Some(required) = details.get("required") {
+                    return format!(
+                        "Fee rate too low (requires at least {} sats/vB).",
+                        value_to_string(required)
+                    );
+                }
+                if let Some(minimum) = details.get("minimum") {
+                    return format!(
+                        "Fee rate too low (minimum is {} sats/vB).",
+                        value_to_string(minimum)
+                    );
+                }
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::PendingLockConflict => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                if let (Some(required), Some(total)) = (
+                    details.get("required"),
+                    details
+                        .get("total_available")
+                        .or_else(|| details.get("available")),
+                ) {
+                    return format!(
+                        "Insufficient unlocked funds (required {}, available {}).",
+                        value_to_string(required),
+                        value_to_string(total)
+                    );
+                }
+            }
+            "Wallet inputs are locked by another draft; release them or lower the amount."
+                .to_string()
+        }
+        WalletRpcErrorCode::ProverTimeout => {
+            if let Some(timeout) = details.and_then(|value| value.get("timeout_secs")) {
+                return format!(
+                    "Wallet prover timed out after {} seconds.",
+                    value_to_string(timeout)
+                );
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::RescanInProgress => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                let requested = details
+                    .get("requested")
+                    .map(value_to_string)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let pending = details.get("pending_from").and_then(|value| {
+                    if value.is_null() {
+                        None
+                    } else {
+                        Some(value_to_string(value))
+                    }
+                });
+                if let Some(pending) = pending {
+                    return format!(
+                        "A rescan from height {pending} is already scheduled (requested {requested})."
+                    );
+                }
+                return format!("A rescan is already scheduled (requested {requested}).");
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::DraftNotFound => {
+            if let Some(id) = details
+                .and_then(|value| value.get("draft_id"))
+                .map(value_to_string)
+            {
+                format!("Draft `{id}` was not found; verify the identifier.")
+            } else {
+                rpc_message.to_string()
+            }
+        }
+        WalletRpcErrorCode::DraftUnsigned => {
+            if let Some(id) = details
+                .and_then(|value| value.get("draft_id"))
+                .map(value_to_string)
+            {
+                format!("Draft `{id}` must be signed before broadcasting; run `send sign` first.")
+            } else {
+                rpc_message.to_string()
+            }
+        }
+        WalletRpcErrorCode::WitnessTooLarge => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                if let (Some(size), Some(limit)) =
+                    (details.get("size_bytes"), details.get("limit_bytes"))
+                {
+                    return format!(
+                        "Witness too large ({} bytes > limit {}).",
+                        value_to_string(size),
+                        value_to_string(limit)
+                    );
+                }
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::SyncUnavailable => {
+            "Wallet sync coordinator is not configured for this node instance.".to_string()
+        }
+        WalletRpcErrorCode::SyncError => rpc_message.to_string(),
+        WalletRpcErrorCode::RescanOutOfRange => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                if let (Some(requested), Some(latest)) =
+                    (details.get("requested"), details.get("latest"))
+                {
+                    return format!(
+                        "Rescan height {} exceeds the latest indexed height {}.",
+                        value_to_string(requested),
+                        value_to_string(latest)
+                    );
+                }
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::FeeTooHigh => rpc_message.to_string(),
+        WalletRpcErrorCode::ProverCancelled => rpc_message.to_string(),
+        WalletRpcErrorCode::ProverFailed => rpc_message.to_string(),
+        WalletRpcErrorCode::NodeUnavailable
+        | WalletRpcErrorCode::NodeRejected
+        | WalletRpcErrorCode::NodePolicy
+        | WalletRpcErrorCode::NodeStatsUnavailable
+        | WalletRpcErrorCode::EngineFailure
+        | WalletRpcErrorCode::SerializationFailure
+        | WalletRpcErrorCode::StatePoisoned
+        | WalletRpcErrorCode::InternalError
+        | WalletRpcErrorCode::InvalidRequest
+        | WalletRpcErrorCode::MethodNotFound
+        | WalletRpcErrorCode::InvalidParams => rpc_message.to_string(),
+        WalletRpcErrorCode::Custom(_) => rpc_message.to_string(),
+    }
+}
+
+fn value_to_string(value: &Value) -> String {
+    if let Some(s) = value.as_str() {
+        s.to_string()
+    } else if let Some(u) = value.as_u64() {
+        u.to_string()
+    } else if let Some(i) = value.as_i64() {
+        i.to_string()
+    } else if let Some(f) = value.as_f64() {
+        f.to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 impl From<reqwest::Error> for WalletCliError {
@@ -136,10 +339,7 @@ impl WalletRpcClient {
 
         let response: JsonRpcResponse = response.json().await?;
         if let Some(error) = response.error {
-            return Err(WalletCliError::RpcError {
-                code: error.code,
-                message: error.message,
-            });
+            return Err(interpret_rpc_error(error));
         }
 
         response.result.ok_or(WalletCliError::EmptyResponse)

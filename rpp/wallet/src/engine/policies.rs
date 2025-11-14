@@ -1,5 +1,6 @@
 use crate::config::wallet::WalletPolicyConfig;
 use crate::db::UtxoOutpoint;
+use serde::Serialize;
 
 use super::{CandidateUtxo, DraftOutput};
 
@@ -113,7 +114,7 @@ impl PolicyEngine {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Clone, Debug, Serialize, PartialEq, Eq)]
 pub enum PolicyViolation {
     DustOutput {
         address: String,
