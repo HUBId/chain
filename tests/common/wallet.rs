@@ -20,7 +20,9 @@ use rpp_wallet::indexer::client::{
 use rpp_wallet::node_client::{
     BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
 };
-use rpp_wallet::wallet::{Wallet, WalletError, WalletSyncCoordinator};
+use rpp_wallet::wallet::{
+    Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
+};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
@@ -150,11 +152,14 @@ impl WalletTestFixture {
         let wallet = Arc::new(
             Wallet::new(
                 Arc::clone(&store),
-                seeded_seed(),
+                WalletMode::Full {
+                    root_seed: seeded_seed(),
+                },
                 policy.clone(),
                 fees,
                 prover,
                 Arc::clone(&node),
+                WalletPaths::for_data_dir(tempdir.path()),
             )
             .context("construct wallet instance")?,
         );
@@ -339,6 +344,7 @@ pub struct MockNodeClient {
 
 struct NodeState {
     submissions: Vec<SubmittedDraft>,
+    raw_submissions: Vec<Vec<u8>>,
     next_error: Option<NodeClientError>,
     fee_estimate: u64,
     mempool_info: MempoolInfo,
@@ -356,6 +362,7 @@ impl MockNodeClient {
         Self {
             state: Mutex::new(NodeState {
                 submissions: Vec::new(),
+                raw_submissions: Vec::new(),
                 next_error: None,
                 fee_estimate: default_fee,
                 mempool_info: MempoolInfo {
@@ -432,6 +439,15 @@ impl NodeClient for MockNodeClient {
             fee_rate: draft.fee_rate,
             total_input_value: draft.total_input_value(),
         });
+        Ok(())
+    }
+
+    fn submit_raw_tx(&self, tx: &[u8]) -> NodeClientResult<()> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.next_error.take() {
+            return Err(error);
+        }
+        state.raw_submissions.push(tx.to_vec());
         Ok(())
     }
 

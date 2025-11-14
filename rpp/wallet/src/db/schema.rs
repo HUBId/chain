@@ -18,6 +18,8 @@ pub const TX_CACHE_NAMESPACE: &[u8] = b"wallet/tx_cache/";
 pub const POLICIES_NAMESPACE: &[u8] = b"wallet/policies/";
 /// Namespace for progress checkpoints (e.g. sync heights).
 pub const CHECKPOINTS_NAMESPACE: &[u8] = b"wallet/checkpoints/";
+/// Namespace storing watch-only configuration records.
+pub const WATCH_ONLY_NAMESPACE: &[u8] = b"wallet/watch_only/";
 
 /// File-system extension for pending lock snapshots.
 pub const EXTENSION_PENDING_LOCKS: &str = "wallet/pending_locks";
@@ -35,6 +37,9 @@ pub const META_FEE_CACHE_EXPIRES_TS_KEY: &str = "fee_cache/expires_ts";
 
 /// Storage key carrying the schema version marker for the wallet layout.
 pub const SCHEMA_VERSION_KEY: &[u8] = b"wallet/schema_version";
+
+/// Storage key storing the watch-only configuration record.
+pub const WATCH_ONLY_STATE_KEY: &str = "state";
 
 /// Current on-disk schema version supported by the wallet store.
 pub const SCHEMA_VERSION_V1: u32 = 1;

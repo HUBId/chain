@@ -19,9 +19,10 @@ use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    CreateTxParams, CreateTxResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto, RescanParams, SetPolicyParams,
-    SyncModeDto, SyncStatusResponse,
+    BroadcastRawParams, BroadcastRawResponse, CreateTxParams, CreateTxResponse, DraftInputDto,
+    DraftOutputDto, DraftSpendModelDto, FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto,
+    RescanParams, SetPolicyParams, SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse,
 };
 use crate::rpc::error::WalletRpcErrorCode;
 
@@ -163,6 +164,10 @@ fn friendly_message(
                 }
             }
             rpc_message.to_string()
+        }
+        WalletRpcErrorCode::WatchOnlyNotEnabled => {
+            "Wallet is running in watch-only mode; signing and draft broadcasts are disabled."
+                .to_string()
         }
         WalletRpcErrorCode::SyncUnavailable => {
             "Wallet sync coordinator is not configured for this node instance.".to_string()
@@ -761,6 +766,8 @@ pub enum SendSubcommand {
     Sign(SendSignCommand),
     /// Broadcast a signed draft transaction to the execution node.
     Broadcast(SendBroadcastCommand),
+    /// Broadcast an externally signed transaction hex blob.
+    BroadcastRaw(SendBroadcastRawCommand),
 }
 
 #[derive(Debug, Args)]
@@ -857,6 +864,110 @@ impl SendBroadcastCommand {
         println!("  Draft ID : {}", response.draft_id);
         println!("  Accepted : {}", format_bool(response.accepted));
         render_locks(&response.locks);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SendBroadcastRawCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Hex-encoded transaction payload signed externally.
+    #[arg(long, value_name = "HEX")]
+    pub tx_hex: String,
+}
+
+impl SendBroadcastRawCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let params = BroadcastRawParams {
+            tx_hex: self.tx_hex.clone(),
+        };
+        let BroadcastRawResponse { accepted } = client.broadcast_raw(&params).await?;
+        println!("Broadcast raw transaction\n");
+        println!("  Accepted : {}", format_bool(accepted));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct WatchOnlyCommand {
+    #[command(subcommand)]
+    pub command: WatchOnlySubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WatchOnlySubcommand {
+    /// Display the current watch-only status of the wallet.
+    Status(WatchOnlyStatusCommand),
+    /// Enable watch-only mode using externally provided descriptors.
+    Enable(WatchOnlyEnableCommand),
+    /// Disable watch-only mode and restore signing operations.
+    Disable(WatchOnlyDisableCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct WatchOnlyStatusCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+impl WatchOnlyStatusCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let status = client.watch_only_status().await?;
+        println!("Watch-only status\n");
+        render_watch_only_status(&status);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct WatchOnlyEnableCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// External receive descriptor or xpub string.
+    #[arg(long, value_name = "DESCRIPTOR")]
+    pub external_descriptor: String,
+    /// Optional internal/change descriptor.
+    #[arg(long, value_name = "DESCRIPTOR")]
+    pub internal_descriptor: Option<String>,
+    /// Optional account-level xpub associated with the descriptors.
+    #[arg(long, value_name = "XPUB")]
+    pub account_xpub: Option<String>,
+    /// Optional birthday height used to bootstrap scanning.
+    #[arg(long, value_name = "HEIGHT")]
+    pub birthday_height: Option<u64>,
+}
+
+impl WatchOnlyEnableCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let params = WatchOnlyEnableParams {
+            external_descriptor: self.external_descriptor.clone(),
+            internal_descriptor: self.internal_descriptor.clone(),
+            account_xpub: self.account_xpub.clone(),
+            birthday_height: self.birthday_height,
+        };
+        let status = client.watch_only_enable(&params).await?;
+        println!("Watch-only mode enabled\n");
+        render_watch_only_status(&status);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct WatchOnlyDisableCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+impl WatchOnlyDisableCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let status = client.watch_only_disable().await?;
+        println!("Watch-only mode disabled\n");
+        render_watch_only_status(&status);
         Ok(())
     }
 }
@@ -1054,6 +1165,8 @@ pub enum WalletCommand {
     Send(SendCommand),
     /// Manage encrypted wallet backups.
     Backup(BackupCommand),
+    /// Manage watch-only wallet mode.
+    WatchOnly(WatchOnlyCommand),
     /// Trigger a historical rescan.
     Rescan(RescanCommand),
 }
@@ -1083,11 +1196,17 @@ impl WalletCommand {
                 SendSubcommand::Create(cmd) => cmd.execute().await,
                 SendSubcommand::Sign(cmd) => cmd.execute().await,
                 SendSubcommand::Broadcast(cmd) => cmd.execute().await,
+                SendSubcommand::BroadcastRaw(cmd) => cmd.execute().await,
             },
             WalletCommand::Backup(BackupCommand { command }) => match command {
                 BackupSubcommand::Export(cmd) => cmd.execute().await,
                 BackupSubcommand::Validate(cmd) => cmd.execute().await,
                 BackupSubcommand::Import(cmd) => cmd.execute().await,
+            },
+            WalletCommand::WatchOnly(WatchOnlyCommand { command }) => match command {
+                WatchOnlySubcommand::Status(cmd) => cmd.execute().await,
+                WatchOnlySubcommand::Enable(cmd) => cmd.execute().await,
+                WatchOnlySubcommand::Disable(cmd) => cmd.execute().await,
             },
             WalletCommand::Rescan(cmd) => cmd.execute().await,
         }
@@ -1259,6 +1378,22 @@ fn describe_fee_source(source: &FeeEstimateSourceDto) -> String {
             };
             format!("node ({congestion} congestion, {samples} samples)")
         }
+    }
+}
+
+fn render_watch_only_status(status: &WatchOnlyStatusResponse) {
+    println!("  Enabled   : {}", format_bool(status.enabled));
+    if let Some(descriptor) = &status.external_descriptor {
+        println!("  External  : {}", descriptor);
+    }
+    if let Some(descriptor) = &status.internal_descriptor {
+        println!("  Internal  : {}", descriptor);
+    }
+    if let Some(xpub) = &status.account_xpub {
+        println!("  Account   : {}", xpub);
+    }
+    if let Some(height) = status.birthday_height {
+        println!("  Birthday  : {}", height);
     }
 }
 

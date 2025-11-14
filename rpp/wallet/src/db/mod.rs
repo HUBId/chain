@@ -5,7 +5,7 @@ pub mod store;
 
 pub use codec::{
     Address, PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
-    UtxoRecord,
+    UtxoRecord, WatchOnlyRecord,
 };
 pub use store::{AddressKind, WalletStore, WalletStoreBatch, WalletStoreError};
 
@@ -18,7 +18,7 @@ mod tests {
     use super::{
         codec, schema,
         store::{AddressKind, WalletStore},
-        PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord,
+        PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
     };
 
     #[test]
@@ -72,6 +72,13 @@ mod tests {
             .put_policy_snapshot("default", &snapshot)
             .expect("policy snapshot");
         batch.put_checkpoint("sync", 256).expect("checkpoint");
+        let watch_only = WatchOnlyRecord::new("wpkh(external)")
+            .with_internal_descriptor("wpkh(internal)")
+            .with_account_xpub("xpub-test")
+            .with_birthday_height(Some(77));
+        batch
+            .put_watch_only(&watch_only)
+            .expect("watch-only record");
         batch.commit().expect("commit");
 
         assert_eq!(
@@ -115,18 +122,21 @@ mod tests {
         assert_eq!(store.iter_policy_snapshots().unwrap().len(), 1);
         assert_eq!(store.get_checkpoint("sync").unwrap(), Some(256));
         assert_eq!(store.iter_checkpoints().unwrap().len(), 1);
+        assert_eq!(store.watch_only_record().unwrap(), Some(watch_only.clone()));
 
         let mut cleanup = store.batch().expect("cleanup batch");
         cleanup.delete_utxo(&utxo.outpoint);
         cleanup.delete_tx_cache_entry(&[6u8; 32]);
         cleanup.delete_policy_snapshot("default");
         cleanup.delete_checkpoint("sync");
+        cleanup.clear_watch_only();
         cleanup.commit().expect("cleanup commit");
 
         assert!(store.get_utxo(&utxo.outpoint).unwrap().is_none());
         assert!(store.get_tx_cache_entry(&[6u8; 32]).unwrap().is_none());
         assert!(store.get_policy_snapshot("default").unwrap().is_none());
         assert!(store.get_checkpoint("sync").unwrap().is_none());
+        assert!(store.watch_only_record().unwrap().is_none());
     }
 
     #[test]

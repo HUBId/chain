@@ -11,10 +11,7 @@ struct EmptyBehaviour;
 
 #[test]
 fn derive_uses_empty_connection_handler() {
-    fn assert_handler_type(
-        _: <EmptyBehaviour as swarm::NetworkBehaviour>::ConnectionHandler,
-    ) {
-    }
+    fn assert_handler_type(_: <EmptyBehaviour as swarm::NetworkBehaviour>::ConnectionHandler) {}
 
     assert_handler_type(EmptyConnectionHandler::default());
 }
