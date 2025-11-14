@@ -22,10 +22,17 @@ pub enum ProverError {
     Serialization(String),
     #[error("unsupported prover backend: {0}")]
     Unsupported(&'static str),
+    #[error("wallet prover runtime unavailable: {0}")]
+    Runtime(String),
+    #[error("wallet prover job timed out after {0} seconds")]
+    Timeout(u64),
+    #[error("wallet prover job was cancelled")]
+    Cancelled,
+    #[error("witness too large ({size} bytes > limit {limit})")]
+    WitnessTooLarge { size: usize, limit: u64 },
 }
 
 pub trait WalletProver: Send + Sync {
     fn backend(&self) -> &'static str;
     fn prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, ProverError>;
 }
-
