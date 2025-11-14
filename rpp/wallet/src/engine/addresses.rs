@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ed25519_dalek::{PublicKey, SecretKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use std::convert::TryInto;
 
 use crate::db::{
@@ -256,10 +256,10 @@ impl AddressManager {
         material.extend_from_slice(&(path.change as u32).to_be_bytes());
         material.extend_from_slice(&path.index.to_be_bytes());
         let seed: [u8; 32] = Blake2sHasher::hash(&material).into();
-        let secret =
-            SecretKey::from_bytes(&seed).map_err(|err| AddressError::Key(err.to_string()))?;
-        let public = PublicKey::from(&secret);
-        let hash: [u8; 32] = Blake2sHasher::hash(public.as_bytes()).into();
+        let signing_key =
+            SigningKey::from_bytes(&seed).map_err(|err| AddressError::Key(err.to_string()))?;
+        let verifying_key = VerifyingKey::from(&signing_key);
+        let hash: [u8; 32] = Blake2sHasher::hash(verifying_key.as_bytes()).into();
         Ok(hex::encode(hash))
     }
 

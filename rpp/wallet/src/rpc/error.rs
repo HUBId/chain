@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -111,6 +112,12 @@ impl WalletRpcErrorCode {
             payload.insert("details".to_string(), details);
         }
         Value::Object(payload)
+    }
+}
+
+impl fmt::Display for WalletRpcErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 

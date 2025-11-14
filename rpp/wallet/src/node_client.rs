@@ -1,9 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::runtime::config::QueueWeightsConfig;
+use crate::runtime::node::MempoolStatus;
 use anyhow::Error as AnyError;
-use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::MempoolStatus;
 use thiserror::Error;
 
 use crate::engine::DraftTransaction;

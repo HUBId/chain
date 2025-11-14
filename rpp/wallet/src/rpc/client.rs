@@ -8,15 +8,17 @@ use serde_json::Value;
 use super::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupValidateParams, BackupValidateResponse, BalanceResponse, BroadcastParams,
-    BroadcastRawParams, BroadcastRawResponse, BroadcastResponse, CreateTxParams, CreateTxResponse,
-    DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse,
-    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
+    BroadcastRawParams, BroadcastRawResponse, BroadcastResponse, CosignerDto, CreateTxParams,
+    CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams,
+    EstimateFeeResponse, GetCosignersResponse, GetMultisigScopeResponse, GetPolicyResponse,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
-    ListUtxosResponse, MempoolInfoResponse, PolicyPreviewResponse, RecentBlocksParams,
-    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
-    JSONRPC_VERSION,
+    ListUtxosResponse, MempoolInfoResponse, MultisigExportParams, MultisigExportResponse,
+    MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse,
+    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
+    SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse,
+    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse,
+    TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 use super::error::WalletRpcErrorCode;
 
@@ -179,6 +181,47 @@ impl WalletRpcClient {
         params: &BroadcastRawParams,
     ) -> Result<BroadcastRawResponse, WalletRpcClientError> {
         self.call("broadcast_raw", Some(params)).await
+    }
+
+    pub async fn get_multisig_scope(
+        &self,
+    ) -> Result<GetMultisigScopeResponse, WalletRpcClientError> {
+        self.call("multisig.get_scope", Option::<Value>::None).await
+    }
+
+    pub async fn set_multisig_scope(
+        &self,
+        scope: Option<&MultisigScopeDto>,
+    ) -> Result<SetMultisigScopeResponse, WalletRpcClientError> {
+        let params = SetMultisigScopeParams {
+            scope: scope.cloned(),
+        };
+        self.call("multisig.set_scope", Some(&params)).await
+    }
+
+    pub async fn get_cosigners(&self) -> Result<GetCosignersResponse, WalletRpcClientError> {
+        self.call("multisig.get_cosigners", Option::<Value>::None)
+            .await
+    }
+
+    pub async fn set_cosigners(
+        &self,
+        cosigners: &[CosignerDto],
+    ) -> Result<SetCosignersResponse, WalletRpcClientError> {
+        let params = SetCosignersParams {
+            cosigners: cosigners.to_vec(),
+        };
+        self.call("multisig.set_cosigners", Some(&params)).await
+    }
+
+    pub async fn export_multisig_metadata(
+        &self,
+        draft_id: &str,
+    ) -> Result<MultisigExportResponse, WalletRpcClientError> {
+        let params = MultisigExportParams {
+            draft_id: draft_id.to_owned(),
+        };
+        self.call("multisig.export", Some(&params)).await
     }
 
     /// Fetches the compiled policy preview from the runtime.

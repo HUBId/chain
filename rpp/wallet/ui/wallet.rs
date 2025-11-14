@@ -50,7 +50,7 @@ use crate::types::{
 use log::debug;
 use log::warn;
 #[cfg(feature = "vendor_electrs")]
-use rpp::runtime::node::MempoolStatus;
+use crate::runtime::node::MempoolStatus;
 #[cfg(feature = "vendor_electrs")]
 use rpp_p2p::GossipTopic;
 #[cfg(feature = "vendor_electrs")]

@@ -7,7 +7,7 @@ use argon2::{Algorithm, Argon2, Params, ParamsBuilder, PasswordHasher, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use clap::{Args, Parser, Subcommand};
-use ed25519_dalek::Keypair;
+use ed25519_dalek::SigningKey;
 use rand_core::{OsRng, RngCore};
 use rpassword::prompt_password;
 use serde::Deserialize;
@@ -15,14 +15,16 @@ use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::multisig::{Cosigner, MultisigScope};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    BroadcastRawParams, BroadcastRawResponse, CreateTxParams, CreateTxResponse, DraftInputDto,
-    DraftOutputDto, DraftSpendModelDto, FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto,
-    RescanParams, SetPolicyParams, SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse,
+    BroadcastRawParams, BroadcastRawResponse, CosignerDto, CreateTxParams, CreateTxResponse,
+    DraftInputDto, DraftOutputDto, DraftSpendModelDto, FeeCongestionDto, FeeEstimateSourceDto,
+    GetCosignersResponse, GetMultisigScopeResponse, MultisigDraftMetadataDto, MultisigScopeDto,
+    PendingLockDto, RescanParams, SetCosignersResponse, SetMultisigScopeResponse, SetPolicyParams,
+    SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
 };
 use crate::rpc::error::WalletRpcErrorCode;
 
@@ -265,10 +267,10 @@ impl From<serde_json::Error> for WalletCliError {
 #[derive(Debug, Clone, Args)]
 pub struct RpcOptions {
     /// URL of the wallet RPC endpoint (without the trailing /rpc path).
-    #[arg(long, value_name = "URL", env = "RPP_WALLET_RPC_ENDPOINT", default_value = DEFAULT_RPC_ENDPOINT)]
-    pub endpoint: String,
+    #[arg(long, value_name = "URL")]
+    pub endpoint: Option<String>,
     /// Bearer token used to authenticate with the wallet RPC (if enabled).
-    #[arg(long, value_name = "TOKEN", env = "RPP_WALLET_RPC_AUTH_TOKEN")]
+    #[arg(long, value_name = "TOKEN")]
     pub auth_token: Option<String>,
     /// Timeout for RPC requests in seconds.
     #[arg(long, value_name = "SECONDS", default_value = "30")]
@@ -276,10 +278,24 @@ pub struct RpcOptions {
 }
 
 impl RpcOptions {
+    fn resolved_endpoint(&self) -> String {
+        self.endpoint
+            .clone()
+            .or_else(|| std::env::var("RPP_WALLET_RPC_ENDPOINT").ok())
+            .unwrap_or_else(|| DEFAULT_RPC_ENDPOINT.to_string())
+    }
+
+    fn resolved_auth_token(&self) -> Option<String> {
+        self.auth_token
+            .clone()
+            .or_else(|| std::env::var("RPP_WALLET_RPC_AUTH_TOKEN").ok())
+            .filter(|token| !token.is_empty())
+    }
+
     fn client(&self) -> Result<WalletRpcClient, WalletCliError> {
         WalletRpcClient::from_endpoint(
-            &self.endpoint,
-            self.auth_token.clone(),
+            &self.resolved_endpoint(),
+            self.resolved_auth_token(),
             Duration::from_secs(self.timeout),
         )
         .map_err(WalletCliError::from)
@@ -453,13 +469,15 @@ impl InitCommand {
             self.passphrase.resolve(true)?
         };
 
-        let keypair = Keypair::generate(&mut OsRng);
-        persist_keypair(&paths.keys_path, &keypair, passphrase.as_ref()).with_context(|| {
-            format!(
-                "failed to persist wallet key at {}",
-                paths.keys_path.display()
-            )
-        })?;
+        let signing_key = SigningKey::generate(&mut OsRng);
+        persist_keypair(&paths.keys_path, &signing_key, passphrase.as_ref()).with_context(
+            || {
+                format!(
+                    "failed to persist wallet key at {}",
+                    paths.keys_path.display()
+                )
+            },
+        )?;
 
         println!("Wallet initialised successfully\n");
         println!("  Data directory : {}", paths.engine_data_dir.display());
@@ -468,7 +486,7 @@ impl InitCommand {
         println!("  Keys path       : {}", paths.keys_path.display());
         println!(
             "  Public key      : {}",
-            hex::encode(keypair.public.to_bytes())
+            hex::encode(signing_key.verifying_key().to_bytes())
         );
 
         Ok(())
@@ -668,6 +686,147 @@ impl PolicySetCommand {
                 println!("    - {}", statement);
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MultisigCommand {
+    #[command(subcommand)]
+    pub command: MultisigSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MultisigSubcommand {
+    /// Inspect or update the multisig scope.
+    Scope(MultisigScopeCommand),
+    /// Manage the cosigner registry.
+    Cosigners(MultisigCosignersCommand),
+    /// Export multisig collaboration metadata for a draft.
+    Export(MultisigExportCommand),
+}
+
+impl MultisigCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        match &self.command {
+            MultisigSubcommand::Scope(cmd) => cmd.execute().await,
+            MultisigSubcommand::Cosigners(cmd) => cmd.execute().await,
+            MultisigSubcommand::Export(cmd) => cmd.execute().await,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MultisigScopeCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    #[command(subcommand)]
+    pub command: MultisigScopeSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MultisigScopeSubcommand {
+    /// Display the currently configured multisig scope.
+    Get,
+    /// Persist a new multisig scope (format: M-of-N).
+    Set {
+        #[arg(value_name = "SCOPE")]
+        scope: String,
+    },
+    /// Remove the persisted multisig scope.
+    Clear,
+}
+
+impl MultisigScopeCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        match &self.command {
+            MultisigScopeSubcommand::Get => {
+                let response = client.get_multisig_scope().await?;
+                println!("Multisig scope\n");
+                render_multisig_scope(response.scope.as_ref());
+                Ok(())
+            }
+            MultisigScopeSubcommand::Set { scope } => {
+                let parsed = MultisigScope::parse(scope)
+                    .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+                let dto = MultisigScopeDto {
+                    threshold: parsed.threshold(),
+                    participants: parsed.participants(),
+                };
+                let response = client.set_multisig_scope(Some(&dto)).await?;
+                println!("Updated multisig scope\n");
+                render_multisig_scope(response.scope.as_ref());
+                Ok(())
+            }
+            MultisigScopeSubcommand::Clear => {
+                client.set_multisig_scope(None).await?;
+                println!("Cleared multisig scope");
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MultisigCosignersCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    #[command(subcommand)]
+    pub command: MultisigCosignersSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MultisigCosignersSubcommand {
+    /// List registered cosigners.
+    List,
+    /// Replace the cosigner registry with the provided entries.
+    Set {
+        #[arg(long = "cosigner", value_name = "FINGERPRINT[@URL]", required = true)]
+        cosigners: Vec<String>,
+    },
+}
+
+impl MultisigCosignersCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        match &self.command {
+            MultisigCosignersSubcommand::List => {
+                let response = client.get_cosigners().await?;
+                println!("Cosigner registry\n");
+                render_cosigners(&response.cosigners);
+                Ok(())
+            }
+            MultisigCosignersSubcommand::Set { cosigners } => {
+                let parsed = cosigners
+                    .iter()
+                    .map(|value| parse_cosigner(value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let response = client.set_cosigners(&parsed).await?;
+                println!("Updated cosigner registry\n");
+                render_cosigners(&response.cosigners);
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MultisigExportCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Draft identifier to export metadata for.
+    #[arg(value_name = "DRAFT_ID")]
+    pub draft_id: String,
+}
+
+impl MultisigExportCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let response = client.export_multisig_metadata(&self.draft_id).await?;
+        println!("Multisig export\n");
+        println!("  Draft ID : {}", response.draft_id);
+        render_multisig_metadata(response.metadata.as_ref());
         Ok(())
     }
 }
@@ -1157,6 +1316,8 @@ pub enum WalletCommand {
     Balance(BalanceCommand),
     /// Inspect or update policy snapshots.
     Policy(PolicyCommand),
+    /// Manage multisig configuration and cosigners.
+    Multisig(MultisigCommand),
     /// Inspect fee estimates.
     Fees(FeesCommand),
     /// Inspect or manage pending locks.
@@ -1184,6 +1345,7 @@ impl WalletCommand {
                 PolicySubcommand::Get(cmd) => cmd.execute().await,
                 PolicySubcommand::Set(cmd) => cmd.execute().await,
             },
+            WalletCommand::Multisig(cmd) => cmd.execute().await,
             WalletCommand::Fees(FeesCommand { command }) => match command {
                 FeesSubcommand::Estimate(cmd) => cmd.execute().await,
             },
@@ -1289,6 +1451,11 @@ fn render_draft_summary(draft: &CreateTxResponse) {
         }
     }
 
+    if draft.multisig.is_some() {
+        println!("\n  Multisig:");
+        render_multisig_metadata(draft.multisig.as_ref());
+    }
+
     render_locks(&draft.locks);
 }
 
@@ -1334,6 +1501,62 @@ fn render_locks(locks: &[PendingLockDto]) {
             outpoint, locked_at_ms, backend, witness_bytes, proof, prove_duration_ms, spending
         );
     }
+}
+
+fn render_multisig_scope(scope: Option<&MultisigScopeDto>) {
+    match scope {
+        Some(scope) => {
+            println!(
+                "  Scope        : {}-of-{}",
+                scope.threshold, scope.participants
+            );
+            let required = if scope.threshold > 1 {
+                "required"
+            } else {
+                "optional"
+            };
+            println!("  Collaboration: {}", required);
+        }
+        None => println!("  Scope        : not configured"),
+    }
+}
+
+fn render_cosigners(cosigners: &[CosignerDto]) {
+    if cosigners.is_empty() {
+        println!("  Cosigners    : none");
+        return;
+    }
+    println!("  Cosigners    :");
+    for cosigner in cosigners {
+        if let Some(endpoint) = &cosigner.endpoint {
+            println!("    - {} ({})", cosigner.fingerprint, endpoint);
+        } else {
+            println!("    - {}", cosigner.fingerprint);
+        }
+    }
+}
+
+fn render_multisig_metadata(metadata: Option<&MultisigDraftMetadataDto>) {
+    match metadata {
+        Some(metadata) => {
+            render_multisig_scope(Some(&metadata.scope));
+            render_cosigners(&metadata.cosigners);
+        }
+        None => println!("  Metadata     : not available"),
+    }
+}
+
+fn parse_cosigner(value: &str) -> Result<CosignerDto, WalletCliError> {
+    let (fingerprint, endpoint) = match value.split_once('@') {
+        Some((fingerprint, endpoint)) => (fingerprint.to_string(), Some(endpoint.to_string())),
+        None => (value.to_string(), None),
+    };
+    Cosigner::new(fingerprint.clone(), endpoint.clone())
+        .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+    Ok(CosignerDto {
+        fingerprint,
+        endpoint,
+    })
 }
 
 fn format_spend_model(model: &DraftSpendModelDto) -> &'static str {
@@ -1399,17 +1622,17 @@ fn render_watch_only_status(status: &WatchOnlyStatusResponse) {
 
 fn persist_keypair(
     path: &Path,
-    keypair: &Keypair,
+    signing_key: &SigningKey,
     passphrase: Option<&Zeroizing<Vec<u8>>>,
 ) -> Result<()> {
     if let Some(passphrase) = passphrase {
-        persist_encrypted_keypair(path, keypair, passphrase)
+        persist_encrypted_keypair(path, signing_key, passphrase)
     } else {
-        persist_plaintext_keypair(path, keypair)
+        persist_plaintext_keypair(path, signing_key)
     }
 }
 
-fn persist_plaintext_keypair(path: &Path, keypair: &Keypair) -> Result<()> {
+fn persist_plaintext_keypair(path: &Path, signing_key: &SigningKey) -> Result<()> {
     #[derive(Serialize)]
     struct PlaintextKeypair<'a> {
         public_key: String,
@@ -1423,8 +1646,8 @@ fn persist_plaintext_keypair(path: &Path, keypair: &Keypair) -> Result<()> {
     }
 
     let stored = PlaintextKeypair {
-        public_key: hex::encode(keypair.public.to_bytes()),
-        secret_key: hex::encode(keypair.secret.to_bytes()),
+        public_key: hex::encode(signing_key.verifying_key().to_bytes()),
+        secret_key: hex::encode(signing_key.to_bytes()),
         signature: None,
         message: None,
         format: Some("ed25519"),
@@ -1439,10 +1662,10 @@ fn persist_plaintext_keypair(path: &Path, keypair: &Keypair) -> Result<()> {
 
 fn persist_encrypted_keypair(
     path: &Path,
-    keypair: &Keypair,
+    signing_key: &SigningKey,
     passphrase: &Zeroizing<Vec<u8>>,
 ) -> Result<()> {
-    let keystore = encrypt_keypair(keypair, passphrase)?;
+    let keystore = encrypt_keypair(signing_key, passphrase)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1453,7 +1676,7 @@ fn persist_encrypted_keypair(
 }
 
 fn encrypt_keypair(
-    keypair: &Keypair,
+    signing_key: &SigningKey,
     passphrase: &Zeroizing<Vec<u8>>,
 ) -> Result<EncryptedKeystore> {
     let mut rng = OsRng;
@@ -1467,10 +1690,7 @@ fn encrypt_keypair(
     derive_symmetric_key(passphrase, &salt, &params, &mut key)?;
 
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&*key));
-    let stored = StoredKeypair {
-        public_key: hex::encode(keypair.public.to_bytes()),
-        secret_key: hex::encode(keypair.secret.to_bytes()),
-    };
+    let stored = StoredKeypair::from_signing_key(signing_key);
     let plaintext =
         Zeroizing::new(serde_json::to_vec(&stored).context("failed to serialise wallet keypair")?);
     let ciphertext = cipher
@@ -1545,6 +1765,16 @@ const KDF_ALGORITHM: &str = "argon2id";
 struct StoredKeypair {
     public_key: String,
     secret_key: String,
+}
+
+impl StoredKeypair {
+    fn from_signing_key(signing_key: &SigningKey) -> Self {
+        let verifying = signing_key.verifying_key();
+        Self {
+            public_key: hex::encode(verifying.to_bytes()),
+            secret_key: hex::encode(signing_key.to_bytes()),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1754,6 +1984,8 @@ mod tests {
                 value: 4_750,
                 change: false,
             }],
+            locks: Vec::new(),
+            multisig: None,
         };
 
         // Ensure formatting function does not panic and includes key fields.

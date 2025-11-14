@@ -5,7 +5,8 @@ edition = "2021"
 rust-version = "1.79"
 
 [features]
-default = ["prover-mock", "backup"]
+default = ["prover-mock", "backup", "runtime"]
+runtime = ["dep:rpp"]
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",
@@ -41,7 +42,7 @@ storage-firewood = { path = "../../storage-firewood" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["sync", "rt", "signal", "macros", "time"] }
-rpp = { package = "firewood", path = "../../firewood" }
+rpp = { package = "rpp-chain", path = "../../rpp/chain", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
 hex = "0.4"
 parking_lot = { version = "0.12", optional = true }

@@ -4,6 +4,7 @@ use super::{
     utxo_sel::{SelectionMetadata, SelectionResult},
     DraftInput, DraftOutput, DraftTransaction, SpendModel,
 };
+use crate::multisig::MultisigDraftMetadata;
 
 #[derive(Clone, Debug)]
 pub struct TransactionBuilder {
@@ -24,6 +25,7 @@ pub struct BuildMetadata {
     pub change_outputs: usize,
     pub change_folded_into_fee: bool,
     pub estimated_vbytes: u64,
+    pub multisig: Option<MultisigDraftMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +186,7 @@ impl TransactionBuilder {
             change_outputs: change_values.len(),
             change_folded_into_fee,
             estimated_vbytes,
+            multisig: None,
         };
 
         Ok(BuildPlan {
@@ -199,6 +202,7 @@ impl TransactionBuilder {
             change_outputs: 0,
             change_folded_into_fee: false,
             estimated_vbytes: self.estimate_vbytes(0, outputs.len()),
+            multisig: None,
         };
         Ok(BuildPlan {
             fee: 0,
