@@ -9,6 +9,7 @@ use crate::rpc::error::WalletRpcErrorCode;
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::{modal, ConfirmDialog};
 use crate::ui::preferences::{Preferences, ThemePreference};
+use crate::ui::telemetry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Snapshot<T> {
@@ -271,6 +272,7 @@ impl State {
                 self.preferences.telemetry_opt_in = enabled;
                 self.telemetry_pending = Some((previous, enabled));
                 commands::rpc(
+                    "telemetry_toggle",
                     client,
                     move |client| async move { client.toggle_telemetry(enabled).await },
                     Message::TelemetryUpdated,
@@ -355,6 +357,7 @@ impl State {
     fn load_policy(&mut self, client: WalletRpcClient) -> Command<Message> {
         self.policy.set_loading();
         commands::rpc(
+            "get_policy",
             client,
             |client| async move { client.get_policy().await },
             Message::PolicyLoaded,
@@ -377,6 +380,7 @@ impl State {
         self.policy_validation_errors.clear();
         let params = SetPolicyParams { statements };
         commands::rpc(
+            "set_policy",
             client,
             move |client| async move { client.set_policy(&params).await },
             Message::PolicySubmitted,
@@ -448,6 +452,7 @@ impl State {
                 self.telemetry_error = Some(format_rpc_error(&error));
             }
         }
+        telemetry::global().set_opt_in(self.preferences.telemetry_opt_in);
     }
 
     fn submit_passphrase_change(&mut self, client: WalletRpcClient) -> Command<Message> {
@@ -471,6 +476,7 @@ impl State {
         let passphrase = std::mem::take(&mut form.new_passphrase);
         form.confirm_passphrase.clear();
         commands::rpc(
+            "keystore.passphrase_update",
             client,
             move |client| async move { change_keystore_passphrase(client, passphrase).await },
             Message::PassphraseChangeCompleted,
@@ -501,6 +507,7 @@ impl State {
         self.keystore_error = None;
         self.keystore_feedback = None;
         commands::rpc(
+            "backup.export",
             client,
             |client| async move { export_keystore_bundle(client).await },
             Message::KeystoreExported,

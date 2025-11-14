@@ -9,6 +9,7 @@ use crate::rpc::dto::{
 
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::error_map::{describe_rpc_error, technical_details};
+use crate::ui::telemetry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RequestState<T> {
@@ -102,6 +103,16 @@ impl OperationStage {
             OperationStage::CreateDraft => "Draft creation",
             OperationStage::SignDraft => "Draft signing",
             OperationStage::Broadcast => "Broadcast",
+        }
+    }
+
+    fn metric_label(self) -> &'static str {
+        match self {
+            OperationStage::PolicyPreview => "policy_preview",
+            OperationStage::FeeEstimate => "fee_estimate",
+            OperationStage::CreateDraft => "create_draft",
+            OperationStage::SignDraft => "sign_draft",
+            OperationStage::Broadcast => "broadcast",
         }
     }
 }
@@ -515,6 +526,7 @@ impl State {
         self.broadcast = RequestState::Idle;
 
         commands.push(commands::rpc(
+            "policy_preview",
             client.clone(),
             |client| async move { client.policy_preview().await },
             map_policy_preview,
@@ -533,6 +545,7 @@ impl State {
             };
 
             commands.push(commands::rpc(
+                "estimate_fee",
                 client,
                 move |client| async move { client.estimate_fee(target).await },
                 map_fee_estimate,
@@ -549,8 +562,12 @@ impl State {
             Ok(preview) => {
                 self.policy_preview.set_success(preview);
                 self.error_banner = None;
+                telemetry::global()
+                    .record_send_step_success(OperationStage::PolicyPreview.metric_label());
             }
             Err(error) => {
+                telemetry::global()
+                    .record_send_step_failure(OperationStage::PolicyPreview.metric_label(), &error);
                 let failure = failure_from_rpc(OperationStage::PolicyPreview, &error);
                 self.policy_preview.set_failure(failure.clone());
                 self.set_error_banner(failure);
@@ -564,8 +581,12 @@ impl State {
                 self.fee_rate_input = estimate.fee_rate.to_string();
                 self.fee_estimate.set_success(estimate);
                 self.error_banner = None;
+                telemetry::global()
+                    .record_send_step_success(OperationStage::FeeEstimate.metric_label());
             }
             Err(error) => {
+                telemetry::global()
+                    .record_send_step_failure(OperationStage::FeeEstimate.metric_label(), &error);
                 let failure = failure_from_rpc(OperationStage::FeeEstimate, &error);
                 self.fee_estimate.set_failure(failure.clone());
                 self.set_error_banner(failure);
@@ -589,6 +610,7 @@ impl State {
         self.broadcast = RequestState::Idle;
 
         commands::rpc(
+            "create_tx",
             client,
             move |client| {
                 let params = params.clone();
@@ -603,8 +625,12 @@ impl State {
             Ok(draft) => {
                 self.draft.set_success(draft);
                 self.error_banner = None;
+                telemetry::global()
+                    .record_send_step_success(OperationStage::CreateDraft.metric_label());
             }
             Err(error) => {
+                telemetry::global()
+                    .record_send_step_failure(OperationStage::CreateDraft.metric_label(), &error);
                 let failure = failure_from_rpc(OperationStage::CreateDraft, &error);
                 self.draft.set_failure(failure.clone());
                 self.set_error_banner(failure);
@@ -623,6 +649,7 @@ impl State {
         self.broadcast = RequestState::Idle;
 
         commands::rpc(
+            "sign_tx",
             client,
             move |client| {
                 let draft_id = draft_id.clone();
@@ -637,8 +664,12 @@ impl State {
             Ok(signature) => {
                 self.signature.set_success(signature);
                 self.error_banner = None;
+                telemetry::global()
+                    .record_send_step_success(OperationStage::SignDraft.metric_label());
             }
             Err(error) => {
+                telemetry::global()
+                    .record_send_step_failure(OperationStage::SignDraft.metric_label(), &error);
                 let failure = failure_from_rpc(OperationStage::SignDraft, &error);
                 self.signature.set_failure(failure.clone());
                 self.set_error_banner(failure);
@@ -656,6 +687,7 @@ impl State {
         self.broadcast.set_loading();
 
         commands::rpc(
+            "broadcast",
             client,
             move |client| {
                 let draft_id = draft_id.clone();
@@ -670,8 +702,12 @@ impl State {
             Ok(response) => {
                 self.broadcast.set_success(response);
                 self.error_banner = None;
+                telemetry::global()
+                    .record_send_step_success(OperationStage::Broadcast.metric_label());
             }
             Err(error) => {
+                telemetry::global()
+                    .record_send_step_failure(OperationStage::Broadcast.metric_label(), &error);
                 let failure = failure_from_rpc(OperationStage::Broadcast, &error);
                 self.broadcast.set_failure(failure.clone());
                 self.set_error_banner(failure);

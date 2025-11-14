@@ -245,6 +245,7 @@ impl State {
     fn load_current_address(&mut self, client: WalletRpcClient) -> Command<Message> {
         self.current.set_loading();
         commands::rpc(
+            "derive_address",
             client,
             |client| async move { client.derive_address(false).await },
             Message::CurrentAddressLoaded,
