@@ -40,6 +40,9 @@ pub mod backup;
 /// Persistent wallet state stored in Firewood.
 pub mod db;
 
+/// Wallet runtime operating modes (e.g. watch-only).
+pub mod modes;
+
 /// Command-line helpers for wallet subsystems.
 pub mod cli;
 

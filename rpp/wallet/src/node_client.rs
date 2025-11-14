@@ -309,6 +309,7 @@ pub struct BlockFeeSummary {
 /// Abstraction over the node RPC surface consumed by the wallet.
 pub trait NodeClient: Send + Sync {
     fn submit_tx(&self, draft: &DraftTransaction) -> NodeClientResult<()>;
+    fn submit_raw_tx(&self, tx: &[u8]) -> NodeClientResult<()>;
     fn estimate_fee(&self, confirmation_target: u16) -> NodeClientResult<u64>;
     fn chain_head(&self) -> NodeClientResult<ChainHead>;
     fn mempool_status(&self) -> NodeClientResult<MempoolStatus>;
@@ -388,6 +389,13 @@ impl NodeClient for StubNodeClient {
         }
         if draft.outputs.is_empty() {
             return Err(NodeClientError::policy("draft missing outputs"));
+        }
+        Ok(())
+    }
+
+    fn submit_raw_tx(&self, tx: &[u8]) -> NodeClientResult<()> {
+        if tx.is_empty() {
+            return Err(NodeClientError::policy("raw transaction payload empty"));
         }
         Ok(())
     }

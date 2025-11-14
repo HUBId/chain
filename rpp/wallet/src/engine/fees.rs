@@ -374,6 +374,10 @@ mod tests {
                 Ok(())
             }
 
+            fn submit_raw_tx(&self, _tx: &[u8]) -> Result<(), NodeClientError> {
+                Ok(())
+            }
+
             fn estimate_fee(&self, _confirmation_target: u16) -> Result<u64, NodeClientError> {
                 Ok(1)
             }

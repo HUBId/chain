@@ -9,7 +9,7 @@ use storage_firewood::{
 use crate::db::{
     codec::{
         self, Address, CodecError, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
-        UtxoRecord,
+        UtxoRecord, WatchOnlyRecord,
     },
     migrations, schema,
 };
@@ -117,6 +117,17 @@ impl WalletStore {
         };
         drop(guard);
         Ok(Some(codec::decode_key_material(&bytes)?))
+    }
+
+    /// Load the persisted watch-only configuration record, when present.
+    pub fn watch_only_record(&self) -> Result<Option<WatchOnlyRecord>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = watch_only_key(schema::WATCH_ONLY_STATE_KEY);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_watch_only(&bytes)?))
     }
 
     /// Load an address entry.
@@ -443,6 +454,18 @@ impl<'a> WalletStoreBatch<'a> {
         self.guard.delete(&pending_lock_key(outpoint));
     }
 
+    pub fn put_watch_only(&mut self, record: &WatchOnlyRecord) -> Result<(), WalletStoreError> {
+        let value = codec::encode_watch_only(record)?;
+        self.guard
+            .put(watch_only_key(schema::WATCH_ONLY_STATE_KEY), value);
+        Ok(())
+    }
+
+    pub fn clear_watch_only(&mut self) {
+        self.guard
+            .delete(&watch_only_key(schema::WATCH_ONLY_STATE_KEY));
+    }
+
     pub fn commit(self) -> Result<Hash, WalletStoreError> {
         Ok(self.guard.commit()?)
     }
@@ -558,6 +581,10 @@ fn pending_lock_key(outpoint: &UtxoOutpoint) -> Vec<u8> {
     key.extend_from_slice(&outpoint.txid);
     key.extend_from_slice(&outpoint.index.to_be_bytes());
     key
+}
+
+fn watch_only_key(label: &str) -> Vec<u8> {
+    namespaced(schema::WATCH_ONLY_NAMESPACE, label.as_bytes())
 }
 
 fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {

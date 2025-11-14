@@ -39,7 +39,7 @@ use rpp_wallet::rpc::dto::{
 };
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
 use rpp_wallet::wallet::WalletPaths;
-use rpp_wallet::wallet::{Wallet, WalletSyncCoordinator};
+use rpp_wallet::wallet::{Wallet, WalletMode, WalletSyncCoordinator};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wallet_runtime_rpc_happy_path() -> Result<()> {
@@ -625,7 +625,9 @@ impl WorkflowFixture {
         let wallet = Arc::new(
             Wallet::new(
                 Arc::clone(&store),
-                [42u8; 32],
+                WalletMode::Full {
+                    root_seed: [42u8; 32],
+                },
                 policy,
                 WalletFeeConfig::default(),
                 WalletProverConfig::default(),
@@ -805,6 +807,7 @@ impl IndexerClient for TestIndexer {
 #[derive(Default)]
 struct RecordingNodeClient {
     submissions: Mutex<Vec<DraftTransaction>>,
+    raw_submissions: Mutex<Vec<Vec<u8>>>,
     fee_rate: u64,
     mempool_info: MempoolInfo,
     recent_blocks: Vec<BlockFeeSummary>,
@@ -823,6 +826,11 @@ impl RecordingNodeClient {
 impl NodeClient for RecordingNodeClient {
     fn submit_tx(&self, draft: &DraftTransaction) -> NodeClientResult<()> {
         self.submissions.lock().unwrap().push(draft.clone());
+        Ok(())
+    }
+
+    fn submit_raw_tx(&self, tx: &[u8]) -> NodeClientResult<()> {
+        self.raw_submissions.lock().unwrap().push(tx.to_vec());
         Ok(())
     }
 

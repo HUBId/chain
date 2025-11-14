@@ -40,12 +40,13 @@ use crate::engine::{
     WalletBalance,
 };
 use crate::indexer::scanner::{SyncMode, SyncStatus};
+use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 use crate::node_client::{
     BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
 };
 use crate::wallet::{
-    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletPaths,
-    WalletSyncCoordinator, WalletSyncError,
+    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletMode,
+    WalletPaths, WalletSyncCoordinator, WalletSyncError, WatchOnlyError,
 };
 use zeroize::Zeroizing;
 
@@ -194,6 +195,10 @@ impl WalletRpcRouter {
                 let params: BroadcastParams = parse_params(params)?;
                 self.broadcast_draft(params.draft_id)
             }
+            "broadcast_raw" => {
+                let params: BroadcastRawParams = parse_params(params)?;
+                self.broadcast_raw(params.tx_hex)
+            }
             "policy_preview" => {
                 parse_params::<EmptyParams>(params)?;
                 let preview = self.wallet.policy_preview();
@@ -207,6 +212,18 @@ impl WalletRpcRouter {
                 let params: SetPolicyParams = parse_params(params)?;
                 let snapshot = self.wallet.set_policy_snapshot(params.statements)?;
                 self.respond_policy_updated(snapshot)
+            }
+            "watch_only.status" => {
+                parse_params::<EmptyParams>(params)?;
+                self.watch_only_status()
+            }
+            "watch_only.enable" => {
+                let params: WatchOnlyEnableParams = parse_params(params)?;
+                self.watch_only_enable(params)
+            }
+            "watch_only.disable" => {
+                parse_params::<EmptyParams>(params)?;
+                self.watch_only_disable()
             }
             "estimate_fee" => {
                 let params: EstimateFeeParams = parse_params(params)?;
@@ -618,6 +635,9 @@ impl WalletRpcRouter {
     }
 
     fn broadcast_draft(&self, draft_id: String) -> Result<Value, RouterError> {
+        if self.wallet.is_watch_only() {
+            return Err(RouterError::WatchOnly(WatchOnlyError::BroadcastDisabled));
+        }
         let mut drafts = self.lock_drafts()?;
         let state = drafts
             .get(&draft_id)
@@ -632,6 +652,33 @@ impl WalletRpcRouter {
             accepted: true,
             locks,
         })
+    }
+
+    fn broadcast_raw(&self, tx_hex: String) -> Result<Value, RouterError> {
+        let bytes = hex::decode(tx_hex).map_err(|err| {
+            RouterError::InvalidParams(format!("invalid raw transaction hex: {err}"))
+        })?;
+        self.wallet_call(self.wallet.broadcast_raw(&bytes))?;
+        to_value(BroadcastRawResponse { accepted: true })
+    }
+
+    fn watch_only_status(&self) -> Result<Value, RouterError> {
+        let status = self
+            .wallet
+            .watch_only_status()
+            .map_err(RouterError::WatchOnly)?;
+        to_value(watch_only_status_to_dto(status))
+    }
+
+    fn watch_only_enable(&self, params: WatchOnlyEnableParams) -> Result<Value, RouterError> {
+        let record = watch_only_record_from_params(params);
+        let status = self.wallet_call(self.wallet.enable_watch_only(record))?;
+        to_value(watch_only_status_to_dto(status))
+    }
+
+    fn watch_only_disable(&self) -> Result<Value, RouterError> {
+        let status = self.wallet_call(self.wallet.disable_watch_only())?;
+        to_value(watch_only_status_to_dto(status))
     }
 
     fn store_draft(&self, draft: DraftTransaction) -> Result<String, RouterError> {
@@ -664,6 +711,7 @@ enum RouterError {
     MethodNotFound(String),
     InvalidParams(String),
     Wallet(WalletError),
+    WatchOnly(WatchOnlyError),
     Sync(WalletSyncError),
     Node(NodeClientError),
     Backup(BackupError),
@@ -697,6 +745,7 @@ impl RouterError {
                 json_error(WalletRpcErrorCode::InvalidParams, message, None)
             }
             RouterError::Wallet(error) => wallet_error_to_json(&error),
+            RouterError::WatchOnly(error) => watch_only_error_to_json(&error),
             RouterError::Sync(error) => wallet_sync_error_to_json(&error),
             RouterError::Node(error) => node_error_to_json(&error),
             RouterError::Backup(error) => backup_error_to_json(&error),
@@ -746,12 +795,49 @@ fn json_error(
     JsonRpcError::new(code.as_i32(), message.into(), Some(payload))
 }
 
+fn watch_only_status_to_dto(status: WatchOnlyStatus) -> WatchOnlyStatusResponse {
+    WatchOnlyStatusResponse {
+        enabled: status.enabled,
+        external_descriptor: status.external_descriptor,
+        internal_descriptor: status.internal_descriptor,
+        account_xpub: status.account_xpub,
+        birthday_height: status.birthday_height,
+    }
+}
+
+fn watch_only_record_from_params(params: WatchOnlyEnableParams) -> WatchOnlyRecord {
+    let mut record = WatchOnlyRecord::new(params.external_descriptor);
+    if let Some(internal) = params.internal_descriptor {
+        record = record.with_internal_descriptor(internal);
+    }
+    if let Some(xpub) = params.account_xpub {
+        record = record.with_account_xpub(xpub);
+    }
+    record.with_birthday_height(params.birthday_height)
+}
+
 fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
     match error {
         WalletError::Engine(engine) => engine_error_to_json(engine),
         WalletError::Prover(prover) => prover_error_to_json(prover),
         WalletError::Node(node) => node_error_to_json(node),
         WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
+        WalletError::WatchOnly(watch_only) => watch_only_error_to_json(watch_only),
+    }
+}
+
+fn watch_only_error_to_json(error: &WatchOnlyError) -> JsonRpcError {
+    match error {
+        WatchOnlyError::StatePoisoned => json_error(
+            WalletRpcErrorCode::StatePoisoned,
+            "watch-only state unavailable",
+            None,
+        ),
+        WatchOnlyError::SigningDisabled | WatchOnlyError::BroadcastDisabled => json_error(
+            WalletRpcErrorCode::WatchOnlyNotEnabled,
+            "wallet watch-only mode prevents this operation",
+            None,
+        ),
     }
 }
 
@@ -1073,6 +1159,7 @@ fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
 
 #[cfg(test)]
 mod tests {
+    use super::dto::WatchOnlyStatusResponse;
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
@@ -1088,14 +1175,43 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
 
-    fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
+    fn router_fixture(
+        sync: Option<Arc<dyn SyncHandle>>,
+    ) -> (WalletRpcRouter, Arc<WalletStore>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
         let keystore = dir.path().join("keystore.toml");
         let backup = dir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [0u8; 32],
+            WalletMode::Full {
+                root_seed: [0u8; 32],
+            },
+            WalletPolicyConfig::default(),
+            WalletFeeConfig::default(),
+            WalletProverConfig::default(),
+            Arc::new(StubNodeClient::default()),
+            WalletPaths::new(keystore, backup),
+        )
+        .expect("wallet");
+        (WalletRpcRouter::new(Arc::new(wallet), sync), store, dir)
+    }
+
+    fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
+        let (router, _store, dir) = router_fixture(sync);
+        let _persist = dir.into_path();
+        router
+    }
+
+    fn build_watch_only_router() -> WalletRpcRouter {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
+        let record = WatchOnlyRecord::new("wpkh(external)");
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::WatchOnly(record),
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
@@ -1104,7 +1220,7 @@ mod tests {
         )
         .expect("wallet");
         let _persist = dir.into_path();
-        WalletRpcRouter::new(Arc::new(wallet), sync)
+        WalletRpcRouter::new(Arc::new(wallet), None)
     }
 
     #[test]
@@ -1122,6 +1238,135 @@ mod tests {
         let data = error.data.expect("error data");
         assert_eq!(data["code"], json!("DRAFT_NOT_FOUND"));
         assert_eq!(data["details"]["draft_id"], json!("deadbeef"));
+    }
+
+    #[test]
+    fn watch_only_router_rejects_sign_and_broadcast() {
+        let router = build_watch_only_router();
+        let draft = DraftTransaction {
+            inputs: vec![DraftInput {
+                outpoint: UtxoOutpoint::new([1u8; 32], 0),
+                value: 5_000,
+                confirmations: 1,
+            }],
+            outputs: vec![DraftOutput::new("addr", 4_000, false)],
+            fee_rate: 1,
+            fee: 1_000,
+            spend_model: SpendModel::Exact { amount: 4_000 },
+        };
+
+        {
+            let mut drafts = router.drafts.lock().unwrap();
+            drafts.insert(
+                "watch-sign".to_string(),
+                DraftState {
+                    draft: draft.clone(),
+                    prover_output: None,
+                },
+            );
+            drafts.insert(
+                "watch-broadcast".to_string(),
+                DraftState {
+                    draft,
+                    prover_output: None,
+                },
+            );
+        }
+
+        let sign_request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "sign_tx".to_string(),
+            params: Some(json!({ "draft_id": "watch-sign" })),
+        };
+        let sign_error = router.handle(sign_request).error.expect("sign error");
+        assert_eq!(
+            sign_error.code,
+            WalletRpcErrorCode::WatchOnlyNotEnabled.as_i32()
+        );
+
+        let broadcast_request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(2)),
+            method: "broadcast".to_string(),
+            params: Some(json!({ "draft_id": "watch-broadcast" })),
+        };
+        let broadcast_error = router
+            .handle(broadcast_request)
+            .error
+            .expect("broadcast error");
+        assert_eq!(
+            broadcast_error.code,
+            WalletRpcErrorCode::WatchOnlyNotEnabled.as_i32()
+        );
+    }
+
+    #[test]
+    fn watch_only_enable_disable_updates_store() {
+        let (router, store, _tempdir) = router_fixture(None);
+        assert!(store
+            .watch_only_record()
+            .expect("watch-only record")
+            .is_none());
+
+        let enable_request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "watch_only.enable".to_string(),
+            params: Some(json!({
+                "external_descriptor": "wpkh(external)",
+                "internal_descriptor": "wpkh(internal)",
+                "account_xpub": "xpub123",
+                "birthday_height": 321u64,
+            })),
+        };
+        let enable_response = router.handle(enable_request);
+        assert!(enable_response.error.is_none());
+        let enable_status: WatchOnlyStatusResponse =
+            serde_json::from_value(enable_response.result.expect("enable result"))
+                .expect("enable status");
+        assert!(enable_status.enabled);
+        assert_eq!(
+            enable_status.external_descriptor.as_deref(),
+            Some("wpkh(external)"),
+        );
+        assert_eq!(
+            store.watch_only_record().expect("record read"),
+            Some(
+                WatchOnlyRecord::new("wpkh(external)")
+                    .with_internal_descriptor("wpkh(internal)")
+                    .with_account_xpub("xpub123")
+                    .with_birthday_height(Some(321)),
+            ),
+        );
+
+        let status_response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(2)),
+            method: "watch_only.status".to_string(),
+            params: None,
+        });
+        assert!(status_response.error.is_none());
+        let status: WatchOnlyStatusResponse =
+            serde_json::from_value(status_response.result.expect("status result")).expect("status");
+        assert!(status.enabled);
+        assert_eq!(status.birthday_height, Some(321));
+
+        let disable_response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(3)),
+            method: "watch_only.disable".to_string(),
+            params: None,
+        });
+        assert!(disable_response.error.is_none());
+        let disable_status: WatchOnlyStatusResponse =
+            serde_json::from_value(disable_response.result.expect("disable result"))
+                .expect("disable status");
+        assert!(!disable_status.enabled);
+        assert!(store
+            .watch_only_record()
+            .expect("post-disable record")
+            .is_none());
     }
 
     #[derive(Clone)]
@@ -1209,6 +1454,13 @@ mod tests {
 
     impl NodeClient for RejectingNodeClient {
         fn submit_tx(&self, _draft: &DraftTransaction) -> NodeClientResult<()> {
+            Err(NodeClientError::rejected_with_hint(
+                "mempool rejection",
+                NodeRejectionHint::FeeRateTooLow { required: Some(25) },
+            ))
+        }
+
+        fn submit_raw_tx(&self, _tx: &[u8]) -> NodeClientResult<()> {
             Err(NodeClientError::rejected_with_hint(
                 "mempool rejection",
                 NodeRejectionHint::FeeRateTooLow { required: Some(25) },
@@ -1332,7 +1584,9 @@ mod tests {
         let backup = dir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [0u8; 32],
+            WalletMode::Full {
+                root_seed: [0u8; 32],
+            },
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),

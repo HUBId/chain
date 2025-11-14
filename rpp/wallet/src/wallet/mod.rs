@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{
@@ -16,6 +16,7 @@ use crate::engine::{
     DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
 };
 use crate::indexer::IndexerClient;
+use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::Blake2sHasher;
 use rpp::runtime::node::MempoolStatus;
@@ -34,6 +35,24 @@ pub enum WalletError {
     Node(#[from] NodeClientError),
     #[error("sync error: {0}")]
     Sync(#[from] WalletSyncError),
+    #[error("watch-only restriction: {0}")]
+    WatchOnly(#[from] WatchOnlyError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WatchOnlyError {
+    #[error("watch-only state unavailable")]
+    StatePoisoned,
+    #[error("watch-only mode does not permit signing or proving drafts")]
+    SigningDisabled,
+    #[error("watch-only mode does not permit broadcasting unsigned drafts")]
+    BroadcastDisabled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WalletMode {
+    Full { root_seed: [u8; 32] },
+    WatchOnly(WatchOnlyRecord),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +92,7 @@ pub struct Wallet {
     identifier: String,
     keystore_path: PathBuf,
     backup_path: PathBuf,
+    watch_only: Arc<RwLock<Option<WatchOnlyRecord>>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -90,22 +110,77 @@ pub struct TelemetryCounters {
 impl Wallet {
     const DEFAULT_POLICY_LABEL: &'static str = "default";
 
+    fn watch_only_read(
+        &self,
+    ) -> Result<RwLockReadGuard<'_, Option<WatchOnlyRecord>>, WatchOnlyError> {
+        self.watch_only
+            .read()
+            .map_err(|_| WatchOnlyError::StatePoisoned)
+    }
+
+    fn watch_only_write(
+        &self,
+    ) -> Result<RwLockWriteGuard<'_, Option<WatchOnlyRecord>>, WatchOnlyError> {
+        self.watch_only
+            .write()
+            .map_err(|_| WatchOnlyError::StatePoisoned)
+    }
+
+    fn ensure_signing_allowed(&self) -> Result<(), WatchOnlyError> {
+        let guard = self.watch_only_read()?;
+        if guard.is_some() {
+            Err(WatchOnlyError::SigningDisabled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_broadcast_allowed(&self) -> Result<(), WatchOnlyError> {
+        let guard = self.watch_only_read()?;
+        if guard.is_some() {
+            Err(WatchOnlyError::BroadcastDisabled)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn new(
         store: Arc<WalletStore>,
-        root_seed: [u8; 32],
+        mode: WalletMode,
         policy: WalletPolicyConfig,
         fees: WalletFeeConfig,
         prover_config: WalletProverConfig,
         node_client: Arc<dyn NodeClient>,
         paths: WalletPaths,
     ) -> Result<Self, WalletError> {
+        let (root_seed, watch_only_record, prover): (
+            [u8; 32],
+            Option<WatchOnlyRecord>,
+            Arc<dyn WalletProver>,
+        ) = match mode {
+            WalletMode::Full { root_seed } => {
+                if store.watch_only_record().map_err(store_error)?.is_some() {
+                    let mut batch = store.batch().map_err(store_error)?;
+                    batch.clear_watch_only();
+                    batch.commit().map_err(store_error)?;
+                }
+                (root_seed, None, build_wallet_prover(&prover_config)?)
+            }
+            WalletMode::WatchOnly(record) => {
+                let seed = record.derive_seed();
+                let mut batch = store.batch().map_err(store_error)?;
+                batch.put_watch_only(&record).map_err(store_error)?;
+                batch.commit().map_err(store_error)?;
+                let prover: Arc<dyn WalletProver> = Arc::new(DisabledWatchOnlyProver::default());
+                (seed, Some(record), prover)
+            }
+        };
         let engine = Arc::new(WalletEngine::new(
             Arc::clone(&store),
             root_seed,
             policy,
             fees,
         )?);
-        let prover = build_wallet_prover(&prover_config)?;
         let identifier = engine.identifier();
         let WalletPaths { keystore, backup } = paths;
         Ok(Self {
@@ -116,7 +191,40 @@ impl Wallet {
             identifier,
             keystore_path: keystore,
             backup_path: backup,
+            watch_only: Arc::new(RwLock::new(watch_only_record)),
         })
+    }
+
+    pub fn is_watch_only(&self) -> bool {
+        self.watch_only_read()
+            .map(|guard| guard.is_some())
+            .unwrap_or(true)
+    }
+
+    pub fn watch_only_status(&self) -> Result<WatchOnlyStatus, WatchOnlyError> {
+        let record = self.watch_only_read()?.clone();
+        Ok(WatchOnlyStatus::from(record))
+    }
+
+    pub fn enable_watch_only(
+        &self,
+        record: WatchOnlyRecord,
+    ) -> Result<WatchOnlyStatus, WalletError> {
+        let mut batch = self.store.batch().map_err(store_error)?;
+        batch.put_watch_only(&record).map_err(store_error)?;
+        batch.commit().map_err(store_error)?;
+        let mut guard = self.watch_only_write()?;
+        *guard = Some(record.clone());
+        Ok(WatchOnlyStatus::from(Some(record)))
+    }
+
+    pub fn disable_watch_only(&self) -> Result<WatchOnlyStatus, WalletError> {
+        let mut batch = self.store.batch().map_err(store_error)?;
+        batch.clear_watch_only();
+        batch.commit().map_err(store_error)?;
+        let mut guard = self.watch_only_write()?;
+        *guard = None;
+        Ok(WatchOnlyStatus::default())
     }
 
     pub fn address(&self) -> &str {
@@ -209,6 +317,7 @@ impl Wallet {
     }
 
     pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, WalletError> {
+        self.ensure_signing_allowed()?;
         match self.prover.prove(draft) {
             Ok(output) => {
                 let txid = lock_fingerprint(draft);
@@ -238,6 +347,7 @@ impl Wallet {
     }
 
     pub fn broadcast(&self, draft: &DraftTransaction) -> Result<(), WalletError> {
+        self.ensure_broadcast_allowed()?;
         let txid = lock_fingerprint(draft);
         match self.node_client.submit_tx(draft) {
             Ok(()) => {
@@ -250,6 +360,10 @@ impl Wallet {
                 Err(err.into())
             }
         }
+    }
+
+    pub fn broadcast_raw(&self, tx_bytes: &[u8]) -> Result<(), WalletError> {
+        Ok(self.node_client.submit_raw_tx(tx_bytes)?)
     }
 
     pub fn estimate_fee(&self, confirmation_target: u16) -> Result<u64, WalletError> {
@@ -308,6 +422,21 @@ impl Wallet {
     }
 }
 
+#[derive(Default)]
+struct DisabledWatchOnlyProver;
+
+impl WalletProver for DisabledWatchOnlyProver {
+    fn backend(&self) -> &'static str {
+        "watch-only"
+    }
+
+    fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, EngineProverError> {
+        Err(EngineProverError::Unsupported(
+            "watch-only mode does not support proving",
+        ))
+    }
+}
+
 fn lock_fingerprint(draft: &DraftTransaction) -> [u8; 32] {
     let mut material = Vec::new();
     for input in &draft.inputs {
@@ -362,7 +491,9 @@ mod tests {
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
     use crate::db::{UtxoOutpoint, UtxoRecord};
     use crate::engine::WalletEngine;
+    use crate::modes::watch_only::WatchOnlyRecord;
     use crate::node_client::{NodeClient, StubNodeClient};
+    use crate::wallet::WatchOnlyError;
 
     struct SleepyWalletProver {
         jobs: ProverJobManager,
@@ -434,6 +565,7 @@ mod tests {
             node_client,
             prover,
             identifier,
+            watch_only: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -468,7 +600,9 @@ mod tests {
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [3u8; 32],
+            WalletMode::Full {
+                root_seed: [3u8; 32],
+            },
             policy,
             fees,
             config,
@@ -521,7 +655,9 @@ mod tests {
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [5u8; 32],
+            WalletMode::Full {
+                root_seed: [5u8; 32],
+            },
             policy,
             fees,
             config,
@@ -606,7 +742,9 @@ mod tests {
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [9u8; 32],
+            WalletMode::Full {
+                root_seed: [9u8; 32],
+            },
             policy,
             fees,
             config,
@@ -629,6 +767,70 @@ mod tests {
         drop(tempdir);
     }
 
+    #[test]
+    fn watch_only_mode_persists_state_and_blocks_signing() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 40_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
+        let record = WatchOnlyRecord::new("wpkh(external)").with_birthday_height(Some(120));
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::WatchOnly(record.clone()),
+            policy,
+            fees,
+            WalletProverConfig::default(),
+            Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
+        )
+        .expect("wallet");
+
+        assert!(wallet.is_watch_only());
+        assert_eq!(store.watch_only_record().unwrap(), Some(record.clone()));
+
+        let status = wallet.watch_only_status().expect("watch-only status");
+        assert!(status.enabled);
+        assert_eq!(status.birthday_height, Some(120));
+
+        let balance = wallet.balance().expect("balance");
+        assert!(balance.total() > 0);
+
+        let draft = make_draft(&wallet, 10_000);
+        let err = wallet.sign_and_prove(&draft).expect_err("sign blocked");
+        assert!(matches!(
+            err,
+            WalletError::WatchOnly(WatchOnlyError::SigningDisabled)
+        ));
+
+        let err = wallet.broadcast(&draft).expect_err("broadcast blocked");
+        assert!(matches!(
+            err,
+            WalletError::WatchOnly(WatchOnlyError::BroadcastDisabled)
+        ));
+
+        wallet
+            .broadcast_raw(&[0u8, 1, 2])
+            .expect("raw broadcast permitted");
+
+        let disabled = wallet.disable_watch_only().expect("disable watch-only");
+        assert!(!disabled.enabled);
+        assert!(store.watch_only_record().unwrap().is_none());
+        assert!(!wallet.is_watch_only());
+
+        let reenabled = wallet
+            .enable_watch_only(record.clone())
+            .expect("re-enable watch-only");
+        assert!(reenabled.enabled);
+        assert_eq!(store.watch_only_record().unwrap(), Some(record));
+    }
+
     #[cfg(feature = "prover-stwo")]
     #[test]
     fn stwo_backend_rejects_large_witnesses_and_releases_locks() {
@@ -649,7 +851,9 @@ mod tests {
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [11u8; 32],
+            WalletMode::Full {
+                root_seed: [11u8; 32],
+            },
             policy,
             fees,
             config,

@@ -6,6 +6,7 @@ use serde_bytes::ByteBuf;
 use thiserror::Error;
 
 use crate::db::schema;
+use crate::modes::watch_only::WatchOnlyRecord;
 
 /// Canonical wallet address representation.
 pub type Address = String;
@@ -201,6 +202,14 @@ pub fn encode_tx_cache_entry(entry: &TxCacheEntry<'_>) -> Result<Vec<u8>, CodecE
 }
 
 pub fn decode_tx_cache_entry<'a>(bytes: &'a [u8]) -> Result<TxCacheEntry<'a>, CodecError> {
+    options().deserialize(bytes)
+}
+
+pub fn encode_watch_only(record: &WatchOnlyRecord) -> Result<Vec<u8>, CodecError> {
+    options().serialize(record)
+}
+
+pub fn decode_watch_only(bytes: &[u8]) -> Result<WatchOnlyRecord, CodecError> {
     options().deserialize(bytes)
 }
 

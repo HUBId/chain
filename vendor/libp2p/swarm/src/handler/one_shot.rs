@@ -19,8 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use std::{
-    error,
-    fmt,
+    error, fmt,
     task::{Context, Poll},
     time::Duration,
 };

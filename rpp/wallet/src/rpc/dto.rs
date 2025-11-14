@@ -334,6 +334,16 @@ pub struct BroadcastResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BroadcastRawParams {
+    pub tx_hex: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BroadcastRawResponse {
+    pub accepted: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicyPreviewResponse {
     pub min_confirmations: u32,
     pub dust_limit: u128,
@@ -359,6 +369,30 @@ pub struct SetPolicyParams {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetPolicyResponse {
     pub snapshot: PolicySnapshotDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatchOnlyEnableParams {
+    pub external_descriptor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_descriptor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_xpub: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthday_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatchOnlyStatusResponse {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_descriptor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internal_descriptor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_xpub: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birthday_height: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

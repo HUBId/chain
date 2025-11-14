@@ -20,7 +20,7 @@ use rpp_wallet::indexer::client::{
     TransactionPayload, TxOutpoint,
 };
 use rpp_wallet::node_client::{ChainHead, NodeClient, NodeClientResult};
-use rpp_wallet::wallet::{Wallet, WalletPaths};
+use rpp_wallet::wallet::{Wallet, WalletMode, WalletPaths};
 
 const RESUME_HEIGHT_LABEL: &str = "indexer::resume_height";
 const LAST_SCAN_TS_LABEL: &str = "indexer::last_scan_ts";
@@ -210,7 +210,9 @@ impl SyncSetup {
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
             Arc::clone(&store),
-            [7u8; 32],
+            WalletMode::Full {
+                root_seed: [7u8; 32],
+            },
             policy,
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
@@ -360,6 +362,10 @@ struct TestNodeClient;
 
 impl NodeClient for TestNodeClient {
     fn submit_tx(&self, _draft: &DraftTransaction) -> NodeClientResult<()> {
+        Ok(())
+    }
+
+    fn submit_raw_tx(&self, _tx: &[u8]) -> NodeClientResult<()> {
         Ok(())
     }
 

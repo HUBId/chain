@@ -8,13 +8,15 @@ use serde_json::Value;
 use super::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupValidateParams, BackupValidateResponse, BalanceResponse, BroadcastParams,
-    BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
-    DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse, GetPolicyResponse, JsonRpcError,
-    JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, ListTransactionsPageResponse,
-    ListTransactionsParams, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
-    PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
-    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
-    SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse, JSONRPC_VERSION,
+    BroadcastRawParams, BroadcastRawResponse, BroadcastResponse, CreateTxParams, CreateTxResponse,
+    DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams, EstimateFeeResponse,
+    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
+    ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
+    ListUtxosResponse, MempoolInfoResponse, PolicyPreviewResponse, RecentBlocksParams,
+    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncStatusResponse, TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
+    JSONRPC_VERSION,
 };
 use super::error::WalletRpcErrorCode;
 
@@ -171,6 +173,14 @@ impl WalletRpcClient {
         self.call("broadcast", Some(&params)).await
     }
 
+    /// Broadcasts an externally signed transaction payload.
+    pub async fn broadcast_raw(
+        &self,
+        params: &BroadcastRawParams,
+    ) -> Result<BroadcastRawResponse, WalletRpcClientError> {
+        self.call("broadcast_raw", Some(params)).await
+    }
+
     /// Fetches the compiled policy preview from the runtime.
     pub async fn policy_preview(&self) -> Result<PolicyPreviewResponse, WalletRpcClientError> {
         self.call("policy_preview", Option::<Value>::None).await
@@ -187,6 +197,26 @@ impl WalletRpcClient {
         params: &SetPolicyParams,
     ) -> Result<SetPolicyResponse, WalletRpcClientError> {
         self.call("set_policy", Some(params)).await
+    }
+
+    /// Retrieves the current watch-only status snapshot.
+    pub async fn watch_only_status(&self) -> Result<WatchOnlyStatusResponse, WalletRpcClientError> {
+        self.call("watch_only.status", Option::<Value>::None).await
+    }
+
+    /// Enables watch-only mode using the supplied descriptors.
+    pub async fn watch_only_enable(
+        &self,
+        params: &WatchOnlyEnableParams,
+    ) -> Result<WatchOnlyStatusResponse, WalletRpcClientError> {
+        self.call("watch_only.enable", Some(params)).await
+    }
+
+    /// Disables watch-only mode and re-enables signing operations.
+    pub async fn watch_only_disable(
+        &self,
+    ) -> Result<WatchOnlyStatusResponse, WalletRpcClientError> {
+        self.call("watch_only.disable", Option::<Value>::None).await
     }
 
     /// Estimates the fee rate for a given confirmation target.
