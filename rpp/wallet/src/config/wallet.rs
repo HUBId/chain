@@ -16,6 +16,10 @@ const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
 const DEFAULT_PROVER_JOB_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_PROVER_MAX_WITNESS_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_PROVER_MAX_CONCURRENCY: u32 = 1;
+const DEFAULT_GUI_POLL_INTERVAL_MS: u64 = 5_000;
+const MIN_GUI_POLL_INTERVAL_MS: u64 = 1_000;
+const DEFAULT_GUI_MAX_HISTORY_ROWS: u32 = 20;
+const MIN_GUI_MAX_HISTORY_ROWS: u32 = 5;
 
 /// High-level wallet configuration exposed to runtime services.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -25,6 +29,7 @@ pub struct WalletConfig {
     pub policy: WalletPolicyConfig,
     pub fees: WalletFeeConfig,
     pub prover: WalletProverConfig,
+    pub gui: WalletGuiConfig,
 }
 
 impl Default for WalletConfig {
@@ -34,6 +39,7 @@ impl Default for WalletConfig {
             policy: WalletPolicyConfig::default(),
             fees: WalletFeeConfig::default(),
             prover: WalletProverConfig::default(),
+            gui: WalletGuiConfig::default(),
         }
     }
 }
@@ -179,6 +185,62 @@ impl Default for WalletProverConfig {
     }
 }
 
+/// Configure GUI-specific behaviour for the wallet desktop application.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletGuiConfig {
+    /// Interval (in milliseconds) between sync status polls.
+    pub poll_interval_ms: u64,
+    /// Maximum number of history entries fetched per page.
+    pub max_history_rows: u32,
+    /// Preferred visual theme surfaced to the GUI.
+    pub theme: WalletGuiTheme,
+    /// Require clipboard confirmation before copying sensitive data.
+    pub confirm_clipboard: bool,
+    /// Opt-in flag for telemetry collection from the GUI.
+    pub telemetry_opt_in: bool,
+}
+
+impl WalletGuiConfig {
+    /// Returns a sanitized copy that clamps out-of-range values.
+    pub fn sanitized(mut self) -> Self {
+        if self.poll_interval_ms < MIN_GUI_POLL_INTERVAL_MS {
+            self.poll_interval_ms = MIN_GUI_POLL_INTERVAL_MS;
+        }
+        if self.max_history_rows < MIN_GUI_MAX_HISTORY_ROWS {
+            self.max_history_rows = DEFAULT_GUI_MAX_HISTORY_ROWS;
+        }
+        self
+    }
+}
+
+impl Default for WalletGuiConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_ms: DEFAULT_GUI_POLL_INTERVAL_MS,
+            max_history_rows: DEFAULT_GUI_MAX_HISTORY_ROWS,
+            theme: WalletGuiTheme::System,
+            confirm_clipboard: true,
+            telemetry_opt_in: false,
+        }
+    }
+}
+
+/// Appearance theme options exposed to the GUI.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletGuiTheme {
+    System,
+    Light,
+    Dark,
+}
+
+impl Default for WalletGuiTheme {
+    fn default() -> Self {
+        WalletGuiTheme::System
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +296,11 @@ mod tests {
             config.prover.max_concurrency,
             DEFAULT_PROVER_MAX_CONCURRENCY
         );
+        assert_eq!(config.gui.poll_interval_ms, DEFAULT_GUI_POLL_INTERVAL_MS);
+        assert_eq!(config.gui.max_history_rows, DEFAULT_GUI_MAX_HISTORY_ROWS);
+        assert_eq!(config.gui.theme, WalletGuiTheme::System);
+        assert!(config.gui.confirm_clipboard);
+        assert!(!config.gui.telemetry_opt_in);
     }
 
     #[test]
@@ -273,6 +340,13 @@ mod tests {
                 max_witness_bytes: 8 * 1024 * 1024,
                 max_concurrency: 4,
             },
+            gui: WalletGuiConfig {
+                poll_interval_ms: 2_000,
+                max_history_rows: 48,
+                theme: WalletGuiTheme::Dark,
+                confirm_clipboard: false,
+                telemetry_opt_in: true,
+            },
         };
 
         let serialized = toml::to_string(&config).expect("serialize");
@@ -305,5 +379,48 @@ mod tests {
         assert_eq!(restored.prover.job_timeout_secs, 420);
         assert_eq!(restored.prover.max_witness_bytes, 8 * 1024 * 1024);
         assert_eq!(restored.prover.max_concurrency, 4);
+        assert_eq!(restored.gui.poll_interval_ms, 2_000);
+        assert_eq!(restored.gui.max_history_rows, 48);
+        assert_eq!(restored.gui.theme, WalletGuiTheme::Dark);
+        assert!(!restored.gui.confirm_clipboard);
+        assert!(restored.gui.telemetry_opt_in);
+    }
+
+    #[test]
+    fn gui_section_defaults_when_absent() {
+        let contents = r#"
+            [wallet.policy]
+            external_gap_limit = 32
+
+            [wallet.prover]
+            enabled = true
+        "#;
+
+        let mut config: WalletConfig = toml::from_str(contents).expect("deserialize");
+        config.gui = config.gui.sanitized();
+
+        assert_eq!(config.gui.poll_interval_ms, DEFAULT_GUI_POLL_INTERVAL_MS);
+        assert_eq!(config.gui.max_history_rows, DEFAULT_GUI_MAX_HISTORY_ROWS);
+        assert_eq!(config.gui.theme, WalletGuiTheme::System);
+        assert!(config.gui.confirm_clipboard);
+        assert!(!config.gui.telemetry_opt_in);
+    }
+
+    #[test]
+    fn gui_sanitization_clamps_out_of_range_values() {
+        let config = WalletGuiConfig {
+            poll_interval_ms: 250,
+            max_history_rows: 0,
+            theme: WalletGuiTheme::Light,
+            confirm_clipboard: false,
+            telemetry_opt_in: false,
+        }
+        .sanitized();
+
+        assert_eq!(config.poll_interval_ms, MIN_GUI_POLL_INTERVAL_MS);
+        assert_eq!(config.max_history_rows, DEFAULT_GUI_MAX_HISTORY_ROWS);
+        assert_eq!(config.theme, WalletGuiTheme::Light);
+        assert!(!config.confirm_clipboard);
+        assert!(!config.telemetry_opt_in);
     }
 }

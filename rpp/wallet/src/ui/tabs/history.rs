@@ -319,16 +319,33 @@ impl<T> Snapshot<T> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct State {
     filters: Filters,
     entries: Snapshot<Vec<HistoryEntry>>,
     page: u32,
     page_size: u32,
+    default_page_size: u32,
     total: Option<u64>,
     selected: Option<String>,
     last_request: Option<ListTransactionsParams>,
     error_banner: Option<String>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            filters: Filters::default(),
+            entries: Snapshot::default(),
+            page: 0,
+            page_size: DEFAULT_PAGE_SIZE,
+            default_page_size: DEFAULT_PAGE_SIZE,
+            total: None,
+            selected: None,
+            last_request: None,
+            error_banner: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -354,11 +371,17 @@ impl State {
         self.filters = Filters::default();
         self.entries = Snapshot::Idle;
         self.page = 0;
-        self.page_size = DEFAULT_PAGE_SIZE;
+        self.page_size = self.default_page_size;
         self.total = None;
         self.selected = None;
         self.last_request = None;
         self.error_banner = None;
+    }
+
+    pub fn set_default_page_size(&mut self, page_size: u32) {
+        let clamped = page_size.max(1);
+        self.default_page_size = clamped;
+        self.page_size = clamped;
     }
 
     pub fn activate(&mut self, client: WalletRpcClient) -> Command<Message> {

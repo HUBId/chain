@@ -178,7 +178,7 @@ impl State {
     }
 
     pub fn set_clipboard_opt_in(&mut self, enabled: bool) {
-        self.preferences.clipboard_opt_in = enabled;
+        self.preferences.set_clipboard_allowed(enabled);
     }
 
     pub fn set_keystore_status(&mut self, present: bool, locked: bool) {
@@ -250,8 +250,8 @@ impl State {
                 Command::none()
             }
             Message::ClipboardConsentChanged(enabled) => {
-                if self.preferences.clipboard_opt_in != enabled {
-                    self.preferences.clipboard_opt_in = enabled;
+                if self.preferences.clipboard_allowed() != enabled {
+                    self.preferences.set_clipboard_allowed(enabled);
                     self.preferences_dirty = true;
                     self.clipboard_feedback = Some(if enabled {
                         "Clipboard access enabled.".into()
@@ -646,7 +646,7 @@ impl State {
         column = column.push(
             checkbox(
                 "Allow copying addresses to the clipboard",
-                self.preferences.clipboard_opt_in,
+                self.preferences.clipboard_allowed(),
             )
             .on_toggle(Message::ClipboardConsentChanged),
         );
@@ -859,7 +859,7 @@ mod tests {
         state.set_preferences(Preferences::default());
         let _ = state.update(dummy_client(), Message::ClipboardConsentChanged(true));
         let prefs = state.take_dirty_preferences().expect("preferences updated");
-        assert!(prefs.clipboard_opt_in);
+        assert!(prefs.clipboard_allowed());
         assert!(state.take_dirty_preferences().is_none());
     }
 }
