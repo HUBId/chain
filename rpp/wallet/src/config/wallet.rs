@@ -13,6 +13,9 @@ const DEFAULT_FEE_TARGET_CONFIRMATIONS: u16 = 3;
 const DEFAULT_HEURISTIC_MIN_FEE_RATE: u64 = 2;
 const DEFAULT_HEURISTIC_MAX_FEE_RATE: u64 = 100;
 const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
+const DEFAULT_PROVER_JOB_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_PROVER_MAX_WITNESS_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_PROVER_MAX_CONCURRENCY: u32 = 1;
 
 /// High-level wallet configuration exposed to runtime services.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -156,6 +159,12 @@ pub struct WalletProverConfig {
     pub enabled: bool,
     /// Allow falling back to the mock prover backend when available.
     pub mock_fallback: bool,
+    /// Timeout (in seconds) applied to prover jobs before they are aborted.
+    pub job_timeout_secs: u64,
+    /// Maximum witness size (in bytes) accepted from prover backends.
+    pub max_witness_bytes: u64,
+    /// Upper bound on concurrent prover jobs executed by the runtime.
+    pub max_concurrency: u32,
 }
 
 impl Default for WalletProverConfig {
@@ -163,6 +172,9 @@ impl Default for WalletProverConfig {
         Self {
             enabled: false,
             mock_fallback: true,
+            job_timeout_secs: DEFAULT_PROVER_JOB_TIMEOUT_SECS,
+            max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
+            max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
         }
     }
 }
@@ -210,6 +222,18 @@ mod tests {
         assert_eq!(config.fees.cache_ttl_secs, DEFAULT_FEE_CACHE_TTL_SECS);
         assert!(!config.prover.enabled);
         assert!(config.prover.mock_fallback);
+        assert_eq!(
+            config.prover.job_timeout_secs,
+            DEFAULT_PROVER_JOB_TIMEOUT_SECS
+        );
+        assert_eq!(
+            config.prover.max_witness_bytes,
+            DEFAULT_PROVER_MAX_WITNESS_BYTES
+        );
+        assert_eq!(
+            config.prover.max_concurrency,
+            DEFAULT_PROVER_MAX_CONCURRENCY
+        );
     }
 
     #[test]
@@ -245,6 +269,9 @@ mod tests {
             prover: WalletProverConfig {
                 enabled: true,
                 mock_fallback: false,
+                job_timeout_secs: 420,
+                max_witness_bytes: 8 * 1024 * 1024,
+                max_concurrency: 4,
             },
         };
 
@@ -275,5 +302,8 @@ mod tests {
         assert_eq!(restored.fees.cache_ttl_secs, 90);
         assert!(restored.prover.enabled);
         assert!(!restored.prover.mock_fallback);
+        assert_eq!(restored.prover.job_timeout_secs, 420);
+        assert_eq!(restored.prover.max_witness_bytes, 8 * 1024 * 1024);
+        assert_eq!(restored.prover.max_concurrency, 4);
     }
 }

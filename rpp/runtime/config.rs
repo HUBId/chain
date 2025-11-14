@@ -3323,7 +3323,28 @@ fn validate_wallet_fees(config: &WalletFeeSettings) -> ChainResult<()> {
     Ok(())
 }
 
-fn validate_wallet_prover(_config: &WalletProverSettings) -> ChainResult<()> {
+fn validate_wallet_prover(config: &WalletProverSettings) -> ChainResult<()> {
+    if config.job_timeout_secs == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.prover.job_timeout_secs must be greater than 0".into(),
+        ));
+    }
+    if config.max_witness_bytes == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.prover.max_witness_bytes must be greater than 0".into(),
+        ));
+    }
+    if config.max_witness_bytes > usize::MAX as u64 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.prover.max_witness_bytes must fit into platform usize"
+                .into(),
+        ));
+    }
+    if config.max_concurrency == 0 {
+        return Err(ChainError::Config(
+            "wallet configuration wallet.prover.max_concurrency must be greater than 0".into(),
+        ));
+    }
     Ok(())
 }
 

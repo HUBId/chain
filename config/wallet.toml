@@ -46,6 +46,9 @@ max_sats_per_vbyte = 200
 [wallet.prover]
 enabled = false
 mock_fallback = true
+job_timeout_secs = 300
+max_witness_bytes = 16777216
+max_concurrency = 1
 
 [node]
 embedded = false
