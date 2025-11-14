@@ -18,14 +18,27 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::errors::ChainError;
 use crate::runtime::telemetry::metrics::{RpcMethod, RpcResult, RuntimeMetrics, WalletRpcMethod};
 use crate::runtime::wallet::runtime::WalletRuntimeConfig;
-use rpp_wallet::rpc::dto::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use rpp_wallet::rpc::dto::{
+    BroadcastResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, RescanResponse,
+    SignTxResponse,
+};
 use rpp_wallet::rpc::WalletRpcRouter;
 
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const CODE_PARSE_ERROR: i32 = -32700;
 const CODE_INVALID_REQUEST: i32 = -32600;
+const CODE_METHOD_NOT_FOUND: i32 = -32601;
+const CODE_INVALID_PARAMS: i32 = -32602;
+const CODE_INTERNAL_ERROR: i32 = -32603;
 const CODE_UNAUTHORIZED: i32 = -32060;
 const CODE_RATE_LIMITED: i32 = -32061;
+const CODE_WALLET_ERROR: i32 = -32010;
+const CODE_SYNC_ERROR: i32 = -32020;
+const CODE_NODE_ERROR: i32 = -32030;
+const CODE_DRAFT_NOT_FOUND: i32 = -32040;
+const CODE_DRAFT_UNSIGNED: i32 = -32041;
+const CODE_SYNC_UNAVAILABLE: i32 = -32050;
+const CODE_RESCAN_OUT_OF_RANGE: i32 = -32051;
 
 /// Wrapper type for wallet RPC authentication tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -282,6 +295,73 @@ fn determine_rate_limit(limit_hint: Option<u64>, global: Option<NonZeroU64>) -> 
     }
 }
 
+fn wallet_prover_metrics_enabled() -> bool {
+    cfg!(feature = "prover-mock")
+        || cfg!(feature = "prover-stwo")
+        || cfg!(feature = "prover-stwo-simd")
+}
+
+fn extract_prover_job_metrics(response: &JsonRpcResponse) -> Option<(String, bool, Duration)> {
+    let result = response.result.as_ref()?;
+    let parsed: SignTxResponse = serde_json::from_value(result.clone()).ok()?;
+    Some((
+        parsed.backend,
+        parsed.proof_generated,
+        Duration::from_millis(parsed.duration_ms),
+    ))
+}
+
+fn extract_rescan_scheduled(response: &JsonRpcResponse) -> Option<bool> {
+    let result = response.result.as_ref()?;
+    let parsed: RescanResponse = serde_json::from_value(result.clone()).ok()?;
+    Some(parsed.scheduled)
+}
+
+fn extract_broadcast_rejection_reason(response: &JsonRpcResponse) -> Option<String> {
+    if let Some(result) = response.result.as_ref() {
+        if let Ok(parsed) = serde_json::from_value::<BroadcastResponse>(result.clone()) {
+            if !parsed.accepted {
+                return Some("NOT_ACCEPTED".to_string());
+            }
+        }
+        return None;
+    }
+
+    let error = response.error.as_ref()?;
+    Some(broadcast_reason_from_error(error))
+}
+
+fn broadcast_reason_from_error(error: &JsonRpcError) -> String {
+    match error.code {
+        CODE_NODE_ERROR => {
+            phase2_code_from_error(error).unwrap_or_else(|| "NODE_ERROR".to_string())
+        }
+        CODE_WALLET_ERROR => "WALLET_ERROR".to_string(),
+        CODE_SYNC_ERROR => "SYNC_ERROR".to_string(),
+        CODE_DRAFT_NOT_FOUND => "MISSING_DRAFT".to_string(),
+        CODE_DRAFT_UNSIGNED => "DRAFT_UNSIGNED".to_string(),
+        CODE_INVALID_PARAMS => "INVALID_PARAMS".to_string(),
+        CODE_INVALID_REQUEST => "INVALID_REQUEST".to_string(),
+        CODE_METHOD_NOT_FOUND => "METHOD_NOT_FOUND".to_string(),
+        CODE_INTERNAL_ERROR => "INTERNAL_ERROR".to_string(),
+        CODE_RATE_LIMITED => "RATE_LIMITED".to_string(),
+        CODE_UNAUTHORIZED => "UNAUTHORIZED".to_string(),
+        CODE_PARSE_ERROR => "PARSE_ERROR".to_string(),
+        CODE_SYNC_UNAVAILABLE => "SYNC_UNAVAILABLE".to_string(),
+        CODE_RESCAN_OUT_OF_RANGE => "RESCAN_OUT_OF_RANGE".to_string(),
+        _ => "UNKNOWN".to_string(),
+    }
+}
+
+fn phase2_code_from_error(error: &JsonRpcError) -> Option<String> {
+    match &error.data {
+        Some(Value::Object(map)) => map
+            .get("phase2_code")
+            .and_then(|value| value.as_str().map(ToString::to_string)),
+        _ => None,
+    }
+}
+
 const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[
     ("get_balance", WalletRpcMethod::JsonGetBalance, Some(120)),
     ("list_utxos", WalletRpcMethod::JsonListUtxos, Some(120)),
@@ -353,9 +433,54 @@ impl WalletRpcServer {
         method: WalletRpcMethod,
         limit_hint: Option<u64>,
     ) -> JsonRpcHandler {
+        let router_for_handler = Arc::clone(&router);
+        let metrics_for_handler = Arc::clone(&metrics);
+        let method_label = method;
+        let prover_metrics_enabled = wallet_prover_metrics_enabled();
         let closure: RpcHandlerFn =
             Arc::new(move |invocation: RpcInvocation<'_, JsonRpcRequest>| {
-                router.handle(invocation.payload)
+                let payload = invocation.payload;
+                match method_label {
+                    WalletRpcMethod::JsonEstimateFee => {
+                        let start = Instant::now();
+                        let response = router_for_handler.handle(payload);
+                        let duration = start.elapsed();
+                        metrics_for_handler.record_wallet_fee_estimate_latency(duration);
+                        response
+                    }
+                    WalletRpcMethod::JsonSignTransaction => {
+                        let response = router_for_handler.handle(payload);
+                        if prover_metrics_enabled {
+                            if let Some((backend, proof_generated, duration)) =
+                                extract_prover_job_metrics(&response)
+                            {
+                                metrics_for_handler.record_wallet_prover_job_duration(
+                                    &backend,
+                                    proof_generated,
+                                    duration,
+                                );
+                            }
+                        }
+                        response
+                    }
+                    WalletRpcMethod::JsonRescan => {
+                        let start = Instant::now();
+                        let response = router_for_handler.handle(payload);
+                        let duration = start.elapsed();
+                        if let Some(scheduled) = extract_rescan_scheduled(&response) {
+                            metrics_for_handler.record_wallet_rescan_duration(scheduled, duration);
+                        }
+                        response
+                    }
+                    WalletRpcMethod::JsonBroadcast => {
+                        let response = router_for_handler.handle(payload);
+                        if let Some(reason) = extract_broadcast_rejection_reason(&response) {
+                            metrics_for_handler.record_wallet_broadcast_rejected(&reason);
+                        }
+                        response
+                    }
+                    _ => router_for_handler.handle(payload),
+                }
             });
         let rate_limit = determine_rate_limit(limit_hint, config.requests_per_minute);
         authenticated_handler::<_, JsonRpcRequest, _>(
