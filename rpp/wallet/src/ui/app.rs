@@ -23,8 +23,9 @@ use super::components::{
     error_banner, modal, progress_bar as progress_bar_view, ErrorBannerState, ProgressBarState,
 };
 use super::error_map::{describe_rpc_error, technical_details};
+use super::preferences::{self, Preferences, ThemePreference};
 use super::routes::{self, NavigationIntent, Route};
-use super::tabs::{dashboard, history, node, receive, send};
+use super::tabs::{dashboard, history, node, receive, send, settings};
 use super::WalletGuiFlags;
 
 const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(1);
@@ -38,6 +39,8 @@ pub struct WalletApp {
 #[derive(Debug, Clone)]
 pub enum Message {
     ConfigLoaded(Result<WalletConfig, AppError>),
+    PreferencesLoaded(Result<Preferences, AppError>),
+    PreferencesStored(Result<(), AppError>),
     KeystoreStatusDetected(Result<KeystoreStatus, AppError>),
     PassphraseChanged(String),
     PassphraseSubmitted,
@@ -51,6 +54,7 @@ pub enum Message {
     Node(node::Message),
     Receive(receive::Message),
     Send(send::Message),
+    Settings(settings::Message),
     DismissError,
     Shutdown,
 }
@@ -63,6 +67,8 @@ impl Application for WalletApp {
 
     fn new(flags: Self::Flags) -> (Self, Command<Self::Message>) {
         let mut model = Model::new(flags);
+        let prefs_path = model.preferences_path.clone();
+        model.queue_async(AsyncAction::LoadPreferences { path: prefs_path });
         model.queue_async(AsyncAction::LoadConfig {
             path: model.config_path.clone(),
         });
@@ -84,6 +90,7 @@ impl Application for WalletApp {
                     Ok(config) => {
                         self.model.keystore_path = Some(config.engine.keystore_path.clone());
                         self.model.node.set_config(Some(config.clone()));
+                        self.model.settings.set_config(Some(config.clone()));
                         self.model.config = Some(config);
                         self.model.queue_async(AsyncAction::DetectKeystore {
                             keystore_path: self.model.keystore_path.clone(),
@@ -92,10 +99,30 @@ impl Application for WalletApp {
                     Err(error) => {
                         self.model.push_error(error);
                         self.model.node.set_config(None);
+                        self.model.settings.set_config(None);
                         self.model.queue_async(AsyncAction::DetectKeystore {
                             keystore_path: None,
                         });
                     }
+                }
+            }
+            Message::PreferencesLoaded(result) => {
+                self.model.mark_async_complete();
+                match result {
+                    Ok(preferences) => {
+                        self.model.preferences = preferences.clone();
+                        self.model.settings.set_preferences(preferences.clone());
+                        self.model
+                            .receive
+                            .set_clipboard_opt_in(preferences.clipboard_opt_in);
+                    }
+                    Err(error) => self.model.push_error(error),
+                }
+            }
+            Message::PreferencesStored(result) => {
+                self.model.mark_async_complete();
+                if let Err(error) = result {
+                    self.model.push_error(error);
                 }
             }
             Message::KeystoreStatusDetected(result) => {
@@ -128,6 +155,10 @@ impl Application for WalletApp {
                         self.model.node.reset();
                         self.model.receive.reset();
                         self.model.send.reset();
+                        self.model.settings.reset();
+                        let clipboard_pref = self.model.preferences.clipboard_opt_in;
+                        self.model.receive.set_clipboard_opt_in(clipboard_pref);
+                        self.model.settings.set_session_unlocked();
                     }
                     Err(error) => {
                         self.model.set_session_locked();
@@ -241,6 +272,24 @@ impl Application for WalletApp {
                     .map(Message::Send);
                 update.push(command);
             }
+            Message::Settings(message) => {
+                let command = self
+                    .model
+                    .settings
+                    .update(self.model.client.clone(), message)
+                    .map(Message::Settings);
+                if let Some(preferences) = self.model.settings.take_dirty_preferences() {
+                    self.model.preferences = preferences.clone();
+                    self.model
+                        .receive
+                        .set_clipboard_opt_in(preferences.clipboard_opt_in);
+                    self.model.queue_async(AsyncAction::PersistPreferences {
+                        path: self.model.preferences_path.clone(),
+                        preferences,
+                    });
+                }
+                update.push(command);
+            }
             Message::DismissError => {
                 self.model.global_error = None;
             }
@@ -288,6 +337,14 @@ impl Application for WalletApp {
                     .send
                     .activate(self.model.client.clone())
                     .map(Message::Send);
+                update.push(command);
+            }
+            if self.model.active_route == Route::Settings {
+                let command = self
+                    .model
+                    .settings
+                    .activate(self.model.client.clone())
+                    .map(Message::Settings);
                 update.push(command);
             }
         }
@@ -340,7 +397,11 @@ impl Application for WalletApp {
     }
 
     fn theme(&self) -> Theme {
-        Theme::Dark
+        match self.model.preferences.theme() {
+            ThemePreference::System => Theme::Dark,
+            ThemePreference::Light => Theme::Light,
+            ThemePreference::Dark => Theme::Dark,
+        }
     }
 }
 
@@ -451,6 +512,7 @@ impl WalletApp {
             Route::Receive => self.model.receive.view().map(Message::Receive),
             Route::Send => self.model.send.view().map(Message::Send),
             Route::Node => self.model.node.view().map(Message::Node),
+            Route::Settings => self.model.settings.view().map(Message::Settings),
         };
 
         column = column.push(content);
@@ -502,6 +564,14 @@ impl WalletApp {
                 .map(Message::Node);
             update.push(command);
         }
+        if self.model.active_route == Route::Settings {
+            let command = self
+                .model
+                .settings
+                .activate(self.model.client.clone())
+                .map(Message::Settings);
+            update.push(command);
+        }
     }
 }
 
@@ -547,10 +617,14 @@ struct Model {
     node: node::State,
     receive: receive::State,
     send: send::State,
+    settings: settings::State,
+    preferences: Preferences,
+    preferences_path: PathBuf,
 }
 
 impl Model {
     fn new(flags: WalletGuiFlags) -> Self {
+        let preferences_path = preferences::default_path(flags.config_path.as_deref());
         Self {
             client: flags.client,
             config_path: flags.config_path,
@@ -570,6 +644,9 @@ impl Model {
             node: node::State::default(),
             receive: receive::State::default(),
             send: send::State::default(),
+            settings: settings::State::default(),
+            preferences: Preferences::default(),
+            preferences_path,
         }
     }
 
@@ -603,16 +680,23 @@ impl Model {
         self.node.reset();
         self.receive.reset();
         self.send.reset();
+        self.settings.reset();
+        self.receive
+            .set_clipboard_opt_in(self.preferences.clipboard_opt_in);
+        self.settings
+            .set_keystore_status(status.present, status.locked);
         if status.locked {
             self.session = SessionState::Locked(LockedSession {
                 keystore_present: status.present,
             });
             self.sync_status = None;
             self.sync_inflight = false;
+            self.settings.set_session_locked();
         } else {
             self.session = SessionState::Unlocked(UnlockedSession::new());
             self.sync_status = None;
             self.sync_inflight = false;
+            self.settings.set_session_unlocked();
         }
     }
 
@@ -622,6 +706,9 @@ impl Model {
         self.node.reset();
         self.receive.reset();
         self.send.reset();
+        self.settings.reset();
+        self.receive
+            .set_clipboard_opt_in(self.preferences.clipboard_opt_in);
         let present = self
             .keystore_path
             .as_ref()
@@ -632,6 +719,8 @@ impl Model {
         });
         self.sync_inflight = false;
         self.sync_status = None;
+        self.settings.set_keystore_status(present, true);
+        self.settings.set_session_locked();
     }
 
     fn set_session_unlocking(&mut self) {
@@ -640,6 +729,9 @@ impl Model {
         self.node.reset();
         self.receive.reset();
         self.send.reset();
+        self.settings.reset();
+        self.receive
+            .set_clipboard_opt_in(self.preferences.clipboard_opt_in);
         let present = self
             .keystore_path
             .as_ref()
@@ -649,6 +741,8 @@ impl Model {
             keystore_present: present,
         });
         self.sync_inflight = false;
+        self.settings.set_keystore_status(present, true);
+        self.settings.set_session_locked();
     }
 
     fn can_attempt_unlock(&self) -> bool {
@@ -812,10 +906,23 @@ impl SessionState {
 
 #[derive(Debug)]
 enum AsyncAction {
-    LoadConfig { path: Option<PathBuf> },
-    DetectKeystore { keystore_path: Option<PathBuf> },
-    Unlock { passphrase: String },
+    LoadPreferences {
+        path: PathBuf,
+    },
+    LoadConfig {
+        path: Option<PathBuf>,
+    },
+    DetectKeystore {
+        keystore_path: Option<PathBuf>,
+    },
+    Unlock {
+        passphrase: String,
+    },
     FetchSyncStatus,
+    PersistPreferences {
+        path: PathBuf,
+        preferences: Preferences,
+    },
 }
 
 impl AsyncAction {
@@ -823,6 +930,9 @@ impl AsyncAction {
         match self {
             AsyncAction::LoadConfig { path } => {
                 Command::perform(load_wallet_config(path), Message::ConfigLoaded)
+            }
+            AsyncAction::LoadPreferences { path } => {
+                Command::perform(load_preferences(path), Message::PreferencesLoaded)
             }
             AsyncAction::DetectKeystore { keystore_path } => Command::perform(
                 detect_keystore_status(client, keystore_path),
@@ -836,6 +946,10 @@ impl AsyncAction {
             AsyncAction::FetchSyncStatus => commands::rpc(client, poll_sync_status, |result| {
                 Message::SyncStatusLoaded(result.map_err(AppError::from))
             }),
+            AsyncAction::PersistPreferences { path, preferences } => Command::perform(
+                store_preferences(path, preferences),
+                Message::PreferencesStored,
+            ),
         }
     }
 }
@@ -850,6 +964,13 @@ async fn load_wallet_config(path: Option<PathBuf>) -> Result<WalletConfig, AppEr
     } else {
         Ok(WalletConfig::default())
     }
+}
+
+async fn load_preferences(path: PathBuf) -> Result<Preferences, AppError> {
+    task::spawn_blocking(move || preferences::load(&path))
+        .await
+        .map_err(AppError::from)?
+        .map_err(AppError::from)
 }
 
 async fn detect_keystore_status(
@@ -913,6 +1034,13 @@ async fn poll_sync_status(
     client: WalletRpcClient,
 ) -> Result<SyncStatusResponse, WalletRpcClientError> {
     client.sync_status().await
+}
+
+async fn store_preferences(path: PathBuf, preferences: Preferences) -> Result<(), AppError> {
+    task::spawn_blocking(move || preferences::store(&path, &preferences))
+        .await
+        .map_err(AppError::from)??;
+    Ok(())
 }
 
 fn sync_status_summary(status: &SyncStatusResponse) -> Element<Message> {

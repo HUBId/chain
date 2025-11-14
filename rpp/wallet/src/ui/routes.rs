@@ -8,16 +8,18 @@ pub enum Route {
     Receive,
     Send,
     Node,
+    Settings,
 }
 
 impl Route {
     /// Ordered list of tabs surfaced in the navigation bar.
-    pub const ALL: [Route; 5] = [
+    pub const ALL: [Route; 6] = [
         Route::Overview,
         Route::Activity,
         Route::Receive,
         Route::Send,
         Route::Node,
+        Route::Settings,
     ];
 
     /// Human readable title rendered in the UI.
@@ -28,6 +30,7 @@ impl Route {
             Route::Receive => "Receive",
             Route::Send => "Send",
             Route::Node => "Node",
+            Route::Settings => "Settings",
         }
     }
 
@@ -39,6 +42,7 @@ impl Route {
             Route::Receive => 2,
             Route::Send => 3,
             Route::Node => 4,
+            Route::Settings => 5,
         }
     }
 
@@ -121,12 +125,14 @@ fn digit_shortcut(key: Key<&str>) -> Option<Route> {
         Key::Character("3") => Some(Route::Receive),
         Key::Character("4") => Some(Route::Send),
         Key::Character("5") => Some(Route::Node),
+        Key::Character("6") => Some(Route::Settings),
         Key::Named(named) => match named {
             Named::Numpad1 => Some(Route::Overview),
             Named::Numpad2 => Some(Route::Activity),
             Named::Numpad3 => Some(Route::Receive),
             Named::Numpad4 => Some(Route::Send),
             Named::Numpad5 => Some(Route::Node),
+            Named::Numpad6 => Some(Route::Settings),
             _ => None,
         },
         _ => None,
