@@ -9,21 +9,17 @@ use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use clap::{Args, Parser, Subcommand};
 use ed25519_dalek::Keypair;
 use rand_core::{OsRng, RngCore};
-use reqwest::Url;
 use rpassword::prompt_password;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
-    BalanceResponse, BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse,
-    DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    EstimateFeeParams, EstimateFeeResponse, FeeCongestionDto, FeeEstimateSourceDto,
-    GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    PendingLockDto, PolicyPreviewResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse,
-    RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncModeDto, SyncStatusResponse, JSONRPC_VERSION,
+    CreateTxParams, CreateTxResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
+    FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto, RescanParams, SetPolicyParams,
+    SyncModeDto, SyncStatusResponse,
 };
 use crate::rpc::error::WalletRpcErrorCode;
 
@@ -47,35 +43,6 @@ pub enum WalletCliError {
     EmptyResponse,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-}
-
-fn interpret_rpc_error(error: JsonRpcError) -> WalletCliError {
-    let (code, details) = rpc_error_payload(&error);
-    let friendly = friendly_message(&code, &error.message, details.as_ref());
-    WalletCliError::RpcError {
-        code,
-        friendly,
-        message: error.message,
-        json_code: error.code,
-        details,
-    }
-}
-
-fn rpc_error_payload(error: &JsonRpcError) -> (WalletRpcErrorCode, Option<Value>) {
-    if let Some(Value::Object(map)) = &error.data {
-        let code = map
-            .get("code")
-            .and_then(|value| value.as_str())
-            .map(WalletRpcErrorCode::from)
-            .unwrap_or_else(|| WalletRpcErrorCode::Custom(format!("JSON_RPC_{}", error.code)));
-        let details = map.get("details").cloned();
-        (code, details)
-    } else {
-        (
-            WalletRpcErrorCode::Custom(format!("JSON_RPC_{}", error.code)),
-            None,
-        )
-    }
 }
 
 fn friendly_message(
@@ -231,6 +198,37 @@ fn friendly_message(
     }
 }
 
+impl From<WalletRpcClientError> for WalletCliError {
+    fn from(value: WalletRpcClientError) -> Self {
+        match value {
+            WalletRpcClientError::InvalidEndpoint(endpoint) => {
+                WalletCliError::InvalidEndpoint(endpoint)
+            }
+            WalletRpcClientError::Json(error) => WalletCliError::Other(error.into()),
+            WalletRpcClientError::Transport(error) => WalletCliError::Transport(error.to_string()),
+            WalletRpcClientError::HttpStatus(status) => {
+                WalletCliError::Transport(format!("HTTP status {} returned by wallet RPC", status))
+            }
+            WalletRpcClientError::EmptyResponse => WalletCliError::EmptyResponse,
+            WalletRpcClientError::Rpc {
+                code,
+                message,
+                json_code,
+                details,
+            } => {
+                let friendly = friendly_message(&code, &message, details.as_ref());
+                WalletCliError::RpcError {
+                    code,
+                    friendly,
+                    message,
+                    json_code,
+                    details,
+                }
+            }
+        }
+    }
+}
+
 fn value_to_string(value: &Value) -> String {
     if let Some(s) = value.as_str() {
         s.to_string()
@@ -271,160 +269,13 @@ pub struct RpcOptions {
 }
 
 impl RpcOptions {
-    fn rpc_url(&self) -> Result<Url, WalletCliError> {
-        let mut url = Url::parse(&self.endpoint)
-            .map_err(|err| WalletCliError::InvalidEndpoint(err.to_string()))?;
-        let mut path = url.path().to_string();
-        if path.is_empty() || path == "/" {
-            url.set_path("/rpc");
-        } else if !path.ends_with("/rpc") {
-            if path.ends_with('/') {
-                path.truncate(path.len() - 1);
-            }
-            path.push_str("/rpc");
-            url.set_path(&path);
-        }
-        Ok(url)
-    }
-}
-
-struct WalletRpcClient {
-    inner: reqwest::Client,
-    url: Url,
-    auth_token: Option<String>,
-}
-
-impl WalletRpcClient {
-    fn new(options: &RpcOptions) -> Result<Self, WalletCliError> {
-        let timeout = Duration::from_secs(options.timeout);
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|err| WalletCliError::Transport(err.to_string()))?;
-        let url = options.rpc_url()?;
-        Ok(Self {
-            inner: client,
-            url,
-            auth_token: options.auth_token.clone(),
-        })
-    }
-
-    async fn request<T: Serialize>(
-        &self,
-        method: &str,
-        params: Option<T>,
-    ) -> Result<Value, WalletCliError> {
-        let payload = JsonRpcRequest {
-            jsonrpc: Some(JSONRPC_VERSION.to_string()),
-            id: Some(Value::from(1)),
-            method: method.to_string(),
-            params: params
-                .map(|value| serde_json::to_value(value))
-                .transpose()
-                .map_err(WalletCliError::from)?,
-        };
-
-        let mut request = self.inner.post(self.url.clone()).json(&payload);
-        if let Some(token) = &self.auth_token {
-            request = request.bearer_auth(token);
-        }
-
-        let response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(WalletCliError::Transport(format!(
-                "HTTP status {} returned by wallet RPC",
-                response.status()
-            )));
-        }
-
-        let response: JsonRpcResponse = response.json().await?;
-        if let Some(error) = response.error {
-            return Err(interpret_rpc_error(error));
-        }
-
-        response.result.ok_or(WalletCliError::EmptyResponse)
-    }
-
-    async fn get_balance(&self) -> Result<BalanceResponse, WalletCliError> {
-        let value = self.request::<Value>("get_balance", None).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn derive_address(&self, change: bool) -> Result<DeriveAddressResponse, WalletCliError> {
-        let params = DeriveAddressParams { change };
-        let value = self.request("derive_address", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn policy_preview(&self) -> Result<PolicyPreviewResponse, WalletCliError> {
-        let value = self.request::<Value>("policy_preview", None).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn get_policy(&self) -> Result<GetPolicyResponse, WalletCliError> {
-        let value = self.request::<Value>("get_policy", None).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn set_policy(
-        &self,
-        params: &SetPolicyParams,
-    ) -> Result<SetPolicyResponse, WalletCliError> {
-        let value = self.request("set_policy", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn estimate_fee(
-        &self,
-        confirmation_target: u16,
-    ) -> Result<EstimateFeeResponse, WalletCliError> {
-        let params = EstimateFeeParams {
-            confirmation_target,
-        };
-        let value = self.request("estimate_fee", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn list_pending_locks(&self) -> Result<ListPendingLocksResponse, WalletCliError> {
-        let value = self.request::<Value>("list_pending_locks", None).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn release_pending_locks(&self) -> Result<ReleasePendingLocksResponse, WalletCliError> {
-        let params = ReleasePendingLocksParams;
-        let value = self.request("release_pending_locks", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn create_tx(&self, params: &CreateTxParams) -> Result<CreateTxResponse, WalletCliError> {
-        let value = self.request("create_tx", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn sign_tx(&self, draft_id: &str) -> Result<SignTxResponse, WalletCliError> {
-        let params = SignTxParams {
-            draft_id: draft_id.to_string(),
-        };
-        let value = self.request("sign_tx", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn broadcast(&self, draft_id: &str) -> Result<BroadcastResponse, WalletCliError> {
-        let params = BroadcastParams {
-            draft_id: draft_id.to_string(),
-        };
-        let value = self.request("broadcast", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn sync_status(&self) -> Result<SyncStatusResponse, WalletCliError> {
-        let value = self.request::<Value>("sync_status", None).await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    async fn rescan(&self, params: &RescanParams) -> Result<RescanResponse, WalletCliError> {
-        let value = self.request("rescan", Some(params)).await?;
-        Ok(serde_json::from_value(value)?)
+    fn client(&self) -> Result<WalletRpcClient, WalletCliError> {
+        WalletRpcClient::from_endpoint(
+            &self.endpoint,
+            self.auth_token.clone(),
+            Duration::from_secs(self.timeout),
+        )
+        .map_err(WalletCliError::from)
     }
 }
 
@@ -617,7 +468,7 @@ pub struct SyncCommand {
 
 impl SyncCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let status = client.sync_status().await?;
         println!("Synchronisation status\n");
         println!("  Syncing           : {}", format_bool(status.syncing));
@@ -689,7 +540,7 @@ pub struct AddrNewCommand {
 
 impl AddrNewCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.derive_address(self.change).await?;
         println!("Generated address\n");
         println!(
@@ -709,7 +560,7 @@ pub struct BalanceCommand {
 
 impl BalanceCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let balance = client.get_balance().await?;
         println!("Wallet balance\n");
         println!("  Confirmed : {}", format_amount(balance.confirmed));
@@ -741,7 +592,7 @@ pub struct PolicyGetCommand {
 
 impl PolicyGetCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.get_policy().await?;
         println!("Policy snapshot\n");
         match response.snapshot {
@@ -777,7 +628,7 @@ pub struct PolicySetCommand {
 
 impl PolicySetCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let mut statements = self.statements.clone();
         if let Some(path) = &self.file {
             let contents =
@@ -829,7 +680,7 @@ pub struct FeesEstimateCommand {
 
 impl FeesEstimateCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.estimate_fee(self.target).await?;
         println!("Fee estimate\n");
         println!("  Target confirmations : {}", response.confirmation_target);
@@ -860,7 +711,7 @@ pub struct LocksListCommand {
 
 impl LocksListCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.list_pending_locks().await?;
         println!("Pending locks\n");
         render_locks(&response.locks);
@@ -876,7 +727,7 @@ pub struct LocksReleaseCommand {
 
 impl LocksReleaseCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.release_pending_locks().await?;
         println!("Released pending locks\n");
         render_locks(&response.released);
@@ -910,7 +761,7 @@ pub struct SendPreviewCommand {
 
 impl SendPreviewCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let preview = client.policy_preview().await?;
         println!("Wallet policy preview\n");
         println!("  Min confirmations : {}", preview.min_confirmations);
@@ -939,7 +790,7 @@ pub struct SendCreateCommand {
 
 impl SendCreateCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let params = CreateTxParams {
             to: self.to.clone(),
             amount: self.amount,
@@ -963,7 +814,7 @@ pub struct SendSignCommand {
 
 impl SendSignCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let result = client.sign_tx(&self.draft_id).await?;
         println!("Draft signed successfully\n");
         println!("  Draft ID      : {}", result.draft_id);
@@ -990,7 +841,7 @@ pub struct SendBroadcastCommand {
 
 impl SendBroadcastCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let response = client.broadcast(&self.draft_id).await?;
         println!("Broadcast result\n");
         println!("  Draft ID : {}", response.draft_id);
@@ -1019,7 +870,7 @@ impl RescanCommand {
                 "rescan requires --from-height or --lookback-blocks"
             )));
         }
-        let client = WalletRpcClient::new(&self.rpc)?;
+        let client = self.rpc.client()?;
         let params = RescanParams {
             from_height: self.from_height,
             lookback_blocks: self.lookback_blocks,
