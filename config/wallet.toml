@@ -1,4 +1,5 @@
 # NOTE: Restart the wallet runtime after editing this file; live reload is not supported.
+# Phase 2 policy/fee/prover settings are documented in docs/wallet_phase2_policies_prover.md.
 data_dir = "./data"
 
 [wallet.keys]
@@ -23,6 +24,8 @@ submit_transaction_per_minute = 120
 proof_generation_per_minute = 60
 pipeline_depth = 64
 
+# Controls automatic lookback rescans and the batch size used when replaying history.
+# See docs/wallet_phase2_policies_prover.md for CLI overrides.
 [wallet.rescan]
 auto_trigger = false
 lookback_blocks = 2880
@@ -33,16 +36,20 @@ data_dir = "./data/wallet"
 keystore_path = "./data/wallet/keystore.toml"
 birthday_height = null
 
+# Spend policy knobs (gap limits, confirmation depth, dust/change budgets, lock timeout).
+# Detailed guidance: docs/wallet_phase2_policies_prover.md#policy-knobs
 [wallet.policy]
 external_gap_limit = 20
 internal_gap_limit = 20
 min_confirmations = 1
 
+# Fee estimator defaults and guardrails (min/max); see docs/wallet_phase2_policies_prover.md#fee-estimator-behaviour
 [wallet.fees]
 default_sats_per_vbyte = 5
 min_sats_per_vbyte = 1
 max_sats_per_vbyte = 200
 
+# Wallet prover runtime; enable alongside the appropriate cargo feature. See docs/wallet_phase2_policies_prover.md#prover-configuration-mock-vs-stwo
 [wallet.prover]
 enabled = false
 mock_fallback = true
