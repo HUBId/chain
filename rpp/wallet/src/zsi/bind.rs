@@ -1,10 +1,10 @@
 use crate::proof_backend::{ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader};
 use prover_backend_interface::{BackendResult, ProofBackend};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Operations supported by the Zero Sync identity prover.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ZsiOperation {
     Issue,
     Rotate,

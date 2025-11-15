@@ -15,9 +15,7 @@ mod startup_errors;
 
 use rpp_chain::config::{FirewoodSyncPolicyConfig, NodeConfig};
 
-use support::{
-    send_ctrl_c, wait_for_exit, ProcessNodeHarness, ProcessTestCluster,
-};
+use support::{send_ctrl_c, wait_for_exit, ProcessNodeHarness, ProcessTestCluster};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -52,14 +50,22 @@ async fn node_process_handles_health_probes_and_ctrl_c() -> Result<()> {
         .send()
         .await
         .context("failed to query liveness probe")?;
-    assert_eq!(live.status(), StatusCode::OK, "live probe should return 200");
+    assert_eq!(
+        live.status(),
+        StatusCode::OK,
+        "live probe should return 200"
+    );
 
     let ready = client
         .get(&ready_url)
         .send()
         .await
         .context("failed to query readiness probe")?;
-    assert_eq!(ready.status(), StatusCode::OK, "ready probe should return 200");
+    assert_eq!(
+        ready.status(),
+        StatusCode::OK,
+        "ready probe should return 200"
+    );
 
     let node = &mut cluster.nodes_mut()[0];
     send_ctrl_c(&node.child).context("failed to deliver CTRL+C to node process")?;

@@ -35,6 +35,8 @@ use crate::reputation::{
 };
 use crate::rpp::{UtxoOutpoint, UtxoRecord};
 #[cfg(feature = "vendor_electrs")]
+use crate::runtime::node::MempoolStatus;
+#[cfg(feature = "vendor_electrs")]
 use crate::runtime::node::PendingTransactionSummary;
 use crate::runtime::{ProofKind, RuntimeMetrics};
 use crate::state::StoredUtxo;
@@ -49,8 +51,6 @@ use crate::types::{
 #[cfg(feature = "vendor_electrs")]
 use log::debug;
 use log::warn;
-#[cfg(feature = "vendor_electrs")]
-use crate::runtime::node::MempoolStatus;
 #[cfg(feature = "vendor_electrs")]
 use rpp_p2p::GossipTopic;
 #[cfg(feature = "vendor_electrs")]

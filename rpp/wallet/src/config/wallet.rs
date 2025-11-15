@@ -29,6 +29,7 @@ pub struct WalletConfig {
     pub policy: WalletPolicyConfig,
     pub fees: WalletFeeConfig,
     pub prover: WalletProverConfig,
+    pub zsi: WalletZsiConfig,
     pub gui: WalletGuiConfig,
 }
 
@@ -39,6 +40,7 @@ impl Default for WalletConfig {
             policy: WalletPolicyConfig::default(),
             fees: WalletFeeConfig::default(),
             prover: WalletProverConfig::default(),
+            zsi: WalletZsiConfig::default(),
             gui: WalletGuiConfig::default(),
         }
     }
@@ -188,6 +190,26 @@ impl Default for WalletProverConfig {
     }
 }
 
+/// Toggle Zero Sync identity workflows exposed by the wallet.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletZsiConfig {
+    /// Enable the wallet ZSI helpers and JSON-RPC surface.
+    pub enabled: bool,
+    /// Optional backend identifier recorded for telemetry purposes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+}
+
+impl Default for WalletZsiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: None,
+        }
+    }
+}
+
 /// Configure GUI-specific behaviour for the wallet desktop application.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -299,6 +321,8 @@ mod tests {
             config.prover.max_concurrency,
             DEFAULT_PROVER_MAX_CONCURRENCY
         );
+        assert!(!config.zsi.enabled);
+        assert!(config.zsi.backend.is_none());
         assert_eq!(config.gui.poll_interval_ms, DEFAULT_GUI_POLL_INTERVAL_MS);
         assert_eq!(config.gui.max_history_rows, DEFAULT_GUI_MAX_HISTORY_ROWS);
         assert_eq!(config.gui.theme, WalletGuiTheme::System);
@@ -343,6 +367,10 @@ mod tests {
                 max_witness_bytes: 8 * 1024 * 1024,
                 max_concurrency: 4,
             },
+            zsi: WalletZsiConfig {
+                enabled: true,
+                backend: Some("stwo".into()),
+            },
             gui: WalletGuiConfig {
                 poll_interval_ms: 2_000,
                 max_history_rows: 48,
@@ -382,6 +410,8 @@ mod tests {
         assert_eq!(restored.prover.job_timeout_secs, 420);
         assert_eq!(restored.prover.max_witness_bytes, 8 * 1024 * 1024);
         assert_eq!(restored.prover.max_concurrency, 4);
+        assert!(restored.zsi.enabled);
+        assert_eq!(restored.zsi.backend.as_deref(), Some("stwo"));
         assert_eq!(restored.gui.poll_interval_ms, 2_000);
         assert_eq!(restored.gui.max_history_rows, 48);
         assert_eq!(restored.gui.theme, WalletGuiTheme::Dark);

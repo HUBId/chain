@@ -25,7 +25,9 @@ use dto::{
     SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
     SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
     TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse, JSONRPC_VERSION,
+    WatchOnlyStatusResponse, ZsiArtifactDto, ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse,
+    ZsiListResponse, ZsiProofParams, ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse,
+    JSONRPC_VERSION,
 };
 use error::WalletRpcErrorCode;
 use hex::encode as hex_encode;
@@ -37,7 +39,7 @@ use crate::backup::{
     backup_export, backup_import, backup_validate, BackupError, BackupExportOptions,
     BackupImportOutcome, BackupValidationMode,
 };
-use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
+use crate::db::{PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
@@ -51,7 +53,8 @@ use crate::node_client::{
 };
 use crate::wallet::{
     PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletMode,
-    WalletPaths, WalletSyncCoordinator, WalletSyncError, WatchOnlyError,
+    WalletPaths, WalletSyncCoordinator, WalletSyncError, WatchOnlyError, ZsiBinding, ZsiError,
+    ZsiProofRequest, ZsiVerifyRequest,
 };
 use zeroize::Zeroizing;
 
@@ -204,6 +207,38 @@ impl WalletRpcRouter {
             "broadcast_raw" => {
                 let params: BroadcastRawParams = parse_params(params)?;
                 self.broadcast_raw(params.tx_hex)
+            }
+            "zsi.prove" => {
+                let params: ZsiProofParams = parse_params(params)?;
+                let request = zsi_proof_params_to_request(params);
+                let proof = self.wallet.zsi_prove(request)?;
+                to_value(ZsiProveResponse { proof })
+            }
+            "zsi.verify" => {
+                let params: ZsiVerifyParams = parse_params(params)?;
+                let request = zsi_verify_params_to_request(params);
+                self.wallet.zsi_verify(request)?;
+                to_value(ZsiVerifyResponse { valid: true })
+            }
+            "zsi.bind_account" => {
+                let params: ZsiProofParams = parse_params(params)?;
+                let request = zsi_proof_params_to_request(params);
+                let binding = self.wallet.zsi_bind_account(request)?;
+                to_value(ZsiBindResponse {
+                    binding: zsi_binding_to_dto(binding),
+                })
+            }
+            "zsi.list" => {
+                parse_params::<EmptyParams>(params)?;
+                let artifacts = self.wallet.zsi_list()?;
+                let artifacts = artifacts.into_iter().map(zsi_artifact_to_dto).collect();
+                to_value(ZsiListResponse { artifacts })
+            }
+            "zsi.delete" => {
+                let params: ZsiDeleteParams = parse_params(params)?;
+                self.wallet
+                    .zsi_delete(&params.identity, &params.commitment_digest)?;
+                to_value(ZsiDeleteResponse { deleted: true })
             }
             "multisig.get_scope" => {
                 parse_params::<EmptyParams>(params)?;
@@ -888,6 +923,40 @@ fn watch_only_status_to_dto(status: WatchOnlyStatus) -> WatchOnlyStatusResponse 
     }
 }
 
+fn zsi_proof_params_to_request(params: ZsiProofParams) -> ZsiProofRequest {
+    ZsiProofRequest {
+        operation: params.operation,
+        record: params.record,
+    }
+}
+
+fn zsi_verify_params_to_request(params: ZsiVerifyParams) -> ZsiVerifyRequest {
+    ZsiVerifyRequest {
+        operation: params.operation,
+        record: params.record,
+        proof: params.proof,
+    }
+}
+
+fn zsi_binding_to_dto(binding: ZsiBinding) -> ZsiBindingDto {
+    ZsiBindingDto {
+        operation: binding.operation,
+        record: binding.record,
+        witness: binding.witness,
+        inputs: binding.inputs,
+    }
+}
+
+fn zsi_artifact_to_dto(artifact: StoredZsiArtifact<'static>) -> ZsiArtifactDto {
+    ZsiArtifactDto {
+        recorded_at_ms: artifact.recorded_at_ms,
+        identity: artifact.identity,
+        commitment_digest: artifact.commitment_digest,
+        backend: artifact.backend,
+        proof: artifact.proof.into_owned(),
+    }
+}
+
 fn watch_only_record_from_params(params: WatchOnlyEnableParams) -> WatchOnlyRecord {
     let mut record = WatchOnlyRecord::new(params.external_descriptor);
     if let Some(internal) = params.internal_descriptor {
@@ -911,6 +980,7 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             multisig.to_string(),
             Some(json!({ "kind": "multisig" })),
         ),
+        WalletError::Zsi(zsi) => zsi_error_to_json(zsi),
     }
 }
 
@@ -925,6 +995,31 @@ fn watch_only_error_to_json(error: &WatchOnlyError) -> JsonRpcError {
             WalletRpcErrorCode::WatchOnlyNotEnabled,
             "wallet watch-only mode prevents this operation",
             None,
+        ),
+    }
+}
+
+fn zsi_error_to_json(error: &ZsiError) -> JsonRpcError {
+    match error {
+        ZsiError::Disabled => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "zsi workflows disabled by configuration",
+            None,
+        ),
+        ZsiError::BackendUnavailable => json_error(
+            WalletRpcErrorCode::InternalError,
+            "zsi backend not configured",
+            None,
+        ),
+        ZsiError::Unsupported => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "zsi backend does not support identity proofs",
+            None,
+        ),
+        ZsiError::Backend(err) => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            err.to_string(),
+            Some(json!({ "kind": "zsi_backend" })),
         ),
     }
 }
@@ -1273,7 +1368,9 @@ mod tests {
     use super::dto::WatchOnlyStatusResponse;
     use super::error::WalletRpcErrorCode;
     use super::*;
-    use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+    use crate::config::wallet::{
+        WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    };
     use crate::db::UtxoOutpoint;
     use crate::db::WalletStore;
     use crate::engine::{DraftInput, DraftOutput, SpendModel};
@@ -1301,6 +1398,8 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
             Arc::new(StubNodeClient::default()),
             WalletPaths::new(keystore, backup),
         )
@@ -1326,6 +1425,8 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
             Arc::new(StubNodeClient::default()),
             WalletPaths::new(keystore, backup),
         )
@@ -1715,6 +1816,8 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
             Arc::new(RejectingNodeClient::new()),
             WalletPaths::new(keystore, backup),
         )

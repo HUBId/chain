@@ -633,6 +633,70 @@ pub struct TelemetryCountersResponse {
     pub counters: Vec<TelemetryCounterDto>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiProofParams {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiProveResponse {
+    pub proof: LifecycleProof,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiVerifyParams {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+    #[serde(with = "serde_bytes")]
+    pub proof: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiVerifyResponse {
+    pub valid: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiBindResponse {
+    pub binding: ZsiBindingDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiBindingDto {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+    #[serde(with = "serde_bytes")]
+    pub witness: Vec<u8>,
+    pub inputs: IdentityPublicInputs,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiListResponse {
+    pub artifacts: Vec<ZsiArtifactDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiArtifactDto {
+    pub recorded_at_ms: u64,
+    pub identity: String,
+    pub commitment_digest: String,
+    pub backend: String,
+    #[serde(with = "serde_bytes")]
+    pub proof: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiDeleteParams {
+    pub identity: String,
+    pub commitment_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiDeleteResponse {
+    pub deleted: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncStatusParams;
 

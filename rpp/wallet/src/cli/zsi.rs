@@ -2,9 +2,10 @@ use clap::{Args, Subcommand};
 use prover_backend_interface::{BackendResult, ProofBackend};
 
 use crate::proof_backend::Blake2sHasher;
+use crate::wallet::{ZsiProofRequest, ZsiVerifyRequest};
 use crate::zsi::{
-    ConsensusApproval, LifecycleReceipt, RevokeRequest, RotateRequest, ZsiLifecycle, ZsiRecord,
-    ZsiRequest,
+    ConsensusApproval, LifecycleReceipt, RevokeRequest, RotateRequest, ZsiLifecycle, ZsiOperation,
+    ZsiRecord, ZsiRequest,
 };
 
 fn parse_approval(value: &str) -> Result<ConsensusApproval, String> {
@@ -30,6 +31,16 @@ fn parse_approval(value: &str) -> Result<ConsensusApproval, String> {
 fn digest(value: &str) -> String {
     let hash: [u8; 32] = Blake2sHasher::hash(value.as_bytes()).into();
     hex::encode(hash)
+}
+
+fn parse_operation(value: &str) -> Result<ZsiOperation, String> {
+    match value {
+        "issue" => Ok(ZsiOperation::Issue),
+        "rotate" => Ok(ZsiOperation::Rotate),
+        "revoke" => Ok(ZsiOperation::Revoke),
+        "audit" => Ok(ZsiOperation::Audit),
+        other => Err(format!("unsupported operation `{other}`")),
+    }
 }
 
 #[derive(Debug, Args)]
@@ -86,6 +97,107 @@ pub enum ZsiSubcommand {
         #[arg(long = "approval", value_parser = parse_approval)]
         approvals: Vec<ConsensusApproval>,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct ZsiWalletCli {
+    #[command(subcommand)]
+    pub command: ZsiWalletSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ZsiWalletSubcommand {
+    /// Generate a lifecycle proof using the configured wallet backend.
+    Prove(ZsiWalletProveArgs),
+    /// Verify an externally supplied lifecycle proof.
+    Verify(ZsiWalletVerifyArgs),
+    /// Bind an identity record to a witness and public inputs.
+    #[command(name = "bind-account")]
+    BindAccount(ZsiWalletBindArgs),
+    /// List cached lifecycle proof artefacts.
+    List,
+    /// Delete a cached lifecycle proof artefact.
+    Delete(ZsiWalletDeleteArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ZsiWalletProofArgs {
+    #[arg(long)]
+    pub operation: String,
+    #[arg(long)]
+    pub identity: String,
+    #[arg(long = "genesis-id")]
+    pub genesis_id: String,
+    #[arg(long)]
+    pub attestation: String,
+    #[arg(long = "approval", value_parser = parse_approval)]
+    pub approvals: Vec<ConsensusApproval>,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ZsiWalletProveArgs {
+    #[command(flatten)]
+    pub proof: ZsiWalletProofArgs,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ZsiWalletBindArgs {
+    #[command(flatten)]
+    pub proof: ZsiWalletProofArgs,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ZsiWalletVerifyArgs {
+    #[command(flatten)]
+    pub proof: ZsiWalletProofArgs,
+    #[arg(long = "proof")]
+    pub proof_hex: String,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct ZsiWalletDeleteArgs {
+    #[arg(long)]
+    pub identity: String,
+    #[arg(long = "commitment")]
+    pub commitment_digest: String,
+}
+
+impl ZsiWalletProofArgs {
+    fn into_request(self) -> Result<ZsiProofRequest, String> {
+        let operation = parse_operation(&self.operation)?;
+        let record = ZsiRecord {
+            identity: self.identity,
+            genesis_id: self.genesis_id,
+            attestation_digest: digest(&self.attestation),
+            approvals: self.approvals,
+        };
+        Ok(ZsiProofRequest { operation, record })
+    }
+}
+
+impl ZsiWalletProveArgs {
+    pub fn into_request(self) -> Result<ZsiProofRequest, String> {
+        self.proof.into_request()
+    }
+}
+
+impl ZsiWalletBindArgs {
+    pub fn into_request(self) -> Result<ZsiProofRequest, String> {
+        self.proof.into_request()
+    }
+}
+
+impl ZsiWalletVerifyArgs {
+    pub fn into_request(self) -> Result<ZsiVerifyRequest, String> {
+        let request = self.proof.into_request()?;
+        let proof = hex::decode(self.proof_hex.trim_start_matches("0x"))
+            .map_err(|err| format!("invalid proof hex: {err}"))?;
+        Ok(ZsiVerifyRequest {
+            operation: request.operation,
+            record: request.record,
+            proof,
+        })
+    }
 }
 
 pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<LifecycleReceipt> {
