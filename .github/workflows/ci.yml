@@ -644,17 +644,21 @@ PY
             features: ""
             no_default_features: ""
             experimental: false
-          - name: prod-stwo
+          - name: prover-stwo-backend
             features: "prod,prover-stwo"
-            no_default_features: "1"
-            experimental: false
-          - name: prod-stwo-rpp-stark
-            features: "prod,prover-stwo,backend-rpp-stark"
             no_default_features: "1"
             experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
+            experimental: false
+          - name: wallet-gui
+            features: "wallet_gui"
+            no_default_features: ""
+            experimental: false
+          - name: wallet-advanced
+            features: "wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls"
+            no_default_features: ""
             experimental: false
       steps:
       - uses: actions/checkout@v4
@@ -673,6 +677,17 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-unit
+      - name: Collect unit suite artifacts (${{ matrix.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/unit-suites/${{ matrix.name }}" logs
+      - name: Upload unit suite artifacts (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-suites-${{ matrix.name }}
+          path: artifacts/unit-suites/${{ matrix.name }}
 
   cli-smoke:
     name: CLI smoke (${{ matrix.name }})
@@ -776,17 +791,21 @@ PY
             features: ""
             no_default_features: ""
             experimental: false
-          - name: prod-stwo
+          - name: prover-stwo-backend
             features: "prod,prover-stwo"
-            no_default_features: "1"
-            experimental: false
-          - name: prod-stwo-rpp-stark
-            features: "prod,prover-stwo,backend-rpp-stark"
             no_default_features: "1"
             experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
+            experimental: false
+          - name: wallet-gui
+            features: "wallet_gui"
+            no_default_features: ""
+            experimental: false
+          - name: wallet-advanced
+            features: "wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls"
+            no_default_features: ""
             experimental: false
       steps:
       - uses: actions/checkout@v4
@@ -817,6 +836,17 @@ PY
             args+=(--features "${{ matrix.features }}")
           fi
           RUST_TEST_THREADS=1 cargo "${args[@]}"
+      - name: Collect integration artifacts (${{ matrix.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/integration/${{ matrix.name }}" logs
+      - name: Upload integration artifacts (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-workflows-${{ matrix.name }}
+          path: artifacts/integration/${{ matrix.name }}
 
   observability-metrics:
     name: Observability metrics (${{ matrix.name }})
@@ -830,17 +860,21 @@ PY
             features: ""
             no_default_features: ""
             experimental: false
-          - name: prod-stwo
+          - name: prover-stwo-backend
             features: "prod,prover-stwo"
-            no_default_features: "1"
-            experimental: false
-          - name: prod-stwo-rpp-stark
-            features: "prod,prover-stwo,backend-rpp-stark"
             no_default_features: "1"
             experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
+            experimental: false
+          - name: wallet-gui
+            features: "wallet_gui"
+            no_default_features: ""
+            experimental: false
+          - name: wallet-advanced
+            features: "wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls"
+            no_default_features: ""
             experimental: false
       steps:
       - uses: actions/checkout@v4
@@ -859,6 +893,17 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-observability
+      - name: Collect observability artifacts (${{ matrix.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/observability/${{ matrix.name }}" logs
+      - name: Upload observability artifacts (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-metrics-${{ matrix.name }}
+          path: artifacts/observability/${{ matrix.name }}
 
   simnet-smoke:
     name: Simnet smoke (${{ matrix.name }})
@@ -872,13 +917,21 @@ PY
             features: ""
             no_default_features: ""
             experimental: false
-          - name: prod-stwo
+          - name: prover-stwo-backend
             features: "prod,prover-stwo"
             no_default_features: "1"
             experimental: false
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
+            experimental: false
+          - name: wallet-gui
+            features: "wallet_gui"
+            no_default_features: ""
+            experimental: false
+          - name: wallet-advanced
+            features: "wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls"
+            no_default_features: ""
             experimental: false
       steps:
       - uses: actions/checkout@v4
@@ -897,6 +950,17 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-simnet
+      - name: Collect simnet artifacts (${{ matrix.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet-smoke/${{ matrix.name }}" logs target/simnet
+      - name: Upload simnet artifacts (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-smoke-${{ matrix.name }}
+          path: artifacts/simnet-smoke/${{ matrix.name }}
 
   simnet-regression:
     name: Simnet regression sweep

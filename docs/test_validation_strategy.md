@@ -31,13 +31,15 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 
 ### 1.4 Feature-Matrix & Laufzeiten
 
-Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt drei Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`) sowie ein Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`). Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L63-L118】【F:.github/workflows/nightly.yml†L1-L86】【f3105d†L1-L5】【f3e57e†L1-L5】
+Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt vier Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`), ein Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`) sowie die wallet-spezifischen Varianten `wallet_gui` und `wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls`. Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L635-L918】【F:.github/workflows/nightly.yml†L1-L86】【f3105d†L1-L5】【f3e57e†L1-L5】
 
 | Feature-Set | Reproduktionsbefehl | Erwartete Dauer (Cold / Warm) |
 | --- | --- | --- |
 | `default` | `cargo xtask test-unit` / `test-integration` / `test-simnet` | ~85 s / ~11 s |
 | `prod,prover-stwo` | `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo" cargo xtask <command>` | ~90 s / ~15 s (wie Default, zusätzliche Proof-Binaries) |
 | `prod,prover-stwo,backend-plonky3` | `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo,backend-plonky3" cargo xtask <command>` | ~95 s / ~20 s (zusätzliche Plonky3-Module) |
+| `wallet_gui` | `XTASK_FEATURES="wallet_gui" cargo xtask <command>` | ~88 s / ~13 s (GUI-Build, keine Proof-Änderung) |
+| `wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls` | `XTASK_FEATURES="wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls" cargo xtask <command>` | ~92 s / ~16 s (zusätzliche Wallet-Security-Module) |
 
 Die Feature-Flags werden von `xtask` automatisch übernommen und damit sowohl in CI als auch lokal konsistent ausgewertet.【F:xtask/src/main.rs†L1-L91】
 
@@ -45,9 +47,9 @@ Die Feature-Flags werden von `xtask` automatisch übernommen und damit sowohl in
 
 Die Phase‑2-Abnahme bestätigt, dass alle drei `cargo xtask`-Läufe automatisiert und reproduzierbar grün sind. Die Jobs sind in [`CI`](../.github/workflows/ci.yml) und [`nightly-simnet`](../.github/workflows/nightly.yml) dokumentiert und liefern geprüfte Artefakte.
 
-- **`unit-suites`** startet `cargo xtask test-unit` über die Feature-Matrix `default`, `prod,prover-stwo` und `prod,prover-stwo,backend-plonky3`. Der kombinierte Lauf benötigt ~12 Minuten (Warm ~6 Minuten), archiviert deterministische Witness- und VRF-Ergebnisse für Auditor:innen und führt zusätzlich die ZSI-Renewal-Regression sowohl mit dem Standard- als auch dem `backend-rpp-stark`-Feature-Set aus.【F:.github/workflows/ci.yml†L185-L217】【F:xtask/src/main.rs†L102-L157】【F:tests/zsi_renewal.rs†L1-L165】
-- **`integration-workflows`** führt `cargo xtask test-integration` für dieselbe Matrix aus. Die Matrix dauert ~18 Minuten (Warm ~9 Minuten) und deckt Blockproduktion, Snapshot-/Light-Client-Sync sowie Manipulationsschutzfälle ab.【F:.github/workflows/ci.yml†L219-L251】
-- **`simnet-smoke`** betreibt `cargo xtask test-simnet` mit allen Simulationsszenarien. Der Lauf benötigt ~22 Minuten (Warm ~11 Minuten) und legt JSON-/CSV-Summaries als Artefakte (`simnet-regression`) im Actions-Tab ab.【F:.github/workflows/ci.yml†L253-L285】
+- **`unit-suites`** startet `cargo xtask test-unit` über die Feature-Matrix `default`, `prod,prover-stwo`, `prod,prover-stwo,backend-plonky3`, `wallet_gui` sowie `wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls`. Der kombinierte Lauf benötigt ~12 Minuten (Warm ~6 Minuten), archiviert deterministische Witness- und VRF-Ergebnisse für Auditor:innen und prüft die ZSI-Renewal-Regression explizit im Wallet-Sicherheits-Bundle. Jede Variante hängt ein redaktiertes Artefaktpaket (`unit-suites-<variant>`) via `scripts/ci/collect_test_artifacts.sh` an, damit Reviewer:innen die Logs herunterladen können, ohne dass Secrets im Klartext landen.【F:.github/workflows/ci.yml†L635-L700】【F:xtask/src/main.rs†L102-L157】【F:tests/zsi_renewal.rs†L1-L165】【F:scripts/ci/collect_test_artifacts.sh†L1-L55】
+- **`integration-workflows`** führt `cargo xtask test-integration` für dieselbe Matrix aus. Die Matrix dauert ~18 Minuten (Warm ~9 Minuten), deckt Blockproduktion, Snapshot-/Light-Client-Sync sowie Manipulationsschutzfälle ab und lädt die redaktierten `integration-workflows-<variant>`-Artefakte hoch.【F:.github/workflows/ci.yml†L768-L830】【F:scripts/ci/collect_test_artifacts.sh†L1-L55】
+- **`simnet-smoke`** betreibt `cargo xtask test-simnet` mit allen Simulationsszenarien für alle Feature-Sets. Der Lauf benötigt ~22 Minuten (Warm ~11 Minuten), legt JSON-/CSV-Summaries als Artefakte (`simnet-regression`) im Actions-Tab ab und ergänzt sanitised Log-Bundles (`simnet-smoke-<variant>`).【F:.github/workflows/ci.yml†L864-L918】【F:scripts/ci/collect_test_artifacts.sh†L1-L55】
 - **Nightly `validation` & `simnet`** replizieren die Matrix täglich (`cargo xtask test-all`) und laden das Paket `simnet-nightly` hoch, das die vollständigen Summaries für Prüfzwecke enthält (~35 Minuten + ~15 Minuten).【F:.github/workflows/nightly.yml†L88-L124】【F:.github/workflows/nightly.yml†L148-L183】
 
 Mit diesen Jobs gelten die Blueprint-Definition-of-Done-Kriterien für Unit-, Integrations- und Simulationsabdeckung als erfüllt.
