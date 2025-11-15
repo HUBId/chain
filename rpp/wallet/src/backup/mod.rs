@@ -32,6 +32,13 @@ const SYMMETRIC_KEY_LEN: usize = 32;
 const CIPHER_ALGORITHM: &str = "chacha20poly1305";
 const KDF_ALGORITHM: &str = "argon2id";
 
+pub(super) fn debug_assert_zeroized(buf: &[u8]) {
+    debug_assert!(
+        buf.iter().all(|byte| *byte == 0),
+        "sensitive buffer should be zeroized",
+    );
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupMetadata {
     pub version: u32,
@@ -224,6 +231,7 @@ pub(super) fn prepare_envelope(
 
     let mut key = key;
     key.zeroize();
+    debug_assert_zeroized(&*key);
 
     let envelope = BackupEnvelope {
         metadata,
@@ -318,6 +326,7 @@ pub(super) fn decrypt_envelope(
 
     let mut key = key;
     key.zeroize();
+    debug_assert_zeroized(&*key);
 
     Ok(Zeroizing::new(plaintext))
 }

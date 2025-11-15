@@ -1,4 +1,5 @@
 use crate::engine::DerivationPath;
+use zeroize::Zeroize;
 
 /// Metadata describing a hardware signing device discovered by the wallet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +52,22 @@ pub struct HardwareSignRequest {
     pub fingerprint: String,
     pub path: DerivationPath,
     pub payload: Vec<u8>,
+}
+
+impl Zeroize for HardwareSignRequest {
+    fn zeroize(&mut self) {
+        self.payload.zeroize();
+    }
+}
+
+impl Drop for HardwareSignRequest {
+    fn drop(&mut self) {
+        self.zeroize();
+        debug_assert!(
+            self.payload.iter().all(|byte| *byte == 0),
+            "hardware signing payload should be zeroized",
+        );
+    }
 }
 
 impl HardwareSignRequest {

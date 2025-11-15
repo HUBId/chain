@@ -139,6 +139,19 @@ arguments, and plaintext files are migrated on first load. Operators should:
   protect the passphrase copies with the same diligence as other hot wallet
   secrets.
 
+## Wallet backup, prover, and hardware hygiene
+
+- Encrypted backup export/validation/import flows zeroize the derived Argon2
+  keys, plaintext envelopes, and keystore payloads after use, and include debug
+  assertions so CI catches regressions before release.【F:rpp/wallet/src/backup/mod.rs†L226-L342】【F:rpp/wallet/src/backup/import.rs†L37-L143】
+- Watch-only seed derivation, prover witness construction, and hardware signing
+  payloads are all treated as sensitive buffers; each path now uses `zeroize`
+  (or drop hooks) to clear memory after RPC calls or proof generation finish so
+  secrets never linger in logs or heap snapshots.【F:rpp/wallet/src/modes/watch_only.rs†L1-L70】【F:rpp/wallet/src/engine/signing/prover.rs†L90-L420】【F:rpp/wallet/src/hw/traits.rs†L1-L118】
+- Wallet RPC audit records only persist hashed bearer tokens or certificate
+  fingerprints, which keeps new backup/mTLS/hardware administrative events
+  traceable without disclosing raw credentials in log archives.【F:rpp/runtime/wallet/rpc/security.rs†L1-L120】【F:rpp/runtime/wallet/rpc/audit.rs†L1-L80】
+
 ## Related security guidance
 
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) details the system assets,

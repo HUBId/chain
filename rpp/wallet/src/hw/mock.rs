@@ -118,6 +118,7 @@ impl HardwareSigner for MockHardwareSigner {
 mod tests {
     use super::*;
     use crate::engine::DerivationPath;
+    use zeroize::Zeroize;
 
     #[test]
     fn mock_signer_tracks_public_key_requests() {
@@ -159,5 +160,13 @@ mod tests {
 
         let recorded = signer.last_sign_request().expect("sign request recorded");
         assert_eq!(recorded, request);
+    }
+
+    #[test]
+    fn hardware_sign_request_zeroizes_payload_via_trait() {
+        let path = DerivationPath::new(44, false, 0);
+        let mut request = HardwareSignRequest::new("abcd", path, vec![0xAA; 16]);
+        request.zeroize();
+        assert!(request.payload.iter().all(|byte| *byte == 0));
     }
 }
