@@ -41,6 +41,19 @@ These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-de
 
 Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
+### Feature matrix and failure triage
+
+Branch-protection suites (`unit-suites`, `integration-workflows`, `observability-metrics`, `simnet-smoke`) now execute under four feature sets so contributors can surface regressions that only appear once the prover, GUI, or advanced wallet knobs are compiled in.【F:.github/workflows/ci.yml†L635-L940】 Use the table below to reproduce the same combinations locally for any `cargo xtask` command:
+
+| Feature set | Description | Local command |
+| --- | --- | --- |
+| `default` | Mock prover, no optional wallet flags. | `cargo xtask <command>` |
+| `prover_stwo_backend` | Production runtime build with STWO backend. | `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo" cargo xtask <command>` |
+| `wallet_gui` | Desktop wallet UI compiled via `wallet_gui`. | `XTASK_FEATURES="wallet_gui" cargo xtask <command>` |
+| `wallet_advanced` | Wallet security bundle (`wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls`). | `XTASK_FEATURES="wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls" cargo xtask <command>` |
+
+Substitute `<command>` with `test-unit`, `test-integration`, `test-observability`, or `test-simnet` to mirror the CI jobs. The workflow attaches sanitized log bundles named `unit-suites-<variant>`, `integration-workflows-<variant>`, etc., by running `scripts/ci/collect_test_artifacts.sh` on the `logs/` tree, so failure triage never exposes secrets while still providing the full stdout/stderr and audit reports for each feature set.【F:.github/workflows/ci.yml†L635-L940】【F:scripts/ci/collect_test_artifacts.sh†L1-L55】 Download the matching artifact from the Actions run whenever one of the matrix jobs fails; its content aligns with the commands above, allowing you to replay the run locally with the same feature flags before pushing a fix.
+
 **Maintainer note.** Whenever a workflow file is renamed or a new CI job is
 introduced, confirm that branch protection still enforces the `fmt`, `clippy`,
 `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`,
