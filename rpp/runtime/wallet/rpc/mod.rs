@@ -485,6 +485,24 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         ROLES_OPERATOR,
     ),
     (
+        "backup.export",
+        WalletRpcMethod::JsonBackupExport,
+        Some(6),
+        ROLES_ADMIN,
+    ),
+    (
+        "backup.validate",
+        WalletRpcMethod::JsonBackupValidate,
+        Some(6),
+        ROLES_OPERATOR,
+    ),
+    (
+        "backup.import",
+        WalletRpcMethod::JsonBackupImport,
+        Some(6),
+        ROLES_ADMIN,
+    ),
+    (
         "broadcast",
         WalletRpcMethod::JsonBroadcast,
         Some(20),
@@ -509,6 +527,36 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         ROLES_ADMIN,
     ),
     (
+        "multisig.get_scope",
+        WalletRpcMethod::JsonMultisigGetScope,
+        Some(30),
+        ROLES_VIEWER,
+    ),
+    (
+        "multisig.set_scope",
+        WalletRpcMethod::JsonMultisigSetScope,
+        Some(10),
+        ROLES_ADMIN,
+    ),
+    (
+        "multisig.get_cosigners",
+        WalletRpcMethod::JsonMultisigGetCosigners,
+        Some(30),
+        ROLES_VIEWER,
+    ),
+    (
+        "multisig.set_cosigners",
+        WalletRpcMethod::JsonMultisigSetCosigners,
+        Some(10),
+        ROLES_ADMIN,
+    ),
+    (
+        "multisig.export",
+        WalletRpcMethod::JsonMultisigExport,
+        Some(10),
+        ROLES_OPERATOR,
+    ),
+    (
         "estimate_fee",
         WalletRpcMethod::JsonEstimateFee,
         Some(120),
@@ -531,6 +579,24 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         WalletRpcMethod::JsonSyncStatus,
         Some(60),
         ROLES_VIEWER,
+    ),
+    (
+        "watch_only.status",
+        WalletRpcMethod::JsonWatchOnlyStatus,
+        Some(60),
+        ROLES_VIEWER,
+    ),
+    (
+        "watch_only.enable",
+        WalletRpcMethod::JsonWatchOnlyEnable,
+        Some(6),
+        ROLES_ADMIN,
+    ),
+    (
+        "watch_only.disable",
+        WalletRpcMethod::JsonWatchOnlyDisable,
+        Some(6),
+        ROLES_ADMIN,
     ),
     (
         "rescan",

@@ -803,6 +803,28 @@ pub enum WalletRpcMethod {
     JsonHwEnumerate,
     /// JSON-RPC: `hw.sign`.
     JsonHwSign,
+    /// JSON-RPC: `backup.export`.
+    JsonBackupExport,
+    /// JSON-RPC: `backup.validate`.
+    JsonBackupValidate,
+    /// JSON-RPC: `backup.import`.
+    JsonBackupImport,
+    /// JSON-RPC: `watch_only.status`.
+    JsonWatchOnlyStatus,
+    /// JSON-RPC: `watch_only.enable`.
+    JsonWatchOnlyEnable,
+    /// JSON-RPC: `watch_only.disable`.
+    JsonWatchOnlyDisable,
+    /// JSON-RPC: `multisig.get_scope`.
+    JsonMultisigGetScope,
+    /// JSON-RPC: `multisig.set_scope`.
+    JsonMultisigSetScope,
+    /// JSON-RPC: `multisig.get_cosigners`.
+    JsonMultisigGetCosigners,
+    /// JSON-RPC: `multisig.set_cosigners`.
+    JsonMultisigSetCosigners,
+    /// JSON-RPC: `multisig.export`.
+    JsonMultisigExport,
     /// JSON-RPC: `broadcast`.
     JsonBroadcast,
     /// JSON-RPC: `policy_preview`.
@@ -903,6 +925,17 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonSignTransaction => "json_sign_transaction",
             Self::JsonHwEnumerate => "json_hw_enumerate",
             Self::JsonHwSign => "json_hw_sign",
+            Self::JsonBackupExport => "json_backup_export",
+            Self::JsonBackupValidate => "json_backup_validate",
+            Self::JsonBackupImport => "json_backup_import",
+            Self::JsonWatchOnlyStatus => "json_watch_only_status",
+            Self::JsonWatchOnlyEnable => "json_watch_only_enable",
+            Self::JsonWatchOnlyDisable => "json_watch_only_disable",
+            Self::JsonMultisigGetScope => "json_multisig_get_scope",
+            Self::JsonMultisigSetScope => "json_multisig_set_scope",
+            Self::JsonMultisigGetCosigners => "json_multisig_get_cosigners",
+            Self::JsonMultisigSetCosigners => "json_multisig_set_cosigners",
+            Self::JsonMultisigExport => "json_multisig_export",
             Self::JsonBroadcast => "json_broadcast",
             Self::JsonPolicyPreview => "json_policy_preview",
             Self::JsonGetPolicy => "json_get_policy",
