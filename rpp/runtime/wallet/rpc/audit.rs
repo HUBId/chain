@@ -242,7 +242,50 @@ fn segment_timestamp(path: &PathBuf) -> Option<SystemTime> {
 mod tests {
     use super::*;
     use crate::runtime::wallet::rpc::WalletRole;
+    use serde_json::Value;
     use tempfile::tempdir;
+
+    #[test]
+    fn appends_redacted_records_to_segment() {
+        let temp = tempdir().expect("tempdir");
+        let logger = WalletAuditLogger::with_settings(
+            temp.path().to_path_buf(),
+            Duration::from_secs(60),
+            Duration::from_secs(600),
+            true,
+        )
+        .expect("logger");
+
+        let identities = vec![WalletIdentity::from_bearer_token("super-secret-token")];
+        let mut roles = WalletRoleSet::new();
+        roles.insert(WalletRole::Operator);
+
+        logger
+            .append_at(
+                UNIX_EPOCH + Duration::from_secs(123),
+                "wallet.advanced",
+                &identities,
+                &roles,
+                17,
+            )
+            .expect("append");
+
+        let records = read_records(temp.path());
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record["method"], Value::from("wallet.advanced"));
+        assert_eq!(record["result_code"], Value::from(17));
+        assert_eq!(record["timestamp"], Value::from(123));
+
+        let identity = record["identities"][0].clone();
+        assert_eq!(identity["kind"], Value::from("token"));
+        let id = identity["id"].as_str().expect("token id");
+        assert_eq!(id.len(), 64);
+        assert_ne!(id, "super-secret-token");
+
+        let roles = record["roles"].as_array().expect("roles array");
+        assert_eq!(roles, &vec![Value::from("operator")]);
+    }
 
     #[test]
     fn rotates_segments_when_interval_elapsed() {
@@ -331,6 +374,19 @@ mod tests {
         assert!(files
             .iter()
             .all(|name| name.contains("-2") || name.contains("-4")));
+    }
+
+    fn read_records(dir: &std::path::Path) -> Vec<Value> {
+        let mut records = Vec::new();
+        for name in read_segment_names(dir) {
+            let path = dir.join(name);
+            let contents = fs::read_to_string(path).expect("segment contents");
+            for line in contents.lines().filter(|line| !line.is_empty()) {
+                let parsed = serde_json::from_str::<Value>(line).expect("record");
+                records.push(parsed);
+            }
+        }
+        records
     }
 
     fn read_segment_names(dir: &std::path::Path) -> Vec<String> {

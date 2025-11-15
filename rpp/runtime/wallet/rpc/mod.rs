@@ -1000,3 +1000,130 @@ fn build_cors_layer(config: &WalletRuntimeConfig) -> Result<CorsLayer, ChainErro
         Ok(layer.allow_origin(Any))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use tempfile::tempdir;
+
+    #[derive(Clone)]
+    struct DummyResponse {
+        code: i32,
+    }
+
+    impl WalletAuditResult for DummyResponse {
+        fn audit_result_code(&self) -> i32 {
+            self.code
+        }
+    }
+
+    #[test]
+    fn privileged_methods_emit_audit_records_for_success_and_failures() {
+        let temp = tempdir().expect("tempdir");
+        let audit = Arc::new(
+            WalletAuditLogger::with_settings(
+                temp.path().to_path_buf(),
+                Duration::from_secs(600),
+                Duration::from_secs(600),
+                true,
+            )
+            .expect("audit"),
+        );
+        let metrics = RuntimeMetrics::noop();
+        let token = "secret-token";
+
+        let handler = AuthenticatedRpcHandler::new(
+            StaticAuthenticator::new(Some(AuthToken::new(token))),
+            move |_invocation: RpcInvocation<'_, ()>| -> DummyResponse {
+                DummyResponse {
+                    code: AUDIT_SUCCESS_CODE,
+                }
+            },
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonHwSign,
+            "hw.sign",
+            None,
+            ROLES_OPERATOR,
+            Arc::clone(&audit),
+        );
+
+        let mut operator_roles = WalletRoleSet::new();
+        operator_roles.insert(WalletRole::Operator);
+        let hashed = WalletIdentity::from_bearer_token(token);
+
+        let success_invocation = RpcInvocation {
+            request: RpcRequest {
+                bearer_token: Some(token),
+                identities: vec![hashed.clone()],
+                roles: operator_roles.clone(),
+            },
+            payload: (),
+        };
+        handler
+            .call(success_invocation)
+            .expect("successful invocation");
+
+        let unauthorized_invocation = RpcInvocation {
+            request: RpcRequest {
+                bearer_token: Some("wrong-token"),
+                identities: vec![WalletIdentity::from_bearer_token("wrong-token")],
+                roles: operator_roles.clone(),
+            },
+            payload: (),
+        };
+        let unauthorized_err = handler
+            .call(unauthorized_invocation)
+            .expect_err("unauthorized should fail");
+        assert_eq!(unauthorized_err.code(), CODE_UNAUTHORIZED);
+
+        let rbac_invocation = RpcInvocation {
+            request: RpcRequest {
+                bearer_token: Some(token),
+                identities: vec![hashed],
+                roles: WalletRoleSet::new(),
+            },
+            payload: (),
+        };
+        let rbac_err = handler.call(rbac_invocation).expect_err("rbac should fail");
+        assert_eq!(rbac_err.code(), CODE_RBAC_FORBIDDEN);
+
+        let records = read_audit_records(temp.path());
+        assert_eq!(records.len(), 3, "expected three audit records");
+        for record in &records {
+            assert_eq!(record["method"], Value::from("hw.sign"));
+        }
+
+        let codes: Vec<_> = records
+            .iter()
+            .map(|record| record["result_code"].as_i64().expect("result code"))
+            .collect();
+        assert!(codes.contains(&i64::from(AUDIT_SUCCESS_CODE)));
+        assert!(codes.contains(&i64::from(CODE_UNAUTHORIZED)));
+        assert!(codes.contains(&i64::from(CODE_RBAC_FORBIDDEN)));
+
+        let roles_sets: Vec<Vec<Value>> = records
+            .iter()
+            .map(|record| record["roles"].as_array().cloned().unwrap_or_default())
+            .collect();
+        assert!(roles_sets.iter().any(|roles| roles.is_empty()));
+        assert!(roles_sets
+            .iter()
+            .any(|roles| roles == &vec![Value::from("operator")]));
+    }
+
+    fn read_audit_records(dir: &std::path::Path) -> Vec<Value> {
+        let mut records = Vec::new();
+        for entry in fs::read_dir(dir).expect("audit dir") {
+            if let Ok(entry) = entry {
+                if entry.path().is_file() {
+                    let contents = fs::read_to_string(entry.path()).expect("segment contents");
+                    for line in contents.lines().filter(|line| !line.is_empty()) {
+                        records.push(serde_json::from_str(line).expect("record"));
+                    }
+                }
+            }
+        }
+        records
+    }
+}

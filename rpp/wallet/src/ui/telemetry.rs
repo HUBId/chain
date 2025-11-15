@@ -539,4 +539,94 @@ mod tests {
         let rescan = TestRecorder::counter_value(&inner, "ui.rescan.triggered{origin=explicit}");
         assert_eq!(rescan, Some(1));
     }
+
+    #[test]
+    fn action_helpers_only_emit_when_opted_in() {
+        let inner = TestRecorder::new();
+        TestRecorder::reset(&inner);
+
+        let telemetry = global();
+        telemetry.set_opt_in(false);
+
+        telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
+        telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
+        telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
+        telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
+        #[cfg(feature = "wallet_hw")]
+        telemetry.record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
+
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=backup.export,outcome=ok}"
+        )
+        .is_none());
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=watch_only.enable,outcome=err}"
+        )
+        .is_none());
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=security.assign,outcome=ok}"
+        )
+        .is_none());
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=zsi.bind_account,outcome=err}"
+        )
+        .is_none());
+        #[cfg(feature = "wallet_hw")]
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=hardware.enumerate,outcome=ok}"
+        )
+        .is_none());
+
+        TestRecorder::reset(&inner);
+        telemetry.set_opt_in(true);
+
+        telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
+        telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
+        telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
+        telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
+        #[cfg(feature = "wallet_hw")]
+        telemetry.record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
+
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=backup.export,outcome=ok}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=watch_only.enable,outcome=err}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=security.assign,outcome=ok}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=zsi.bind_account,outcome=err}"
+            ),
+            Some(1)
+        );
+        #[cfg(feature = "wallet_hw")]
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=hardware.enumerate,outcome=ok}"
+            ),
+            Some(1)
+        );
+    }
 }
