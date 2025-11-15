@@ -96,22 +96,22 @@ complete rollout guide.【F:docs/wallet_phase4_advanced.md†L1-L176】 Highligh
 
 ```bash
 # Export an encrypted backup (manual rotation)
-cargo run -p rpp-wallet --features "wallet_backup" -- backup export --output ./backups/manual.rppb
+cargo run -p rpp-wallet --features "backup" -- backup export --output ./backups/manual.rppb
 
 # Restore from backup with policy enforcement
-cargo run -p rpp-wallet --features "wallet_backup" -- backup restore --path ./backups/manual.rppb
+cargo run -p rpp-wallet --features "backup" -- backup restore --path ./backups/manual.rppb
 
 # Launch watch-only daemon (read-only RPC)
-cargo run -p rpp-wallet --features "wallet_watch_only" -- watch-only start
+cargo run -p rpp-wallet -- watch-only start
 
 # Register multisig coordinator hooks
-cargo run -p rpp-wallet --features "wallet_multisig" -- multisig register --config ./config/multisig.toml
+cargo run -p rpp-wallet --features "wallet_multisig_hooks" -- multisig register --config ./config/multisig.toml
 
 # Import a ZSI bundle after staging checksums
 cargo run -p rpp-wallet --features "wallet_zsi" -- zsi import --bundle ./zsi/bootstrap.tar.gz
 
 # Start hardened RPC with GUI
-cargo run -p rpp-wallet --features "wallet_gui wallet_rpc_security" -- gui --require-mtls
+cargo run -p rpp-wallet --features "wallet_gui wallet_rpc_mtls" -- gui --require-mtls
 
 # Pilot hardware signing workflows
 cargo run -p rpp-wallet --features "wallet_hw" -- hw test --transport hid
@@ -123,17 +123,40 @@ certificate paths before opening the window.【F:docs/wallet_phase4_advanced.md�
 
 ### Feature flags
 
-Phase 4 crates introduce additional flags alongside the prover and GUI options:
+Phase 4 crates introduce additional cargo features alongside the prover and GUI options.
+The wallet runtime also has configuration-only toggles (for example `[wallet.watch_only]`)
+that do not correspond to cargo features. The table below lists the compile-time flags and
+their runtime counterparts:
 
-* `wallet_backup`
-* `wallet_watch_only`
-* `wallet_multisig`
-* `wallet_zsi`
-* `wallet_rpc_security`
-* `wallet_hw`
+| Feature flag | Default | Related configuration | Notes |
+| --- | --- | --- | --- |
+| `runtime` | Enabled | All `[wallet.*]` sections | Required for the JSON-RPC service and background tasks. Disable only when building the CLI without a daemon.【F:rpp/wallet/Cargo.toml†L7-L32】 |
+| `backup` | Enabled | `[wallet.backup]` | Provides backup CLI commands and hashing dependencies. Configuration alone controls automation windows; there is no `wallet_backup` flag.【F:config/wallet.toml†L17-L33】 |
+| `wallet_multisig_hooks` | Disabled | `[wallet.multisig]` | Compiles the multisig RPC surface and CLI helpers. The runtime returns `WalletError::MultisigDisabled` when the config enables hooks but the feature is missing.【F:rpp/wallet/src/wallet/mod.rs†L358-L430】 |
+| `wallet_zsi` | Disabled | `[wallet.zsi]` | Enables Zero State Import RPCs, CLI commands, and telemetry. Config toggles gate actual imports and checksum enforcement.【F:rpp/wallet/src/lib.rs†L77-L111】 |
+| `wallet_rpc_mtls` | Disabled | `[wallet.rpc.security]`, `[wallet.security]` | Adds the mTLS/RBAC middleware as well as GUI/CLI controls. Without the flag, security sections error out during parsing.【F:rpp/runtime/config.rs†L3072-L3218】 |
+| `wallet_hw` | Disabled | `[wallet.hw]` | Builds hardware wallet backends and CLI tests. The config section fails fast if the binary was built without the feature.【F:rpp/wallet/src/config/wallet.rs†L81-L96】 |
+| `wallet_gui` | Disabled | `[wallet.gui]` | Compiles the iced GUI shell. Runtime configuration controls UX defaults and inactivity locks.【F:config/wallet.toml†L60-L84】 |
 
-Enable combinations that match the features in use. CI coverage should enable all wallet
-flags to surface integration issues early.【F:docs/wallet_phase4_advanced.md†L152-L168】
+Use configuration toggles such as `[wallet.watch_only]`, `[wallet.backup]`, and
+`[wallet.multisig]` to opt into behaviours at runtime after compiling with the relevant
+features. There are no `wallet_watch_only`, `wallet_backup`, or `wallet_rpc_security`
+features; those names refer to configuration scopes.
+
+### Wallet feature matrix
+
+`cargo xtask test-wallet-feature-matrix` runs `cargo check` and `cargo test` for the
+following `rpp-wallet` build combinations:
+
+1. Default features.
+2. `runtime,prover-mock,backup` with `wallet_zsi` enabled.
+3. `runtime,prover-mock,backup` with `wallet_multisig_hooks` enabled.
+4. `runtime,prover-mock,backup` with `wallet_hw` enabled.
+5. `runtime,prover-mock,backup` with `wallet_rpc_mtls` enabled.
+6. `runtime,prover-mock,backup` with all wallet features enabled simultaneously.
+
+The CI workflow runs this xtask on every pull request to surface integration issues when
+features are enabled individually or combined.【F:.github/workflows/ci.yml†L551-L564】
 
 ### Troubleshooting & security considerations
 
