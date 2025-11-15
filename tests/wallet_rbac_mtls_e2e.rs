@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet_rpc_mtls")]
+
 //! Wallet RBAC and mTLS integration tests.
 //!
 //! Exercises the security context helpers backed by the mocked wallet fixture
