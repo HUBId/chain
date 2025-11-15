@@ -113,3 +113,51 @@ impl HardwareSigner for MockHardwareSigner {
         self.take_sign_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::DerivationPath;
+
+    #[test]
+    fn mock_signer_tracks_public_key_requests() {
+        let signer = MockHardwareSigner::new(vec![HardwareDevice::new("abcd", "TestSigner")]);
+        let path = DerivationPath::new(0, false, 0);
+        signer.push_public_key_response(Ok(HardwarePublicKey::new(
+            "abcd",
+            path.clone(),
+            [1u8; 33],
+        )));
+
+        let key = signer
+            .get_public_key("abcd", &path)
+            .expect("public key available");
+        assert_eq!(key.fingerprint, "abcd");
+        assert_eq!(signer.enumerate().expect("enumerate").len(), 1);
+        let request = signer
+            .last_public_key_request()
+            .expect("public key request recorded");
+        assert_eq!(request.0, "abcd");
+        assert_eq!(request.1, path);
+    }
+
+    #[test]
+    fn mock_signer_tracks_sign_requests() {
+        let signer = MockHardwareSigner::default();
+        let path = DerivationPath::new(0, true, 7);
+        let request = HardwareSignRequest::new("abcd", path.clone(), [9u8; 32]);
+        signer.push_sign_response(Ok(HardwareSignature::new(
+            "abcd",
+            path.clone(),
+            [3u8; 64],
+            [2u8; 33],
+        )));
+
+        let signature = signer.sign(&request).expect("signature available");
+        assert_eq!(signature.fingerprint, "abcd");
+        assert_eq!(signature.path, path);
+
+        let recorded = signer.last_sign_request().expect("sign request recorded");
+        assert_eq!(recorded, request);
+    }
+}

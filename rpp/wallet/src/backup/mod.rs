@@ -684,4 +684,27 @@ mod tests {
         assert!(!outcome.restored_keystore);
         assert!(!keystore_path.exists());
     }
+
+    #[test]
+    fn symmetric_key_derivation_depends_on_salt() {
+        let passphrase = Zeroizing::new(b"correct horse".to_vec());
+        let params = build_argon2_params().expect("argon2 params");
+
+        let mut salt_a = [0u8; SALT_LEN];
+        salt_a.copy_from_slice(b"0123456789abcdef");
+        let mut first = Zeroizing::new([0u8; SYMMETRIC_KEY_LEN]);
+        derive_symmetric_key(&passphrase, &salt_a, &params, &mut first).expect("derive first key");
+
+        let mut repeat = Zeroizing::new([0u8; SYMMETRIC_KEY_LEN]);
+        derive_symmetric_key(&passphrase, &salt_a, &params, &mut repeat)
+            .expect("derive repeat key");
+        assert_eq!(&*first, &*repeat, "deterministic derivation failed");
+
+        let mut salt_b = salt_a;
+        salt_b[0] ^= 0xAA;
+        let mut changed = Zeroizing::new([0u8; SYMMETRIC_KEY_LEN]);
+        derive_symmetric_key(&passphrase, &salt_b, &params, &mut changed)
+            .expect("derive alternate key");
+        assert_ne!(&*first, &*changed, "salt mutations must change key");
+    }
 }

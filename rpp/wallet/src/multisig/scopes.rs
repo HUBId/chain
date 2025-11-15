@@ -92,6 +92,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_scope_accepts_whitespace_and_case() {
+        let scope = MultisigScope::parse(" 3 OF 5 ").expect("scope");
+        assert_eq!(scope.threshold(), 3);
+        assert_eq!(scope.participants(), 5);
+    }
+
+    #[test]
     fn parse_rejects_invalid_format() {
         assert!(matches!(
             MultisigScope::parse("bad"),
@@ -129,5 +136,13 @@ mod tests {
             MultisigScope::new(3, 2),
             Err(MultisigScopeError::ThresholdExceedsParticipants)
         ));
+    }
+
+    #[test]
+    fn requires_collaboration_detects_threshold() {
+        let solo = MultisigScope::new(1, 3).expect("scope");
+        assert!(!solo.requires_collaboration());
+        let collaborative = MultisigScope::new(2, 3).expect("scope");
+        assert!(collaborative.requires_collaboration());
     }
 }

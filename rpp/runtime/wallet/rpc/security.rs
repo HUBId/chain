@@ -425,4 +425,42 @@ mod tests {
             .iter()
             .any(|identity| matches!(identity, WalletIdentity::Certificate(value) if value == &expected_b)));
     }
+
+    #[test]
+    fn resolves_roles_for_multiple_identities() {
+        let temp = tempdir().expect("tempdir");
+        let store_path = temp.path().join("rbac.json");
+        let store = WalletRbacStore::load(&store_path).expect("load store");
+
+        let token_identity = WalletIdentity::from_bearer_token("operator");
+        let certificate_identity = WalletIdentity::from_certificate_der(b"mtls-client");
+
+        let mut operator_roles = WalletRoleSet::new();
+        operator_roles.insert(WalletRole::Operator);
+        let mut viewer_roles = WalletRoleSet::new();
+        viewer_roles.insert(WalletRole::Viewer);
+
+        store.apply_bindings(&[
+            WalletSecurityBinding::new(token_identity.clone(), operator_roles.clone()),
+            WalletSecurityBinding::new(certificate_identity.clone(), viewer_roles.clone()),
+        ]);
+        store.save().expect("persist store");
+
+        let context = WalletSecurityContext::from_store(store);
+        let combined =
+            context.resolve_roles(&[token_identity.clone(), certificate_identity.clone()]);
+        assert!(combined.contains(&WalletRole::Operator));
+        assert!(combined.contains(&WalletRole::Viewer));
+
+        let token_only = context.resolve_roles(&[token_identity]);
+        assert_eq!(token_only, operator_roles);
+        let certificate_only = context.resolve_roles(&[certificate_identity]);
+        assert_eq!(certificate_only, viewer_roles);
+    }
+
+    #[test]
+    fn fingerprint_parser_rejects_invalid_input() {
+        assert!(WalletIdentity::from_certificate_fingerprint("").is_err());
+        assert!(WalletIdentity::from_certificate_fingerprint("not-hex").is_err());
+    }
 }

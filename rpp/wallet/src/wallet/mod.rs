@@ -1286,6 +1286,57 @@ mod tests {
         assert_eq!(store.watch_only_record().unwrap(), Some(record));
     }
 
+    #[test]
+    fn enabling_watch_only_on_full_wallet_blocks_signing() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 45_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [21u8; 32],
+            },
+            policy,
+            fees,
+            WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            Arc::clone(&node_client),
+            WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
+        )
+        .expect("wallet");
+
+        assert!(!wallet.is_watch_only());
+        let draft = make_draft(&wallet, 12_000);
+
+        let record = WatchOnlyRecord::new("wpkh(full)")
+            .with_birthday_height(Some(88))
+            .with_account_xpub("xpub-full");
+        wallet.enable_watch_only(record).expect("enable watch-only");
+
+        let sign_err = wallet
+            .sign_and_prove(&draft)
+            .expect_err("signing blocked by watch-only");
+        assert!(matches!(
+            sign_err,
+            WalletError::WatchOnly(WatchOnlyError::SigningDisabled)
+        ));
+
+        wallet.disable_watch_only().expect("disable watch-only");
+        wallet
+            .sign_and_prove(&draft)
+            .expect("signing resumes after disabling watch-only");
+    }
+
     #[cfg(feature = "prover-stwo")]
     #[test]
     fn stwo_backend_rejects_large_witnesses_and_releases_locks() {

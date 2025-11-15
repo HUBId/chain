@@ -22,15 +22,14 @@ use rpp_wallet::indexer::client::{
 use rpp_wallet::node_client::{
     BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
 };
+use rpp_wallet::proof_backend::ProofBackend;
 use rpp_wallet::telemetry::WalletActionTelemetry;
-use rpp_wallet::wallet::{
-    Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
-};
+use rpp_wallet::wallet::{Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 /// Builder used to configure wallet integration test fixtures.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WalletTestBuilder {
     deposit_values: Vec<u64>,
     birthday_height: u64,
@@ -38,6 +37,8 @@ pub struct WalletTestBuilder {
     policy: WalletPolicyConfig,
     fees: WalletFeeConfig,
     prover: WalletProverConfig,
+    zsi: WalletZsiConfig,
+    zsi_backend: Option<Arc<dyn ProofBackend>>,
 }
 
 impl Default for WalletTestBuilder {
@@ -49,6 +50,8 @@ impl Default for WalletTestBuilder {
             policy: WalletPolicyConfig::default(),
             fees: WalletFeeConfig::default(),
             prover: WalletProverConfig::default(),
+            zsi: WalletZsiConfig::default(),
+            zsi_backend: None,
         }
     }
 }
@@ -100,6 +103,16 @@ impl WalletTestBuilder {
         self
     }
 
+    pub fn with_zsi_config(mut self, config: WalletZsiConfig) -> Self {
+        self.zsi = config;
+        self
+    }
+
+    pub fn with_zsi_backend(mut self, backend: Arc<dyn ProofBackend>) -> Self {
+        self.zsi_backend = Some(backend);
+        self
+    }
+
     pub fn build(self) -> Result<WalletTestFixture> {
         WalletTestFixture::new(
             self.deposit_values,
@@ -108,6 +121,8 @@ impl WalletTestBuilder {
             self.policy,
             self.fees,
             self.prover,
+            self.zsi,
+            self.zsi_backend,
         )
     }
 }
@@ -138,6 +153,8 @@ impl WalletTestFixture {
         mut policy: WalletPolicyConfig,
         fees: WalletFeeConfig,
         prover: WalletProverConfig,
+        zsi: WalletZsiConfig,
+        zsi_backend: Option<Arc<dyn ProofBackend>>,
     ) -> Result<Self> {
         let tempdir = TempDir::new().context("create wallet temp directory")?;
         let store = Arc::new(WalletStore::open(tempdir.path()).context("open wallet store")?);
@@ -161,8 +178,8 @@ impl WalletTestFixture {
                 policy.clone(),
                 fees,
                 prover,
-                WalletZsiConfig::default(),
-                None,
+                zsi,
+                zsi_backend,
                 Arc::clone(&node),
                 WalletPaths::for_data_dir(tempdir.path()),
                 Arc::new(WalletActionTelemetry::new(false)),
