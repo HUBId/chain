@@ -32,6 +32,14 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   queues.【F:rpp/p2p/src/topics.rs†L6-L85】【F:rpp/runtime/node.rs†L2544-L2680】
 - **Operational documentation** – Operator guides, runbooks, and interface
   specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
+  Wallet operators targeting the enterprise-focused Phase 4 stack should read
+  [docs/wallet_phase4_advanced.md](docs/wallet_phase4_advanced.md) before
+  enabling new knobs. The guide calls out which capabilities need cargo feature
+  flags (`wallet_rpc_mtls`, `wallet_multisig_hooks`, etc.) during build time and
+  which are controlled solely through configuration sections like
+  `[wallet.watch_only]` and `[wallet.backup]`. Mixing the two (for example,
+  turning on watch-only config without compiling the mTLS feature) will surface
+  runtime errors.
 - **Security, observability, and backend procedures** – Review the
   [security policy](./SECURITY.md) for reporting channels, the
   [observability guide and runbook](./docs/observability.md) for telemetry

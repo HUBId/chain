@@ -6,6 +6,15 @@ containerized environments. All runtime images are distilled down to minimal
 Debian or Alpine layers and default to non-root users to improve the security
 posture of demo deployments.
 
+> 📘 **Wallet Phase 4 operators** – When building wallet-centric containers, read
+> [docs/wallet_phase4_advanced.md](docs/wallet_phase4_advanced.md) to understand
+> which capabilities require cargo feature flags at image build time versus
+> configuration toggles at runtime. For example, mTLS/RBAC enforcement mandates
+> compiling with `wallet_rpc_mtls`, while watch-only and backup schedulers live
+> entirely under `[wallet.watch_only]` and `[wallet.backup]`. Failing to enable
+> the correct feature flag before baking the image will leave the corresponding
+> configuration unusable.
+
 ## Image matrix
 
 | Image | Dockerfile | Runtime user | Purpose |
