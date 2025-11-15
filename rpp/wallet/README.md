@@ -65,3 +65,85 @@ coverage.【F:docs/wallet_phase3_gui.md†L1-L169】 Highlights for operators:
 * **Validation** – Run GUI-focused tests via
   `cargo test -p rpp-wallet --features wallet_gui -- ui` or rely on
   `cargo xtask test-unit`, which already enables the flag.【F:docs/wallet_phase3_gui.md†L139-L147】【F:xtask/src/main.rs†L138-L171】
+
+## Phase 4: Advanced operations
+
+Phase 4 focuses on operational resiliency and secure integrations. See
+[Wallet Phase 4 – Advanced Operations](../../docs/wallet_phase4_advanced.md) for the
+complete rollout guide.【F:docs/wallet_phase4_advanced.md†L1-L176】 Highlights include:
+
+* **Encrypted backups** – Deterministic archives with Argon2id passphrase policies and
+  retention controls.【F:docs/wallet_phase4_advanced.md†L9-L33】
+* **Watch-only projection** – Project balance state without spend keys for monitoring
+  deployments.【F:docs/wallet_phase4_advanced.md†L35-L54】
+* **Multisig hooks** – Register external coordinators and quorum policies for shared
+  custody.【F:docs/wallet_phase4_advanced.md†L56-L78】
+* **Zero State Import** – Bootstrap from vetted snapshots with checksum verification.【F:docs/wallet_phase4_advanced.md†L80-L97】
+* **RPC hardening** – Opt-in mTLS and RBAC enforcement with certificate rotation guidance.【F:docs/wallet_phase4_advanced.md†L99-L138】
+* **Hardware signing** – Optional HID/USB/TCP devices with safe fallback logic.【F:docs/wallet_phase4_advanced.md†L140-L168】
+
+### Prerequisites
+
+* **Schema version** – Run `rpp-wallet migrate` and confirm `WalletStore::schema_version()`
+  reports 4 before enabling Phase 4 features.【F:docs/wallet_phase4_advanced.md†L170-L186】
+* **Configuration** – Extend `config/wallet.toml` with the new `wallet.backup`,
+  `wallet.watch_only`, `wallet.multisig`, `wallet.zsi`, `wallet.rpc.security`, and
+  `wallet.hw` sections. Safe defaults keep features disabled until explicitly enabled.【F:config/wallet.toml†L1-L120】
+* **Certificates** – Stage server and client certificates in the paths referenced by
+  `[wallet.rpc.security]` before toggling mTLS or RBAC.【F:config/wallet.toml†L11-L36】【F:docs/wallet_phase4_advanced.md†L106-L124】
+
+### Quickstart commands
+
+```bash
+# Export an encrypted backup (manual rotation)
+cargo run -p rpp-wallet --features "wallet_backup" -- backup export --output ./backups/manual.rppb
+
+# Restore from backup with policy enforcement
+cargo run -p rpp-wallet --features "wallet_backup" -- backup restore --path ./backups/manual.rppb
+
+# Launch watch-only daemon (read-only RPC)
+cargo run -p rpp-wallet --features "wallet_watch_only" -- watch-only start
+
+# Register multisig coordinator hooks
+cargo run -p rpp-wallet --features "wallet_multisig" -- multisig register --config ./config/multisig.toml
+
+# Import a ZSI bundle after staging checksums
+cargo run -p rpp-wallet --features "wallet_zsi" -- zsi import --bundle ./zsi/bootstrap.tar.gz
+
+# Start hardened RPC with GUI
+cargo run -p rpp-wallet --features "wallet_gui wallet_rpc_security" -- gui --require-mtls
+
+# Pilot hardware signing workflows
+cargo run -p rpp-wallet --features "wallet_hw" -- hw test --transport hid
+```
+
+Ensure the CLI commands run from the repository root so cargo finds the workspace manifest.
+When running the GUI with RPC security enabled, launch the daemon once with matching
+certificate paths before opening the window.【F:docs/wallet_phase4_advanced.md†L99-L168】
+
+### Feature flags
+
+Phase 4 crates introduce additional flags alongside the prover and GUI options:
+
+* `wallet_backup`
+* `wallet_watch_only`
+* `wallet_multisig`
+* `wallet_zsi`
+* `wallet_rpc_security`
+* `wallet_hw`
+
+Enable combinations that match the features in use. CI coverage should enable all wallet
+flags to surface integration issues early.【F:docs/wallet_phase4_advanced.md†L152-L168】
+
+### Troubleshooting & security considerations
+
+* **Passphrase policies** – Keep `wallet.backup.passphrase_profile` on `argon2id` and require
+  12+ character phrases with mixed classes. Rotate passphrases quarterly and store recovery
+  material in sealed envelopes tracked by dual control logs.【F:docs/wallet_phase4_advanced.md†L15-L33】【F:docs/wallet_phase4_advanced.md†L188-L196】
+* **Certificate management** – Maintain a short-lived internal CA, automate renewals with
+  `rpp-wallet cert renew`, and restrict private keys to `0600` permissions. Document rotation
+  playbooks alongside RBAC audits.【F:docs/wallet_phase4_advanced.md†L106-L138】【F:docs/wallet_phase4_advanced.md†L188-L196】
+* **ZSI safety** – Keep `wallet.zsi.enabled` false outside import windows and ensure checksum
+  verification stays enabled to prevent tampered bundles.【F:docs/wallet_phase4_advanced.md†L80-L97】
+* **Hardware operations** – Leave `wallet.hw.fallback_to_software = true` until hardware health
+  monitoring is in place; review `HardwareFallback` events for drift.【F:config/wallet.toml†L37-L110】【F:docs/wallet_phase4_advanced.md†L140-L168】
