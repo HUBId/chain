@@ -34,7 +34,9 @@ use crate::proof_backend::{
 };
 use crate::runtime::node::MempoolStatus;
 use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
-use crate::zsi::{self, LifecycleProof, ZsiBinder, ZsiOperation, ZsiRecord};
+#[cfg(feature = "wallet_zsi")]
+use crate::zsi::ZsiBinder;
+use crate::zsi::{self, LifecycleProof, ZsiOperation, ZsiRecord};
 use prover_backend_interface::BackendError as ZsiBackendError;
 use serde::{Deserialize, Serialize};
 
@@ -241,6 +243,7 @@ impl Wallet {
         )?);
         let identifier = engine.identifier();
         let WalletPaths { keystore, backup } = paths;
+        let zsi = WalletZsiState::new(zsi_config, zsi_backend)?;
         Ok(Self {
             store,
             engine,
@@ -251,7 +254,7 @@ impl Wallet {
             backup_path: backup,
             watch_only: Arc::new(RwLock::new(watch_only_record)),
             telemetry,
-            zsi: WalletZsiState::new(zsi_config, zsi_backend),
+            zsi,
         })
     }
 
@@ -576,10 +579,18 @@ impl Wallet {
         backend.sign(&request).map_err(WalletError::from)
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_backend(&self) -> Result<Arc<dyn ProofBackend>, WalletError> {
         self.zsi.backend().map_err(WalletError::from)
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn zsi_backend(&self) -> Result<Arc<dyn ProofBackend>, WalletError> {
+        let _ = &self.zsi;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     fn ensure_zsi_enabled(&self) -> Result<(), WalletError> {
         if self.zsi.enabled() {
             Ok(())
@@ -588,6 +599,13 @@ impl Wallet {
         }
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn ensure_zsi_enabled(&self) -> Result<(), WalletError> {
+        let _ = &self.zsi;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     pub fn zsi_bind_account(&self, request: ZsiProofRequest) -> Result<ZsiBinding, WalletError> {
         self.ensure_signing_allowed()?;
         self.ensure_zsi_enabled()?;
@@ -602,6 +620,13 @@ impl Wallet {
         })
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn zsi_bind_account(&self, _request: ZsiProofRequest) -> Result<ZsiBinding, WalletError> {
+        self.ensure_signing_allowed()?;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     pub fn zsi_prove(&self, request: ZsiProofRequest) -> Result<LifecycleProof, WalletError> {
         self.ensure_signing_allowed()?;
         self.ensure_zsi_enabled()?;
@@ -629,6 +654,13 @@ impl Wallet {
         Ok(proof)
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn zsi_prove(&self, _request: ZsiProofRequest) -> Result<LifecycleProof, WalletError> {
+        self.ensure_signing_allowed()?;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     pub fn zsi_verify(&self, request: ZsiVerifyRequest) -> Result<(), WalletError> {
         self.ensure_signing_allowed()?;
         self.ensure_zsi_enabled()?;
@@ -638,18 +670,38 @@ impl Wallet {
         zsi::verify::identity(backend.as_ref(), &proof, &inputs).map_err(map_zsi_error)
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn zsi_verify(&self, _request: ZsiVerifyRequest) -> Result<(), WalletError> {
+        self.ensure_signing_allowed()?;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     pub fn zsi_list(&self) -> Result<Vec<StoredZsiArtifact<'static>>, WalletError> {
         self.ensure_signing_allowed()?;
         self.ensure_zsi_enabled()?;
         self.store.iter_zsi_artifacts().map_err(store_error)
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn zsi_list(&self) -> Result<Vec<StoredZsiArtifact<'static>>, WalletError> {
+        self.ensure_signing_allowed()?;
+        Err(ZsiError::Disabled.into())
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     pub fn zsi_delete(&self, identity: &str, commitment_digest: &str) -> Result<(), WalletError> {
         self.ensure_signing_allowed()?;
         self.ensure_zsi_enabled()?;
         let mut batch = self.store.batch().map_err(store_error)?;
         batch.delete_zsi_artifact(identity, commitment_digest);
         batch.commit().map_err(store_error)
+    }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn zsi_delete(&self, _identity: &str, _commitment_digest: &str) -> Result<(), WalletError> {
+        self.ensure_signing_allowed()?;
+        Err(ZsiError::Disabled.into())
     }
 
     pub fn start_sync_coordinator(
@@ -668,15 +720,35 @@ struct WalletZsiState {
 }
 
 impl WalletZsiState {
-    fn new(config: WalletZsiConfig, backend: Option<Arc<dyn ProofBackend>>) -> Self {
+    #[cfg(feature = "wallet_zsi")]
+    fn new(
+        config: WalletZsiConfig,
+        backend: Option<Arc<dyn ProofBackend>>,
+    ) -> Result<Self, WalletError> {
         let backend = if config.enabled { backend } else { None };
-        Self {
+        Ok(Self {
             enabled: config.enabled,
             backend,
             configured_label: config.backend,
-        }
+        })
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn new(
+        config: WalletZsiConfig,
+        _backend: Option<Arc<dyn ProofBackend>>,
+    ) -> Result<Self, WalletError> {
+        if config.enabled {
+            return Err(ZsiError::Disabled.into());
+        }
+        Ok(Self {
+            enabled: false,
+            backend: None,
+            configured_label: config.backend,
+        })
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     fn backend(&self) -> Result<Arc<dyn ProofBackend>, ZsiError> {
         if !self.enabled {
             return Err(ZsiError::Disabled);
@@ -685,6 +757,12 @@ impl WalletZsiState {
             .as_ref()
             .cloned()
             .ok_or(ZsiError::BackendUnavailable)
+    }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn backend(&self) -> Result<Arc<dyn ProofBackend>, ZsiError> {
+        let _ = &self.backend;
+        Err(ZsiError::Disabled)
     }
 
     fn enabled(&self) -> bool {
@@ -749,6 +827,7 @@ fn current_timestamp_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_prepare_binding(
     backend: &Arc<dyn ProofBackend>,
     operation: ZsiOperation,
@@ -760,6 +839,7 @@ fn zsi_prepare_binding(
     Ok((binder, witness, inputs))
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_identity_inputs(record: &ZsiRecord) -> IdentityPublicInputs {
     let approvals = serde_json::to_vec(&record.approvals).unwrap_or_default();
     IdentityPublicInputs {
@@ -770,6 +850,7 @@ fn zsi_identity_inputs(record: &ZsiRecord) -> IdentityPublicInputs {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn map_zsi_error(error: ZsiBackendError) -> WalletError {
     match error {
         ZsiBackendError::Unsupported(_) => ZsiError::Unsupported.into(),
@@ -931,7 +1012,7 @@ mod tests {
             backup_path: PathBuf::new(),
             watch_only: Arc::new(RwLock::new(None)),
             telemetry: Arc::new(WalletActionTelemetry::new(false)),
-            zsi: WalletZsiState::new(WalletZsiConfig::default(), None),
+            zsi: WalletZsiState::new(WalletZsiConfig::default(), None).expect("zsi state"),
         }
     }
 
@@ -955,6 +1036,36 @@ mod tests {
             .enable_time()
             .build()
             .expect("runtime")
+    }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    #[test]
+    fn wallet_new_fails_when_zsi_feature_disabled() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut zsi_config = WalletZsiConfig::default();
+        zsi_config.enabled = true;
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
+
+        let result = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [1u8; 32],
+            },
+            policy,
+            fees,
+            WalletProverConfig::default(),
+            zsi_config,
+            None,
+            node_client,
+            WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
+        );
+
+        assert!(matches!(result, Err(WalletError::Zsi(ZsiError::Disabled))));
     }
 
     #[cfg(feature = "prover-mock")]
