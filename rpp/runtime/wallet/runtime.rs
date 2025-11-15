@@ -1,6 +1,4 @@
 use std::convert::Infallible;
-use std::fs;
-use std::io::BufReader;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -9,23 +7,12 @@ use std::time::Duration;
 
 use axum::serve;
 use axum::Router;
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::Request;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
 use parking_lot::Mutex;
-use rustls::crypto::aws_lc_rs;
-use rustls::pki_types::{
-    CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
-};
-use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
-use rustls::{RootCertStore, ServerConfig};
-use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
 use tokio::net::TcpListener as TokioTcpListener;
 use tokio::sync::watch;
-use tokio::task::{JoinHandle, JoinSet};
-use tokio_rustls::TlsAcceptor;
+use tokio::task::JoinHandle;
+#[cfg(feature = "wallet_rpc_mtls")]
+use tokio::task::JoinSet;
 use tower::ServiceExt;
 use tracing::{debug, info, warn};
 
@@ -35,11 +22,42 @@ use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 use crate::wallet::wallet::Wallet;
 use rpp_wallet::node_client::NodeClient;
 
+#[cfg(feature = "wallet_rpc_mtls")]
+use super::rpc::WalletClientCertificates;
 use super::rpc::{
-    AuthToken, WalletClientCertificates, WalletRbacStore, WalletSecurityBinding,
-    WalletSecurityContext, WalletSecurityPaths,
+    AuthToken, WalletRbacStore, WalletSecurityBinding, WalletSecurityContext, WalletSecurityPaths,
 };
+
+#[cfg(feature = "wallet_rpc_mtls")]
+use std::fs;
+#[cfg(feature = "wallet_rpc_mtls")]
+use std::io::BufReader;
+
 use super::sync::{SyncCheckpoint, SyncProvider};
+#[cfg(feature = "wallet_rpc_mtls")]
+use hyper::body::Incoming;
+#[cfg(feature = "wallet_rpc_mtls")]
+use hyper::service::service_fn;
+#[cfg(feature = "wallet_rpc_mtls")]
+use hyper::Request;
+#[cfg(feature = "wallet_rpc_mtls")]
+use hyper_util::rt::{TokioExecutor, TokioIo};
+#[cfg(feature = "wallet_rpc_mtls")]
+use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls::crypto::aws_lc_rs;
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls::pki_types::{
+    CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
+};
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls::{RootCertStore, ServerConfig};
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
+#[cfg(feature = "wallet_rpc_mtls")]
+use tokio_rustls::TlsAcceptor;
 
 /// Trait implemented by types that expose wallet functionality to the runtime.
 pub trait WalletService: Send + Sync {
@@ -504,96 +522,107 @@ impl WalletRuntime {
             })?;
 
             if config.security_settings().enabled() {
-                let tls_acceptor = build_wallet_tls_acceptor(config.security_settings())?;
-                let mut shutdown_rx_http = shutdown_rx.clone();
-                let task = tokio::spawn(async move {
-                    let mut listener = listener;
-                    let mut make_service =
-                        router.into_make_service_with_connect_info::<SocketAddr>();
-                    let mut tasks: JoinSet<()> = JoinSet::new();
-                    loop {
-                        let mut shutdown_future = wait_for_shutdown(shutdown_rx_http.clone());
-                        tokio::pin!(shutdown_future);
-                        tokio::select! {
-                            _ = &mut shutdown_future => {
-                                break;
-                            }
-                            accept_result = listener.accept() => {
-                                let (stream, remote_addr) = match accept_result {
-                                    Ok(value) => value,
-                                    Err(err) => {
-                                        warn!(?err, "failed to accept wallet RPC TLS connection");
-                                        continue;
-                                    }
-                                };
-
-                                let tower_service = unwrap_infallible(make_service.call(remote_addr).await);
-                                let acceptor = tls_acceptor.clone();
-                                let mut shutdown_conn = shutdown_rx_http.clone();
-                                tasks.spawn(async move {
-                                    let tls_stream = match acceptor.accept(stream).await {
-                                        Ok(tls_stream) => tls_stream,
+                #[cfg(feature = "wallet_rpc_mtls")]
+                {
+                    let tls_acceptor = build_wallet_tls_acceptor(config.security_settings())?;
+                    let tls_router = router.clone();
+                    let mut shutdown_rx_http = shutdown_rx.clone();
+                    let task = tokio::spawn(async move {
+                        let mut listener = listener;
+                        let mut make_service =
+                            tls_router.into_make_service_with_connect_info::<SocketAddr>();
+                        let mut tasks: JoinSet<()> = JoinSet::new();
+                        loop {
+                            let mut shutdown_future = wait_for_shutdown(shutdown_rx_http.clone());
+                            tokio::pin!(shutdown_future);
+                            tokio::select! {
+                                _ = &mut shutdown_future => {
+                                    break;
+                                }
+                                accept_result = listener.accept() => {
+                                    let (stream, remote_addr) = match accept_result {
+                                        Ok(value) => value,
                                         Err(err) => {
-                                            warn!(?remote_addr, error = %err, "wallet RPC TLS handshake failed");
-                                            return;
+                                            warn!(?err, "failed to accept wallet RPC TLS connection");
+                                            continue;
                                         }
                                     };
 
-                                    let client_certs = tls_stream
-                                        .get_ref()
-                                        .1
-                                        .peer_certificates()
-                                        .map(|chain| {
-                                            WalletClientCertificates::from_der(
-                                                chain.iter().map(|cert| cert.as_ref()),
-                                            )
-                                        })
-                                        .unwrap_or_else(WalletClientCertificates::empty);
-                                    let client_certs = Arc::new(client_certs);
-
-                                    let hyper_service = service_fn(move |mut request: Request<Incoming>| {
-                                        let service = tower_service.clone();
-                                        let client_certs = Arc::clone(&client_certs);
-                                        async move {
-                                            if !client_certs.is_empty() {
-                                                request
-                                                    .extensions_mut()
-                                                    .insert(Arc::clone(&client_certs));
+                                    let tower_service = unwrap_infallible(make_service.call(remote_addr).await);
+                                    let acceptor = tls_acceptor.clone();
+                                    let mut shutdown_conn = shutdown_rx_http.clone();
+                                    tasks.spawn(async move {
+                                        let tls_stream = match acceptor.accept(stream).await {
+                                            Ok(tls_stream) => tls_stream,
+                                            Err(err) => {
+                                                warn!(?remote_addr, error = %err, "wallet RPC TLS handshake failed");
+                                                return;
                                             }
-                                            service.oneshot(request).await
+                                        };
+
+                                        let client_certs = tls_stream
+                                            .get_ref()
+                                            .1
+                                            .peer_certificates()
+                                            .map(|chain| {
+                                                WalletClientCertificates::from_der(
+                                                    chain.iter().map(|cert| cert.as_ref()),
+                                                )
+                                            })
+                                            .unwrap_or_else(WalletClientCertificates::empty);
+                                        let client_certs = Arc::new(client_certs);
+
+                                        let hyper_service = service_fn(move |mut request: Request<Incoming>| {
+                                            let service = tower_service.clone();
+                                            let client_certs = Arc::clone(&client_certs);
+                                            async move {
+                                                if !client_certs.is_empty() {
+                                                    request
+                                                        .extensions_mut()
+                                                        .insert(Arc::clone(&client_certs));
+                                                }
+                                                service.oneshot(request).await
+                                            }
+                                        });
+
+                                        let mut conn = HyperConnBuilder::new(TokioExecutor::new())
+                                            .serve_connection_with_upgrades(
+                                                TokioIo::new(tls_stream),
+                                                hyper_service,
+                                            );
+                                        tokio::pin!(conn);
+                                        let mut shutdown_future = wait_for_shutdown(shutdown_conn.clone());
+                                        tokio::pin!(shutdown_future);
+                                        tokio::select! {
+                                            result = &mut conn => {
+                                                if let Err(err) = result {
+                                                    warn!(?remote_addr, error = %err, "wallet RPC TLS connection terminated with error");
+                                                }
+                                            }
+                                            _ = &mut shutdown_future => {
+                                                conn.as_mut().graceful_shutdown();
+                                                if let Err(err) = conn.await {
+                                                    warn!(?remote_addr, error = %err, "wallet RPC TLS connection terminated during shutdown");
+                                                }
+                                            }
                                         }
                                     });
-
-                                    let mut conn = HyperConnBuilder::new(TokioExecutor::new())
-                                        .serve_connection_with_upgrades(
-                                            TokioIo::new(tls_stream),
-                                            hyper_service,
-                                        );
-                                    tokio::pin!(conn);
-                                    let mut shutdown_future = wait_for_shutdown(shutdown_conn.clone());
-                                    tokio::pin!(shutdown_future);
-                                    tokio::select! {
-                                        result = &mut conn => {
-                                            if let Err(err) = result {
-                                                warn!(?remote_addr, error = %err, "wallet RPC TLS connection terminated with error");
-                                            }
-                                        }
-                                        _ = &mut shutdown_future => {
-                                            conn.as_mut().graceful_shutdown();
-                                            if let Err(err) = conn.await {
-                                                warn!(?remote_addr, error = %err, "wallet RPC TLS connection terminated during shutdown");
-                                            }
-                                        }
-                                    }
-                                });
+                                }
                             }
                         }
-                    }
 
-                    while tasks.join_next().await.is_some() {}
-                });
-                info!(listen = %listen_addr, "wallet runtime RPC server listening (tls)");
-                (Some(task), listen_addr)
+                        while tasks.join_next().await.is_some() {}
+                    });
+                    info!(listen = %listen_addr, "wallet runtime RPC server listening (tls)");
+                    (Some(task), listen_addr)
+                }
+                #[cfg(not(feature = "wallet_rpc_mtls"))]
+                {
+                    return Err(ChainError::Config(
+                        "wallet RPC TLS support requires enabling the `wallet_rpc_mtls` feature"
+                            .into(),
+                    ));
+                }
             } else {
                 let mut shutdown_rx_http = shutdown_rx.clone();
                 let service = router.into_make_service();
@@ -665,6 +694,7 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn build_wallet_tls_acceptor(
     settings: &WalletRpcSecurityRuntimeConfig,
 ) -> ChainResult<TlsAcceptor> {
@@ -700,6 +730,7 @@ fn build_wallet_tls_acceptor(
     Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn load_certificates(path: &Path) -> ChainResult<Vec<CertificateDer<'static>>> {
     let bytes = fs::read(path)
         .map_err(|err| ChainError::Config(format!("failed to read {path:?}: {err}")))?;
@@ -713,6 +744,7 @@ fn load_certificates(path: &Path) -> ChainResult<Vec<CertificateDer<'static>>> {
         .collect())
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
     let bytes = fs::read(path)
         .map_err(|err| ChainError::Config(format!("failed to read {path:?}: {err}")))?;
@@ -758,6 +790,7 @@ fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
     )))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn build_client_verifier(ca_path: &Path) -> ChainResult<Arc<dyn ClientCertVerifier>> {
     let ca_certs = load_certificates(ca_path)?;
     let mut roots = RootCertStore::empty();
