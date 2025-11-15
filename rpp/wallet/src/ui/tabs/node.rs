@@ -2,16 +2,25 @@ use iced::widget::{button, column, container, row, text, text_input, Column, Rul
 use iced::{Alignment, Command, Element, Length};
 
 use crate::config::WalletConfig;
-use crate::rpc::client::WalletRpcClient;
+use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BlockFeeSummaryDto, ListPendingLocksResponse, MempoolInfoResponse, PendingLockDto,
     RecentBlocksResponse, ReleasePendingLocksResponse, RescanParams, RescanResponse, SyncModeDto,
-    SyncStatusResponse, TelemetryCountersResponse,
+    SyncStatusResponse, TelemetryCountersResponse, ZsiArtifactDto, ZsiBindResponse, ZsiBindingDto,
+    ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
 };
 
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::{modal, ConfirmDialog};
+use crate::ui::error_map::{describe_rpc_error, technical_details};
 use crate::ui::telemetry;
+use crate::zsi::bind::ZsiOperation;
+use crate::zsi::lifecycle::{ConsensusApproval, ZsiRecord};
+
+use hex::encode as hex_encode;
+
+#[cfg(feature = "wallet_hw")]
+use crate::rpc::dto::{HardwareDeviceDto, HardwareEnumerateResponse};
 
 const RECENT_BLOCK_SAMPLE: u32 = 8;
 
@@ -85,6 +94,92 @@ impl RescanPrompt {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZsiBindField {
+    Identity,
+    Genesis,
+    Attestation,
+    Approvals,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ZsiBindingForm {
+    operation: ZsiOperation,
+    identity: String,
+    genesis_id: String,
+    attestation_digest: String,
+    approvals_json: String,
+    error: Option<String>,
+}
+
+impl ZsiBindingForm {
+    fn reset(&mut self) {
+        self.operation = ZsiOperation::Issue;
+        self.identity.clear();
+        self.genesis_id.clear();
+        self.attestation_digest.clear();
+        self.approvals_json.clear();
+        self.error = None;
+    }
+
+    fn update_field(&mut self, field: ZsiBindField, value: String) {
+        match field {
+            ZsiBindField::Identity => self.identity = value,
+            ZsiBindField::Genesis => self.genesis_id = value,
+            ZsiBindField::Attestation => self.attestation_digest = value,
+            ZsiBindField::Approvals => self.approvals_json = value,
+        }
+        self.error = None;
+    }
+
+    fn cycle_operation(&mut self) {
+        self.operation = next_operation(self.operation);
+    }
+
+    fn build_params(&self) -> Result<ZsiProofParams, String> {
+        let identity = self.identity.trim();
+        if identity.is_empty() {
+            return Err("Identity is required".into());
+        }
+
+        let genesis_id = self.genesis_id.trim();
+        if genesis_id.is_empty() {
+            return Err("Genesis commitment is required".into());
+        }
+
+        let attestation = self.attestation_digest.trim();
+        if attestation.is_empty() {
+            return Err("Attestation digest is required".into());
+        }
+
+        let approvals = if self.approvals_json.trim().is_empty() {
+            Vec::<ConsensusApproval>::new()
+        } else {
+            serde_json::from_str::<Vec<ConsensusApproval>>(&self.approvals_json)
+                .map_err(|err| format!("Invalid approvals JSON: {err}"))?
+        };
+
+        Ok(ZsiProofParams {
+            operation: self.operation,
+            record: ZsiRecord {
+                identity: identity.to_string(),
+                genesis_id: genesis_id.to_string(),
+                attestation_digest: attestation.to_string(),
+                approvals,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ZsiModal {
+    BindConfirm(ZsiProofParams),
+    DeleteConfirm {
+        identity: String,
+        commitment: String,
+    },
+}
+
 #[derive(Debug, Default)]
 pub struct State {
     config: Option<WalletConfig>,
@@ -93,6 +188,17 @@ pub struct State {
     recent_blocks: Snapshot<Vec<BlockFeeSummaryDto>>,
     pending_locks: Snapshot<Vec<PendingLockDto>>,
     telemetry: Snapshot<TelemetryCountersResponse>,
+    zsi_artifacts: Snapshot<Vec<ZsiArtifactDto>>,
+    zsi_bind_form: ZsiBindingForm,
+    zsi_binding: Option<ZsiBindingDto>,
+    zsi_op_inflight: bool,
+    zsi_feedback: Option<String>,
+    zsi_error: Option<String>,
+    zsi_modal: Option<ZsiModal>,
+    #[cfg(feature = "wallet_hw")]
+    hardware_devices: Snapshot<Vec<HardwareDeviceDto>>,
+    #[cfg(feature = "wallet_hw")]
+    hardware_inflight: bool,
     refresh_inflight: bool,
     refresh_pending: usize,
     rescan_inflight: bool,
@@ -112,6 +218,23 @@ pub enum Message {
     MempoolInfoLoaded(Result<MempoolInfoResponse, RpcCallError>),
     RecentBlocksLoaded(Result<Vec<BlockFeeSummaryDto>, RpcCallError>),
     TelemetryLoaded(Result<TelemetryCountersResponse, RpcCallError>),
+    RefreshZsi,
+    ZsiArtifactsLoaded(Result<Vec<ZsiArtifactDto>, RpcCallError>),
+    ZsiBindFieldChanged(ZsiBindField, String),
+    CycleZsiOperation,
+    SubmitZsiBind,
+    ConfirmZsiBind,
+    CancelZsiAction,
+    ZsiBindCompleted(Result<ZsiBindResponse, RpcCallError>),
+    RequestZsiDelete {
+        identity: String,
+        commitment: String,
+    },
+    ConfirmZsiDelete,
+    ZsiDeleteCompleted(Result<ZsiDeleteResponse, RpcCallError>),
+    DismissZsiFeedback,
+    #[cfg(feature = "wallet_hw")]
+    HardwareDevicesLoaded(Result<Vec<HardwareDeviceDto>, RpcCallError>),
     RescanHeightChanged(String),
     RequestRescanFromBirthday,
     RequestRescanFromHeight,
@@ -130,6 +253,18 @@ impl State {
         self.recent_blocks = Snapshot::Idle;
         self.pending_locks = Snapshot::Idle;
         self.telemetry = Snapshot::Idle;
+        self.zsi_artifacts = Snapshot::Idle;
+        self.zsi_bind_form = ZsiBindingForm::default();
+        self.zsi_binding = None;
+        self.zsi_op_inflight = false;
+        self.zsi_feedback = None;
+        self.zsi_error = None;
+        self.zsi_modal = None;
+        #[cfg(feature = "wallet_hw")]
+        {
+            self.hardware_devices = Snapshot::Idle;
+            self.hardware_inflight = false;
+        }
         self.refresh_inflight = false;
         self.refresh_pending = 0;
         self.rescan_inflight = false;
@@ -185,6 +320,157 @@ impl State {
                     Ok(counters) => self.telemetry.set_loaded(counters),
                     Err(error) => self.telemetry.set_error(&error),
                 }
+                self.finish_refresh();
+                Command::none()
+            }
+            Message::RefreshZsi => {
+                if !self.zsi_enabled() {
+                    return Command::none();
+                }
+                self.load_zsi_artifacts(client)
+            }
+            Message::ZsiArtifactsLoaded(result) => {
+                match result {
+                    Ok(artifacts) => self.zsi_artifacts.set_loaded(artifacts),
+                    Err(error) => self.zsi_artifacts.set_error(&error),
+                }
+                self.finish_refresh();
+                Command::none()
+            }
+            Message::ZsiBindFieldChanged(field, value) => {
+                self.zsi_bind_form.update_field(field, value);
+                Command::none()
+            }
+            Message::CycleZsiOperation => {
+                self.zsi_bind_form.cycle_operation();
+                Command::none()
+            }
+            Message::SubmitZsiBind => {
+                if self.zsi_op_inflight {
+                    return Command::none();
+                }
+                match self.zsi_bind_form.build_params() {
+                    Ok(params) => {
+                        self.zsi_modal = Some(ZsiModal::BindConfirm(params));
+                        self.zsi_bind_form.error = None;
+                    }
+                    Err(error) => {
+                        self.zsi_bind_form.error = Some(error);
+                    }
+                }
+                Command::none()
+            }
+            Message::ConfirmZsiBind => {
+                if self.zsi_op_inflight {
+                    return Command::none();
+                }
+                let Some(ZsiModal::BindConfirm(params)) = self.zsi_modal.take() else {
+                    return Command::none();
+                };
+                self.zsi_op_inflight = true;
+                self.zsi_feedback = None;
+                self.zsi_error = None;
+                commands::rpc(
+                    "zsi.bind_account",
+                    client,
+                    move |client| async move { client.zsi_bind_account(&params).await },
+                    Message::ZsiBindCompleted,
+                )
+            }
+            Message::CancelZsiAction => {
+                self.zsi_modal = None;
+                Command::none()
+            }
+            Message::ZsiBindCompleted(result) => {
+                self.zsi_op_inflight = false;
+                match result {
+                    Ok(response) => {
+                        self.zsi_binding = Some(response.binding);
+                        self.zsi_bind_form.reset();
+                        self.zsi_feedback = Some("Generated account binding witness.".into());
+                        Command::none()
+                    }
+                    Err(error) => {
+                        self.zsi_error = Some(format_rpc_error(&error));
+                        Command::none()
+                    }
+                }
+            }
+            Message::RequestZsiDelete {
+                identity,
+                commitment,
+            } => {
+                if self.zsi_op_inflight {
+                    return Command::none();
+                }
+                self.zsi_modal = Some(ZsiModal::DeleteConfirm {
+                    identity,
+                    commitment,
+                });
+                Command::none()
+            }
+            Message::ConfirmZsiDelete => {
+                if self.zsi_op_inflight {
+                    return Command::none();
+                }
+                let Some(ZsiModal::DeleteConfirm {
+                    identity,
+                    commitment,
+                }) = self.zsi_modal.take()
+                else {
+                    return Command::none();
+                };
+                self.zsi_op_inflight = true;
+                self.zsi_feedback = None;
+                self.zsi_error = None;
+                commands::rpc(
+                    "zsi.delete",
+                    client,
+                    move |client| async move {
+                        client
+                            .zsi_delete(&ZsiDeleteParams {
+                                identity,
+                                commitment_digest: commitment,
+                            })
+                            .await
+                    },
+                    Message::ZsiDeleteCompleted,
+                )
+            }
+            Message::ZsiDeleteCompleted(result) => {
+                self.zsi_op_inflight = false;
+                match result {
+                    Ok(response) => {
+                        if response.deleted {
+                            self.zsi_feedback = Some("Deleted stored Zero Sync artifact.".into());
+                        } else {
+                            self.zsi_feedback = Some(
+                                "No Zero Sync artifact matched the provided commitment.".into(),
+                            );
+                        }
+                        if self.zsi_enabled() {
+                            return self.load_zsi_artifacts(client);
+                        }
+                        Command::none()
+                    }
+                    Err(error) => {
+                        self.zsi_error = Some(format_rpc_error(&error));
+                        Command::none()
+                    }
+                }
+            }
+            Message::DismissZsiFeedback => {
+                self.zsi_feedback = None;
+                self.zsi_error = None;
+                Command::none()
+            }
+            #[cfg(feature = "wallet_hw")]
+            Message::HardwareDevicesLoaded(result) => {
+                match result {
+                    Ok(devices) => self.hardware_devices.set_loaded(devices),
+                    Err(error) => self.hardware_devices.set_error(&error),
+                }
+                self.hardware_inflight = false;
                 self.finish_refresh();
                 Command::none()
             }
@@ -319,6 +605,47 @@ impl State {
     }
 
     pub fn view(&self) -> Element<Message> {
+        if let Some(modal_state) = &self.zsi_modal {
+            let dialog = match modal_state {
+                ZsiModal::BindConfirm(params) => {
+                    let approvals = params.record.approvals.len();
+                    let body = format!(
+                        "Generate binding witness for operation {} on identity {}?\nGenesis commitment: {}\nAttestation digest: {}\nApprovals: {}",
+                        params.operation.as_str(),
+                        params.record.identity,
+                        params.record.genesis_id,
+                        params.record.attestation_digest,
+                        approvals
+                    );
+                    ConfirmDialog {
+                        title: "Generate account binding",
+                        body,
+                        confirm_label: "Generate",
+                        cancel_label: "Cancel",
+                        on_confirm: Message::ConfirmZsiBind,
+                        on_cancel: Message::CancelZsiAction,
+                    }
+                }
+                ZsiModal::DeleteConfirm {
+                    identity,
+                    commitment,
+                } => {
+                    let body = format!(
+                        "Delete stored proof for identity {identity}?\nCommitment digest: {commitment}"
+                    );
+                    ConfirmDialog {
+                        title: "Delete Zero Sync proof",
+                        body,
+                        confirm_label: "Delete",
+                        cancel_label: "Cancel",
+                        on_confirm: Message::ConfirmZsiDelete,
+                        on_cancel: Message::CancelZsiAction,
+                    }
+                }
+            };
+            return modal(column![dialog.view()]);
+        }
+
         if let Some(prompt) = &self.pending_rescan {
             let dialog = ConfirmDialog {
                 title: "Schedule rescan",
@@ -352,7 +679,11 @@ impl State {
         }
 
         content = content
+            .push(self.zsi_section())
+            .push(Rule::horizontal(1))
             .push(self.pending_locks_view())
+            .push(Rule::horizontal(1))
+            .push(self.hardware_section())
             .push(Rule::horizontal(1))
             .push(self.recent_blocks_view())
             .push(Rule::horizontal(1))
@@ -439,10 +770,17 @@ impl State {
             },
         );
 
-        row![sync_card, mempool_card, telemetry_card]
+        let top = row![sync_card, mempool_card, telemetry_card]
             .spacing(16)
-            .width(Length::Fill)
-            .into()
+            .width(Length::Fill);
+
+        let mut bottom = row![self.zsi_summary_card(), self.prover_summary_card()]
+            .spacing(16)
+            .width(Length::Fill);
+
+        bottom = bottom.push(self.hardware_summary_card());
+
+        column![top, bottom].spacing(16).width(Length::Fill).into()
     }
 
     fn actions_view(&self) -> Element<Message> {
@@ -486,6 +824,241 @@ impl State {
         }
 
         row.push(release_button).into()
+    }
+
+    fn zsi_summary_card(&self) -> Element<Message> {
+        let lines = if !self.zsi_enabled() {
+            vec!["Zero Sync disabled".into()]
+        } else {
+            match &self.zsi_artifacts {
+                Snapshot::Idle => vec!["Awaiting artifact snapshot".into()],
+                Snapshot::Loading => vec!["Loading artifacts...".into()],
+                Snapshot::Error(error) => vec![format!("Error: {error}")],
+                Snapshot::Loaded(artifacts) => {
+                    let mut lines = vec![format!("Stored artifacts: {}", artifacts.len())];
+                    if let Some(latest) = artifacts.last() {
+                        lines.push(format!("Latest identity: {}", latest.identity));
+                    }
+                    lines
+                }
+            }
+        };
+
+        summary_card("Zero Sync", column_from(lines))
+    }
+
+    fn prover_summary_card(&self) -> Element<Message> {
+        if let Some(config) = &self.config {
+            let prover = &config.prover;
+            let lines = vec![
+                format!("Enabled: {}", format_bool(prover.enabled)),
+                format!("Mock fallback: {}", format_bool(prover.mock_fallback)),
+                format!("Timeout: {}s", prover.job_timeout_secs),
+            ];
+            summary_card("Prover", column_from(lines))
+        } else {
+            summary_card("Prover", column![text("Configuration unavailable")])
+        }
+    }
+
+    fn hardware_summary_card(&self) -> Element<Message> {
+        #[cfg(feature = "wallet_hw")]
+        {
+            let body = match &self.hardware_devices {
+                Snapshot::Idle => column![text("Enumeration pending")],
+                Snapshot::Loading => column![text("Enumerating devices...")],
+                Snapshot::Error(error) => column![text(format!("Error: {error}"))],
+                Snapshot::Loaded(devices) => {
+                    if devices.is_empty() {
+                        column![text("No devices detected")]
+                    } else {
+                        let mut lines = Vec::new();
+                        lines.push(format!("Devices: {}", devices.len()));
+                        if let Some(first) = devices.first() {
+                            let label = first.label.clone().unwrap_or_else(|| "(no label)".into());
+                            lines.push(format!("First device: {}", label));
+                        }
+                        column_from(lines)
+                    }
+                }
+            };
+            summary_card("Hardware", body)
+        }
+        #[cfg(not(feature = "wallet_hw"))]
+        {
+            summary_card(
+                "Hardware",
+                column![text("Hardware wallet support not available in this build.")],
+            )
+        }
+    }
+
+    fn zsi_section(&self) -> Element<Message> {
+        let mut header = row![text("Zero Sync artifacts").size(18)]
+            .spacing(8)
+            .align_items(Alignment::Center);
+        if self.zsi_enabled() {
+            let mut refresh = button(text("Refresh")).padding(8);
+            if !matches!(self.zsi_artifacts, Snapshot::Loading) && !self.zsi_op_inflight {
+                refresh = refresh.on_press(Message::RefreshZsi);
+            }
+            header = header.push(refresh);
+        } else {
+            header = header.push(text("Disabled in configuration").size(14));
+        }
+
+        let mut section = column![header, self.zsi_artifacts_view()]
+            .spacing(12)
+            .width(Length::Fill);
+
+        if let Some(binding) = &self.zsi_binding {
+            section = section.push(zsi_binding_view(binding));
+        }
+
+        section = section.push(self.zsi_bind_form_view());
+
+        if let Some(feedback) = &self.zsi_feedback {
+            section = section.push(text(feedback).size(16));
+        }
+        if let Some(error) = &self.zsi_error {
+            section = section.push(text(error).size(16));
+        }
+        if self.zsi_feedback.is_some() || self.zsi_error.is_some() {
+            let dismiss = button(text("Dismiss message")).padding(8);
+            section = section.push(dismiss.on_press(Message::DismissZsiFeedback));
+        }
+
+        container(section).width(Length::Fill).into()
+    }
+
+    fn zsi_artifacts_view(&self) -> Element<Message> {
+        match &self.zsi_artifacts {
+            Snapshot::Idle => container(text("Zero Sync artifacts have not been loaded yet."))
+                .width(Length::Fill)
+                .into(),
+            Snapshot::Loading => container(text("Loading Zero Sync artifacts..."))
+                .width(Length::Fill)
+                .into(),
+            Snapshot::Error(error) => {
+                container(text(format!("Unable to load Zero Sync artifacts: {error}")))
+                    .width(Length::Fill)
+                    .into()
+            }
+            Snapshot::Loaded(artifacts) => {
+                if artifacts.is_empty() {
+                    container(text("No stored Zero Sync artifacts were found."))
+                        .width(Length::Fill)
+                        .into()
+                } else {
+                    let entries = artifacts.iter().fold(column![], |column, artifact| {
+                        column.push(zsi_artifact_entry(artifact, self.zsi_op_inflight))
+                    });
+                    container(entries.spacing(8)).width(Length::Fill).into()
+                }
+            }
+        }
+    }
+
+    fn zsi_bind_form_view(&self) -> Element<Message> {
+        let mut operation_button = button(text(format!(
+            "Operation: {}",
+            self.zsi_bind_form.operation.as_str()
+        )))
+        .padding(8);
+        if !self.zsi_op_inflight {
+            operation_button = operation_button.on_press(Message::CycleZsiOperation);
+        }
+
+        let identity_input = text_input("Identity", &self.zsi_bind_form.identity)
+            .on_input(|value| Message::ZsiBindFieldChanged(ZsiBindField::Identity, value))
+            .padding(10)
+            .size(16);
+        let genesis_input = text_input("Genesis commitment", &self.zsi_bind_form.genesis_id)
+            .on_input(|value| Message::ZsiBindFieldChanged(ZsiBindField::Genesis, value))
+            .padding(10)
+            .size(16);
+        let attestation_input =
+            text_input("Attestation digest", &self.zsi_bind_form.attestation_digest)
+                .on_input(|value| Message::ZsiBindFieldChanged(ZsiBindField::Attestation, value))
+                .padding(10)
+                .size(16);
+        let approvals_input = text_input("Approvals JSON", &self.zsi_bind_form.approvals_json)
+            .on_input(|value| Message::ZsiBindFieldChanged(ZsiBindField::Approvals, value))
+            .padding(10)
+            .size(16);
+
+        let mut submit = button(text("Generate binding witness")).padding(12);
+        if self.zsi_enabled() && !self.zsi_op_inflight {
+            submit = submit.on_press(Message::SubmitZsiBind);
+        }
+
+        let mut form = column![
+            text("Generate binding witness").size(18),
+            row![operation_button].spacing(8),
+            identity_input,
+            genesis_input,
+            attestation_input,
+            approvals_input,
+            text("Approvals should be provided as a JSON array (optional)").size(14),
+            submit,
+        ]
+        .spacing(8)
+        .width(Length::Fill);
+
+        if !self.zsi_enabled() {
+            form = form.push(
+                text("Enable Zero Sync support in the wallet configuration to generate bindings.")
+                    .size(14),
+            );
+        }
+
+        if let Some(error) = &self.zsi_bind_form.error {
+            form = form.push(text(error).size(14));
+        }
+
+        container(form).width(Length::Fill).into()
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_section(&self) -> Element<Message> {
+        let header = row![text("Hardware devices").size(18)]
+            .spacing(8)
+            .align_items(Alignment::Center);
+
+        let body = match &self.hardware_devices {
+            Snapshot::Idle => column![text("Hardware enumeration not requested yet.")],
+            Snapshot::Loading => column![text("Enumerating connected hardware wallets...")],
+            Snapshot::Error(error) => column![text(format!(
+                "Unable to enumerate hardware devices: {error}"
+            ))],
+            Snapshot::Loaded(devices) => {
+                if devices.is_empty() {
+                    column![text("No hardware wallets detected.".to_string())]
+                } else {
+                    let entries = devices.iter().fold(column![], |column, device| {
+                        column.push(hardware_device_entry(device))
+                    });
+                    entries.spacing(4)
+                }
+            }
+        };
+
+        container(column![header, body.spacing(8)].spacing(12))
+            .width(Length::Fill)
+            .into()
+    }
+
+    #[cfg(not(feature = "wallet_hw"))]
+    fn hardware_section(&self) -> Element<Message> {
+        container(
+            column![
+                text("Hardware devices").size(18),
+                text("This build was compiled without hardware wallet support."),
+            ]
+            .spacing(8),
+        )
+        .width(Length::Fill)
+        .into()
     }
 
     fn pending_locks_view(&self) -> Element<Message> {
@@ -627,16 +1200,56 @@ impl State {
             map_recent_blocks,
         ));
 
+        if self.zsi_enabled() {
+            self.zsi_artifacts.set_loading();
+            self.refresh_pending += 1;
+            commands.push(commands::rpc(
+                "zsi.list",
+                client.clone(),
+                |client| async move { client.zsi_list().await },
+                map_zsi_artifacts,
+            ));
+        } else {
+            self.zsi_artifacts = Snapshot::Loaded(Vec::new());
+        }
+
         self.telemetry.set_loading();
         self.refresh_pending += 1;
         commands.push(commands::rpc(
             "telemetry_counters",
-            client,
+            client.clone(),
             |client| async move { client.telemetry_counters().await },
             Message::TelemetryLoaded,
         ));
 
+        #[cfg(feature = "wallet_hw")]
+        {
+            self.hardware_devices.set_loading();
+            self.hardware_inflight = true;
+            self.refresh_pending += 1;
+            commands.push(commands::rpc(
+                "hw.enumerate",
+                client,
+                |client| async move { client.hw_enumerate().await },
+                map_hardware_devices,
+            ));
+        }
+
         Command::batch(commands)
+    }
+
+    fn load_zsi_artifacts(&mut self, client: WalletRpcClient) -> Command<Message> {
+        if matches!(self.zsi_artifacts, Snapshot::Loading) {
+            return Command::none();
+        }
+        self.zsi_artifacts.set_loading();
+        self.zsi_error = None;
+        commands::rpc(
+            "zsi.list",
+            client,
+            |client| async move { client.zsi_list().await },
+            map_zsi_artifacts,
+        )
     }
 
     fn finish_refresh(&mut self) {
@@ -663,6 +1276,13 @@ impl State {
         }
         false
     }
+
+    fn zsi_enabled(&self) -> bool {
+        self.config
+            .as_ref()
+            .map(|config| config.zsi.enabled)
+            .unwrap_or(false)
+    }
 }
 
 fn map_pending_locks(result: Result<ListPendingLocksResponse, RpcCallError>) -> Message {
@@ -673,10 +1293,115 @@ fn map_recent_blocks(result: Result<RecentBlocksResponse, RpcCallError>) -> Mess
     Message::RecentBlocksLoaded(result.map(|response| response.blocks))
 }
 
+fn map_zsi_artifacts(result: Result<ZsiListResponse, RpcCallError>) -> Message {
+    Message::ZsiArtifactsLoaded(result.map(|response| response.artifacts))
+}
+
+#[cfg(feature = "wallet_hw")]
+fn map_hardware_devices(result: Result<HardwareEnumerateResponse, RpcCallError>) -> Message {
+    Message::HardwareDevicesLoaded(result.map(|response| response.devices))
+}
+
 fn column_from(lines: Vec<String>) -> Column<'static, Message> {
     lines
         .into_iter()
         .fold(column![], |column, line| column.push(text(line)))
+}
+
+fn zsi_artifact_entry(artifact: &ZsiArtifactDto, op_inflight: bool) -> Element<Message> {
+    let mut delete = button(text("Delete")).padding(8);
+    if !op_inflight {
+        delete = delete.on_press(Message::RequestZsiDelete {
+            identity: artifact.identity.clone(),
+            commitment: artifact.commitment_digest.clone(),
+        });
+    }
+
+    column![
+        row![
+            text(format!("Identity: {}", artifact.identity)).width(Length::FillPortion(3)),
+            text(format!("Backend: {}", artifact.backend)).width(Length::FillPortion(2)),
+            text(format!("Recorded at: {}", artifact.recorded_at_ms)).width(Length::FillPortion(2)),
+        ]
+        .spacing(8),
+        row![
+            text(format!("Commitment: {}", artifact.commitment_digest))
+                .width(Length::FillPortion(5)),
+            text(format!("Proof bytes: {}", artifact.proof.len())).width(Length::FillPortion(2)),
+            delete,
+        ]
+        .spacing(8)
+        .align_items(Alignment::Center),
+    ]
+    .spacing(4)
+    .into()
+}
+
+fn zsi_binding_view(binding: &ZsiBindingDto) -> Element<Message> {
+    let mut lines = vec![
+        format!("Operation: {}", binding.operation.as_str()),
+        format!("Identity: {}", binding.record.identity),
+        format!("Genesis commitment: {}", binding.record.genesis_id),
+        format!("Attestation digest: {}", binding.record.attestation_digest),
+        format!("Approvals recorded: {}", binding.record.approvals.len()),
+        format!("Witness bytes: {}", binding.witness.len()),
+        format!(
+            "Wallet address digest: {}",
+            hex_encode(binding.inputs.wallet_address)
+        ),
+        format!(
+            "Identity root digest: {}",
+            hex_encode(binding.inputs.identity_root)
+        ),
+        format!(
+            "State root digest: {}",
+            hex_encode(binding.inputs.state_root)
+        ),
+    ];
+    if !binding.inputs.vrf_tag.is_empty() {
+        lines.push(format!("VRF tag: {}", hex_encode(&binding.inputs.vrf_tag)));
+    }
+
+    container(
+        column![
+            text("Generated binding summary").size(16),
+            column_from(lines).spacing(4)
+        ]
+        .spacing(8),
+    )
+    .width(Length::Fill)
+    .style(iced::theme::Container::Box)
+    .padding(12)
+    .into()
+}
+
+#[cfg(feature = "wallet_hw")]
+fn hardware_device_entry(device: &HardwareDeviceDto) -> Element<Message> {
+    let label = device
+        .label
+        .clone()
+        .unwrap_or_else(|| "Unnamed device".to_string());
+    container(
+        column![
+            text(format!("Fingerprint: {}", device.fingerprint)),
+            text(format!("Model: {}", device.model)),
+            text(format!("Label: {label}")),
+        ]
+        .spacing(4),
+    )
+    .width(Length::Fill)
+    .style(iced::theme::Container::Box)
+    .padding(8)
+    .into()
+}
+
+fn next_operation(current: ZsiOperation) -> ZsiOperation {
+    match current {
+        ZsiOperation::Issue => ZsiOperation::Rotate,
+        ZsiOperation::Rotate => ZsiOperation::Revoke,
+        ZsiOperation::Revoke => ZsiOperation::Audit,
+        ZsiOperation::Audit => ZsiOperation::Issue,
+    }
 }
 
 fn lock_row(lock: &PendingLockDto) -> Element<Message> {
@@ -731,6 +1456,23 @@ fn format_rpc_error(error: &RpcCallError) -> String {
         RpcCallError::Timeout(duration) => {
             format!("Request timed out after {}s", duration.as_secs())
         }
+        RpcCallError::Client(WalletRpcClientError::Rpc {
+            code,
+            message,
+            details,
+            ..
+        }) => {
+            let description = describe_rpc_error(code, details.as_ref());
+            let mut headline = description.headline;
+            if let Some(detail) = description.technical {
+                headline = format!("{headline} — {detail}");
+            }
+            if let Some(extra) = technical_details(message, details.as_ref()) {
+                format!("{headline} ({extra})")
+            } else {
+                headline
+            }
+        }
         RpcCallError::Client(inner) => inner.to_string(),
     }
 }
@@ -739,6 +1481,10 @@ fn format_rpc_error(error: &RpcCallError) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    use crate::rpc::client::WalletRpcClientError;
+    use crate::rpc::error::WalletRpcErrorCode;
+    use crate::zsi::lifecycle::ZsiRecord;
 
     fn dummy_client() -> WalletRpcClient {
         WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, None, Duration::from_secs(1))
@@ -817,5 +1563,85 @@ mod tests {
         let command = state.update(dummy_client(), Message::RequestRescanFromHeight);
         assert!(state.pending_rescan.is_none());
         assert!(command.actions().is_empty());
+    }
+
+    #[test]
+    fn zsi_bind_requires_confirmation() {
+        let mut state = State::default();
+        state.zsi_bind_form.identity = "alice".into();
+        state.zsi_bind_form.genesis_id = "genesis".into();
+        state.zsi_bind_form.attestation_digest = "attest".into();
+        let command = state.update(dummy_client(), Message::SubmitZsiBind);
+        assert!(matches!(state.zsi_modal, Some(ZsiModal::BindConfirm(_))));
+        assert!(command.actions().is_empty());
+    }
+
+    #[test]
+    fn zsi_bind_blocks_duplicates() {
+        let mut state = State::default();
+        let record = ZsiRecord {
+            identity: "alice".into(),
+            genesis_id: "genesis".into(),
+            attestation_digest: "attest".into(),
+            approvals: Vec::new(),
+        };
+        let params = ZsiProofParams {
+            operation: ZsiOperation::Issue,
+            record,
+        };
+        state.zsi_modal = Some(ZsiModal::BindConfirm(params.clone()));
+        let client = dummy_client();
+        let _ = state.update(client.clone(), Message::ConfirmZsiBind);
+        assert!(state.zsi_op_inflight);
+        assert!(state.zsi_modal.is_none());
+        let _ = state.update(client, Message::ConfirmZsiBind);
+        assert!(state.zsi_op_inflight);
+    }
+
+    #[test]
+    fn zsi_delete_requires_confirmation() {
+        let mut state = State::default();
+        let _ = state.update(
+            dummy_client(),
+            Message::RequestZsiDelete {
+                identity: "alice".into(),
+                commitment: "commit".into(),
+            },
+        );
+        assert!(matches!(
+            state.zsi_modal,
+            Some(ZsiModal::DeleteConfirm { .. })
+        ));
+    }
+
+    #[test]
+    fn zsi_delete_blocks_duplicates() {
+        let mut state = State::default();
+        state.zsi_modal = Some(ZsiModal::DeleteConfirm {
+            identity: "alice".into(),
+            commitment: "commit".into(),
+        });
+        let client = dummy_client();
+        let _ = state.update(client.clone(), Message::ConfirmZsiDelete);
+        assert!(state.zsi_op_inflight);
+        assert!(state.zsi_modal.is_none());
+        let _ = state.update(client, Message::ConfirmZsiDelete);
+        assert!(state.zsi_op_inflight);
+    }
+
+    #[test]
+    fn zsi_errors_map_to_friendly_message() {
+        let mut state = State::default();
+        let error = RpcCallError::Client(WalletRpcClientError::Rpc {
+            code: WalletRpcErrorCode::ProverTimeout,
+            message: "timeout".into(),
+            json_code: -32014,
+            details: None,
+        });
+        let _ = state.update(dummy_client(), Message::ZsiBindCompleted(Err(error)));
+        assert_eq!(
+            state.zsi_error.as_deref(),
+            Some("The prover timed out while building the proof.")
+        );
     }
 }
