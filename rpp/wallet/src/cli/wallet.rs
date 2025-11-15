@@ -25,6 +25,9 @@ use rpp::runtime::wallet::rpc::{
 };
 use rpp::runtime::RuntimeMode;
 
+#[cfg(feature = "wallet_hw")]
+use super::telemetry::HardwareAction;
+use super::telemetry::{self, BackupAction, WatchOnlyAction};
 use crate::multisig::{Cosigner, MultisigScope};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
@@ -39,6 +42,7 @@ use crate::rpc::dto::{
 #[cfg(feature = "wallet_hw")]
 use crate::rpc::dto::{DerivationPathDto, HardwareSignParams};
 use crate::rpc::error::WalletRpcErrorCode;
+use crate::telemetry::TelemetryOutcome;
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
 
@@ -1195,8 +1199,20 @@ pub struct HardwareEnumerateCommand {
 #[cfg(feature = "wallet_hw")]
 impl HardwareEnumerateCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
-        let response = client.hw_enumerate().await?;
+        let response = match client.hw_enumerate().await {
+            Ok(response) => {
+                telemetry::global()
+                    .record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
+                response
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
         if response.devices.is_empty() {
             println!("No hardware signing devices detected.");
             return Ok(());
@@ -1241,6 +1257,7 @@ pub struct HardwareSignCommand {
 #[cfg(feature = "wallet_hw")]
 impl HardwareSignCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         let payload_clean = self.payload.trim();
         let payload_bytes = hex::decode(payload_clean)
@@ -1254,7 +1271,18 @@ impl HardwareSignCommand {
             },
             payload: hex::encode(payload_bytes),
         };
-        let response = client.hw_sign(&params).await?;
+        let response = match client.hw_sign(&params).await {
+            Ok(response) => {
+                telemetry::global()
+                    .record_hardware_outcome(HardwareAction::Sign, TelemetryOutcome::Success);
+                response
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_hardware_outcome(HardwareAction::Sign, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
         println!("Hardware signature\n");
         println!("  Fingerprint : {}", response.fingerprint);
         println!(
@@ -1293,8 +1321,20 @@ pub struct WatchOnlyStatusCommand {
 
 impl WatchOnlyStatusCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
-        let status = client.watch_only_status().await?;
+        let status = match client.watch_only_status().await {
+            Ok(status) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Status, TelemetryOutcome::Success);
+                status
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Status, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
         println!("Watch-only status\n");
         render_watch_only_status(&status);
         Ok(())
@@ -1321,6 +1361,7 @@ pub struct WatchOnlyEnableCommand {
 
 impl WatchOnlyEnableCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         require_confirmation(
             "Enable watch-only mode? Signing and proving operations will be disabled.",
@@ -1331,7 +1372,18 @@ impl WatchOnlyEnableCommand {
             account_xpub: self.account_xpub.clone(),
             birthday_height: self.birthday_height,
         };
-        let status = client.watch_only_enable(&params).await?;
+        let status = match client.watch_only_enable(&params).await {
+            Ok(status) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Success);
+                status
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
         println!("Watch-only mode enabled\n");
         render_watch_only_status(&status);
         Ok(())
@@ -1346,9 +1398,21 @@ pub struct WatchOnlyDisableCommand {
 
 impl WatchOnlyDisableCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         require_confirmation("Disable watch-only mode and restore signing capabilities?")?;
-        let status = client.watch_only_disable().await?;
+        let status = match client.watch_only_disable().await {
+            Ok(status) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Disable, TelemetryOutcome::Success);
+                status
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Disable, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
         println!("Watch-only mode disabled\n");
         render_watch_only_status(&status);
         Ok(())
@@ -1385,6 +1449,7 @@ pub struct BackupExportCommand {
 
 impl BackupExportCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         let passphrase = Zeroizing::new(
             prompt_password("Enter backup passphrase: ")
@@ -1404,9 +1469,21 @@ impl BackupExportCommand {
             metadata_only: self.metadata_only,
             include_checksums: !self.skip_checksums,
         };
-        let response: BackupExportResponse = client.backup_export(&params).await?;
+        let result = client.backup_export(&params).await;
         params.passphrase.zeroize();
         params.confirmation.zeroize();
+        let response: BackupExportResponse = match result {
+            Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
+                response
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Export, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
 
         println!("Backup exported\n");
         println!("  Path             : {}", response.path);
@@ -1429,6 +1506,7 @@ pub struct BackupValidateCommand {
 
 impl BackupValidateCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         let passphrase = Zeroizing::new(
             prompt_password("Enter backup passphrase: ")
@@ -1443,8 +1521,20 @@ impl BackupValidateCommand {
                 BackupValidationModeDto::Full
             },
         };
-        let response: BackupValidateResponse = client.backup_validate(&params).await?;
+        let result = client.backup_validate(&params).await;
         params.passphrase.zeroize();
+        let response: BackupValidateResponse = match result {
+            Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Validate, TelemetryOutcome::Success);
+                response
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Validate, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
 
         println!("Backup validation\n");
         render_backup_metadata(&response.metadata);
@@ -1469,6 +1559,7 @@ pub struct BackupImportCommand {
 
 impl BackupImportCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
+        telemetry::configure(None, None);
         let client = self.rpc.client()?;
         require_confirmation(&format!(
             "Import backup `{}` and overwrite local wallet state?",
@@ -1482,8 +1573,20 @@ impl BackupImportCommand {
             name: self.name.clone(),
             passphrase: (*passphrase).clone(),
         };
-        let response: BackupImportResponse = client.backup_import(&params).await?;
+        let result = client.backup_import(&params).await;
         params.passphrase.zeroize();
+        let response: BackupImportResponse = match result {
+            Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Import, TelemetryOutcome::Success);
+                response
+            }
+            Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Import, TelemetryOutcome::Error);
+                return Err(WalletCliError::from(error));
+            }
+        };
 
         println!("Backup import completed\n");
         render_backup_metadata(&response.metadata);

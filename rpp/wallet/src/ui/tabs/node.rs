@@ -10,10 +10,11 @@ use crate::rpc::dto::{
     ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
 };
 
+use crate::telemetry::TelemetryOutcome;
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::{modal, ConfirmDialog};
 use crate::ui::error_map::{describe_rpc_error, technical_details};
-use crate::ui::telemetry;
+use crate::ui::telemetry::{self, ZsiAction};
 use crate::zsi::bind::ZsiOperation;
 use crate::zsi::lifecycle::{ConsensusApproval, ZsiRecord};
 
@@ -21,6 +22,8 @@ use hex::encode as hex_encode;
 
 #[cfg(feature = "wallet_hw")]
 use crate::rpc::dto::{HardwareDeviceDto, HardwareEnumerateResponse};
+#[cfg(feature = "wallet_hw")]
+use crate::ui::telemetry::HardwareAction;
 
 const RECENT_BLOCK_SAMPLE: u32 = 8;
 
@@ -331,8 +334,18 @@ impl State {
             }
             Message::ZsiArtifactsLoaded(result) => {
                 match result {
-                    Ok(artifacts) => self.zsi_artifacts.set_loaded(artifacts),
-                    Err(error) => self.zsi_artifacts.set_error(&error),
+                    Ok(artifacts) => {
+                        telemetry::global().record_zsi_outcome(
+                            ZsiAction::ListArtifacts,
+                            TelemetryOutcome::Success,
+                        );
+                        self.zsi_artifacts.set_loaded(artifacts)
+                    }
+                    Err(error) => {
+                        telemetry::global()
+                            .record_zsi_outcome(ZsiAction::ListArtifacts, TelemetryOutcome::Error);
+                        self.zsi_artifacts.set_error(&error)
+                    }
                 }
                 self.finish_refresh();
                 Command::none()
@@ -385,12 +398,16 @@ impl State {
                 self.zsi_op_inflight = false;
                 match result {
                     Ok(response) => {
+                        telemetry::global()
+                            .record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Success);
                         self.zsi_binding = Some(response.binding);
                         self.zsi_bind_form.reset();
                         self.zsi_feedback = Some("Generated account binding witness.".into());
                         Command::none()
                     }
                     Err(error) => {
+                        telemetry::global()
+                            .record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
                         self.zsi_error = Some(format_rpc_error(&error));
                         Command::none()
                     }
@@ -441,6 +458,10 @@ impl State {
                 self.zsi_op_inflight = false;
                 match result {
                     Ok(response) => {
+                        telemetry::global().record_zsi_outcome(
+                            ZsiAction::DeleteArtifact,
+                            TelemetryOutcome::Success,
+                        );
                         if response.deleted {
                             self.zsi_feedback = Some("Deleted stored Zero Sync artifact.".into());
                         } else {
@@ -454,6 +475,8 @@ impl State {
                         Command::none()
                     }
                     Err(error) => {
+                        telemetry::global()
+                            .record_zsi_outcome(ZsiAction::DeleteArtifact, TelemetryOutcome::Error);
                         self.zsi_error = Some(format_rpc_error(&error));
                         Command::none()
                     }
@@ -467,8 +490,20 @@ impl State {
             #[cfg(feature = "wallet_hw")]
             Message::HardwareDevicesLoaded(result) => {
                 match result {
-                    Ok(devices) => self.hardware_devices.set_loaded(devices),
-                    Err(error) => self.hardware_devices.set_error(&error),
+                    Ok(devices) => {
+                        telemetry::global().record_hardware_outcome(
+                            HardwareAction::Enumerate,
+                            TelemetryOutcome::Success,
+                        );
+                        self.hardware_devices.set_loaded(devices)
+                    }
+                    Err(error) => {
+                        telemetry::global().record_hardware_outcome(
+                            HardwareAction::Enumerate,
+                            TelemetryOutcome::Error,
+                        );
+                        self.hardware_devices.set_error(&error)
+                    }
                 }
                 self.hardware_inflight = false;
                 self.finish_refresh();

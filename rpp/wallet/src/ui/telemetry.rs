@@ -5,6 +5,7 @@ use std::time::Duration;
 use metrics::{counter, histogram};
 
 use crate::rpc::client::WalletRpcClientError;
+use crate::telemetry::TelemetryOutcome;
 
 use super::commands::RpcCallError;
 
@@ -134,6 +135,128 @@ impl UiTelemetry {
             return;
         }
         counter!("ui.rescan.triggered", "origin" => origin).increment(1);
+    }
+
+    pub fn record_backup_outcome(&self, action: BackupAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
+    pub fn record_watch_only_outcome(&self, action: WatchOnlyAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
+    pub fn record_security_outcome(&self, action: SecurityAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
+    pub fn record_zsi_outcome(&self, action: ZsiAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn record_hardware_outcome(&self, action: HardwareAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
+    fn record_action(&self, operation: &'static str, outcome: TelemetryOutcome) {
+        if !self.opted_in() {
+            return;
+        }
+        counter!(
+            "ui.action.events",
+            "operation" => operation,
+            "outcome" => outcome.label()
+        )
+        .increment(1);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackupAction {
+    Export,
+    Validate,
+    Import,
+}
+
+impl BackupAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Export => "backup.export",
+            Self::Validate => "backup.validate",
+            Self::Import => "backup.import",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WatchOnlyAction {
+    Status,
+    Enable,
+    Disable,
+}
+
+impl WatchOnlyAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Status => "watch_only.status",
+            Self::Enable => "watch_only.enable",
+            Self::Disable => "watch_only.disable",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SecurityAction {
+    Snapshot,
+    Assign,
+    Remove,
+    MtlsUpdate,
+    CertificateUpload,
+}
+
+impl SecurityAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Snapshot => "security.snapshot",
+            Self::Assign => "security.assign",
+            Self::Remove => "security.remove",
+            Self::MtlsUpdate => "security.mtls_update",
+            Self::CertificateUpload => "security.certificate_upload",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZsiAction {
+    ListArtifacts,
+    BindAccount,
+    DeleteArtifact,
+}
+
+impl ZsiAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ListArtifacts => "zsi.list",
+            Self::BindAccount => "zsi.bind_account",
+            Self::DeleteArtifact => "zsi.delete",
+        }
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HardwareAction {
+    Enumerate,
+    Sign,
+}
+
+#[cfg(feature = "wallet_hw")]
+impl HardwareAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Enumerate => "hardware.enumerate",
+            Self::Sign => "hardware.sign",
+        }
     }
 }
 

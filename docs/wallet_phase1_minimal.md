@@ -38,6 +38,25 @@ When enabled, the UI emits histogram and counter events—such as
 dormant whenever the opt-in is unset, ensuring no telemetry leaves the operator
 workstation by default.【F:rpp/wallet/src/ui/telemetry.rs†L1-L220】
 
+### CLI telemetry opt-in
+
+Command-line workflows (backup management, watch-only toggles, hardware probes,
+and Zero Sync helpers) share the same opt-in defaults. The CLI checks the
+standard wallet configuration if it exists, and honours the environment
+variable `RPP_WALLET_TELEMETRY_OPT_IN` (accepting `true/1/yes` and
+`false/0/no`).【F:rpp/wallet/src/cli/telemetry.rs†L1-L154】 Operators can export
+metrics for these flows by setting the flag before running a command:
+
+```bash
+export RPP_WALLET_TELEMETRY_OPT_IN=1
+rpp-wallet backup export --rpc-endpoint http://127.0.0.1:9090
+```
+
+When enabled, the CLI records action counters—e.g. `cli.action.events` labelled
+for backups, watch-only, hardware, and ZSI operations—only after each RPC or
+proof task resolves, ensuring failures and successes are distinguished without
+logging sensitive identifiers.【F:rpp/wallet/src/cli/telemetry.rs†L23-L148】【F:rpp/wallet/src/cli/wallet.rs†L1180-L1516】【F:rpp/wallet/src/cli/zsi.rs†L199-L244】
+
 ## Phase 1 JSON-RPC reference
 
 ### Transport, authentication, and limits
