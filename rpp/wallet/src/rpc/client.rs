@@ -5,6 +5,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(feature = "wallet_rpc_mtls")]
+use super::dto::WalletRoleDto;
 use super::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupValidateParams, BackupValidateResponse, BalanceResponse, BroadcastParams,
@@ -20,9 +22,9 @@ use super::dto::{
     SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetCosignersParams,
     SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
     SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse,
-    WalletRoleDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
-    ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
-    ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
+    WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse, ZsiDeleteParams,
+    ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse, ZsiVerifyParams,
+    ZsiVerifyResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_hw")]
 use super::dto::{HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse};
@@ -325,13 +327,22 @@ impl WalletRpcClient {
     }
 
     /// Fetches the wallet security snapshot including RBAC assignments and mTLS state.
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub async fn security_snapshot(
         &self,
     ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
         self.call("security.snapshot", Option::<Value>::None).await
     }
 
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub async fn security_snapshot(
+        &self,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        Err(mtls_rpc_disabled("security.snapshot"))
+    }
+
     /// Applies a new RBAC assignment for the provided identity.
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub async fn security_assign(
         &self,
         params: &SecurityAssignParams,
@@ -339,7 +350,16 @@ impl WalletRpcClient {
         self.call("security.assign", Some(params)).await
     }
 
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub async fn security_assign(
+        &self,
+        _params: &SecurityAssignParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        Err(mtls_rpc_disabled("security.assign"))
+    }
+
     /// Removes an RBAC assignment for the provided identity.
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub async fn security_remove(
         &self,
         params: &SecurityRemoveParams,
@@ -347,7 +367,16 @@ impl WalletRpcClient {
         self.call("security.remove", Some(params)).await
     }
 
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub async fn security_remove(
+        &self,
+        _params: &SecurityRemoveParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        Err(mtls_rpc_disabled("security.remove"))
+    }
+
     /// Toggles the wallet mTLS configuration state.
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub async fn security_update_mtls(
         &self,
         params: &SecurityMtlsUpdateParams,
@@ -355,12 +384,29 @@ impl WalletRpcClient {
         self.call("security.mtls_update", Some(params)).await
     }
 
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub async fn security_update_mtls(
+        &self,
+        _params: &SecurityMtlsUpdateParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        Err(mtls_rpc_disabled("security.mtls_update"))
+    }
+
     /// Uploads certificate artifacts for the wallet RPC server.
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub async fn security_upload_certificate(
         &self,
         params: &SecurityCertificateUploadParams,
     ) -> Result<SecurityCertificateUploadResponse, WalletRpcClientError> {
         self.call("security.certificate_upload", Some(params)).await
+    }
+
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub async fn security_upload_certificate(
+        &self,
+        _params: &SecurityCertificateUploadParams,
+    ) -> Result<SecurityCertificateUploadResponse, WalletRpcClientError> {
+        Err(mtls_rpc_disabled("security.certificate_upload"))
     }
 
     /// Estimates the fee rate for a given confirmation target.
@@ -486,6 +532,14 @@ impl WalletRpcClient {
     }
 }
 
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+fn mtls_rpc_disabled(method: &'static str) -> WalletRpcClientError {
+    WalletRpcClientError::UnsupportedFeature {
+        feature: "wallet_rpc_mtls",
+        details: format!("{method} RPC requires wallet RPC mTLS support"),
+    }
+}
+
 fn rpc_error_payload(error: &JsonRpcError) -> (WalletRpcErrorCode, Option<Value>) {
     if let Some(Value::Object(map)) = &error.data {
         let code = map
@@ -521,5 +575,10 @@ pub enum WalletRpcClientError {
         message: String,
         json_code: i32,
         details: Option<Value>,
+    },
+    #[error("wallet RPC client feature `{feature}` unavailable: {details}")]
+    UnsupportedFeature {
+        feature: &'static str,
+        details: String,
     },
 }

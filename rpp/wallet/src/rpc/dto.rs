@@ -577,6 +577,7 @@ pub struct ReleasePendingLocksResponse {
     pub released: Vec<PendingLockDto>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WalletRoleDto {
@@ -585,6 +586,7 @@ pub enum WalletRoleDto {
     Viewer,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityAssignmentDto {
     pub identity: String,
@@ -592,6 +594,7 @@ pub struct SecurityAssignmentDto {
     pub roles: Vec<WalletRoleDto>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityFingerprintDto {
     pub fingerprint: String,
@@ -599,6 +602,7 @@ pub struct SecurityFingerprintDto {
     pub description: Option<String>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecuritySnapshotResponse {
     pub mtls_enabled: bool,
@@ -612,6 +616,7 @@ pub struct SecuritySnapshotResponse {
     pub client_fingerprints: Vec<String>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityAssignParams {
     pub identity: String,
@@ -619,16 +624,19 @@ pub struct SecurityAssignParams {
     pub roles: Vec<WalletRoleDto>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityRemoveParams {
     pub identity: String,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityMtlsUpdateParams {
     pub enabled: bool,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityCertificateUploadParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -639,10 +647,48 @@ pub struct SecurityCertificateUploadParams {
     pub ca_certificate_path: Option<String>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecurityCertificateUploadResponse {
     pub stored: bool,
 }
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletRoleDto {}
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityAssignmentDto;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityFingerprintDto;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecuritySnapshotResponse;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityAssignParams;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityRemoveParams;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityMtlsUpdateParams;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityCertificateUploadParams;
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityCertificateUploadResponse;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupMetadataDto {
