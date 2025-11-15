@@ -8,6 +8,9 @@ rust-version = "1.79"
 default = ["prover-mock", "backup", "runtime"]
 runtime = ["dep:rpp"]
 wallet_hw = []
+wallet_zsi = []
+wallet_multisig_hooks = []
+wallet_rpc_mtls = []
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",

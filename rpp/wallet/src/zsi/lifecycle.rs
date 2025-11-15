@@ -226,8 +226,40 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proof_backend::{
+        ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, VerifyingKey,
+    };
     use prover_backend_interface::BackendResult;
     use prover_mock_backend::MockBackend;
+
+    #[derive(Default)]
+    struct ProofingBackend;
+
+    impl ProofBackend for ProofingBackend {
+        fn name(&self) -> &'static str {
+            "proofing"
+        }
+
+        fn prove_identity(
+            &self,
+            _pk: &ProvingKey,
+            witness: &WitnessBytes,
+        ) -> BackendResult<ProofBytes> {
+            ProofBytes::encode(
+                &ProofHeader::new(ProofSystemKind::Mock, self.name()),
+                &witness.as_slice(),
+            )
+        }
+
+        fn verify_identity(
+            &self,
+            _vk: &VerifyingKey,
+            _proof: &ProofBytes,
+            _inputs: &IdentityPublicInputs,
+        ) -> BackendResult<()> {
+            Ok(())
+        }
+    }
 
     fn sample_request() -> ZsiRequest {
         ZsiRequest {
@@ -291,6 +323,22 @@ mod tests {
         match receipt {
             LifecycleReceipt::Revoked { identity, .. } => {
                 assert_eq!(identity, "alice");
+            }
+            _ => panic!("unexpected variant"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn proof_backend_attaches_lifecycle_proof() -> BackendResult<()> {
+        let lifecycle = ZsiLifecycle::new(ProofingBackend::default());
+        let receipt = lifecycle.issue(sample_request())?;
+        match receipt {
+            LifecycleReceipt::Issued { proof, .. } => {
+                let proof = proof.expect("proof attached");
+                assert_eq!(proof.backend, "proofing");
+                assert_eq!(proof.operation, "issue");
+                assert!(!proof.raw_proof.is_empty());
             }
             _ => panic!("unexpected variant"),
         }
