@@ -54,11 +54,16 @@ use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
 use crate::node_client::{
     BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
 };
-use crate::wallet::{
-    PolicyPreview, TelemetryCounter, TelemetryCounters, Wallet, WalletError, WalletMode,
-    WalletPaths, WalletSyncCoordinator, WalletSyncError, WatchOnlyError, ZsiBinding, ZsiError,
-    ZsiProofRequest, ZsiVerifyRequest,
+use crate::telemetry::{
+    TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletActionTelemetry,
+    WalletTelemetryAction,
 };
+use crate::wallet::{
+    PolicyPreview, Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
+    WalletSyncError, WatchOnlyError, ZsiBinding, ZsiError, ZsiProofRequest, ZsiVerifyRequest,
+};
+#[cfg(feature = "runtime")]
+use rpp::runtime::telemetry::metrics::{RuntimeMetrics, WalletAction, WalletActionResult};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug)]
@@ -105,16 +110,37 @@ impl SyncHandle for WalletSyncCoordinator {
 
 pub struct WalletRpcRouter {
     wallet: Arc<Wallet>,
+    telemetry: Arc<WalletActionTelemetry>,
     drafts: Mutex<HashMap<String, DraftState>>,
     next_id: AtomicU64,
     sync: Option<Arc<dyn SyncHandle>>,
+    #[cfg(feature = "runtime")]
+    metrics: Arc<RuntimeMetrics>,
 }
 
 const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
 
 impl WalletRpcRouter {
+    #[cfg(feature = "runtime")]
+    pub fn new(
+        wallet: Arc<Wallet>,
+        sync: Option<Arc<dyn SyncHandle>>,
+        metrics: Arc<RuntimeMetrics>,
+    ) -> Self {
+        Self {
+            telemetry: wallet.telemetry_handle(),
+            wallet,
+            drafts: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            sync,
+            metrics,
+        }
+    }
+
+    #[cfg(not(feature = "runtime"))]
     pub fn new(wallet: Arc<Wallet>, sync: Option<Arc<dyn SyncHandle>>) -> Self {
         Self {
+            telemetry: wallet.telemetry_handle(),
             wallet,
             drafts: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -131,6 +157,39 @@ impl WalletRpcRouter {
     fn clear_node_failure(&self) {
         if let Some(sync) = &self.sync {
             sync.clear_node_failure();
+        }
+    }
+
+    fn record_action(&self, action: WalletTelemetryAction, outcome: TelemetryOutcome) {
+        self.telemetry.record(action, outcome);
+        #[cfg(feature = "runtime")]
+        {
+            let action_label = match action {
+                WalletTelemetryAction::BackupExport => WalletAction::BackupExport,
+                WalletTelemetryAction::BackupValidate => WalletAction::BackupValidate,
+                WalletTelemetryAction::BackupImport => WalletAction::BackupImport,
+                WalletTelemetryAction::WatchOnlyStatus => WalletAction::WatchOnlyStatus,
+                WalletTelemetryAction::WatchOnlyEnable => WalletAction::WatchOnlyEnable,
+                WalletTelemetryAction::WatchOnlyDisable => WalletAction::WatchOnlyDisable,
+                WalletTelemetryAction::MultisigGetScope => WalletAction::MultisigGetScope,
+                WalletTelemetryAction::MultisigSetScope => WalletAction::MultisigSetScope,
+                WalletTelemetryAction::MultisigGetCosigners => WalletAction::MultisigGetCosigners,
+                WalletTelemetryAction::MultisigSetCosigners => WalletAction::MultisigSetCosigners,
+                WalletTelemetryAction::MultisigExport => WalletAction::MultisigExport,
+                WalletTelemetryAction::ZsiProve => WalletAction::ZsiProve,
+                WalletTelemetryAction::ZsiVerify => WalletAction::ZsiVerify,
+                WalletTelemetryAction::ZsiBindAccount => WalletAction::ZsiBindAccount,
+                WalletTelemetryAction::ZsiList => WalletAction::ZsiList,
+                WalletTelemetryAction::ZsiDelete => WalletAction::ZsiDelete,
+                WalletTelemetryAction::HwEnumerate => WalletAction::HwEnumerate,
+                WalletTelemetryAction::HwSign => WalletAction::HwSign,
+            };
+            let outcome_label = match outcome {
+                TelemetryOutcome::Success => WalletActionResult::Success,
+                TelemetryOutcome::Error => WalletActionResult::Error,
+            };
+            self.metrics
+                .record_wallet_action(action_label, outcome_label);
         }
     }
 
@@ -224,34 +283,103 @@ impl WalletRpcRouter {
             "zsi.prove" => {
                 let params: ZsiProofParams = parse_params(params)?;
                 let request = zsi_proof_params_to_request(params);
-                let proof = self.wallet.zsi_prove(request)?;
-                to_value(ZsiProveResponse { proof })
+                match self.wallet_call(self.wallet.zsi_prove(request)) {
+                    Ok(proof) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiProve,
+                            TelemetryOutcome::Success,
+                        );
+                        to_value(ZsiProveResponse { proof })
+                    }
+                    Err(error) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiProve,
+                            TelemetryOutcome::Error,
+                        );
+                        Err(error)
+                    }
+                }
             }
             "zsi.verify" => {
                 let params: ZsiVerifyParams = parse_params(params)?;
                 let request = zsi_verify_params_to_request(params);
-                self.wallet.zsi_verify(request)?;
-                to_value(ZsiVerifyResponse { valid: true })
+                match self.wallet_call(self.wallet.zsi_verify(request)) {
+                    Ok(()) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiVerify,
+                            TelemetryOutcome::Success,
+                        );
+                        to_value(ZsiVerifyResponse { valid: true })
+                    }
+                    Err(error) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiVerify,
+                            TelemetryOutcome::Error,
+                        );
+                        Err(error)
+                    }
+                }
             }
             "zsi.bind_account" => {
                 let params: ZsiProofParams = parse_params(params)?;
                 let request = zsi_proof_params_to_request(params);
-                let binding = self.wallet.zsi_bind_account(request)?;
-                to_value(ZsiBindResponse {
-                    binding: zsi_binding_to_dto(binding),
-                })
+                match self.wallet_call(self.wallet.zsi_bind_account(request)) {
+                    Ok(binding) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiBindAccount,
+                            TelemetryOutcome::Success,
+                        );
+                        to_value(ZsiBindResponse {
+                            binding: zsi_binding_to_dto(binding),
+                        })
+                    }
+                    Err(error) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiBindAccount,
+                            TelemetryOutcome::Error,
+                        );
+                        Err(error)
+                    }
+                }
             }
             "zsi.list" => {
                 parse_params::<EmptyParams>(params)?;
-                let artifacts = self.wallet.zsi_list()?;
-                let artifacts = artifacts.into_iter().map(zsi_artifact_to_dto).collect();
-                to_value(ZsiListResponse { artifacts })
+                match self.wallet_call(self.wallet.zsi_list()) {
+                    Ok(artifacts) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiList,
+                            TelemetryOutcome::Success,
+                        );
+                        let artifacts = artifacts.into_iter().map(zsi_artifact_to_dto).collect();
+                        to_value(ZsiListResponse { artifacts })
+                    }
+                    Err(error) => {
+                        self.record_action(WalletTelemetryAction::ZsiList, TelemetryOutcome::Error);
+                        Err(error)
+                    }
+                }
             }
             "zsi.delete" => {
                 let params: ZsiDeleteParams = parse_params(params)?;
-                self.wallet
-                    .zsi_delete(&params.identity, &params.commitment_digest)?;
-                to_value(ZsiDeleteResponse { deleted: true })
+                match self.wallet_call(
+                    self.wallet
+                        .zsi_delete(&params.identity, &params.commitment_digest),
+                ) {
+                    Ok(()) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiDelete,
+                            TelemetryOutcome::Success,
+                        );
+                        to_value(ZsiDeleteResponse { deleted: true })
+                    }
+                    Err(error) => {
+                        self.record_action(
+                            WalletTelemetryAction::ZsiDelete,
+                            TelemetryOutcome::Error,
+                        );
+                        Err(error)
+                    }
+                }
             }
             "multisig.get_scope" => {
                 parse_params::<EmptyParams>(params)?;
@@ -404,24 +532,50 @@ impl WalletRpcRouter {
 
     #[cfg(feature = "wallet_hw")]
     fn hw_enumerate(&self) -> Result<Value, RouterError> {
-        let devices = self.wallet.hardware_devices()?;
-        let devices = devices.into_iter().map(hardware_device_to_dto).collect();
-        to_value(HardwareEnumerateResponse { devices })
+        match self.wallet_call(self.wallet.hardware_devices()) {
+            Ok(devices) => {
+                self.record_action(
+                    WalletTelemetryAction::HwEnumerate,
+                    TelemetryOutcome::Success,
+                );
+                let devices = devices.into_iter().map(hardware_device_to_dto).collect();
+                to_value(HardwareEnumerateResponse { devices })
+            }
+            Err(error) => {
+                self.record_action(WalletTelemetryAction::HwEnumerate, TelemetryOutcome::Error);
+                Err(error)
+            }
+        }
     }
 
     #[cfg(feature = "wallet_hw")]
     fn hw_sign(&self, params: HardwareSignParams) -> Result<Value, RouterError> {
-        let payload = hex_decode(&params.payload)
-            .map_err(|err| RouterError::InvalidParams(format!("invalid payload hex: {err}")))?;
+        let payload = match hex_decode(&params.payload) {
+            Ok(payload) => payload,
+            Err(err) => {
+                self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Error);
+                return Err(RouterError::InvalidParams(format!(
+                    "invalid payload hex: {err}"
+                )));
+            }
+        };
         let path = dto_to_derivation_path(params.path);
         let request = HardwareSignRequest::new(params.fingerprint.clone(), path.clone(), payload);
-        let signature = self.wallet.hardware_sign(request)?;
-        to_value(HardwareSignResponse {
-            fingerprint: signature.fingerprint,
-            signature: hex_encode(signature.signature),
-            public_key: hex_encode(signature.public_key),
-            path: derivation_path_to_dto(&signature.path),
-        })
+        match self.wallet_call(self.wallet.hardware_sign(request)) {
+            Ok(signature) => {
+                self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Success);
+                to_value(HardwareSignResponse {
+                    fingerprint: signature.fingerprint,
+                    signature: hex_encode(signature.signature),
+                    public_key: hex_encode(signature.public_key),
+                    path: derivation_path_to_dto(&signature.path),
+                })
+            }
+            Err(error) => {
+                self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Error);
+                Err(error)
+            }
+        }
     }
 
     fn respond_draft(&self, draft_id: &str, bundle: &DraftBundle) -> Result<Value, RouterError> {
@@ -472,54 +626,161 @@ impl WalletRpcRouter {
     }
 
     fn multisig_get_scope(&self) -> Result<Value, RouterError> {
-        let scope = self.wallet_call(self.wallet.multisig_scope())?;
-        let dto = scope.as_ref().map(MultisigScopeDto::from);
-        to_value(GetMultisigScopeResponse { scope: dto })
+        match self.wallet_call(self.wallet.multisig_scope()) {
+            Ok(scope) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigGetScope,
+                    TelemetryOutcome::Success,
+                );
+                let dto = scope.as_ref().map(MultisigScopeDto::from);
+                to_value(GetMultisigScopeResponse { scope: dto })
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigGetScope,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn multisig_set_scope(&self, params: SetMultisigScopeParams) -> Result<Value, RouterError> {
-        let scope = params.scope.map(scope_from_dto).transpose()?;
-        self.wallet_call(self.wallet.set_multisig_scope(scope))?;
-        let updated = self.wallet_call(self.wallet.multisig_scope())?;
-        let dto = updated.as_ref().map(MultisigScopeDto::from);
-        to_value(SetMultisigScopeResponse { scope: dto })
+        let scope = match params.scope.map(scope_from_dto).transpose() {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetScope,
+                    TelemetryOutcome::Error,
+                );
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.wallet_call(self.wallet.set_multisig_scope(scope)) {
+            self.record_action(
+                WalletTelemetryAction::MultisigSetScope,
+                TelemetryOutcome::Error,
+            );
+            return Err(error);
+        }
+        match self.wallet_call(self.wallet.multisig_scope()) {
+            Ok(updated) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetScope,
+                    TelemetryOutcome::Success,
+                );
+                let dto = updated.as_ref().map(MultisigScopeDto::from);
+                to_value(SetMultisigScopeResponse { scope: dto })
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetScope,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn multisig_get_cosigners(&self) -> Result<Value, RouterError> {
-        let registry = self.wallet_call(self.wallet.cosigner_registry())?;
-        let cosigners = registry
-            .as_ref()
-            .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
-            .unwrap_or_default();
-        to_value(GetCosignersResponse { cosigners })
+        match self.wallet_call(self.wallet.cosigner_registry()) {
+            Ok(registry) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigGetCosigners,
+                    TelemetryOutcome::Success,
+                );
+                let cosigners = registry
+                    .as_ref()
+                    .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
+                    .unwrap_or_default();
+                to_value(GetCosignersResponse { cosigners })
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigGetCosigners,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn multisig_set_cosigners(&self, params: SetCosignersParams) -> Result<Value, RouterError> {
         if params.cosigners.is_empty() {
+            self.record_action(
+                WalletTelemetryAction::MultisigSetCosigners,
+                TelemetryOutcome::Error,
+            );
             return Err(RouterError::InvalidParams(
                 "cosigners list cannot be empty".to_string(),
             ));
         }
-        let registry = registry_from_dtos(params.cosigners)?;
-        self.wallet_call(self.wallet.set_cosigner_registry(Some(registry)))?;
-        let registry = self.wallet_call(self.wallet.cosigner_registry())?;
-        let cosigners = registry
-            .as_ref()
-            .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
-            .unwrap_or_default();
-        to_value(SetCosignersResponse { cosigners })
+        let registry = match registry_from_dtos(params.cosigners) {
+            Ok(registry) => registry,
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetCosigners,
+                    TelemetryOutcome::Error,
+                );
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.wallet_call(self.wallet.set_cosigner_registry(Some(registry))) {
+            self.record_action(
+                WalletTelemetryAction::MultisigSetCosigners,
+                TelemetryOutcome::Error,
+            );
+            return Err(error);
+        }
+        match self.wallet_call(self.wallet.cosigner_registry()) {
+            Ok(registry) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetCosigners,
+                    TelemetryOutcome::Success,
+                );
+                let cosigners = registry
+                    .as_ref()
+                    .map(|registry| registry.entries().iter().map(CosignerDto::from).collect())
+                    .unwrap_or_default();
+                to_value(SetCosignersResponse { cosigners })
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigSetCosigners,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn multisig_export(&self, params: MultisigExportParams) -> Result<Value, RouterError> {
         let draft_id = params.draft_id;
-        let drafts = self.lock_drafts()?;
-        let metadata = drafts
-            .get(&draft_id)
-            .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?
-            .metadata
-            .multisig
-            .clone();
+        let drafts = match self.lock_drafts() {
+            Ok(drafts) => drafts,
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigExport,
+                    TelemetryOutcome::Error,
+                );
+                return Err(error);
+            }
+        };
+        let metadata = match drafts.get(&draft_id) {
+            Some(state) => state.metadata.multisig.clone(),
+            None => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigExport,
+                    TelemetryOutcome::Error,
+                );
+                return Err(RouterError::MissingDraft(draft_id.clone()));
+            }
+        };
         drop(drafts);
+        self.record_action(
+            WalletTelemetryAction::MultisigExport,
+            TelemetryOutcome::Success,
+        );
         let metadata = metadata.as_ref().map(MultisigDraftMetadataDto::from);
         to_value(MultisigExportResponse { draft_id, metadata })
     }
@@ -694,20 +955,30 @@ impl WalletRpcRouter {
             include_checksums,
         };
         let store = self.wallet.store();
-        let result = backup_export(
+        match backup_export(
             store.as_ref(),
             self.wallet.keystore_path(),
             self.wallet.backup_dir(),
             passphrase,
             confirmation,
             options,
-        )
-        .map_err(RouterError::Backup)?;
-        let response = BackupExportResponse {
-            path: result.path.to_string_lossy().to_string(),
-            metadata: metadata_to_dto(&result.metadata),
-        };
-        to_value(response)
+        ) {
+            Ok(result) => {
+                self.record_action(
+                    WalletTelemetryAction::BackupExport,
+                    TelemetryOutcome::Success,
+                );
+                let response = BackupExportResponse {
+                    path: result.path.to_string_lossy().to_string(),
+                    metadata: metadata_to_dto(&result.metadata),
+                };
+                to_value(response)
+            }
+            Err(error) => {
+                self.record_action(WalletTelemetryAction::BackupExport, TelemetryOutcome::Error);
+                Err(RouterError::Backup(error))
+            }
+        }
     }
 
     fn handle_backup_validate(&self, params: BackupValidateParams) -> Result<Value, RouterError> {
@@ -722,35 +993,59 @@ impl WalletRpcRouter {
             BackupValidationModeDto::Full => BackupValidationMode::Full,
         };
         let store = self.wallet.store();
-        let validation = backup_validate(
+        match backup_validate(
             store.as_ref(),
             self.wallet.backup_dir(),
             &name,
             passphrase,
             mode,
-        )
-        .map_err(RouterError::Backup)?;
-        let response = BackupValidateResponse {
-            metadata: metadata_to_dto(&validation.metadata),
-            has_keystore: validation.has_keystore,
-            policy_count: validation.policy_count,
-            meta_entries: validation.meta_entries,
-        };
-        to_value(response)
+        ) {
+            Ok(validation) => {
+                self.record_action(
+                    WalletTelemetryAction::BackupValidate,
+                    TelemetryOutcome::Success,
+                );
+                let response = BackupValidateResponse {
+                    metadata: metadata_to_dto(&validation.metadata),
+                    has_keystore: validation.has_keystore,
+                    policy_count: validation.policy_count,
+                    meta_entries: validation.meta_entries,
+                };
+                to_value(response)
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::BackupValidate,
+                    TelemetryOutcome::Error,
+                );
+                Err(RouterError::Backup(error))
+            }
+        }
     }
 
     fn handle_backup_import(&self, params: BackupImportParams) -> Result<Value, RouterError> {
         let BackupImportParams { name, passphrase } = params;
         let passphrase = Zeroizing::new(passphrase.into_bytes());
         let store = self.wallet.store();
-        let outcome = backup_import(
+        let outcome = match backup_import(
             store.as_ref(),
             self.wallet.keystore_path(),
             self.wallet.backup_dir(),
             &name,
             passphrase,
-        )
-        .map_err(RouterError::Backup)?;
+        ) {
+            Ok(outcome) => {
+                self.record_action(
+                    WalletTelemetryAction::BackupImport,
+                    TelemetryOutcome::Success,
+                );
+                outcome
+            }
+            Err(error) => {
+                self.record_action(WalletTelemetryAction::BackupImport, TelemetryOutcome::Error);
+                return Err(RouterError::Backup(error));
+            }
+        };
         let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
         let _ = sync
             .request_rescan(outcome.rescan_from)
@@ -815,22 +1110,61 @@ impl WalletRpcRouter {
     }
 
     fn watch_only_status(&self) -> Result<Value, RouterError> {
-        let status = self
-            .wallet
-            .watch_only_status()
-            .map_err(RouterError::WatchOnly)?;
-        to_value(watch_only_status_to_dto(status))
+        match self.wallet.watch_only_status() {
+            Ok(status) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyStatus,
+                    TelemetryOutcome::Success,
+                );
+                to_value(watch_only_status_to_dto(status))
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyStatus,
+                    TelemetryOutcome::Error,
+                );
+                Err(RouterError::WatchOnly(error))
+            }
+        }
     }
 
     fn watch_only_enable(&self, params: WatchOnlyEnableParams) -> Result<Value, RouterError> {
         let record = watch_only_record_from_params(params);
-        let status = self.wallet_call(self.wallet.enable_watch_only(record))?;
-        to_value(watch_only_status_to_dto(status))
+        match self.wallet_call(self.wallet.enable_watch_only(record)) {
+            Ok(status) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyEnable,
+                    TelemetryOutcome::Success,
+                );
+                to_value(watch_only_status_to_dto(status))
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyEnable,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn watch_only_disable(&self) -> Result<Value, RouterError> {
-        let status = self.wallet_call(self.wallet.disable_watch_only())?;
-        to_value(watch_only_status_to_dto(status))
+        match self.wallet_call(self.wallet.disable_watch_only()) {
+            Ok(status) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyDisable,
+                    TelemetryOutcome::Success,
+                );
+                to_value(watch_only_status_to_dto(status))
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::WatchOnlyDisable,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn store_draft(&self, bundle: DraftBundle) -> Result<String, RouterError> {
@@ -1495,6 +1829,7 @@ mod tests {
         BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
         NodeRejectionHint, StubNodeClient,
     };
+    use rpp::runtime::telemetry::metrics::RuntimeMetrics;
     use serde_json::json;
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -1506,6 +1841,7 @@ mod tests {
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
         let keystore = dir.path().join("keystore.toml");
         let backup = dir.path().join("backups");
+        let telemetry = Arc::new(WalletActionTelemetry::new(false));
         let wallet = Wallet::new(
             Arc::clone(&store),
             WalletMode::Full {
@@ -1518,9 +1854,15 @@ mod tests {
             None,
             Arc::new(StubNodeClient::default()),
             WalletPaths::new(keystore, backup),
+            Arc::clone(&telemetry),
         )
         .expect("wallet");
-        (WalletRpcRouter::new(Arc::new(wallet), sync), store, dir)
+        let metrics = RuntimeMetrics::noop();
+        (
+            WalletRpcRouter::new(Arc::new(wallet), sync, metrics),
+            store,
+            dir,
+        )
     }
 
     fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
@@ -1535,6 +1877,7 @@ mod tests {
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
         let keystore = dir.path().join("keystore.toml");
         let backup = dir.path().join("backups");
+        let telemetry = Arc::new(WalletActionTelemetry::new(false));
         let wallet = Wallet::new(
             Arc::clone(&store),
             WalletMode::Full {
@@ -1547,6 +1890,7 @@ mod tests {
             None,
             Arc::new(StubNodeClient::default()),
             WalletPaths::new(keystore, backup),
+            Arc::clone(&telemetry),
         )
         .expect("wallet");
         let signer = MockHardwareSigner::new(vec![
@@ -1555,7 +1899,12 @@ mod tests {
         wallet
             .configure_hardware_signer(Some(Arc::new(signer.clone())))
             .expect("configure signer");
-        (WalletRpcRouter::new(Arc::new(wallet), None), signer, dir)
+        let metrics = RuntimeMetrics::noop();
+        (
+            WalletRpcRouter::new(Arc::new(wallet), None, metrics),
+            signer,
+            dir,
+        )
     }
 
     fn build_watch_only_router() -> WalletRpcRouter {
@@ -1564,6 +1913,7 @@ mod tests {
         let keystore = dir.path().join("keystore.toml");
         let backup = dir.path().join("backups");
         let record = WatchOnlyRecord::new("wpkh(external)");
+        let telemetry = Arc::new(WalletActionTelemetry::new(false));
         let wallet = Wallet::new(
             Arc::clone(&store),
             WalletMode::WatchOnly(record),
@@ -1574,10 +1924,12 @@ mod tests {
             None,
             Arc::new(StubNodeClient::default()),
             WalletPaths::new(keystore, backup),
+            Arc::clone(&telemetry),
         )
         .expect("wallet");
         let _persist = dir.into_path();
-        WalletRpcRouter::new(Arc::new(wallet), None)
+        let metrics = RuntimeMetrics::noop();
+        WalletRpcRouter::new(Arc::new(wallet), None, metrics)
     }
 
     #[test]

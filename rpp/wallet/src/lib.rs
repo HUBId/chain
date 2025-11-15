@@ -41,6 +41,9 @@ pub mod backup;
 /// Persistent wallet state stored in Firewood.
 pub mod db;
 
+/// Wallet telemetry helpers.
+pub mod telemetry;
+
 /// Wallet runtime operating modes (e.g. watch-only).
 pub mod modes;
 

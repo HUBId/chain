@@ -33,6 +33,7 @@ use crate::proof_backend::{
     Blake2sHasher, IdentityPublicInputs, ProofBackend, ProofBytes, WitnessBytes,
 };
 use crate::runtime::node::MempoolStatus;
+use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
 use crate::zsi::{self, LifecycleProof, ZsiBinder, ZsiOperation, ZsiRecord};
 use prover_backend_interface::BackendError as ZsiBackendError;
 use serde::{Deserialize, Serialize};
@@ -157,19 +158,8 @@ pub struct Wallet {
     keystore_path: PathBuf,
     backup_path: PathBuf,
     watch_only: Arc<RwLock<Option<WatchOnlyRecord>>>,
+    telemetry: Arc<WalletActionTelemetry>,
     zsi: WalletZsiState,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TelemetryCounter {
-    pub name: String,
-    pub value: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TelemetryCounters {
-    pub enabled: bool,
-    pub counters: Vec<TelemetryCounter>,
 }
 
 impl Wallet {
@@ -219,6 +209,7 @@ impl Wallet {
         zsi_backend: Option<Arc<dyn ProofBackend>>,
         node_client: Arc<dyn NodeClient>,
         paths: WalletPaths,
+        telemetry: Arc<WalletActionTelemetry>,
     ) -> Result<Self, WalletError> {
         let (root_seed, watch_only_record, prover): (
             [u8; 32],
@@ -259,6 +250,7 @@ impl Wallet {
             keystore_path: keystore,
             backup_path: backup,
             watch_only: Arc::new(RwLock::new(watch_only_record)),
+            telemetry,
             zsi: WalletZsiState::new(zsi_config, zsi_backend),
         })
     }
@@ -503,7 +495,11 @@ impl Wallet {
     }
 
     pub fn telemetry_counters(&self) -> TelemetryCounters {
-        TelemetryCounters::default()
+        self.telemetry.snapshot()
+    }
+
+    pub fn telemetry_handle(&self) -> Arc<WalletActionTelemetry> {
+        Arc::clone(&self.telemetry)
     }
 
     pub fn store(&self) -> Arc<WalletStore> {
@@ -802,6 +798,7 @@ mod tests {
         MultisigScope,
     };
     use crate::node_client::{NodeClient, StubNodeClient};
+    use crate::telemetry::WalletActionTelemetry;
     use crate::wallet::WatchOnlyError;
 
     struct SleepyWalletProver {
@@ -900,6 +897,7 @@ mod tests {
             None,
             node_client,
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
         let signer = MockHardwareSigner::new(vec![
@@ -932,6 +930,7 @@ mod tests {
             keystore_path: PathBuf::new(),
             backup_path: PathBuf::new(),
             watch_only: Arc::new(RwLock::new(None)),
+            telemetry: Arc::new(WalletActionTelemetry::new(false)),
             zsi: WalletZsiState::new(WalletZsiConfig::default(), None),
         }
     }
@@ -986,6 +985,7 @@ mod tests {
             None,
             Arc::clone(&node_client),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
 
@@ -1043,6 +1043,7 @@ mod tests {
             None,
             Arc::clone(&node_client),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
 
@@ -1132,6 +1133,7 @@ mod tests {
             None,
             Arc::clone(&node_client),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
 
@@ -1241,6 +1243,7 @@ mod tests {
             None,
             Arc::clone(&node_client),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
 
@@ -1313,6 +1316,7 @@ mod tests {
             None,
             Arc::clone(&node_client),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
 

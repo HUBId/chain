@@ -80,6 +80,10 @@ metrics:
   - name: rpp.runtime.wallet.rpc_latency
     labels:
       - method
+  - name: rpp.runtime.wallet.action.total
+    labels:
+      - action
+      - outcome
   - name: rpp_stark_params_bytes
     labels:
       - proof_backend

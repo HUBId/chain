@@ -11,7 +11,9 @@ use tokio::time::sleep;
 
 use rpp::runtime::config::QueueWeightsConfig;
 use rpp::runtime::node::MempoolStatus;
-use rpp_wallet::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+use rpp_wallet::config::wallet::{
+    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+};
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::engine::DraftTransaction;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
@@ -22,6 +24,7 @@ use rpp_wallet::indexer::client::{
     TransactionPayload, TxOutpoint,
 };
 use rpp_wallet::node_client::{ChainHead, NodeClient, NodeClientResult};
+use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletPaths};
 
 const RESUME_HEIGHT_LABEL: &str = "indexer::resume_height";
@@ -218,8 +221,11 @@ impl SyncSetup {
             policy,
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
             Arc::new(TestNodeClient::default()),
             WalletPaths::new(keystore, backup),
+            Arc::new(WalletActionTelemetry::new(false)),
         )
         .expect("wallet");
         let deposit_address = wallet.derive_address(false).expect("address");
