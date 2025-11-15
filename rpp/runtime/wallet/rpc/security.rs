@@ -21,6 +21,16 @@ pub enum WalletRole {
     Viewer,
 }
 
+impl WalletRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WalletRole::Admin => "admin",
+            WalletRole::Operator => "operator",
+            WalletRole::Viewer => "viewer",
+        }
+    }
+}
+
 /// Collection type tracking the roles associated with a request or identity.
 pub type WalletRoleSet = BTreeSet<WalletRole>;
 

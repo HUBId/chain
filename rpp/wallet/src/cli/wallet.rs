@@ -189,6 +189,19 @@ fn friendly_message(
             }
             rpc_message.to_string()
         }
+        WalletRpcErrorCode::RbacForbidden => {
+            if let Some(details) = details.and_then(|value| value.as_object()) {
+                if let Some(required) = details.get("required_roles") {
+                    if let Some(array) = required.as_array() {
+                        return format!(
+                            "Caller lacks required wallet role (needs one of: {}).",
+                            join_values(array)
+                        );
+                    }
+                }
+            }
+            "Caller lacks the required wallet role.".to_string()
+        }
         WalletRpcErrorCode::FeeTooHigh => rpc_message.to_string(),
         WalletRpcErrorCode::ProverCancelled => rpc_message.to_string(),
         WalletRpcErrorCode::ProverFailed => rpc_message.to_string(),
@@ -250,6 +263,14 @@ fn value_to_string(value: &Value) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn join_values(values: &[Value]) -> String {
+    values
+        .iter()
+        .map(value_to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl From<reqwest::Error> for WalletCliError {

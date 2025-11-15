@@ -69,12 +69,57 @@ pub fn describe_rpc_error(code: &WalletRpcErrorCode, details: Option<&Value>) ->
             "The daemon could not serialise the response payload."
         }
         WalletRpcErrorCode::StatePoisoned => "The daemon state is poisoned and requires attention.",
+        WalletRpcErrorCode::RbacForbidden => {
+            "You do not have permission to invoke this wallet RPC method."
+        }
         WalletRpcErrorCode::Custom(code) => {
             return ErrorDescription::new(format!("Wallet RPC error: {code}"));
         }
     };
 
     let mut description = ErrorDescription::new(headline);
+    if *code == WalletRpcErrorCode::RbacForbidden {
+        if let Some(payload) = details {
+            let required = payload
+                .get("required_roles")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .map(|value| value.to_owned())
+                        .collect::<Vec<_>>()
+                });
+            let granted = payload
+                .get("granted_roles")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .map(|value| value.to_owned())
+                        .collect::<Vec<_>>()
+                });
+            let mut parts = Vec::new();
+            if let Some(required) = required {
+                if !required.is_empty() {
+                    parts.push(format!("Required roles: {}", required.join(", ")));
+                }
+            }
+            if let Some(granted) = granted {
+                let granted_display = if granted.is_empty() {
+                    "none".to_string()
+                } else {
+                    granted.join(", ")
+                };
+                parts.push(format!("Granted roles: {granted_display}"));
+            }
+            if !parts.is_empty() {
+                return description.with_detail(parts.join(" — "));
+            }
+        }
+        return description;
+    }
     if let Some(details) = details.and_then(stringify_details) {
         description = description.with_detail(details);
     }
