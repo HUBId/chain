@@ -52,9 +52,13 @@ impl CliTelemetry {
         self.record_action(action.label(), outcome);
     }
 
+    #[cfg(feature = "wallet_zsi")]
     pub fn record_zsi_outcome(&self, action: ZsiAction, outcome: TelemetryOutcome) {
         self.record_action(action.label(), outcome);
     }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn record_zsi_outcome(&self, _action: ZsiAction, _outcome: TelemetryOutcome) {}
 
     pub fn record_hardware_outcome(&self, action: HardwareAction, outcome: TelemetryOutcome) {
         self.record_action(action.label(), outcome);
@@ -152,6 +156,7 @@ impl WatchOnlyAction {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ZsiAction {
     Issue,
@@ -165,6 +170,7 @@ pub enum ZsiAction {
     DeleteArtifact,
 }
 
+#[cfg(feature = "wallet_zsi")]
 impl ZsiAction {
     fn label(self) -> &'static str {
         match self {
@@ -178,6 +184,21 @@ impl ZsiAction {
             Self::ListArtifacts => "zsi.list",
             Self::DeleteArtifact => "zsi.delete",
         }
+    }
+}
+
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZsiAction {
+    #[allow(dead_code)]
+    Disabled,
+}
+
+#[cfg(not(feature = "wallet_zsi"))]
+impl ZsiAction {
+    fn label(self) -> &'static str {
+        let _ = self;
+        "zsi.disabled"
     }
 }
 
