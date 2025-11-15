@@ -51,7 +51,8 @@ impl Default for WalletConfig {
 impl WalletConfig {
     /// Validates that feature-gated sections align with the compiled binary.
     pub fn ensure_supported(&self) -> Result<(), &'static str> {
-        self.multisig.ensure_supported()
+        self.multisig.ensure_supported()?;
+        self.gui.ensure_security_supported()
     }
 }
 
@@ -258,6 +259,8 @@ pub struct WalletGuiConfig {
     pub confirm_clipboard: bool,
     /// Opt-in flag for telemetry collection from the GUI.
     pub telemetry_opt_in: bool,
+    /// Enable the Security section for managing RPC mTLS + RBAC from the GUI.
+    pub security_controls_enabled: bool,
 }
 
 impl WalletGuiConfig {
@@ -271,6 +274,15 @@ impl WalletGuiConfig {
         }
         self
     }
+
+    /// Ensures GUI security controls align with the compiled feature set.
+    pub fn ensure_security_supported(&self) -> Result<(), &'static str> {
+        if self.security_controls_enabled && !cfg!(feature = "wallet_rpc_mtls") {
+            Err("wallet GUI security controls require the `wallet_rpc_mtls` feature")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Default for WalletGuiConfig {
@@ -281,6 +293,7 @@ impl Default for WalletGuiConfig {
             theme: WalletGuiTheme::System,
             confirm_clipboard: true,
             telemetry_opt_in: false,
+            security_controls_enabled: cfg!(feature = "wallet_rpc_mtls"),
         }
     }
 }
@@ -363,6 +376,10 @@ mod tests {
         assert_eq!(config.gui.theme, WalletGuiTheme::System);
         assert!(config.gui.confirm_clipboard);
         assert!(!config.gui.telemetry_opt_in);
+        assert_eq!(
+            config.gui.security_controls_enabled,
+            cfg!(feature = "wallet_rpc_mtls")
+        );
     }
 
     #[test]
@@ -413,6 +430,7 @@ mod tests {
                 theme: WalletGuiTheme::Dark,
                 confirm_clipboard: false,
                 telemetry_opt_in: true,
+                security_controls_enabled: true,
             },
         };
 
@@ -453,6 +471,7 @@ mod tests {
         assert_eq!(restored.gui.theme, WalletGuiTheme::Dark);
         assert!(!restored.gui.confirm_clipboard);
         assert!(restored.gui.telemetry_opt_in);
+        assert!(restored.gui.security_controls_enabled);
     }
 
     #[cfg(not(feature = "wallet_multisig_hooks"))]
@@ -474,6 +493,25 @@ mod tests {
         assert!(config.ensure_supported().is_ok());
     }
 
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    #[test]
+    fn gui_security_controls_rejected_without_feature() {
+        let mut config = WalletConfig::default();
+        config.gui.security_controls_enabled = true;
+        assert_eq!(
+            config.ensure_supported(),
+            Err("wallet GUI security controls require the `wallet_rpc_mtls` feature")
+        );
+    }
+
+    #[cfg(feature = "wallet_rpc_mtls")]
+    #[test]
+    fn gui_security_controls_allowed_with_feature() {
+        let mut config = WalletConfig::default();
+        config.gui.security_controls_enabled = true;
+        assert!(config.ensure_supported().is_ok());
+    }
+
     #[test]
     fn gui_section_defaults_when_absent() {
         let contents = r#"
@@ -492,6 +530,10 @@ mod tests {
         assert_eq!(config.gui.theme, WalletGuiTheme::System);
         assert!(config.gui.confirm_clipboard);
         assert!(!config.gui.telemetry_opt_in);
+        assert_eq!(
+            config.gui.security_controls_enabled,
+            cfg!(feature = "wallet_rpc_mtls")
+        );
     }
 
     #[test]
@@ -502,6 +544,7 @@ mod tests {
             theme: WalletGuiTheme::Light,
             confirm_clipboard: false,
             telemetry_opt_in: false,
+            security_controls_enabled: false,
         }
         .sanitized();
 
@@ -510,5 +553,6 @@ mod tests {
         assert_eq!(config.theme, WalletGuiTheme::Light);
         assert!(!config.confirm_clipboard);
         assert!(!config.telemetry_opt_in);
+        assert!(!config.security_controls_enabled);
     }
 }

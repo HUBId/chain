@@ -29,6 +29,7 @@ pub struct Preferences {
     pub max_history_rows: u32,
     pub confirm_clipboard: bool,
     pub telemetry_opt_in: bool,
+    pub security_controls_enabled: bool,
 }
 
 impl Default for Preferences {
@@ -90,6 +91,7 @@ pub fn load(path: &Path, fallback: &Preferences) -> io::Result<Preferences> {
                 max_history_rows: Option<u32>,
                 confirm_clipboard: Option<bool>,
                 telemetry_opt_in: Option<bool>,
+                security_controls_enabled: Option<bool>,
             }
 
             let overrides: PartialPreferences = toml::from_str(&contents)
@@ -110,6 +112,9 @@ pub fn load(path: &Path, fallback: &Preferences) -> io::Result<Preferences> {
             }
             if let Some(telemetry_opt_in) = overrides.telemetry_opt_in {
                 merged.telemetry_opt_in = telemetry_opt_in;
+            }
+            if let Some(security_controls_enabled) = overrides.security_controls_enabled {
+                merged.security_controls_enabled = security_controls_enabled;
             }
 
             Ok(merged.sanitized())
@@ -144,6 +149,7 @@ impl From<WalletGuiConfig> for Preferences {
             max_history_rows: sanitized.max_history_rows,
             confirm_clipboard: sanitized.confirm_clipboard,
             telemetry_opt_in: sanitized.telemetry_opt_in,
+            security_controls_enabled: sanitized.security_controls_enabled,
         }
     }
 }
@@ -156,6 +162,7 @@ impl From<&Preferences> for WalletGuiConfig {
             theme: WalletGuiTheme::from(value.theme),
             confirm_clipboard: value.confirm_clipboard,
             telemetry_opt_in: value.telemetry_opt_in,
+            security_controls_enabled: value.security_controls_enabled,
         }
     }
 }

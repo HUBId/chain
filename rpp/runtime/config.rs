@@ -3066,6 +3066,16 @@ pub struct WalletRpcSecurityConfig {
 
 impl WalletRpcSecurityConfig {
     fn validate(&self, mtls_enabled: bool) -> ChainResult<()> {
+        if cfg!(not(feature = "wallet_rpc_mtls")) {
+            if self.certificate.is_some()
+                || self.private_key.is_some()
+                || self.ca_certificate.is_some()
+            {
+                return Err(wallet_rpc_mtls_disabled_error("wallet.rpc.security"));
+            }
+            return Ok(());
+        }
+
         if mtls_enabled {
             for (path, field) in [
                 (&self.certificate, "wallet.rpc.security.certificate"),
@@ -3162,6 +3172,13 @@ pub struct WalletSecurityConfig {
 
 impl WalletSecurityConfig {
     fn validate(&self) -> ChainResult<()> {
+        if cfg!(not(feature = "wallet_rpc_mtls")) {
+            if self.is_configured() {
+                return Err(wallet_rpc_mtls_disabled_error("wallet.security"));
+            }
+            return Ok(());
+        }
+
         for fingerprint in &self.ca_fingerprints {
             fingerprint.validate("wallet.security.ca_fingerprints")?;
         }
@@ -3177,6 +3194,10 @@ impl WalletSecurityConfig {
             .map(WalletRpcSecurityBinding::to_runtime_binding)
             .collect()
     }
+
+    fn is_configured(&self) -> bool {
+        self.mtls_enabled || !self.ca_fingerprints.is_empty() || !self.bindings.is_empty()
+    }
 }
 
 impl Default for WalletSecurityConfig {
@@ -3187,6 +3208,12 @@ impl Default for WalletSecurityConfig {
             bindings: Vec::new(),
         }
     }
+}
+
+fn wallet_rpc_mtls_disabled_error(scope: &str) -> ChainError {
+    ChainError::Config(format!(
+        "{scope} requires compiling with the `wallet_rpc_mtls` feature; rebuild this binary to configure wallet RPC security"
+    ))
 }
 
 #[cfg(test)]
@@ -3686,6 +3713,9 @@ impl WalletConfig {
     }
 
     fn validate(&self) -> ChainResult<()> {
+        if cfg!(not(feature = "wallet_rpc_mtls")) && self.wallet.security.is_configured() {
+            return Err(wallet_rpc_mtls_disabled_error("wallet.security"));
+        }
         self.wallet.security.validate()?;
         self.wallet
             .rpc
@@ -3840,6 +3870,7 @@ pub struct WalletGuiConfig {
     pub theme: WalletGuiTheme,
     pub confirm_clipboard: bool,
     pub telemetry_opt_in: bool,
+    pub security_controls_enabled: bool,
 }
 
 impl WalletGuiConfig {
@@ -3862,6 +3893,7 @@ impl Default for WalletGuiConfig {
             theme: WalletGuiTheme::System,
             confirm_clipboard: true,
             telemetry_opt_in: false,
+            security_controls_enabled: cfg!(feature = "wallet_rpc_mtls"),
         }
     }
 }
