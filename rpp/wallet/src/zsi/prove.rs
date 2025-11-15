@@ -59,3 +59,69 @@ pub fn generate<B: ProofBackend>(
         Err(other) => Err(other),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prover_backend_interface::{ProofBackend, ProofHeader, ProofSystemKind, ProvingKey};
+
+    struct DummyBackend;
+
+    impl ProofBackend for DummyBackend {
+        fn name(&self) -> &'static str {
+            "dummy"
+        }
+
+        fn prove_identity(
+            &self,
+            _pk: &ProvingKey,
+            _witness: &WitnessBytes,
+        ) -> BackendResult<ProofBytes> {
+            Ok(ProofBytes::encode(
+                &ProofHeader::new(ProofSystemKind::Mock, "dummy"),
+                &vec![1u8, 2, 3],
+            )?)
+        }
+    }
+
+    #[test]
+    fn lifecycle_proof_updates_digests_on_changes() {
+        let backend = DummyBackend;
+        let binder = ZsiBinder::new(&backend, ZsiOperation::Issue);
+        let witness = binder.encode_witness(&"alice").expect("witness");
+        let inputs = IdentityPublicInputs {
+            wallet_address: [0u8; 32],
+            vrf_tag: vec![],
+            identity_root: [0u8; 32],
+            state_root: [0u8; 32],
+        };
+        let proof_bytes = backend
+            .prove_identity(&ProvingKey(Vec::new()), &witness)
+            .expect("mock proof");
+        let encoded = binder.encode_proof(&proof_bytes).expect("encode proof");
+
+        let proof = LifecycleProof::new("issue", backend.name(), witness.as_slice(), &encoded);
+        let mutated_witness = b"bob".to_vec();
+        let mutated = LifecycleProof::new("issue", backend.name(), &mutated_witness, &encoded);
+        assert_ne!(proof.witness_digest, mutated.witness_digest);
+
+        let alternate_raw = ProofBytes::encode(
+            &ProofHeader::new(ProofSystemKind::Mock, "dummy"),
+            &vec![9u8, 9, 9],
+        )
+        .expect("alt proof");
+        let alternate_encoded = binder
+            .encode_proof(&alternate_raw)
+            .expect("encode alternate proof");
+        let alternate = LifecycleProof::new(
+            "issue",
+            backend.name(),
+            witness.as_slice(),
+            &alternate_encoded,
+        );
+        assert_ne!(proof.proof_commitment, alternate.proof_commitment);
+
+        // Verify helper still validates the proof via mock backend.
+        super::verify::identity(&backend, &encoded, &inputs).expect("verify");
+    }
+}
