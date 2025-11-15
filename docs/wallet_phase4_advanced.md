@@ -119,6 +119,9 @@ controls. Configure `[wallet.rpc.security]` and `[wallet.security]` together.
   `submit_tx`. Use `rpp-wallet rbac lint` to validate the file.
 * **Legacy compatibility** – Leave both flags false to retain Phase 3 behaviour. Clients must
   negotiate TLS even when mTLS is disabled because the server certificate is still loaded.
+* **Build flag** – The node binary now ships the TLS stack behind the `rpp-chain` feature
+  `wallet_rpc_mtls`. Enable it (`cargo build -p rpp-chain --features wallet_rpc_mtls`) when you
+  need wallet RPC mTLS.
 
 ### Certificate Management
 

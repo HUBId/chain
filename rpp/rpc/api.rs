@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
+#[cfg(feature = "wallet_rpc_mtls")]
 use std::io::BufReader;
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU64;
@@ -32,11 +33,13 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+#[cfg(feature = "wallet_rpc_mtls")]
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch, Notify};
 
 use tokio::task::JoinSet;
+#[cfg(feature = "wallet_rpc_mtls")]
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
@@ -119,12 +122,17 @@ use rpp_p2p::{
     LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk,
     NetworkStateSyncPlan, SnapshotChunk,
 };
+#[cfg(feature = "wallet_rpc_mtls")]
 use rustls::crypto::aws_lc_rs;
+#[cfg(feature = "wallet_rpc_mtls")]
 use rustls::pki_types::{
     CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
 };
+#[cfg(feature = "wallet_rpc_mtls")]
 use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
+#[cfg(feature = "wallet_rpc_mtls")]
 use rustls::{RootCertStore, ServerConfig};
+#[cfg(feature = "wallet_rpc_mtls")]
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
 
 #[path = "src/routes/mod.rs"]
@@ -1667,7 +1675,13 @@ where
     let router = router.with_state(context);
     let mut make_service = router.into_make_service_with_connect_info::<SocketAddr>();
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     let tls_acceptor = build_tls_acceptor(&tls).await?;
+
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    if tls.enabled {
+        warn!("wallet RPC TLS requested but the `wallet_rpc_mtls` feature is disabled");
+    }
 
     let mut listener = match TcpListener::bind(addr).await {
         Ok(listener) => {
@@ -1705,9 +1719,11 @@ where
                 };
 
                 let tower_service = unwrap_infallible(make_service.call(remote_addr).await);
+                #[cfg(feature = "wallet_rpc_mtls")]
                 let tls_acceptor = tls_acceptor.clone();
                 let notify = notify.clone();
                 tasks.spawn(async move {
+                    #[cfg(feature = "wallet_rpc_mtls")]
                     let io = match tls_acceptor {
                         Some(acceptor) => match acceptor.accept(stream).await {
                             Ok(tls_stream) => TokioIo::new(tls_stream),
@@ -1718,6 +1734,9 @@ where
                         },
                         None => TokioIo::new(stream),
                     };
+
+                    #[cfg(not(feature = "wallet_rpc_mtls"))]
+                    let io = TokioIo::new(stream);
 
                     let hyper_service = service_fn(move |request: Request<Incoming>| {
                         let service = tower_service.clone();
@@ -1766,6 +1785,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 async fn build_tls_acceptor(config: &NetworkTlsConfig) -> ChainResult<Option<TlsAcceptor>> {
     if !config.enabled {
         return Ok(None);
@@ -1814,6 +1834,7 @@ async fn build_tls_acceptor(config: &NetworkTlsConfig) -> ChainResult<Option<Tls
     Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 async fn build_client_verifier(
     ca_path: &Path,
     require_client_auth: bool,
@@ -1839,6 +1860,7 @@ async fn build_client_verifier(
     })
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 async fn load_certificates(path: &Path) -> ChainResult<Vec<CertificateDer<'static>>> {
     let bytes = fs::read(path)
         .await
@@ -1853,6 +1875,7 @@ async fn load_certificates(path: &Path) -> ChainResult<Vec<CertificateDer<'stati
         .collect())
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 async fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
     let bytes = fs::read(path)
         .await
