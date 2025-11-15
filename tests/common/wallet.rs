@@ -8,7 +8,9 @@ use anyhow::{Context, Result};
 use rpp::runtime::config::QueueWeightsConfig;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::wallet::sync::SyncStatus;
-use rpp_wallet::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+use rpp_wallet::config::wallet::{
+    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+};
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
 use rpp_wallet::indexer::client::{
@@ -20,6 +22,7 @@ use rpp_wallet::indexer::client::{
 use rpp_wallet::node_client::{
     BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
 };
+use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::{
     Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
 };
@@ -158,8 +161,11 @@ impl WalletTestFixture {
                 policy.clone(),
                 fees,
                 prover,
+                WalletZsiConfig::default(),
+                None,
                 Arc::clone(&node),
                 WalletPaths::for_data_dir(tempdir.path()),
+                Arc::new(WalletActionTelemetry::new(false)),
             )
             .context("construct wallet instance")?,
         );

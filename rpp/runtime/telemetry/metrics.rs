@@ -68,6 +68,7 @@ pub struct RuntimeMetrics {
     proofs: ProofMetrics,
     consensus_block_duration: EnumF64Histogram<ConsensusStage>,
     wallet_rpc_latency: EnumF64Histogram<WalletRpcMethod>,
+    wallet_action_total: RpcCounter<WalletAction, WalletActionResult>,
     wallet_fee_estimate_latency: Histogram<f64>,
     wallet_prover_job_duration: Histogram<f64>,
     wallet_rescan_duration: Histogram<f64>,
@@ -116,6 +117,13 @@ impl RuntimeMetrics {
                     .f64_histogram("rpp.runtime.wallet.rpc_latency")
                     .with_description("Latency of wallet RPC requests in milliseconds")
                     .with_unit("ms")
+                    .build(),
+            ),
+            wallet_action_total: RpcCounter::new(
+                meter
+                    .u64_counter("rpp.runtime.wallet.action.total")
+                    .with_description("Total wallet action outcomes grouped by label and result")
+                    .with_unit("1")
                     .build(),
             ),
             wallet_fee_estimate_latency: meter
@@ -314,6 +322,11 @@ impl RuntimeMetrics {
     /// Record the latency of a wallet RPC invocation.
     pub fn record_wallet_rpc_latency(&self, method: WalletRpcMethod, duration: Duration) {
         self.wallet_rpc_latency.record_duration(method, duration);
+    }
+
+    /// Record a wallet action result for in-memory and OTLP consumers.
+    pub fn record_wallet_action(&self, action: WalletAction, outcome: WalletActionResult) {
+        self.wallet_action_total.add(action, outcome, 1);
     }
 
     /// Record the latency of wallet fee estimation requests.
@@ -978,6 +991,74 @@ impl MetricLabel for WalletRpcMethod {
             Self::PipelineWait => "pipeline_wait",
             Self::PipelineShutdown => "pipeline_shutdown",
             Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Wallet actions instrumented for telemetry counters.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum WalletAction {
+    BackupExport,
+    BackupValidate,
+    BackupImport,
+    WatchOnlyStatus,
+    WatchOnlyEnable,
+    WatchOnlyDisable,
+    MultisigGetScope,
+    MultisigSetScope,
+    MultisigGetCosigners,
+    MultisigSetCosigners,
+    MultisigExport,
+    ZsiProve,
+    ZsiVerify,
+    ZsiBindAccount,
+    ZsiList,
+    ZsiDelete,
+    HwEnumerate,
+    HwSign,
+}
+
+impl MetricLabel for WalletAction {
+    const KEY: &'static str = "action";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::BackupExport => "backup.export",
+            Self::BackupValidate => "backup.validate",
+            Self::BackupImport => "backup.import",
+            Self::WatchOnlyStatus => "watch_only.status",
+            Self::WatchOnlyEnable => "watch_only.enable",
+            Self::WatchOnlyDisable => "watch_only.disable",
+            Self::MultisigGetScope => "multisig.get_scope",
+            Self::MultisigSetScope => "multisig.set_scope",
+            Self::MultisigGetCosigners => "multisig.get_cosigners",
+            Self::MultisigSetCosigners => "multisig.set_cosigners",
+            Self::MultisigExport => "multisig.export",
+            Self::ZsiProve => "zsi.prove",
+            Self::ZsiVerify => "zsi.verify",
+            Self::ZsiBindAccount => "zsi.bind_account",
+            Self::ZsiList => "zsi.list",
+            Self::ZsiDelete => "zsi.delete",
+            Self::HwEnumerate => "hw.enumerate",
+            Self::HwSign => "hw.sign",
+        }
+    }
+}
+
+/// Result label emitted alongside [`WalletAction`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum WalletActionResult {
+    Success,
+    Error,
+}
+
+impl MetricLabel for WalletActionResult {
+    const KEY: &'static str = "outcome";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Success => "ok",
+            Self::Error => "err",
         }
     }
 }

@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use prover_mock_backend::MockBackend;
+use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp_wallet::config::wallet::{
     WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::node_client::StubNodeClient;
+use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::{
     Wallet, WalletError, WalletMode, WalletPaths, WatchOnlyError, ZsiProofRequest, ZsiVerifyRequest,
 };
@@ -44,6 +46,7 @@ impl WalletHarness {
             backend,
             node_client,
             paths,
+            Arc::new(WalletActionTelemetry::new(true)),
         )
         .expect("wallet");
         Self {
@@ -247,7 +250,8 @@ fn rpc_router_handles_zsi_binding_and_proof_paths() {
 
     let harness = WalletHarness::with_zsi_enabled();
     let wallet = Arc::clone(&harness.wallet);
-    let router = WalletRpcRouter::new(wallet, None);
+    let metrics = RuntimeMetrics::noop();
+    let router = WalletRpcRouter::new(wallet, None, metrics);
 
     let params = ZsiProofParams {
         operation: ZsiOperation::Issue,

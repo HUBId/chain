@@ -20,7 +20,9 @@ use rpp::runtime::wallet::{
     json_rpc_router, DeterministicSync, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle,
     WalletSecurityPaths,
 };
-use rpp_wallet::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+use rpp_wallet::config::wallet::{
+    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+};
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::engine::DraftTransaction;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
@@ -41,6 +43,7 @@ use rpp_wallet::rpc::dto::{
     SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
+use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::WalletPaths;
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletSyncCoordinator};
 
@@ -634,8 +637,11 @@ impl WorkflowFixture {
                 policy,
                 WalletFeeConfig::default(),
                 WalletProverConfig::default(),
+                WalletZsiConfig::default(),
+                None,
                 node.clone(),
                 WalletPaths::new(keystore, backup),
+                Arc::new(WalletActionTelemetry::new(false)),
             )
             .context("construct wallet instance")?,
         );

@@ -11,7 +11,7 @@ use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMete
 use rpp_runtime::runtime::telemetry::metrics::{
     ConsensusStage, ProofKind, ProofVerificationBackend, ProofVerificationKind,
     ProofVerificationOutcome, ProofVerificationStage, RpcMethod, RpcResult, WalFlushOutcome,
-    WalletRpcMethod,
+    WalletAction, WalletActionResult, WalletRpcMethod,
 };
 use rpp_runtime::RuntimeMetrics;
 use serde::Deserialize;
@@ -40,6 +40,7 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
 
     metrics.record_consensus_stage_duration(ConsensusStage::Commitment, Duration::from_millis(7));
     metrics.record_wallet_rpc_latency(WalletRpcMethod::SubmitTransaction, Duration::from_millis(5));
+    metrics.record_wallet_action(WalletAction::BackupExport, WalletActionResult::Success);
     metrics.record_rpc_request(
         RpcMethod::Wallet(WalletRpcMethod::RuntimeStatus),
         RpcResult::ClientError,
