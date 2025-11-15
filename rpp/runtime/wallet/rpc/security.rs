@@ -24,6 +24,20 @@ pub enum WalletRole {
 /// Collection type tracking the roles associated with a request or identity.
 pub type WalletRoleSet = BTreeSet<WalletRole>;
 
+/// Static assignment between an identity and the set of roles it should have.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalletSecurityBinding {
+    pub identity: WalletIdentity,
+    #[serde(default)]
+    pub roles: WalletRoleSet,
+}
+
+impl WalletSecurityBinding {
+    pub fn new(identity: WalletIdentity, roles: WalletRoleSet) -> Self {
+        Self { identity, roles }
+    }
+}
+
 /// Identity extracted from an RPC request.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "id")]
@@ -170,6 +184,21 @@ impl WalletRbacStore {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Persist the provided bindings into the RBAC store, replacing any
+    /// existing roles associated with the identity.
+    pub fn apply_bindings(&self, bindings: &[WalletSecurityBinding]) {
+        let mut assignments = self.assignments.write();
+        for binding in bindings {
+            if binding.roles.is_empty() {
+                assignments.entries.remove(&binding.identity);
+            } else {
+                assignments
+                    .entries
+                    .insert(binding.identity.clone(), binding.roles.clone());
+            }
+        }
+    }
 }
 
 /// Filesystem locations used by the wallet security subsystem.
@@ -229,6 +258,11 @@ impl WalletSecurityContext {
         })
     }
 
+    /// Construct a context from an already loaded store.
+    pub fn from_store(store: WalletRbacStore) -> Self {
+        Self { store }
+    }
+
     /// Resolve roles for the provided identities.
     pub fn resolve_roles(&self, identities: &[WalletIdentity]) -> WalletRoleSet {
         let mut roles = WalletRoleSet::new();
@@ -252,6 +286,49 @@ impl WalletSecurityContext {
     /// Access the underlying RBAC store snapshot.
     pub fn snapshot(&self) -> BTreeMap<WalletIdentity, WalletRoleSet> {
         self.store.snapshot()
+    }
+}
+
+/// Client certificate fingerprints extracted during TLS handshakes.
+#[derive(Clone, Debug, Default)]
+pub struct WalletClientCertificates {
+    fingerprints: Vec<String>,
+}
+
+impl WalletClientCertificates {
+    /// Construct an empty certificate collection.
+    pub fn empty() -> Self {
+        Self {
+            fingerprints: Vec::new(),
+        }
+    }
+
+    /// Build the collection from DER-encoded certificates.
+    pub fn from_der<'a, I>(certs: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let fingerprints = certs.into_iter().map(hex_digest).collect();
+        Self { fingerprints }
+    }
+
+    /// Returns true when no certificates were presented.
+    pub fn is_empty(&self) -> bool {
+        self.fingerprints.is_empty()
+    }
+
+    /// Access the underlying fingerprint set.
+    pub fn fingerprints(&self) -> &[String] {
+        &self.fingerprints
+    }
+
+    /// Convert all fingerprints into wallet identities.
+    pub fn identities(&self) -> Vec<WalletIdentity> {
+        self.fingerprints
+            .iter()
+            .cloned()
+            .map(WalletIdentity::Certificate)
+            .collect()
     }
 }
 
