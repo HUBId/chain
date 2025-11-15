@@ -128,3 +128,67 @@ impl WalletActionTelemetry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_telemetry_does_not_record_events() {
+        let telemetry = WalletActionTelemetry::new(false);
+        assert!(!telemetry.enabled());
+
+        telemetry.record(
+            WalletTelemetryAction::BackupExport,
+            TelemetryOutcome::Success,
+        );
+        telemetry.record(
+            WalletTelemetryAction::WatchOnlyEnable,
+            TelemetryOutcome::Error,
+        );
+
+        let snapshot = telemetry.snapshot();
+        assert!(!snapshot.enabled);
+        assert!(snapshot.counters.is_empty());
+    }
+
+    #[test]
+    fn enabled_telemetry_accumulates_success_and_errors() {
+        let telemetry = WalletActionTelemetry::new(true);
+        assert!(telemetry.enabled());
+
+        telemetry.record(
+            WalletTelemetryAction::BackupExport,
+            TelemetryOutcome::Success,
+        );
+        telemetry.record(
+            WalletTelemetryAction::BackupExport,
+            TelemetryOutcome::Success,
+        );
+        telemetry.record(WalletTelemetryAction::BackupExport, TelemetryOutcome::Error);
+        telemetry.record(
+            WalletTelemetryAction::WatchOnlyEnable,
+            TelemetryOutcome::Error,
+        );
+
+        let snapshot = telemetry.snapshot();
+        assert!(snapshot.enabled);
+        assert_eq!(
+            snapshot.counters,
+            vec![
+                TelemetryCounter {
+                    name: "backup.export.err".to_string(),
+                    value: 1,
+                },
+                TelemetryCounter {
+                    name: "backup.export.ok".to_string(),
+                    value: 2,
+                },
+                TelemetryCounter {
+                    name: "watch_only.enable.err".to_string(),
+                    value: 1,
+                },
+            ]
+        );
+    }
+}
