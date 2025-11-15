@@ -6,6 +6,7 @@ use http::StatusCode;
 use rpp_chain::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 use rpp_chain::runtime::wallet::rpc::{
     AuthToken, AuthenticatedRpcHandler, RpcInvocation, RpcRequest, StaticAuthenticator,
+    WalletAuditLogger,
 };
 
 #[test]
@@ -19,7 +20,10 @@ fn wallet_rpc_requires_authentication() {
         },
         Arc::clone(&metrics),
         WalletRpcMethod::RuntimeStatus,
+        "runtime_status",
         None,
+        &[],
+        Arc::new(WalletAuditLogger::disabled()),
     );
 
     let err = handler

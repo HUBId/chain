@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
+use std::ptr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::errors::ChainError;
+use crate::errors::{ChainError, ChainResult};
 use crate::runtime::telemetry::metrics::{RpcMethod, RpcResult, RuntimeMetrics, WalletRpcMethod};
 use crate::runtime::wallet::runtime::WalletRuntimeConfig;
 use rpp_wallet::rpc::dto::{
@@ -25,8 +26,10 @@ use rpp_wallet::rpc::dto::{
 use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use rpp_wallet::rpc::WalletRpcRouter;
 
+mod audit;
 mod security;
 
+pub use audit::WalletAuditLogger;
 pub use security::{
     WalletClientCertificates, WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet,
     WalletSecurityContext, WalletSecurityPaths,
@@ -37,6 +40,7 @@ const CODE_PARSE_ERROR: i32 = -32700;
 const CODE_UNAUTHORIZED: i32 = -32060;
 const CODE_RATE_LIMITED: i32 = -32061;
 const CODE_RBAC_FORBIDDEN: i32 = -32062;
+const AUDIT_SUCCESS_CODE: i32 = 0;
 
 /// Wrapper type for wallet RPC authentication tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -227,6 +231,23 @@ impl RateLimiter {
     }
 }
 
+pub trait WalletAuditResult {
+    fn audit_result_code(&self) -> i32 {
+        AUDIT_SUCCESS_CODE
+    }
+}
+
+impl WalletAuditResult for JsonRpcResponse {
+    fn audit_result_code(&self) -> i32 {
+        self.error
+            .as_ref()
+            .map(|err| err.code)
+            .unwrap_or(AUDIT_SUCCESS_CODE)
+    }
+}
+
+impl WalletAuditResult for String {}
+
 /// Wrapper ensuring that RPC handlers are only executed when authorized and
 /// within the configured rate limits.
 pub struct AuthenticatedRpcHandler<H, P> {
@@ -234,8 +255,10 @@ pub struct AuthenticatedRpcHandler<H, P> {
     handler: H,
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
+    method_name: &'static str,
     rate_limiter: Option<RateLimiter>,
     required_roles: &'static [WalletRole],
+    audit: Arc<WalletAuditLogger>,
     _marker: PhantomData<fn(P)>,
 }
 
@@ -248,16 +271,20 @@ where
         handler: H,
         metrics: Arc<RuntimeMetrics>,
         method: WalletRpcMethod,
+        method_name: &'static str,
         rate_limit: Option<NonZeroU64>,
         required_roles: &'static [WalletRole],
+        audit: Arc<WalletAuditLogger>,
     ) -> Self {
         Self {
             authenticator: Arc::new(authenticator),
             handler,
             metrics,
             method,
+            method_name,
             rate_limiter: rate_limit.map(|limit| RateLimiter::new(limit, RATE_LIMIT_WINDOW)),
             required_roles,
+            audit,
             _marker: PhantomData,
         }
     }
@@ -267,22 +294,39 @@ impl<H, R, P> AuthenticatedRpcHandler<H, P>
 where
     H: Fn(RpcInvocation<'_, P>) -> R + Send + Sync,
     P: Clone,
+    R: WalletAuditResult,
 {
     pub fn call(&self, invocation: RpcInvocation<'_, P>) -> Result<R, RpcError> {
         let start = Instant::now();
+        let audit_context = if self.should_audit() {
+            Some(AuditContext::from_invocation(self.method_name, &invocation))
+        } else {
+            None
+        };
+
         if !self
             .authenticator
             .authenticate(invocation.request.bearer_token)
         {
             let duration = start.elapsed();
-            self.record_outcome(RpcResult::ClientError, duration);
+            self.record_outcome(
+                audit_context.as_ref(),
+                CODE_UNAUTHORIZED,
+                RpcResult::ClientError,
+                duration,
+            );
             return Err(RpcError::unauthorized());
         }
 
         if let Some(limiter) = &self.rate_limiter {
             if !limiter.try_acquire() {
                 let duration = start.elapsed();
-                self.record_outcome(RpcResult::ClientError, duration);
+                self.record_outcome(
+                    audit_context.as_ref(),
+                    CODE_RATE_LIMITED,
+                    RpcResult::ClientError,
+                    duration,
+                );
                 return Err(RpcError::too_many_requests());
             }
         }
@@ -294,7 +338,12 @@ where
                 .any(|role| invocation.request.roles.contains(role))
         {
             let duration = start.elapsed();
-            self.record_outcome(RpcResult::ClientError, duration);
+            self.record_outcome(
+                audit_context.as_ref(),
+                CODE_RBAC_FORBIDDEN,
+                RpcResult::ClientError,
+                duration,
+            );
             return Err(RpcError::rbac_forbidden(
                 self.required_roles,
                 &invocation.request.roles,
@@ -303,15 +352,41 @@ where
 
         let response = (self.handler)(invocation);
         let duration = start.elapsed();
-        self.record_outcome(RpcResult::Success, duration);
+        let result_code = audit_context
+            .as_ref()
+            .map_or(AUDIT_SUCCESS_CODE, |_| response.audit_result_code());
+        self.record_outcome(
+            audit_context.as_ref(),
+            result_code,
+            RpcResult::Success,
+            duration,
+        );
         Ok(response)
     }
 
-    fn record_outcome(&self, result: RpcResult, duration: Duration) {
+    fn record_outcome(
+        &self,
+        context: Option<&AuditContext>,
+        result_code: i32,
+        result: RpcResult,
+        duration: Duration,
+    ) {
         self.metrics
             .record_wallet_rpc_latency(self.method, duration);
         self.metrics
             .record_rpc_request(RpcMethod::Wallet(self.method), result, duration);
+        if let Some(context) = context {
+            self.audit.log(
+                context.method,
+                &context.identities,
+                &context.roles,
+                result_code,
+            );
+        }
+    }
+
+    fn should_audit(&self) -> bool {
+        ptr::eq(self.required_roles, ROLES_OPERATOR) || ptr::eq(self.required_roles, ROLES_ADMIN)
     }
 }
 
@@ -327,25 +402,46 @@ pub fn authenticated_handler<H, P, R>(
     handler: H,
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
+    method_name: &'static str,
     rate_limit: Option<NonZeroU64>,
     required_roles: &'static [WalletRole],
+    audit: Arc<WalletAuditLogger>,
 ) -> AuthenticatedRpcHandler<H, P>
 where
     H: Fn(RpcInvocation<'_, P>) -> R + Send + Sync,
     P: Clone,
+    R: WalletAuditResult,
 {
     AuthenticatedRpcHandler::new(
         authenticator,
         handler,
         metrics,
         method,
+        method_name,
         rate_limit,
         required_roles,
+        audit,
     )
 }
 
 type RpcHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
 type JsonRpcHandler = AuthenticatedRpcHandler<RpcHandlerFn, JsonRpcRequest>;
+
+struct AuditContext {
+    method: &'static str,
+    identities: Vec<WalletIdentity>,
+    roles: WalletRoleSet,
+}
+
+impl AuditContext {
+    fn from_invocation<P>(method: &'static str, invocation: &RpcInvocation<'_, P>) -> Self {
+        Self {
+            method,
+            identities: invocation.request.identities.clone(),
+            roles: invocation.request.roles.clone(),
+        }
+    }
+}
 
 fn determine_rate_limit(limit_hint: Option<u64>, global: Option<NonZeroU64>) -> Option<NonZeroU64> {
     let method_limit = limit_hint.and_then(NonZeroU64::new);
@@ -647,17 +743,20 @@ impl WalletRpcServer {
         router: Arc<WalletRpcRouter>,
         metrics: Arc<RuntimeMetrics>,
         config: &WalletRuntimeConfig,
-    ) -> Self {
+    ) -> ChainResult<Self> {
         let security = config.security_context();
+        let audit = Arc::new(WalletAuditLogger::from_config(config.audit_settings())?);
         let mut handlers = HashMap::new();
         for (name, method, limit, roles) in JSON_RPC_METHODS {
             let handler = Self::build_handler(
                 Arc::clone(&router),
                 Arc::clone(&metrics),
                 config,
+                *name,
                 *method,
                 *limit,
                 roles,
+                Arc::clone(&audit),
             );
             handlers.insert(*name, handler);
         }
@@ -665,24 +764,28 @@ impl WalletRpcServer {
             router,
             metrics,
             config,
+            "unknown",
             WalletRpcMethod::Unknown,
             None,
             ROLES_ANY,
+            audit,
         );
-        Self {
+        Ok(Self {
             handlers,
             fallback,
             security,
-        }
+        })
     }
 
     fn build_handler(
         router: Arc<WalletRpcRouter>,
         metrics: Arc<RuntimeMetrics>,
         config: &WalletRuntimeConfig,
+        method_name: &'static str,
         method: WalletRpcMethod,
         limit_hint: Option<u64>,
         required_roles: &'static [WalletRole],
+        audit: Arc<WalletAuditLogger>,
     ) -> JsonRpcHandler {
         let router_for_handler = Arc::clone(&router);
         let metrics_for_handler = Arc::clone(&metrics);
@@ -739,8 +842,10 @@ impl WalletRpcServer {
             closure,
             metrics,
             method,
+            method_name,
             rate_limit,
             required_roles,
+            audit,
         )
     }
 
@@ -759,7 +864,7 @@ pub fn json_rpc_router(
         wallet_router,
         Arc::clone(&metrics),
         config,
-    ));
+    )?);
     let cors = build_cors_layer(config)?;
     Ok(Router::new()
         .route("/rpc", post(wallet_rpc_handler))

@@ -16,8 +16,9 @@ use reqwest::{Certificate, Client, ClientBuilder, Identity};
 use rpp_chain::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 use rpp_chain::runtime::wallet::rpc::{
     authenticated_handler, AuthenticatedRpcHandler, RpcError, RpcInvocation, RpcRequest,
-    StaticAuthenticator, WalletClientCertificates, WalletIdentity, WalletRbacStore, WalletRole,
-    WalletRoleSet, WalletSecurityBinding, WalletSecurityContext, WalletSecurityPaths,
+    StaticAuthenticator, WalletAuditLogger, WalletClientCertificates, WalletIdentity,
+    WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityContext,
+    WalletSecurityPaths,
 };
 use rpp_chain::runtime::wallet::runtime::{
     DeterministicSync, WalletRpcSecurityRuntimeConfig, WalletRuntime, WalletRuntimeConfig,
@@ -204,25 +205,34 @@ fn viewer_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
         }),
         metrics,
         WalletRpcMethod::JsonGetBalance,
+        VIEWER_METHOD,
         None,
         ROLES_VIEWER,
+        Arc::new(WalletAuditLogger::disabled()),
     )
 }
 
 fn operator_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
     success_handler(
         metrics,
+        OPERATOR_METHOD,
         WalletRpcMethod::JsonCreateTransaction,
         ROLES_OPERATOR,
     )
 }
 
 fn admin_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
-    success_handler(metrics, WalletRpcMethod::JsonSetPolicy, ROLES_ADMIN)
+    success_handler(
+        metrics,
+        ADMIN_METHOD,
+        WalletRpcMethod::JsonSetPolicy,
+        ROLES_ADMIN,
+    )
 }
 
 fn success_handler(
     metrics: Arc<RuntimeMetrics>,
+    method_name: &'static str,
     method: WalletRpcMethod,
     roles: &'static [WalletRole],
 ) -> TestHandler {
@@ -236,8 +246,10 @@ fn success_handler(
         }),
         metrics,
         method,
+        method_name,
         None,
         roles,
+        Arc::new(WalletAuditLogger::disabled()),
     )
 }
 
@@ -256,6 +268,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         BACKUP_IMPORT_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            BACKUP_IMPORT_METHOD,
             WalletRpcMethod::JsonBackupImport,
             ROLES_ADMIN,
         ),
@@ -264,6 +277,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         BACKUP_VALIDATE_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            BACKUP_VALIDATE_METHOD,
             WalletRpcMethod::JsonBackupValidate,
             ROLES_OPERATOR,
         ),
@@ -272,6 +286,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         WATCH_STATUS_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            WATCH_STATUS_METHOD,
             WalletRpcMethod::JsonWatchOnlyStatus,
             ROLES_VIEWER,
         ),
@@ -280,6 +295,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         WATCH_ENABLE_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            WATCH_ENABLE_METHOD,
             WalletRpcMethod::JsonWatchOnlyEnable,
             ROLES_ADMIN,
         ),
@@ -288,6 +304,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         MULTISIG_GET_SCOPE_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            MULTISIG_GET_SCOPE_METHOD,
             WalletRpcMethod::JsonMultisigGetScope,
             ROLES_VIEWER,
         ),
@@ -296,6 +313,7 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         MULTISIG_SET_COSIGNERS_METHOD.to_string(),
         success_handler(
             Arc::clone(&metrics),
+            MULTISIG_SET_COSIGNERS_METHOD,
             WalletRpcMethod::JsonMultisigSetCosigners,
             ROLES_ADMIN,
         ),
