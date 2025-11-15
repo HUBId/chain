@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use rpp::runtime::config::QueueWeightsConfig;
 use rpp::runtime::node::MempoolStatus;
 use rpp_wallet::config::wallet::{
-    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::engine::DraftTransaction;
@@ -221,6 +221,7 @@ impl SyncSetup {
             policy,
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::new(TestNodeClient::default()),

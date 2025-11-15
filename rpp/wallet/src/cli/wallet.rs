@@ -18,8 +18,9 @@ use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
+use rpp::runtime::config::WalletConfig as RuntimeWalletConfig;
 #[cfg(feature = "wallet_rpc_mtls")]
-use rpp::runtime::config::{WalletConfig as RuntimeWalletConfig, WalletRpcSecurityBinding};
+use rpp::runtime::config::WalletRpcSecurityBinding;
 use rpp::runtime::wallet::rpc::WalletIdentity;
 #[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::wallet::rpc::{
@@ -1209,7 +1210,8 @@ pub enum HardwareSubcommand {
 
 #[cfg(feature = "wallet_hw")]
 impl HardwareCommand {
-    pub async fn execute(&self) -> Result<(), WalletCliError> {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        ensure_hardware_config_enabled(context)?;
         match &self.command {
             HardwareSubcommand::Enumerate(cmd) => cmd.execute().await,
             HardwareSubcommand::Sign(cmd) => cmd.execute().await,
@@ -2055,7 +2057,7 @@ impl WalletCommand {
                 SendSubcommand::BroadcastRaw(cmd) => cmd.execute().await,
             },
             #[cfg(feature = "wallet_hw")]
-            WalletCommand::Hardware(cmd) => cmd.execute().await,
+            WalletCommand::Hardware(cmd) => cmd.execute(init_context).await,
             WalletCommand::Backup(BackupCommand { command }) => match command {
                 BackupSubcommand::Export(cmd) => cmd.execute().await,
                 BackupSubcommand::Validate(cmd) => cmd.execute().await,
@@ -2072,21 +2074,43 @@ impl WalletCommand {
     }
 }
 
-#[cfg(feature = "wallet_rpc_mtls")]
-fn load_wallet_security_config(
+fn load_runtime_wallet_config_with_path(
     context: &InitContext,
 ) -> Result<(RuntimeWalletConfig, PathBuf), WalletCliError> {
     let path = context.resolve_wallet_config_path();
-    let config = if path.exists() {
+    let mut config = if path.exists() {
         RuntimeWalletConfig::load(&path).map_err(|err| WalletCliError::Other(anyhow!(err)))?
     } else {
         RuntimeWalletConfig::default()
     };
-    let mut config = config;
     if let Some(dir) = &context.data_dir_override {
         config.data_dir = dir.clone();
     }
     Ok((config, path))
+}
+
+fn load_runtime_wallet_config(context: &InitContext) -> Result<RuntimeWalletConfig, WalletCliError> {
+    let (config, _) = load_runtime_wallet_config_with_path(context)?;
+    Ok(config)
+}
+
+#[cfg(feature = "wallet_hw")]
+fn ensure_hardware_config_enabled(context: &InitContext) -> Result<(), WalletCliError> {
+    let config = load_runtime_wallet_config(context)?;
+    if config.wallet.hw.enabled {
+        Ok(())
+    } else {
+        Err(WalletCliError::Other(anyhow!(
+            "wallet hardware commands require `wallet.hw.enabled = true`"
+        )))
+    }
+}
+
+#[cfg(feature = "wallet_rpc_mtls")]
+fn load_wallet_security_config(
+    context: &InitContext,
+) -> Result<(RuntimeWalletConfig, PathBuf), WalletCliError> {
+    load_runtime_wallet_config_with_path(context)
 }
 
 #[cfg(feature = "wallet_rpc_mtls")]

@@ -132,6 +132,8 @@ pub struct WalletRpcRouter {
 }
 
 const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
+#[cfg(feature = "wallet_hw")]
+const HARDWARE_DISABLED_ERROR: &str = "wallet hardware support disabled by configuration";
 
 impl WalletRpcRouter {
     #[cfg(feature = "runtime")]
@@ -287,11 +289,17 @@ impl WalletRpcRouter {
             }
             #[cfg(feature = "wallet_hw")]
             "hw.enumerate" => {
+                if !self.wallet.hardware_enabled() {
+                    return Err(RouterError::InvalidRequest(HARDWARE_DISABLED_ERROR));
+                }
                 parse_params::<EmptyParams>(params)?;
                 self.hw_enumerate()
             }
             #[cfg(feature = "wallet_hw")]
             "hw.sign" => {
+                if !self.wallet.hardware_enabled() {
+                    return Err(RouterError::InvalidRequest(HARDWARE_DISABLED_ERROR));
+                }
                 let params: HardwareSignParams = parse_params(params)?;
                 self.hw_sign(params)
             }
@@ -1431,6 +1439,11 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             Some(json!({ "kind": "multisig" })),
         ),
         WalletError::Zsi(zsi) => zsi_error_to_json(zsi),
+        WalletError::HardwareFeatureDisabled => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "wallet hardware support disabled at build time",
+            None,
+        ),
         #[cfg(feature = "wallet_hw")]
         WalletError::Hardware(err) => hardware_error_to_json(err),
         #[cfg(feature = "wallet_hw")]
@@ -1443,6 +1456,12 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
         WalletError::HardwareStatePoisoned => json_error(
             WalletRpcErrorCode::StatePoisoned,
             "hardware signer state unavailable",
+            None,
+        ),
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareDisabled => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "wallet hardware support disabled by configuration",
             None,
         ),
     }
@@ -1873,7 +1892,7 @@ mod tests {
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{
-        WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+        WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
     };
     use crate::db::UtxoOutpoint;
     use crate::db::WalletStore;
@@ -1908,6 +1927,7 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::new(StubNodeClient::default()),
@@ -1944,6 +1964,11 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            {
+                let mut hw = WalletHwConfig::default();
+                hw.enabled = true;
+                hw
+            },
             WalletZsiConfig::default(),
             None,
             Arc::new(StubNodeClient::default()),
@@ -1978,6 +2003,7 @@ mod tests {
             WalletPolicyConfig::default(),
             WalletFeeConfig::default(),
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::new(StubNodeClient::default()),
@@ -2462,6 +2488,22 @@ mod tests {
         let enumerate: HardwareEnumerateResponse = serde_json::from_value(result).expect("decode");
         assert_eq!(enumerate.devices.len(), 1);
         assert_eq!(enumerate.devices[0].fingerprint, "deadbeef");
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hw_methods_rejected_when_disabled_in_config() {
+        let router = build_router(None);
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "hw.enumerate".to_string(),
+            params: None,
+        };
+        let response = router.handle(request);
+        let error = response.error.expect("error");
+        assert_eq!(error.code, WalletRpcErrorCode::InvalidRequest.as_i32());
+        assert_eq!(error.message, HARDWARE_DISABLED_ERROR);
     }
 
     #[cfg(feature = "wallet_hw")]

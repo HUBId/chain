@@ -4,7 +4,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{
-    PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    PolicyTierHooks, WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig,
+    WalletZsiConfig,
 };
 use crate::db::{
     PendingLock, PendingLockMetadata, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoRecord,
@@ -64,6 +65,8 @@ pub enum WalletError {
     MultisigDisabled,
     #[error("zsi error: {0}")]
     Zsi(#[from] ZsiError),
+    #[error("wallet hardware support disabled at build time")]
+    HardwareFeatureDisabled,
     #[cfg(feature = "wallet_hw")]
     #[error("hardware signer error: {0}")]
     Hardware(#[from] HardwareSignerError),
@@ -73,6 +76,9 @@ pub enum WalletError {
     #[cfg(feature = "wallet_hw")]
     #[error("hardware signer state unavailable")]
     HardwareStatePoisoned,
+    #[cfg(feature = "wallet_hw")]
+    #[error("wallet hardware support disabled by configuration")]
+    HardwareDisabled,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -166,6 +172,7 @@ pub struct Wallet {
     watch_only: Arc<RwLock<Option<WatchOnlyRecord>>>,
     telemetry: Arc<WalletActionTelemetry>,
     zsi: WalletZsiState,
+    hw_config: WalletHwConfig,
 }
 
 impl Wallet {
@@ -211,12 +218,16 @@ impl Wallet {
         policy: WalletPolicyConfig,
         fees: WalletFeeConfig,
         prover_config: WalletProverConfig,
+        hw_config: WalletHwConfig,
         zsi_config: WalletZsiConfig,
         zsi_backend: Option<Arc<dyn ProofBackend>>,
         node_client: Arc<dyn NodeClient>,
         paths: WalletPaths,
         telemetry: Arc<WalletActionTelemetry>,
     ) -> Result<Self, WalletError> {
+        if hw_config.enabled && !cfg!(feature = "wallet_hw") {
+            return Err(WalletError::HardwareFeatureDisabled);
+        }
         let (root_seed, watch_only_record, prover): (
             [u8; 32],
             Option<WatchOnlyRecord>,
@@ -259,7 +270,21 @@ impl Wallet {
             watch_only: Arc::new(RwLock::new(watch_only_record)),
             telemetry,
             zsi,
+            hw_config,
         })
+    }
+
+    pub fn hardware_enabled(&self) -> bool {
+        self.hw_config.enabled
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn ensure_hardware_enabled(&self) -> Result<(), WalletError> {
+        if self.hw_config.enabled {
+            Ok(())
+        } else {
+            Err(WalletError::HardwareDisabled)
+        }
     }
 
     pub fn is_watch_only(&self) -> bool {
@@ -570,6 +595,9 @@ impl Wallet {
         &self,
         signer: Option<Arc<dyn HardwareSigner>>,
     ) -> Result<(), WalletError> {
+        if signer.is_some() {
+            self.ensure_hardware_enabled()?;
+        }
         self.engine
             .set_hardware_signer(signer)
             .map_err(|_| WalletError::HardwareStatePoisoned)
@@ -577,6 +605,7 @@ impl Wallet {
 
     #[cfg(feature = "wallet_hw")]
     fn hardware_backend(&self) -> Result<Arc<dyn HardwareSigner>, WalletError> {
+        self.ensure_hardware_enabled()?;
         match self
             .engine
             .hardware_signer()
@@ -903,7 +932,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
+    use crate::config::wallet::{WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig};
     use crate::db::{UtxoOutpoint, UtxoRecord};
     use crate::engine::signing::ProverError;
     use crate::engine::{DerivationPath, WalletEngine};
@@ -1003,6 +1032,8 @@ mod tests {
         let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
         let keystore = tempdir.path().join("keystore.toml");
         let backup = tempdir.path().join("backups");
+        let mut hw_config = WalletHwConfig::default();
+        hw_config.enabled = true;
         let wallet = Wallet::new(
             Arc::clone(&store),
             WalletMode::Full {
@@ -1011,6 +1042,7 @@ mod tests {
             policy,
             fees,
             WalletProverConfig::default(),
+            hw_config,
             WalletZsiConfig::default(),
             None,
             node_client,
@@ -1050,6 +1082,7 @@ mod tests {
             watch_only: Arc::new(RwLock::new(None)),
             telemetry: Arc::new(WalletActionTelemetry::new(false)),
             zsi: WalletZsiState::new(WalletZsiConfig::default(), None).expect("zsi state"),
+            hw_config: WalletHwConfig::default(),
         }
     }
 
@@ -1095,6 +1128,7 @@ mod tests {
             policy,
             fees,
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             zsi_config,
             None,
             node_client,
@@ -1103,6 +1137,37 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WalletError::Zsi(ZsiError::Disabled))));
+    }
+
+    #[cfg(not(feature = "wallet_hw"))]
+    #[test]
+    fn wallet_new_rejects_hw_config_without_feature() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let mut hw_config = WalletHwConfig::default();
+        hw_config.enabled = true;
+        let result = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [2u8; 32],
+            },
+            policy,
+            fees,
+            WalletProverConfig::default(),
+            hw_config,
+            WalletZsiConfig::default(),
+            None,
+            node_client,
+            WalletPaths::new(
+                tempdir.path().join("keystore.toml"),
+                tempdir.path().join("backups"),
+            ),
+            Arc::new(WalletActionTelemetry::new(false)),
+        );
+
+        assert!(matches!(result, Err(WalletError::HardwareFeatureDisabled)));
     }
 
     #[cfg(feature = "prover-mock")]
@@ -1129,6 +1194,7 @@ mod tests {
             policy,
             fees,
             config,
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),
@@ -1187,6 +1253,7 @@ mod tests {
             policy,
             fees,
             config,
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),
@@ -1277,6 +1344,7 @@ mod tests {
             policy,
             fees,
             config,
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),
@@ -1389,6 +1457,7 @@ mod tests {
             policy,
             fees,
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),
@@ -1457,6 +1526,7 @@ mod tests {
             policy,
             fees,
             WalletProverConfig::default(),
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),
@@ -1513,6 +1583,7 @@ mod tests {
             policy,
             fees,
             config,
+            WalletHwConfig::default(),
             WalletZsiConfig::default(),
             None,
             Arc::clone(&node_client),

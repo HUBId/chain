@@ -32,6 +32,7 @@ pub struct WalletConfig {
     pub multisig: WalletMultisigConfig,
     pub zsi: WalletZsiConfig,
     pub gui: WalletGuiConfig,
+    pub hw: WalletHwConfig,
 }
 
 impl Default for WalletConfig {
@@ -44,6 +45,7 @@ impl Default for WalletConfig {
             multisig: WalletMultisigConfig::default(),
             zsi: WalletZsiConfig::default(),
             gui: WalletGuiConfig::default(),
+            hw: WalletHwConfig::default(),
         }
     }
 }
@@ -52,9 +54,64 @@ impl WalletConfig {
     /// Validates that feature-gated sections align with the compiled binary.
     pub fn ensure_supported(&self) -> Result<(), &'static str> {
         self.multisig.ensure_supported()?;
-        self.gui.ensure_security_supported()
+        self.gui
+            .ensure_security_supported()
+            .and_then(|_| self.hw.ensure_supported())
     }
 }
+
+/// Configure hardware wallet integration toggles.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletHwConfig {
+    /// Enable hardware wallet support for signing flows.
+    pub enabled: bool,
+    /// Transport used to communicate with hardware devices.
+    pub transport: WalletHwTransport,
+    /// Optional device selector narrowing enumeration results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_selector: Option<String>,
+    /// Allow falling back to software signing when devices are unavailable.
+    pub fallback_to_software: bool,
+}
+
+impl WalletHwConfig {
+    /// Ensures the configuration matches the compiled feature set.
+    pub fn ensure_supported(&self) -> Result<(), &'static str> {
+        if self.enabled && !cfg!(feature = "wallet_hw") {
+            Err("wallet hardware support requires the `wallet_hw` feature")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Default for WalletHwConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            transport: WalletHwTransport::default(),
+            device_selector: None,
+            fallback_to_software: true,
+        }
+    }
+}
+
+/// Supported hardware wallet transports.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WalletHwTransport {
+    Hid,
+    Usb,
+    Tcp,
+}
+
+impl Default for WalletHwTransport {
+    fn default() -> Self {
+        WalletHwTransport::Hid
+    }
+}
+
 
 /// Configure storage paths and lifecycle metadata for the wallet engine.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -509,6 +566,25 @@ mod tests {
     fn gui_security_controls_allowed_with_feature() {
         let mut config = WalletConfig::default();
         config.gui.security_controls_enabled = true;
+        assert!(config.ensure_supported().is_ok());
+    }
+
+    #[cfg(not(feature = "wallet_hw"))]
+    #[test]
+    fn hardware_config_rejected_without_feature() {
+        let mut config = WalletConfig::default();
+        config.hw.enabled = true;
+        assert_eq!(
+            config.ensure_supported(),
+            Err("wallet hardware support requires the `wallet_hw` feature")
+        );
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hardware_config_allowed_with_feature() {
+        let mut config = WalletConfig::default();
+        config.hw.enabled = true;
         assert!(config.ensure_supported().is_ok());
     }
 

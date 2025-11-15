@@ -316,6 +316,11 @@ impl State {
 
     pub fn set_config(&mut self, config: Option<WalletConfig>) {
         self.config = config;
+        #[cfg(feature = "wallet_hw")]
+        if !self.hardware_config_enabled() {
+            self.hardware_devices = Snapshot::Idle;
+            self.hardware_inflight = false;
+        }
     }
 
     pub fn activate(&mut self, client: WalletRpcClient) -> Command<Message> {
@@ -956,6 +961,12 @@ impl State {
     fn hardware_summary_card(&self) -> Element<Message> {
         #[cfg(feature = "wallet_hw")]
         {
+            if !self.hardware_config_enabled() {
+                return summary_card(
+                    "Hardware",
+                    column![text("Hardware wallet support disabled in configuration.")],
+                );
+            }
             let body = match &self.hardware_devices {
                 Snapshot::Idle => column![text("Enumeration pending")],
                 Snapshot::Loading => column![text("Enumerating devices...")],
@@ -1133,20 +1144,24 @@ impl State {
             .spacing(8)
             .align_items(Alignment::Center);
 
-        let body = match &self.hardware_devices {
-            Snapshot::Idle => column![text("Hardware enumeration not requested yet.")],
-            Snapshot::Loading => column![text("Enumerating connected hardware wallets...")],
-            Snapshot::Error(error) => column![text(format!(
-                "Unable to enumerate hardware devices: {error}"
-            ))],
-            Snapshot::Loaded(devices) => {
-                if devices.is_empty() {
-                    column![text("No hardware wallets detected.".to_string())]
-                } else {
-                    let entries = devices.iter().fold(column![], |column, device| {
-                        column.push(hardware_device_entry(device))
-                    });
-                    entries.spacing(4)
+        let body: Column<Message> = if !self.hardware_config_enabled() {
+            column![text("Hardware wallet support disabled in configuration.")]
+        } else {
+            match &self.hardware_devices {
+                Snapshot::Idle => column![text("Hardware enumeration not requested yet.")],
+                Snapshot::Loading => column![text("Enumerating connected hardware wallets...")],
+                Snapshot::Error(error) => column![text(format!(
+                    "Unable to enumerate hardware devices: {error}"
+                ))],
+                Snapshot::Loaded(devices) => {
+                    if devices.is_empty() {
+                        column![text("No hardware wallets detected.".to_string())]
+                    } else {
+                        let entries = devices.iter().fold(column![], |column, device| {
+                            column.push(hardware_device_entry(device))
+                        });
+                        entries.spacing(4)
+                    }
                 }
             }
         };
@@ -1335,15 +1350,20 @@ impl State {
 
         #[cfg(feature = "wallet_hw")]
         {
-            self.hardware_devices.set_loading();
-            self.hardware_inflight = true;
-            self.refresh_pending += 1;
-            commands.push(commands::rpc(
-                "hw.enumerate",
-                client,
-                |client| async move { client.hw_enumerate().await },
-                map_hardware_devices,
-            ));
+            if self.hardware_config_enabled() {
+                self.hardware_devices.set_loading();
+                self.hardware_inflight = true;
+                self.refresh_pending += 1;
+                commands.push(commands::rpc(
+                    "hw.enumerate",
+                    client,
+                    |client| async move { client.hw_enumerate().await },
+                    map_hardware_devices,
+                ));
+            } else {
+                self.hardware_devices = Snapshot::Idle;
+                self.hardware_inflight = false;
+            }
         }
 
         Command::batch(commands)
@@ -1402,6 +1422,14 @@ impl State {
     #[cfg(not(feature = "wallet_zsi"))]
     fn zsi_enabled(&self) -> bool {
         false
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_config_enabled(&self) -> bool {
+        self.config
+            .as_ref()
+            .map(|config| config.hw.enabled)
+            .unwrap_or(false)
     }
 }
 

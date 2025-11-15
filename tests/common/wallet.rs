@@ -9,7 +9,7 @@ use rpp::runtime::config::QueueWeightsConfig;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::wallet::sync::SyncStatus;
 use rpp_wallet::config::wallet::{
-    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
@@ -178,6 +178,7 @@ impl WalletTestFixture {
                 policy.clone(),
                 fees,
                 prover,
+                WalletHwConfig::default(),
                 zsi,
                 zsi_backend,
                 Arc::clone(&node),
