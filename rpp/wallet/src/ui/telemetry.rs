@@ -149,9 +149,13 @@ impl UiTelemetry {
         self.record_action(action.label(), outcome);
     }
 
+    #[cfg(feature = "wallet_zsi")]
     pub fn record_zsi_outcome(&self, action: ZsiAction, outcome: TelemetryOutcome) {
         self.record_action(action.label(), outcome);
     }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    pub fn record_zsi_outcome(&self, _action: ZsiAction, _outcome: TelemetryOutcome) {}
 
     #[cfg(feature = "wallet_hw")]
     pub fn record_hardware_outcome(&self, action: HardwareAction, outcome: TelemetryOutcome) {
@@ -226,6 +230,7 @@ impl SecurityAction {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ZsiAction {
     ListArtifacts,
@@ -233,6 +238,7 @@ pub enum ZsiAction {
     DeleteArtifact,
 }
 
+#[cfg(feature = "wallet_zsi")]
 impl ZsiAction {
     fn label(self) -> &'static str {
         match self {
@@ -242,6 +248,10 @@ impl ZsiAction {
         }
     }
 }
+
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ZsiAction;
 
 #[cfg(feature = "wallet_hw")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -551,6 +561,7 @@ mod tests {
         telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
         telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
         telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
+        #[cfg(feature = "wallet_zsi")]
         telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
         #[cfg(feature = "wallet_hw")]
         telemetry.record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
@@ -570,6 +581,7 @@ mod tests {
             "ui.action.events{operation=security.assign,outcome=ok}"
         )
         .is_none());
+        #[cfg(feature = "wallet_zsi")]
         assert!(TestRecorder::counter_value(
             &inner,
             "ui.action.events{operation=zsi.bind_account,outcome=err}"
@@ -588,6 +600,7 @@ mod tests {
         telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
         telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
         telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
+        #[cfg(feature = "wallet_zsi")]
         telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
         #[cfg(feature = "wallet_hw")]
         telemetry.record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
@@ -613,6 +626,7 @@ mod tests {
             ),
             Some(1)
         );
+        #[cfg(feature = "wallet_zsi")]
         assert_eq!(
             TestRecorder::counter_value(
                 &inner,
