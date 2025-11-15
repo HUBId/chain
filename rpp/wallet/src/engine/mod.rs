@@ -11,6 +11,7 @@ use crate::db::{
 };
 #[cfg(feature = "wallet_hw")]
 use crate::hw::HardwareSigner;
+#[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{load_cosigner_registry, load_scope, MultisigDraftMetadata, MultisigError};
 use crate::node_client::NodeClient;
 
@@ -402,16 +403,19 @@ impl WalletEngine {
             spend_model,
             metadata,
         )?;
-        let scope = load_scope(&self.store).map_err(MultisigError::from)?;
-        if let Some(scope) = scope {
-            let registry = load_cosigner_registry(&self.store).map_err(MultisigError::from)?;
-            let cosigners = registry
-                .map(|registry| registry.to_vec())
-                .unwrap_or_default();
-            if scope.requires_collaboration() && cosigners.is_empty() {
-                return Err(EngineError::Multisig(MultisigError::MissingCosigners));
+        #[cfg(feature = "wallet_multisig_hooks")]
+        {
+            let scope = load_scope(&self.store).map_err(MultisigError::from)?;
+            if let Some(scope) = scope {
+                let registry = load_cosigner_registry(&self.store).map_err(MultisigError::from)?;
+                let cosigners = registry
+                    .map(|registry| registry.to_vec())
+                    .unwrap_or_default();
+                if scope.requires_collaboration() && cosigners.is_empty() {
+                    return Err(EngineError::Multisig(MultisigError::MissingCosigners));
+                }
+                built.metadata.multisig = Some(MultisigDraftMetadata { scope, cosigners });
             }
-            built.metadata.multisig = Some(MultisigDraftMetadata { scope, cosigners });
         }
         let mut draft = built.transaction;
         self.address_manager.lock_inputs(

@@ -29,6 +29,7 @@ pub struct WalletConfig {
     pub policy: WalletPolicyConfig,
     pub fees: WalletFeeConfig,
     pub prover: WalletProverConfig,
+    pub multisig: WalletMultisigConfig,
     pub zsi: WalletZsiConfig,
     pub gui: WalletGuiConfig,
 }
@@ -40,9 +41,17 @@ impl Default for WalletConfig {
             policy: WalletPolicyConfig::default(),
             fees: WalletFeeConfig::default(),
             prover: WalletProverConfig::default(),
+            multisig: WalletMultisigConfig::default(),
             zsi: WalletZsiConfig::default(),
             gui: WalletGuiConfig::default(),
         }
+    }
+}
+
+impl WalletConfig {
+    /// Validates that feature-gated sections align with the compiled binary.
+    pub fn ensure_supported(&self) -> Result<(), &'static str> {
+        self.multisig.ensure_supported()
     }
 }
 
@@ -210,6 +219,31 @@ impl Default for WalletZsiConfig {
     }
 }
 
+/// Configure multisig workflow exposure for the wallet runtime.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletMultisigConfig {
+    /// Enable multisig helpers surfaced through the wallet runtime.
+    pub enabled: bool,
+}
+
+impl WalletMultisigConfig {
+    /// Ensures the configuration matches the compiled feature set.
+    pub fn ensure_supported(&self) -> Result<(), &'static str> {
+        if self.enabled && !cfg!(feature = "wallet_multisig_hooks") {
+            Err("wallet multisig support disabled at build time")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Default for WalletMultisigConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
 /// Configure GUI-specific behaviour for the wallet desktop application.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -321,6 +355,7 @@ mod tests {
             config.prover.max_concurrency,
             DEFAULT_PROVER_MAX_CONCURRENCY
         );
+        assert!(!config.multisig.enabled);
         assert!(!config.zsi.enabled);
         assert!(config.zsi.backend.is_none());
         assert_eq!(config.gui.poll_interval_ms, DEFAULT_GUI_POLL_INTERVAL_MS);
@@ -367,6 +402,7 @@ mod tests {
                 max_witness_bytes: 8 * 1024 * 1024,
                 max_concurrency: 4,
             },
+            multisig: WalletMultisigConfig { enabled: true },
             zsi: WalletZsiConfig {
                 enabled: true,
                 backend: Some("stwo".into()),
@@ -417,6 +453,25 @@ mod tests {
         assert_eq!(restored.gui.theme, WalletGuiTheme::Dark);
         assert!(!restored.gui.confirm_clipboard);
         assert!(restored.gui.telemetry_opt_in);
+    }
+
+    #[cfg(not(feature = "wallet_multisig_hooks"))]
+    #[test]
+    fn multisig_config_rejected_when_feature_disabled() {
+        let mut config = WalletConfig::default();
+        config.multisig.enabled = true;
+        assert_eq!(
+            config.ensure_supported(),
+            Err("wallet multisig support disabled at build time")
+        );
+    }
+
+    #[cfg(feature = "wallet_multisig_hooks")]
+    #[test]
+    fn multisig_config_allowed_when_feature_enabled() {
+        let mut config = WalletConfig::default();
+        config.multisig.enabled = true;
+        assert!(config.ensure_supported().is_ok());
     }
 
     #[test]

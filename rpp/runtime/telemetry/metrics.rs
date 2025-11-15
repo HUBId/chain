@@ -829,14 +829,19 @@ pub enum WalletRpcMethod {
     /// JSON-RPC: `watch_only.disable`.
     JsonWatchOnlyDisable,
     /// JSON-RPC: `multisig.get_scope`.
+    #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigGetScope,
     /// JSON-RPC: `multisig.set_scope`.
+    #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigSetScope,
     /// JSON-RPC: `multisig.get_cosigners`.
+    #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigGetCosigners,
     /// JSON-RPC: `multisig.set_cosigners`.
+    #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigSetCosigners,
     /// JSON-RPC: `multisig.export`.
+    #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigExport,
     /// JSON-RPC: `broadcast`.
     JsonBroadcast,
@@ -949,10 +954,15 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonWatchOnlyStatus => "json_watch_only_status",
             Self::JsonWatchOnlyEnable => "json_watch_only_enable",
             Self::JsonWatchOnlyDisable => "json_watch_only_disable",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigGetScope => "json_multisig_get_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigSetScope => "json_multisig_set_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigGetCosigners => "json_multisig_get_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigSetCosigners => "json_multisig_set_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigExport => "json_multisig_export",
             Self::JsonBroadcast => "json_broadcast",
             Self::JsonPolicyPreview => "json_policy_preview",
@@ -1014,10 +1024,15 @@ pub enum WalletAction {
     WatchOnlyStatus,
     WatchOnlyEnable,
     WatchOnlyDisable,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigGetScope,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigSetScope,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigGetCosigners,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigSetCosigners,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigExport,
     #[cfg(feature = "wallet_zsi")]
     ZsiProve,
@@ -1044,10 +1059,15 @@ impl MetricLabel for WalletAction {
             Self::WatchOnlyStatus => "watch_only.status",
             Self::WatchOnlyEnable => "watch_only.enable",
             Self::WatchOnlyDisable => "watch_only.disable",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigGetScope => "multisig.get_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigSetScope => "multisig.set_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigGetCosigners => "multisig.get_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigSetCosigners => "multisig.set_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigExport => "multisig.export",
             #[cfg(feature = "wallet_zsi")]
             Self::ZsiProve => "zsi.prove",

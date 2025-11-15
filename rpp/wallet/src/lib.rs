@@ -54,6 +54,10 @@ pub mod cli;
 pub mod rpc;
 
 /// Multisig configuration and registry helpers.
+#[cfg(feature = "wallet_multisig_hooks")]
+pub mod multisig;
+#[cfg(not(feature = "wallet_multisig_hooks"))]
+#[path = "multisig_stub.rs"]
 pub mod multisig;
 
 /// Runtime integration shims and stubs.

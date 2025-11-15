@@ -37,7 +37,9 @@ const BACKUP_IMPORT_METHOD: &str = "backup.import";
 const BACKUP_VALIDATE_METHOD: &str = "backup.validate";
 const WATCH_STATUS_METHOD: &str = "watch_only.status";
 const WATCH_ENABLE_METHOD: &str = "watch_only.enable";
+#[cfg(feature = "wallet_multisig_hooks")]
 const MULTISIG_GET_SCOPE_METHOD: &str = "multisig.get_scope";
+#[cfg(feature = "wallet_multisig_hooks")]
 const MULTISIG_SET_COSIGNERS_METHOD: &str = "multisig.set_cosigners";
 
 const ROLES_VIEWER: &[WalletRole] = &[WalletRole::Viewer, WalletRole::Operator, WalletRole::Admin];
@@ -300,24 +302,27 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
             ROLES_ADMIN,
         ),
     );
-    handlers.insert(
-        MULTISIG_GET_SCOPE_METHOD.to_string(),
-        success_handler(
-            Arc::clone(&metrics),
-            MULTISIG_GET_SCOPE_METHOD,
-            WalletRpcMethod::JsonMultisigGetScope,
-            ROLES_VIEWER,
-        ),
-    );
-    handlers.insert(
-        MULTISIG_SET_COSIGNERS_METHOD.to_string(),
-        success_handler(
-            Arc::clone(&metrics),
-            MULTISIG_SET_COSIGNERS_METHOD,
-            WalletRpcMethod::JsonMultisigSetCosigners,
-            ROLES_ADMIN,
-        ),
-    );
+    #[cfg(feature = "wallet_multisig_hooks")]
+    {
+        handlers.insert(
+            MULTISIG_GET_SCOPE_METHOD.to_string(),
+            success_handler(
+                Arc::clone(&metrics),
+                MULTISIG_GET_SCOPE_METHOD,
+                WalletRpcMethod::JsonMultisigGetScope,
+                ROLES_VIEWER,
+            ),
+        );
+        handlers.insert(
+            MULTISIG_SET_COSIGNERS_METHOD.to_string(),
+            success_handler(
+                Arc::clone(&metrics),
+                MULTISIG_SET_COSIGNERS_METHOD,
+                WalletRpcMethod::JsonMultisigSetCosigners,
+                ROLES_ADMIN,
+            ),
+        );
+    }
 
     let server = Arc::new(TestRpcServer { security, handlers });
 
@@ -564,25 +569,28 @@ async fn wallet_rpc_mtls_enforces_rbac() {
         .expect("admin watch enable request");
     assert_eq!(watch_enable_admin.status(), StatusCode::OK);
 
-    let multisig_get_scope_viewer =
-        send_request(&viewer_client, &base_url, MULTISIG_GET_SCOPE_METHOD)
-            .await
-            .expect("viewer multisig get scope request");
-    assert_eq!(multisig_get_scope_viewer.status(), StatusCode::OK);
+    #[cfg(feature = "wallet_multisig_hooks")]
+    {
+        let multisig_get_scope_viewer =
+            send_request(&viewer_client, &base_url, MULTISIG_GET_SCOPE_METHOD)
+                .await
+                .expect("viewer multisig get scope request");
+        assert_eq!(multisig_get_scope_viewer.status(), StatusCode::OK);
 
-    let multisig_set_cosigners_operator =
-        send_request(&operator_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
-            .await
-            .expect("operator multisig set cosigners request");
-    assert_eq!(
-        multisig_set_cosigners_operator.status(),
-        StatusCode::FORBIDDEN
-    );
-    let multisig_set_cosigners_admin =
-        send_request(&admin_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
-            .await
-            .expect("admin multisig set cosigners request");
-    assert_eq!(multisig_set_cosigners_admin.status(), StatusCode::OK);
+        let multisig_set_cosigners_operator =
+            send_request(&operator_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
+                .await
+                .expect("operator multisig set cosigners request");
+        assert_eq!(
+            multisig_set_cosigners_operator.status(),
+            StatusCode::FORBIDDEN
+        );
+        let multisig_set_cosigners_admin =
+            send_request(&admin_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
+                .await
+                .expect("admin multisig set cosigners request");
+        assert_eq!(multisig_set_cosigners_admin.status(), StatusCode::OK);
+    }
 
     let admin_response = send_request(&admin_client, &base_url, ADMIN_METHOD)
         .await

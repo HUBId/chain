@@ -59,25 +59,34 @@ requesting client when role enforcement is active.
 
 ## Multisig Hooks
 
-The wallet can register with an external signing coordinator for multisignature policies.
-Configuration lives under `[wallet.multisig]`.
+The wallet exposes multisignature flows only when the binary is compiled with the
+`wallet_multisig_hooks` feature. Builds without the feature omit the CLI commands and
+JSON-RPC methods, and any runtime access returns `WalletError::MultisigDisabled`.
 
-* **Coordinator URL** – `wallet.multisig.coordinator_url` must point at a trusted HTTPS
-  endpoint that brokers partial signatures. Use certificates signed by a CA listed in
-  `wallet.rpc.security.trusted_ca_dir`.
-* **Quorum** – `wallet.multisig.quorum` defines the minimum number of participants required
-  for approval. The runtime rejects transactions that do not meet the configured quorum.
-* **Participants** – Populate `wallet.multisig.participants` with known key fingerprints or
-  device labels to enable deterministic routing.
-* **Hooks** – Implement hook scripts under `scripts/multisig/` to integrate with HSMs or
-  external coordinators. Hooks receive the PSBT and must return a signature bundle.
+Set `[wallet.multisig].enabled = true` in the wallet configuration to opt in after
+compiling with the feature. When active, use the CLI helpers to manage state:
+
+* `rpp-wallet multisig scope get|set|clear` – inspect or update the active threshold scope.
+* `rpp-wallet multisig cosigners list|set|clear` – manage the local cosigner registry.
+* `rpp-wallet multisig export --draft <id>` – export draft metadata for external
+  coordinators.
+
+Hook integration remains environment-specific. Deployments can continue to implement
+scripts under `scripts/multisig/` that broker PSBT signing with their chosen coordinator.
+Ensure those scripts are only enabled when `[wallet.multisig].enabled` is true and the
+binary was produced with `wallet_multisig_hooks`.
 
 ### Multisig Troubleshooting
 
+* **Feature disabled errors** – Ensure the runtime was built with `wallet_multisig_hooks`
+  and that `[wallet.multisig].enabled = true`. Otherwise the CLI hides multisig commands and
+  RPC calls surface `wallet multisig support disabled at build time`.
 * **Stalled approvals** – Check coordinator logs for quorum mismatches. Use
-  `rpp-wallet multisig status` to inspect pending requests.
+  `rpp-wallet multisig scope get` and `rpp-wallet multisig cosigners list` to inspect the
+  recorded policy and cosigners.
 * **Hook errors** – Ensure the hook process has executable permissions and returns JSON in
-  the expected schema; malformed responses surface as `HookFailed` errors in the runtime log.
+  the expected schema; malformed responses surface as runtime errors during multisig export
+  or signing.
 
 ## ZSI Workflows
 

@@ -24,6 +24,7 @@ use crate::hw::{
 };
 use crate::indexer::IndexerClient;
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
+#[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{
     clear_cosigner_registry, clear_scope, load_cosigner_registry, load_scope,
     store_cosigner_registry, store_scope, CosignerRegistry, MultisigError, MultisigScope,
@@ -56,8 +57,11 @@ pub enum WalletError {
     Sync(#[from] WalletSyncError),
     #[error("watch-only restriction: {0}")]
     WatchOnly(#[from] WatchOnlyError),
+    #[cfg(feature = "wallet_multisig_hooks")]
     #[error("multisig error: {0}")]
     Multisig(#[from] MultisigError),
+    #[error("wallet multisig support disabled at build time")]
+    MultisigDisabled,
     #[error("zsi error: {0}")]
     Zsi(#[from] ZsiError),
     #[cfg(feature = "wallet_hw")]
@@ -326,12 +330,19 @@ impl Wallet {
             .create_draft(to, amount, fee_rate, Some(self.node_client.as_ref()))?)
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     pub fn multisig_scope(&self) -> Result<Option<MultisigScope>, WalletError> {
         load_scope(&self.store)
             .map_err(MultisigError::from)
             .map_err(WalletError::from)
     }
 
+    #[cfg(not(feature = "wallet_multisig_hooks"))]
+    pub fn multisig_scope(&self) -> Result<Option<crate::multisig::MultisigScope>, WalletError> {
+        Err(WalletError::MultisigDisabled)
+    }
+
+    #[cfg(feature = "wallet_multisig_hooks")]
     pub fn set_multisig_scope(
         &self,
         scope: Option<MultisigScope>,
@@ -350,12 +361,29 @@ impl Wallet {
         Ok(previous)
     }
 
+    #[cfg(not(feature = "wallet_multisig_hooks"))]
+    pub fn set_multisig_scope(
+        &self,
+        _scope: Option<crate::multisig::MultisigScope>,
+    ) -> Result<Option<crate::multisig::MultisigScope>, WalletError> {
+        Err(WalletError::MultisigDisabled)
+    }
+
+    #[cfg(feature = "wallet_multisig_hooks")]
     pub fn cosigner_registry(&self) -> Result<Option<CosignerRegistry>, WalletError> {
         load_cosigner_registry(&self.store)
             .map_err(MultisigError::from)
             .map_err(WalletError::from)
     }
 
+    #[cfg(not(feature = "wallet_multisig_hooks"))]
+    pub fn cosigner_registry(
+        &self,
+    ) -> Result<Option<crate::multisig::CosignerRegistry>, WalletError> {
+        Err(WalletError::MultisigDisabled)
+    }
+
+    #[cfg(feature = "wallet_multisig_hooks")]
     pub fn set_cosigner_registry(
         &self,
         registry: Option<CosignerRegistry>,
@@ -372,6 +400,14 @@ impl Wallet {
         }
         batch.commit().map_err(store_error)?;
         Ok(previous)
+    }
+
+    #[cfg(not(feature = "wallet_multisig_hooks"))]
+    pub fn set_cosigner_registry(
+        &self,
+        _registry: Option<crate::multisig::CosignerRegistry>,
+    ) -> Result<Option<crate::multisig::CosignerRegistry>, WalletError> {
+        Err(WalletError::MultisigDisabled)
     }
 
     pub fn pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
@@ -874,6 +910,7 @@ mod tests {
     #[cfg(feature = "wallet_hw")]
     use crate::hw::{HardwareDevice, HardwareSignRequest, HardwareSignature, MockHardwareSigner};
     use crate::modes::watch_only::WatchOnlyRecord;
+    #[cfg(feature = "wallet_multisig_hooks")]
     use crate::multisig::{
         store_cosigner_registry, store_scope, Cosigner, CosignerRegistry, MultisigError,
         MultisigScope,
@@ -1263,6 +1300,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn create_draft_includes_multisig_metadata() {
         let tempdir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
@@ -1300,6 +1338,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn create_draft_requires_cosigners_for_multisig() {
         let tempdir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));

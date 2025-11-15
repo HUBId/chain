@@ -9,10 +9,15 @@ pub enum WalletTelemetryAction {
     WatchOnlyStatus,
     WatchOnlyEnable,
     WatchOnlyDisable,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigGetScope,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigSetScope,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigGetCosigners,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigSetCosigners,
+    #[cfg(feature = "wallet_multisig_hooks")]
     MultisigExport,
     #[cfg(feature = "wallet_zsi")]
     ZsiProve,
@@ -37,10 +42,15 @@ impl WalletTelemetryAction {
             Self::WatchOnlyStatus => "watch_only.status",
             Self::WatchOnlyEnable => "watch_only.enable",
             Self::WatchOnlyDisable => "watch_only.disable",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigGetScope => "multisig.get_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigSetScope => "multisig.set_scope",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigGetCosigners => "multisig.get_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigSetCosigners => "multisig.set_cosigners",
+            #[cfg(feature = "wallet_multisig_hooks")]
             Self::MultisigExport => "multisig.export",
             #[cfg(feature = "wallet_zsi")]
             Self::ZsiProve => "zsi.prove",

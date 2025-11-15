@@ -622,30 +622,35 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         Some(10),
         ROLES_ADMIN,
     ),
+    #[cfg(feature = "wallet_multisig_hooks")]
     (
         "multisig.get_scope",
         WalletRpcMethod::JsonMultisigGetScope,
         Some(30),
         ROLES_VIEWER,
     ),
+    #[cfg(feature = "wallet_multisig_hooks")]
     (
         "multisig.set_scope",
         WalletRpcMethod::JsonMultisigSetScope,
         Some(10),
         ROLES_ADMIN,
     ),
+    #[cfg(feature = "wallet_multisig_hooks")]
     (
         "multisig.get_cosigners",
         WalletRpcMethod::JsonMultisigGetCosigners,
         Some(30),
         ROLES_VIEWER,
     ),
+    #[cfg(feature = "wallet_multisig_hooks")]
     (
         "multisig.set_cosigners",
         WalletRpcMethod::JsonMultisigSetCosigners,
         Some(10),
         ROLES_ADMIN,
     ),
+    #[cfg(feature = "wallet_multisig_hooks")]
     (
         "multisig.export",
         WalletRpcMethod::JsonMultisigExport,

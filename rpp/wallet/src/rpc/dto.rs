@@ -1,5 +1,6 @@
 use crate::config::wallet::PolicyTierHooks;
 use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
+#[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
 use crate::proof_backend::IdentityPublicInputs;
 use crate::zsi::{LifecycleProof, ZsiOperation, ZsiRecord};
@@ -302,6 +303,7 @@ pub struct CreateTxResponse {
     pub inputs: Vec<DraftInputDto>,
     pub outputs: Vec<DraftOutputDto>,
     pub locks: Vec<PendingLockDto>,
+    #[cfg(feature = "wallet_multisig_hooks")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multisig: Option<MultisigDraftMetadataDto>,
 }
@@ -369,12 +371,14 @@ pub struct SignTxResponse {
     pub locks: Vec<PendingLockDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultisigScopeDto {
     pub threshold: u8,
     pub participants: u8,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CosignerDto {
     pub fingerprint: String,
@@ -382,12 +386,14 @@ pub struct CosignerDto {
     pub endpoint: Option<String>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultisigDraftMetadataDto {
     pub scope: MultisigScopeDto,
     pub cosigners: Vec<CosignerDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl From<&MultisigDraftMetadata> for MultisigDraftMetadataDto {
     fn from(metadata: &MultisigDraftMetadata) -> Self {
         Self {
@@ -400,6 +406,7 @@ impl From<&MultisigDraftMetadata> for MultisigDraftMetadataDto {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl From<&Cosigner> for CosignerDto {
     fn from(value: &Cosigner) -> Self {
         Self {
@@ -409,6 +416,7 @@ impl From<&Cosigner> for CosignerDto {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl From<&MultisigScope> for MultisigScopeDto {
     fn from(scope: &MultisigScope) -> Self {
         Self {
@@ -440,44 +448,52 @@ pub struct BroadcastRawResponse {
     pub accepted: bool,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetMultisigScopeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<MultisigScopeDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetMultisigScopeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<MultisigScopeDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetMultisigScopeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<MultisigScopeDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetCosignersResponse {
     pub cosigners: Vec<CosignerDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetCosignersParams {
     pub cosigners: Vec<CosignerDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetCosignersResponse {
     pub cosigners: Vec<CosignerDto>,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultisigExportParams {
     pub draft_id: String,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultisigExportResponse {
     pub draft_id: String,

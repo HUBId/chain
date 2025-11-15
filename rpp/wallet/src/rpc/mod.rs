@@ -14,20 +14,24 @@ use dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
     BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastRawParams, BroadcastRawResponse,
-    BroadcastResponse, CosignerDto, CreateTxParams, CreateTxResponse, DerivationPathDto,
-    DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
-    EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto,
-    GetCosignersResponse, GetMultisigScopeResponse, GetPolicyResponse, HardwareDeviceDto,
-    HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse, JsonRpcError,
-    JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, ListTransactionsResponse,
-    ListUtxosResponse, MempoolInfoResponse, MultisigDraftMetadataDto, MultisigExportParams,
-    MultisigExportResponse, MultisigScopeDto, PendingLockDto, PolicyPreviewResponse,
-    PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
-    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetCosignersParams,
-    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
-    SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto, SyncModeDto,
-    SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
-    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    BroadcastResponse, CreateTxParams, CreateTxResponse, DerivationPathDto, DeriveAddressParams,
+    DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto, EmptyParams,
+    EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetPolicyResponse,
+    HardwareDeviceDto, HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
+    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
+    PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse,
+    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
+    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto,
+    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
+    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse, JSONRPC_VERSION,
+};
+#[cfg(feature = "wallet_multisig_hooks")]
+use dto::{
+    CosignerDto, GetCosignersResponse, GetMultisigScopeResponse, MultisigDraftMetadataDto,
+    MultisigExportParams, MultisigExportResponse, MultisigScopeDto, SetCosignersParams,
+    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse,
 };
 #[cfg(feature = "wallet_zsi")]
 use dto::{
@@ -56,6 +60,7 @@ use crate::engine::{
 use crate::hw::{HardwareDevice, HardwareSignRequest, HardwareSignature, HardwareSignerError};
 use crate::indexer::scanner::{SyncMode, SyncStatus};
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
+#[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
 use crate::node_client::{
     BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
@@ -179,10 +184,15 @@ impl WalletRpcRouter {
                 WalletTelemetryAction::WatchOnlyStatus => WalletAction::WatchOnlyStatus,
                 WalletTelemetryAction::WatchOnlyEnable => WalletAction::WatchOnlyEnable,
                 WalletTelemetryAction::WatchOnlyDisable => WalletAction::WatchOnlyDisable,
+                #[cfg(feature = "wallet_multisig_hooks")]
                 WalletTelemetryAction::MultisigGetScope => WalletAction::MultisigGetScope,
+                #[cfg(feature = "wallet_multisig_hooks")]
                 WalletTelemetryAction::MultisigSetScope => WalletAction::MultisigSetScope,
+                #[cfg(feature = "wallet_multisig_hooks")]
                 WalletTelemetryAction::MultisigGetCosigners => WalletAction::MultisigGetCosigners,
+                #[cfg(feature = "wallet_multisig_hooks")]
                 WalletTelemetryAction::MultisigSetCosigners => WalletAction::MultisigSetCosigners,
+                #[cfg(feature = "wallet_multisig_hooks")]
                 WalletTelemetryAction::MultisigExport => WalletAction::MultisigExport,
                 #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiProve => WalletAction::ZsiProve,
@@ -399,26 +409,37 @@ impl WalletRpcRouter {
                     }
                 }
             }
+            #[cfg(feature = "wallet_multisig_hooks")]
             "multisig.get_scope" => {
                 parse_params::<EmptyParams>(params)?;
                 self.multisig_get_scope()
             }
+            #[cfg(feature = "wallet_multisig_hooks")]
             "multisig.set_scope" => {
                 let params: SetMultisigScopeParams = parse_params(params)?;
                 self.multisig_set_scope(params)
             }
+            #[cfg(feature = "wallet_multisig_hooks")]
             "multisig.get_cosigners" => {
                 parse_params::<EmptyParams>(params)?;
                 self.multisig_get_cosigners()
             }
+            #[cfg(feature = "wallet_multisig_hooks")]
             "multisig.set_cosigners" => {
                 let params: SetCosignersParams = parse_params(params)?;
                 self.multisig_set_cosigners(params)
             }
+            #[cfg(feature = "wallet_multisig_hooks")]
             "multisig.export" => {
                 let params: MultisigExportParams = parse_params(params)?;
                 self.multisig_export(params)
             }
+            #[cfg(not(feature = "wallet_multisig_hooks"))]
+            "multisig.get_scope"
+            | "multisig.set_scope"
+            | "multisig.get_cosigners"
+            | "multisig.set_cosigners"
+            | "multisig.export" => Err(RouterError::Wallet(WalletError::MultisigDisabled)),
             "policy_preview" => {
                 parse_params::<EmptyParams>(params)?;
                 let preview = self.wallet.policy_preview();
@@ -622,11 +643,6 @@ impl WalletRpcRouter {
             .wallet
             .latest_fee_quote()
             .map(|quote| FeeEstimateSourceDto::from(quote.source()));
-        let multisig = bundle
-            .metadata
-            .multisig
-            .as_ref()
-            .map(MultisigDraftMetadataDto::from);
         let response = CreateTxResponse {
             draft_id: draft_id.to_string(),
             fee_rate: draft.fee_rate,
@@ -638,11 +654,17 @@ impl WalletRpcRouter {
             inputs,
             outputs,
             locks,
-            multisig,
+            #[cfg(feature = "wallet_multisig_hooks")]
+            multisig: bundle
+                .metadata
+                .multisig
+                .as_ref()
+                .map(MultisigDraftMetadataDto::from),
         };
         to_value(response)
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_get_scope(&self) -> Result<Value, RouterError> {
         match self.wallet_call(self.wallet.multisig_scope()) {
             Ok(scope) => {
@@ -663,6 +685,7 @@ impl WalletRpcRouter {
         }
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_set_scope(&self, params: SetMultisigScopeParams) -> Result<Value, RouterError> {
         let scope = match params.scope.map(scope_from_dto).transpose() {
             Ok(scope) => scope,
@@ -700,6 +723,7 @@ impl WalletRpcRouter {
         }
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_get_cosigners(&self) -> Result<Value, RouterError> {
         match self.wallet_call(self.wallet.cosigner_registry()) {
             Ok(registry) => {
@@ -723,6 +747,7 @@ impl WalletRpcRouter {
         }
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_set_cosigners(&self, params: SetCosignersParams) -> Result<Value, RouterError> {
         if params.cosigners.is_empty() {
             self.record_action(
@@ -772,6 +797,7 @@ impl WalletRpcRouter {
         }
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_export(&self, params: MultisigExportParams) -> Result<Value, RouterError> {
         let draft_id = params.draft_id;
         let drafts = match self.lock_drafts() {
@@ -1393,9 +1419,15 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
         WalletError::Node(node) => node_error_to_json(node),
         WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
         WalletError::WatchOnly(watch_only) => watch_only_error_to_json(watch_only),
+        #[cfg(feature = "wallet_multisig_hooks")]
         WalletError::Multisig(multisig) => json_error(
             WalletRpcErrorCode::InvalidParams,
             multisig.to_string(),
+            Some(json!({ "kind": "multisig" })),
+        ),
+        WalletError::MultisigDisabled => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "wallet multisig support disabled at build time",
             Some(json!({ "kind": "multisig" })),
         ),
         WalletError::Zsi(zsi) => zsi_error_to_json(zsi),
@@ -1533,6 +1565,7 @@ fn engine_error_to_json(error: &EngineError) -> JsonRpcError {
             error.to_string(),
             Some(json!({ "kind": "address", "message": address.to_string() })),
         ),
+        #[cfg(feature = "wallet_multisig_hooks")]
         EngineError::Multisig(multisig) => json_error(
             WalletRpcErrorCode::InvalidParams,
             multisig.to_string(),
@@ -1541,11 +1574,13 @@ fn engine_error_to_json(error: &EngineError) -> JsonRpcError {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn scope_from_dto(dto: MultisigScopeDto) -> Result<MultisigScope, RouterError> {
     MultisigScope::new(dto.threshold, dto.participants)
         .map_err(|err| RouterError::InvalidParams(err.to_string()))
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn registry_from_dtos(dtos: Vec<CosignerDto>) -> Result<CosignerRegistry, RouterError> {
     let cosigners = dtos
         .into_iter()
@@ -1554,6 +1589,7 @@ fn registry_from_dtos(dtos: Vec<CosignerDto>) -> Result<CosignerRegistry, Router
     CosignerRegistry::new(cosigners).map_err(|err| RouterError::InvalidParams(err.to_string()))
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn cosigner_from_dto(dto: CosignerDto) -> Result<Cosigner, RouterError> {
     Cosigner::new(dto.fingerprint, dto.endpoint)
         .map_err(|err| RouterError::InvalidParams(err.to_string()))

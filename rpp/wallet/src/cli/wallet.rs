@@ -28,16 +28,21 @@ use rpp::runtime::RuntimeMode;
 #[cfg(feature = "wallet_hw")]
 use super::telemetry::HardwareAction;
 use super::telemetry::{self, BackupAction, WatchOnlyAction};
+#[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, MultisigScope};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    BroadcastRawParams, BroadcastRawResponse, CosignerDto, CreateTxParams, CreateTxResponse,
-    DraftInputDto, DraftOutputDto, DraftSpendModelDto, FeeCongestionDto, FeeEstimateSourceDto,
-    GetCosignersResponse, GetMultisigScopeResponse, MultisigDraftMetadataDto, MultisigScopeDto,
-    PendingLockDto, RescanParams, SetCosignersResponse, SetMultisigScopeResponse, SetPolicyParams,
-    SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
+    BroadcastRawParams, BroadcastRawResponse, CreateTxParams, CreateTxResponse, DraftInputDto,
+    DraftOutputDto, DraftSpendModelDto, FeeCongestionDto, FeeEstimateSourceDto, PendingLockDto,
+    RescanParams, SetPolicyParams, SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse,
+};
+#[cfg(feature = "wallet_multisig_hooks")]
+use crate::rpc::dto::{
+    CosignerDto, GetCosignersResponse, GetMultisigScopeResponse, MultisigDraftMetadataDto,
+    MultisigScopeDto, SetCosignersResponse, SetMultisigScopeResponse,
 };
 #[cfg(feature = "wallet_hw")]
 use crate::rpc::dto::{DerivationPathDto, HardwareSignParams};
@@ -797,12 +802,14 @@ impl PolicySetCommand {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Args)]
 pub struct MultisigCommand {
     #[command(subcommand)]
     pub command: MultisigSubcommand,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Subcommand)]
 pub enum MultisigSubcommand {
     /// Inspect or update the multisig scope.
@@ -813,6 +820,7 @@ pub enum MultisigSubcommand {
     Export(MultisigExportCommand),
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl MultisigCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         match &self.command {
@@ -823,6 +831,7 @@ impl MultisigCommand {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Args)]
 pub struct MultisigScopeCommand {
     #[command(flatten)]
@@ -831,6 +840,7 @@ pub struct MultisigScopeCommand {
     pub command: MultisigScopeSubcommand,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Subcommand)]
 pub enum MultisigScopeSubcommand {
     /// Display the currently configured multisig scope.
@@ -844,6 +854,7 @@ pub enum MultisigScopeSubcommand {
     Clear,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl MultisigScopeCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
@@ -879,6 +890,7 @@ impl MultisigScopeCommand {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Args)]
 pub struct MultisigCosignersCommand {
     #[command(flatten)]
@@ -887,6 +899,7 @@ pub struct MultisigCosignersCommand {
     pub command: MultisigCosignersSubcommand,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Subcommand)]
 pub enum MultisigCosignersSubcommand {
     /// List registered cosigners.
@@ -898,6 +911,7 @@ pub enum MultisigCosignersSubcommand {
     },
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl MultisigCosignersCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
@@ -925,6 +939,7 @@ impl MultisigCosignersCommand {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Debug, Args)]
 pub struct MultisigExportCommand {
     #[command(flatten)]
@@ -934,6 +949,7 @@ pub struct MultisigExportCommand {
     pub draft_id: String,
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 impl MultisigExportCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
@@ -1928,6 +1944,7 @@ pub enum WalletCommand {
     /// Inspect or update policy snapshots.
     Policy(PolicyCommand),
     /// Manage multisig configuration and cosigners.
+    #[cfg(feature = "wallet_multisig_hooks")]
     Multisig(MultisigCommand),
     /// Inspect fee estimates.
     Fees(FeesCommand),
@@ -1961,6 +1978,7 @@ impl WalletCommand {
                 PolicySubcommand::Get(cmd) => cmd.execute().await,
                 PolicySubcommand::Set(cmd) => cmd.execute().await,
             },
+            #[cfg(feature = "wallet_multisig_hooks")]
             WalletCommand::Multisig(cmd) => cmd.execute().await,
             WalletCommand::Fees(FeesCommand { command }) => match command {
                 FeesSubcommand::Estimate(cmd) => cmd.execute().await,
@@ -2226,6 +2244,7 @@ fn render_draft_summary(draft: &CreateTxResponse) {
         }
     }
 
+    #[cfg(feature = "wallet_multisig_hooks")]
     if draft.multisig.is_some() {
         println!("\n  Multisig:");
         render_multisig_metadata(draft.multisig.as_ref());
@@ -2278,6 +2297,7 @@ fn render_locks(locks: &[PendingLockDto]) {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn render_multisig_scope(scope: Option<&MultisigScopeDto>) {
     match scope {
         Some(scope) => {
@@ -2296,6 +2316,7 @@ fn render_multisig_scope(scope: Option<&MultisigScopeDto>) {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn render_cosigners(cosigners: &[CosignerDto]) {
     if cosigners.is_empty() {
         println!("  Cosigners    : none");
@@ -2311,6 +2332,7 @@ fn render_cosigners(cosigners: &[CosignerDto]) {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn render_multisig_metadata(metadata: Option<&MultisigDraftMetadataDto>) {
     match metadata {
         Some(metadata) => {
@@ -2321,6 +2343,7 @@ fn render_multisig_metadata(metadata: Option<&MultisigDraftMetadataDto>) {
     }
 }
 
+#[cfg(feature = "wallet_multisig_hooks")]
 fn parse_cosigner(value: &str) -> Result<CosignerDto, WalletCliError> {
     let (fingerprint, endpoint) = match value.split_once('@') {
         Some((fingerprint, endpoint)) => (fingerprint.to_string(), Some(endpoint.to_string())),

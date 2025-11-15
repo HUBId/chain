@@ -89,14 +89,12 @@ enabled = false
 xpub_path = "./keys/watch_only.toml"
 expose_rpc = false
 
-# Multisig hook registration. Hooks remain inactive until pointed at a signing
-# coordinator and quorum policy. Review docs/wallet_phase4_advanced.md#multisig-hooks
-# before enabling to avoid accidental partial signatures.
+# Multisig hook registration. Requires compiling with the
+# `wallet_multisig_hooks` feature; otherwise the runtime surfaces
+# `WalletError::MultisigDisabled` and omits the JSON-RPC endpoints. See
+# docs/wallet_phase4_advanced.md#multisig-hooks for integration guidance.
 [wallet.multisig]
 enabled = false
-coordinator_url = "https://multisig.local"
-quorum = 2
-participants = []
 
 # Zero State Import (ZSI) workflows for initial data seeding. Disabled by default to
 # prevent accidental replay of historical bundles. docs/wallet_phase4_advanced.md#zsi-workflows
