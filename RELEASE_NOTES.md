@@ -6,7 +6,7 @@ signing requirements, and advisory flow enforced by the latest pipelines.
 
 ## Stable Toolchain Workflow
 
-The project is standardised on the Rust `1.79.0` toolchain. Each release must confirm that this stable pin continues to compile, format, and lint cleanly before the artefact is tagged. Toolchain health is summarised in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md), and migration criteria are tracked in `MIGRATION.md`.
+The project is standardised on the Rust `1.79.0` toolchain. Each release must confirm that this stable pin continues to compile, format, and lint cleanly before the artefact is tagged. Toolchain health is summarised in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md), and migration criteria are tracked in `MIGRATION.md`. The repository’s `rust-toolchain.toml` still names the `nightly` channel for developer utilities; keep the pinned nightly toolchain updated in lockstep with the stable validation plan.
 
 ## Prover Backend Wiring
 
@@ -46,6 +46,31 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   Die zugehörigen Dashboards (`docs/observability/pipeline.md`) und das
   Lifecycle-Dossier (`docs/lifecycle/pipeline.md`) sind als Referenz verlinkt
   und verweisen auf die Blueprint-Abdeckung.【F:docs/lifecycle/pipeline.md†L1-L86】【F:tests/pipeline/end_to_end.rs†L1-L122】【F:docs/observability/pipeline.md†L1-L74】【F:docs/blueprint_coverage.md†L73-L121】
+
+## Wallet Phase 4
+
+- Added [Wallet Phase 4 – Advanced Operations](docs/wallet_phase4_advanced.md),
+  detailing deterministic backup archives, watch-only projections, multisig
+  hooks, Zero State Import (ZSI) workflows, hardened RPC (mTLS + RBAC), and
+  hardware signing bridges for the wallet runtime.【F:docs/wallet_phase4_advanced.md†L1-L165】
+- Phase 4 features rely on explicit cargo feature flags:
+  `wallet_multisig_hooks`, `wallet_zsi`, `wallet_rpc_mtls`, `wallet_hw`, and the
+  default `runtime`/`backup` toggles. Operators must build artefacts with the
+  required flags before enabling the corresponding `[wallet.*]` configuration
+  sections.【F:docs/wallet_phase4_advanced.md†L131-L176】
+- Watch-only mode stays configuration-driven (`wallet.watch_only.*`) and never
+  exposes private keys. RPC projections remain hidden unless
+  `wallet.watch_only.expose_rpc = true`, so monitoring deployments should wire
+  downstream services accordingly.【F:docs/wallet_phase4_advanced.md†L45-L66】
+- RPC hardening now supports mutual TLS and RBAC bindings. Enabling it requires
+  both configuration (`[wallet.rpc.security]`) and the `wallet_rpc_mtls` cargo
+  feature; legacy clients that do not present client certificates are rejected
+  once `wallet.rpc.security.mtls_required = true` is set.【F:docs/wallet_phase4_advanced.md†L103-L150】
+- Backup archives must be seeded manually before turning on automatic export and
+  rotation, and restores can enforce passphrase policies for rollback events.
+  Operators should take a manual export with `rpp-wallet backup export` prior to
+  schema upgrades or config changes to ensure a known-good recovery point.
+  【F:docs/wallet_phase4_advanced.md†L8-L43】
 
 ### Risks
 

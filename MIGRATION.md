@@ -47,3 +47,56 @@ Use the following checklist to keep the `1.79.0` workflow healthy:
   - [ ] Communicate any performance deltas to stakeholders and capture follow-up tasks.
 
 Once every item is checked, announce the toolchain status in the release communication channel and monitor post-merge CI for regressions.
+
+## Wallet database schema v3 upgrade
+
+Phase 4 ships the third major revision of the wallet store. The upgrade adds
+tables for deterministic backups, mTLS/RBAC registries, and watch-only account
+metadata, so operators must plan the migration before rolling out the new
+binary.
+
+### Prerequisites
+
+1. **Backups first.** Take an encrypted snapshot with the Phase 4 backup tool
+   before touching the on-disk database:
+   ```sh
+   rpp-wallet backup export --path /var/backups/wallet/pre-v3.rppb \
+       --profile argon2id --tag pre-v3
+   ```
+   Confirm the archive lives in `wallet.backup.export_dir` and replicate it to
+   offline media. Automatic exports (`wallet.backup.auto_export_enabled`) should
+   stay disabled until the manual backup is verified.
+2. **Schema discovery.** Run `rpp-wallet doctor schema` (or
+   `rpp-wallet info --json | jq '.wallet.schema_version'`) to confirm the
+   current version is `2`. Abort and investigate if the store already reports a
+   higher version; the migration is not reversible in-place.
+3. **Maintenance window.** Stop the wallet runtime and ensure no external tools
+   are writing to the store. The schema migration is not safe to run while the
+   wallet is online.
+
+### Upgrade workflow
+
+1. Deploy the Phase 4 wallet binary compiled with the required feature flags
+   (e.g. `wallet_rpc_mtls`, `wallet_multisig_hooks`).
+2. Apply the schema upgrade:
+   ```sh
+   rpp-wallet migrate --schema-target 3
+   ```
+   The command creates the backup buckets, security registries, and watch-only
+   projections introduced in `docs/wallet_phase4_advanced.md`.
+3. Validate success by re-running `rpp-wallet doctor schema` and confirming the
+   stored version is `3`. Start the wallet process only after the check passes.
+
+### Rollback
+
+If application smoke tests fail after the upgrade, keep the wallet runtime
+stopped and restore the pre-v3 backup:
+
+```sh
+rpp-wallet backup restore --path /var/backups/wallet/pre-v3.rppb --force
+```
+
+The restore drops the new schema and reinstates the previous store. Repeat the
+`rpp-wallet migrate --schema-target 3` command only after investigating the
+failure and capturing fresh backups. Never attempt to downgrade a live database
+without restoring from a clean backup archive.
