@@ -37,7 +37,7 @@ plonky3-setup:
 bench-iter:
         cargo $(STABLE_TOOLCHAIN) bench --manifest-path firewood/Cargo.toml --bench iter
 
-.PHONY: pruning-validation test\:unit test\:integration test\:observability test\:simnet test\:all
+.PHONY: pruning-validation test\:unit test\:integration test\:observability test\:simnet test\:all wallet-regression
 
 ## Run pruning receipt conformance checks to guard snapshot publication.
 pruning-validation:
@@ -61,4 +61,8 @@ test\:simnet:
 
 ## Run the full multi-layer validation stack (unit + integration + observability + simnet).
 test\:all:
-        cargo xtask test-all
+	cargo xtask test-all
+
+## Exercise the wallet feature matrix regression suite used by operators.
+wallet-regression:
+	cargo xtask test-wallet-feature-matrix

@@ -4,6 +4,9 @@ Phase 4 extends the RPP wallet with enterprise-focused controls: encrypted back
 recovery formats, watch-only projections, multisig signing hooks, Zero State Import (ZSI)
 workflows, hardened RPC security (mTLS and RBAC), and hardware signing bridges. This
 document covers configuration, migrations, operational runbooks, and troubleshooting.
+Pair it with the [Wallet Operator Runbook](./wallet_operator_runbook.md), which details the
+prerequisite validation and acceptance testing sequence that proves each feature works end
+to end before a release is promoted.
 
 ## Backup/Recovery Formats and Rotation
 
@@ -197,7 +200,8 @@ failures.
 5. **Hardware pilot** – Test hardware signing in a staging environment before allowing
    production spends. Monitor for `HardwareSession` events.
 6. **Documentation refresh** – Update operator runbooks with the troubleshooting and security
-   considerations listed in this guide.
+   considerations listed in this guide and follow the [Wallet Operator Runbook](./wallet_operator_runbook.md)
+   so each migration captures acceptance evidence alongside the schema/config diffs.
 
 ## Security Considerations
 
