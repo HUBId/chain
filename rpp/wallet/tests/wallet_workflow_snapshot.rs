@@ -21,7 +21,7 @@ use rpp::runtime::wallet::{
     WalletSecurityPaths,
 };
 use rpp_wallet::config::wallet::{
-    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::engine::DraftTransaction;
@@ -637,6 +637,7 @@ impl WorkflowFixture {
                 policy,
                 WalletFeeConfig::default(),
                 WalletProverConfig::default(),
+                WalletHwConfig::default(),
                 WalletZsiConfig::default(),
                 None,
                 node.clone(),

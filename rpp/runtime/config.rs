@@ -24,7 +24,8 @@ use rand::rngs::OsRng;
 use rpp_wallet::config::electrs::ElectrsConfig;
 use rpp_wallet::config::wallet::{
     WalletEngineConfig as WalletEngineSettings, WalletFeeConfig as WalletFeeSettings,
-    WalletPolicyConfig as WalletPolicySettings, WalletProverConfig as WalletProverSettings,
+    WalletHwConfig as WalletHwSettings, WalletPolicyConfig as WalletPolicySettings,
+    WalletProverConfig as WalletProverSettings,
 };
 
 use crate::consensus_engine::governance::TimetokeRewardGovernance;
@@ -2972,6 +2973,7 @@ pub struct WalletServiceConfig {
     pub policy: WalletPolicySettings,
     pub fees: WalletFeeSettings,
     pub prover: WalletProverSettings,
+    pub hw: WalletHwSettings,
 }
 
 impl Default for WalletServiceConfig {
@@ -2988,6 +2990,7 @@ impl Default for WalletServiceConfig {
             policy: WalletPolicySettings::default(),
             fees: WalletFeeSettings::default(),
             prover: WalletProverSettings::default(),
+            hw: WalletHwSettings::default(),
         }
     }
 }
@@ -3727,6 +3730,7 @@ impl WalletConfig {
         validate_wallet_policy(&self.wallet.policy)?;
         validate_wallet_fees(&self.wallet.fees)?;
         validate_wallet_prover(&self.wallet.prover)?;
+        self.wallet.hw.ensure_supported()?;
         self.wallet.auth.validate(false)?;
         if !self.node.embedded && self.node.gossip_endpoints.is_empty() {
             return Err(ChainError::Config(

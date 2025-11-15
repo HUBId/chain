@@ -7,7 +7,7 @@ use std::sync::Arc;
 use prover_mock_backend::MockBackend;
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp_wallet::config::wallet::{
-    WalletFeeConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+    WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::node_client::StubNodeClient;
@@ -46,6 +46,7 @@ impl WalletHarness {
             policy,
             fees,
             prover,
+            WalletHwConfig::default(),
             zsi_config,
             backend,
             node_client,
