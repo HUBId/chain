@@ -182,6 +182,7 @@ fn run_unit_suites() -> Result<()> {
     run_command(empty_behaviour, "rpp-p2p empty behaviour smoke")?;
 
     run_wallet_gui_tests()?;
+    run_wallet_feature_matrix()?;
     run_stwo_backend_matrix_tests()?;
     run_zsi_renewal_tests()?;
     run_rpp_fail_matrix_tests()
@@ -209,6 +210,93 @@ fn run_wallet_gui_tests() -> Result<()> {
     command.arg("--features").arg(features);
 
     run_command(command, "wallet GUI unit tests")
+}
+
+struct WalletFeatureScenario<'a> {
+    name: &'a str,
+    features: &'a [&'a str],
+    no_default_features: bool,
+}
+
+fn run_wallet_feature_matrix() -> Result<()> {
+    let root = workspace_root();
+    let base_features = ["runtime", "prover-mock", "backup"];
+    let scenarios = [
+        WalletFeatureScenario {
+            name: "default",
+            features: &[],
+            no_default_features: false,
+        },
+        WalletFeatureScenario {
+            name: "wallet_zsi",
+            features: &["wallet_zsi"],
+            no_default_features: true,
+        },
+        WalletFeatureScenario {
+            name: "wallet_multisig_hooks",
+            features: &["wallet_multisig_hooks"],
+            no_default_features: true,
+        },
+        WalletFeatureScenario {
+            name: "wallet_hw",
+            features: &["wallet_hw"],
+            no_default_features: true,
+        },
+        WalletFeatureScenario {
+            name: "wallet_rpc_mtls",
+            features: &["wallet_rpc_mtls"],
+            no_default_features: true,
+        },
+        WalletFeatureScenario {
+            name: "all-wallet",
+            features: &[
+                "wallet_zsi",
+                "wallet_multisig_hooks",
+                "wallet_hw",
+                "wallet_rpc_mtls",
+            ],
+            no_default_features: true,
+        },
+    ];
+
+    for scenario in scenarios {
+        run_wallet_matrix_command(&root, "check", &scenario, &base_features)?;
+        run_wallet_matrix_command(&root, "test", &scenario, &base_features)?;
+    }
+
+    Ok(())
+}
+
+fn run_wallet_matrix_command(
+    root: &Path,
+    subcommand: &str,
+    scenario: &WalletFeatureScenario<'_>,
+    base_features: &[&str],
+) -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(root)
+        .arg(subcommand)
+        .arg("-p")
+        .arg("rpp-wallet")
+        .arg("--locked");
+    if scenario.no_default_features {
+        command.arg("--no-default-features");
+    }
+
+    let mut features: Vec<&str> = Vec::new();
+    if scenario.no_default_features {
+        features.extend_from_slice(base_features);
+    }
+    features.extend_from_slice(scenario.features);
+
+    if !features.is_empty() {
+        let joined = features.join(",");
+        command.arg("--features").arg(joined);
+    }
+
+    let context = format!("wallet feature matrix {} {subcommand}", scenario.name);
+    run_command(command, &context)
 }
 
 fn run_stwo_backend_matrix_tests() -> Result<()> {
@@ -3080,7 +3168,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-wallet-feature-matrix  Run rpp-wallet checks/tests across wallet feature combinations\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
     );
 }
 
@@ -5051,6 +5139,7 @@ fn main() -> Result<()> {
         "test-integration" => run_integration_workflows(),
         "test-observability" => run_observability_suite(),
         "test-simnet" => run_simnet_smoke(),
+        "test-wallet-feature-matrix" => run_wallet_feature_matrix(),
         "test-cli" => cli_smoke::run_cli_smoke(&argv),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
         "test-worm-export" => run_worm_export_smoke(),

@@ -162,16 +162,26 @@ The wallet can delegate signing to hardware devices, such as Ledger or FIDO-base
 Phase 4 introduces the following cargo feature flags in addition to the prover and GUI flags
 from earlier phases:
 
-* `wallet_backup` – Enables backup CLI commands and background tasks.
-* `wallet_watch_only` – Builds watch-only projection APIs.
-* `wallet_multisig` – Compiles multisig hooks and RPC surfaces.
-* `wallet_zsi` – Adds ZSI import/export logic.
-* `wallet_rpc_security` – Enables mTLS/RBAC middleware.
+* `runtime` (enabled by default) – Builds the wallet runtime, JSON-RPC service, and
+  background tasks required for `[wallet.*]` sections.
+* `backup` (enabled by default) – Includes backup CLI commands and hashing dependencies for
+  archive metadata.
+* `wallet_multisig_hooks` – Compiles multisig hooks, telemetry, and RPC surfaces; required
+  when `[wallet.multisig].enabled = true`.
+* `wallet_zsi` – Adds ZSI import/export logic and CLI commands.
+* `wallet_rpc_mtls` – Enables the mTLS/RBAC middleware as well as GUI and CLI security
+  controls.
 * `wallet_hw` – Includes hardware signing traits and device backends.
+* `wallet_gui` – Compiles the iced GUI frontend.
 
-Combine these with `wallet_gui` or prover flags as needed. CI jobs should enable all wallet
-flags to avoid coverage regressions: `cargo test -p rpp-wallet --features "wallet_gui \
-wallet_backup wallet_watch_only wallet_multisig wallet_zsi wallet_rpc_security wallet_hw"`.
+Watch-only projections and backup schedules are controlled solely through configuration
+(`[wallet.watch_only]`, `[wallet.backup]`); there are no `wallet_watch_only` or
+`wallet_backup` cargo features.
+
+Combine these with prover flags as needed. CI runs `cargo xtask test-wallet-feature-matrix`
+to execute `cargo check`/`cargo test` for the default wallet build, each individual feature,
+and the "all wallet features" combination. Use the same xtask locally to reproduce coverage
+failures.
 
 ## Migration Guidance
 

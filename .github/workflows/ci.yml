@@ -548,6 +548,21 @@ PY
           set -euo pipefail
           cargo xtask test-firewood
 
+  wallet-feature-matrix:
+    name: Wallet feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-feature-matrix
+      - name: Run wallet feature matrix
+        run: |
+          set -euo pipefail
+          cargo xtask test-wallet-feature-matrix
+
   firewood-ffi-go:
     name: Firewood Go FFI tests (${{ matrix.name }})
     runs-on: ubuntu-latest
