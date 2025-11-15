@@ -1,3 +1,7 @@
+#![cfg(feature = "wallet_zsi")]
+
+//! These tests require the `wallet_zsi` feature. Enable with `--features wallet_zsi`.
+
 use std::sync::Arc;
 
 use prover_mock_backend::MockBackend;
