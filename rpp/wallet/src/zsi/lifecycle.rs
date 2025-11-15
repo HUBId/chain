@@ -1,20 +1,11 @@
 use std::fmt;
 
-use crate::proof_backend::{
-    Blake2sHasher, ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, VerifyingKey,
-    WitnessBytes, WitnessHeader,
-};
-use prover_backend_interface::{BackendError, BackendResult, IdentityPublicInputs, ProofBackend};
+use prover_backend_interface::{BackendResult, IdentityPublicInputs, ProofBackend};
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-fn hash_bytes(input: &[u8]) -> [u8; 32] {
-    Blake2sHasher::hash(input).into()
-}
-
-fn hash_hex(input: impl AsRef<[u8]>) -> String {
-    hex::encode(hash_bytes(input.as_ref()))
-}
+use super::bind::{ZsiBinder, ZsiOperation};
+use super::prove::{generate, hash_bytes, hash_hex, LifecycleProof};
 
 /// Approval emitted by consensus while onboarding an identity.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -77,30 +68,6 @@ pub struct RevokeRequest {
     pub reason: String,
     #[serde(default)]
     pub attestation: Option<String>,
-}
-
-/// Compact representation of a lifecycle proof artefact.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LifecycleProof {
-    pub backend: String,
-    pub operation: String,
-    pub witness_digest: String,
-    pub proof_commitment: String,
-    pub raw_proof: Vec<u8>,
-}
-
-impl LifecycleProof {
-    fn new(operation: &str, backend: &str, witness: &[u8], proof: &ProofBytes) -> Self {
-        let witness_digest = hash_hex(witness);
-        let proof_commitment = hash_hex(proof.as_slice());
-        Self {
-            backend: backend.to_string(),
-            operation: operation.to_string(),
-            witness_digest,
-            proof_commitment,
-            raw_proof: proof.clone().into_inner(),
-        }
-    }
 }
 
 /// High-level summary returned after a lifecycle operation.
@@ -171,27 +138,6 @@ fn identity_inputs(record: &ZsiRecord) -> IdentityPublicInputs {
     }
 }
 
-fn operation_kind(name: &str) -> ProofSystemKind {
-    match name {
-        "stwo" => ProofSystemKind::Stwo,
-        _ => ProofSystemKind::Mock,
-    }
-}
-
-fn witness_header<'a>(backend: &'a dyn ProofBackend, operation: &str) -> WitnessHeader {
-    WitnessHeader::new(
-        operation_kind(backend.name()),
-        format!("wallet.zsi.{operation}"),
-    )
-}
-
-fn proof_header<'a>(backend: &'a dyn ProofBackend, operation: &str) -> ProofHeader {
-    ProofHeader::new(
-        operation_kind(backend.name()),
-        format!("wallet.zsi.{operation}"),
-    )
-}
-
 /// Lifecycle handler encapsulating the Zero Sync identity flows.
 pub struct ZsiLifecycle<B> {
     backend: B,
@@ -209,7 +155,7 @@ where
         let attestation_digest = hash_hex(request.attestation.as_bytes());
         let record = ZsiRecord::new(request.identity, request.genesis_id, attestation_digest)
             .with_approvals(request.approvals);
-        let proof = self.prove("issue", &record)?;
+        let proof = self.prove(ZsiOperation::Issue, &record)?;
         Ok(LifecycleReceipt::Issued { record, proof })
     }
 
@@ -224,7 +170,7 @@ where
             attestation_digest,
         )
         .with_approvals(request.approvals);
-        let proof = self.prove("rotate", &updated)?;
+        let proof = self.prove(ZsiOperation::Rotate, &updated)?;
         Ok(LifecycleReceipt::Rotated {
             previous: request.previous,
             updated,
@@ -238,7 +184,7 @@ where
             .unwrap_or_else(|| request.reason.clone());
         let digest = hash_hex(attestation.as_bytes());
         let tombstone = ZsiRecord::new(request.identity.clone(), "revoked".into(), digest.clone());
-        let proof = self.prove("revoke", &tombstone)?;
+        let proof = self.prove(ZsiOperation::Revoke, &tombstone)?;
         Ok(LifecycleReceipt::Revoked {
             identity: request.identity,
             revocation_digest: digest,
@@ -247,7 +193,7 @@ where
     }
 
     pub fn audit(&self, record: ZsiRecord) -> BackendResult<LifecycleReceipt> {
-        let proof = self.prove("audit", &record)?;
+        let proof = self.prove(ZsiOperation::Audit, &record)?;
         let mut checks = Vec::new();
         if record.genesis_id.is_empty() {
             checks.push("genesis_id missing".into());
@@ -265,38 +211,15 @@ where
         Ok(LifecycleReceipt::Audit(AuditReceipt { summary, checks }))
     }
 
-    fn prove(&self, operation: &str, record: &ZsiRecord) -> BackendResult<Option<LifecycleProof>> {
-        let header = witness_header(&self.backend, operation);
-        let witness = WitnessBytes::encode(&header, record)?;
+    fn prove(
+        &self,
+        operation: ZsiOperation,
+        record: &ZsiRecord,
+    ) -> BackendResult<Option<LifecycleProof>> {
+        let binder = ZsiBinder::new(&self.backend, operation);
+        let witness = binder.encode_witness(record)?;
         let inputs = identity_inputs(record);
-        match self
-            .backend
-            .prove_identity(&ProvingKey(Vec::new()), &witness)
-        {
-            Ok(proof) => {
-                let header = proof_header(&self.backend, operation);
-                let proof_bytes = ProofBytes::encode(&header, &proof)?;
-                // Attempt verification; ignore unsupported backends.
-                if let Err(err) =
-                    self.backend
-                        .verify_identity(&VerifyingKey(Vec::new()), &proof_bytes, &inputs)
-                {
-                    if !matches!(err, BackendError::Unsupported(_)) {
-                        return Err(err);
-                    }
-                }
-                Ok(Some(LifecycleProof::new(
-                    operation,
-                    self.backend.name(),
-                    witness.as_slice(),
-                    &proof_bytes,
-                )))
-            }
-            Err(err) => match err {
-                BackendError::Unsupported(_) => Ok(None),
-                other => Err(other),
-            },
-        }
+        generate(&self.backend, &binder, witness, inputs)
     }
 }
 
