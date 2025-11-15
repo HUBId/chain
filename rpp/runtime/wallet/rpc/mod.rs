@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -28,8 +28,8 @@ use rpp_wallet::rpc::WalletRpcRouter;
 mod security;
 
 pub use security::{
-    WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityContext,
-    WalletSecurityPaths,
+    WalletClientCertificates, WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet,
+    WalletSecurityContext, WalletSecurityPaths,
 };
 
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
@@ -531,6 +531,7 @@ pub fn json_rpc_router(
 
 async fn wallet_rpc_handler(
     State(server): State<Arc<WalletRpcServer>>,
+    client_certs: Option<Extension<Arc<WalletClientCertificates>>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -549,7 +550,10 @@ async fn wallet_rpc_handler(
     let id = request.id.clone();
     let method = request.method.clone();
     let token_owned = bearer_token(&headers);
-    let identities = request_identities(&headers, token_owned.as_deref());
+    let certificate_view = client_certs
+        .as_ref()
+        .map(|Extension(certs)| Arc::as_ref(certs));
+    let identities = request_identities(&headers, token_owned.as_deref(), certificate_view);
     let roles = server.security.resolve_roles(&identities);
     let invocation = RpcInvocation {
         request: RpcRequest {
@@ -588,10 +592,17 @@ fn rpc_error_response(
     (status, Json(JsonRpcResponse::error(id, error))).into_response()
 }
 
-fn request_identities(headers: &HeaderMap, bearer: Option<&str>) -> Vec<WalletIdentity> {
+fn request_identities(
+    headers: &HeaderMap,
+    bearer: Option<&str>,
+    client_certs: Option<&WalletClientCertificates>,
+) -> Vec<WalletIdentity> {
     let mut identities = Vec::new();
     if let Some(token) = bearer {
         identities.push(WalletIdentity::from_bearer_token(token));
+    }
+    if let Some(certs) = client_certs {
+        identities.extend(certs.identities());
     }
     if let Some(identity) = certificate_identity(headers) {
         identities.push(identity);

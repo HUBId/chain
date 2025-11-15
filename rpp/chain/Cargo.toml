@@ -64,6 +64,7 @@ vendor_electrs = ["rpp-wallet/vendor_electrs"]
 anyhow = "=1.0.100"
 argon2 = "=0.5.3"
 axum = { version = "=0.7.9", features = ["json"] }
+axum-server = { version = "=0.7.3", features = ["tls-rustls"] }
 base64 = "=0.22.1"
 bincode = "=1.3.3"
 blake2 = "=0.10.6"

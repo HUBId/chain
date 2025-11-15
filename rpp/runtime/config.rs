@@ -36,7 +36,10 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
-use crate::runtime::wallet::rpc::WalletSecurityPaths;
+use crate::runtime::wallet::rpc::{
+    WalletIdentity, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
+};
+use crate::runtime::wallet::runtime::WalletRpcSecurityRuntimeConfig;
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
 
@@ -3008,6 +3011,8 @@ pub struct WalletRpcConfig {
     pub allowed_origin: Option<String>,
     #[serde(default)]
     pub requests_per_minute: Option<u64>,
+    #[serde(default)]
+    pub security: WalletRpcSecurityConfig,
 }
 
 impl WalletRpcConfig {
@@ -3027,6 +3032,7 @@ impl WalletRpcConfig {
                 ));
             }
         }
+        self.security.validate()?;
         Ok(())
     }
 }
@@ -3037,6 +3043,7 @@ impl Default for WalletRpcConfig {
             listen: default_wallet_rpc_listen(),
             allowed_origin: None,
             requests_per_minute: None,
+            security: WalletRpcSecurityConfig::default(),
         }
     }
 }
@@ -3045,6 +3052,132 @@ fn default_wallet_rpc_listen() -> SocketAddr {
     "127.0.0.1:9090".parse().expect("valid socket addr")
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletRpcSecurityConfig {
+    pub enabled: bool,
+    pub certificate: Option<PathBuf>,
+    pub private_key: Option<PathBuf>,
+    pub ca_certificate: Option<PathBuf>,
+    #[serde(default)]
+    pub ca_fingerprints: Vec<WalletRpcSecurityCaFingerprint>,
+    #[serde(default)]
+    pub bindings: Vec<WalletRpcSecurityBinding>,
+}
+
+impl WalletRpcSecurityConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.enabled {
+            for (path, field) in [
+                (&self.certificate, "wallet.rpc.security.certificate"),
+                (&self.private_key, "wallet.rpc.security.private_key"),
+                (&self.ca_certificate, "wallet.rpc.security.ca_certificate"),
+            ] {
+                let path = path.as_ref().ok_or_else(|| {
+                    ChainError::Config(format!(
+                        "{field} must be provided when TLS security is enabled"
+                    ))
+                })?;
+                if path.as_os_str().is_empty() {
+                    return Err(ChainError::Config(format!("{field} must not be empty")));
+                }
+                if !path.exists() {
+                    return Err(ChainError::Config(format!(
+                        "{field} references {} which does not exist",
+                        path.display()
+                    )));
+                }
+            }
+        }
+
+        for fingerprint in &self.ca_fingerprints {
+            fingerprint.validate("wallet.rpc.security.ca_fingerprints")?;
+        }
+        for binding in &self.bindings {
+            binding.validate("wallet.rpc.security.bindings")?;
+        }
+
+        Ok(())
+    }
+
+    pub fn runtime_settings(&self) -> WalletRpcSecurityRuntimeConfig {
+        WalletRpcSecurityRuntimeConfig::new(
+            self.enabled,
+            self.certificate.clone(),
+            self.private_key.clone(),
+            self.ca_certificate.clone(),
+            self.ca_fingerprints.clone(),
+        )
+    }
+
+    pub fn runtime_bindings(&self) -> Vec<WalletSecurityBinding> {
+        self.bindings
+            .iter()
+            .map(WalletRpcSecurityBinding::to_runtime_binding)
+            .collect()
+    }
+}
+
+impl Default for WalletRpcSecurityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            certificate: None,
+            private_key: None,
+            ca_certificate: None,
+            ca_fingerprints: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalletRpcSecurityCaFingerprint {
+    pub fingerprint: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl WalletRpcSecurityCaFingerprint {
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        let trimmed = self.fingerprint.trim();
+        if trimmed.is_empty() {
+            return Err(ChainError::Config(format!(
+                "{label} entries must not contain empty fingerprints"
+            )));
+        }
+        if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(ChainError::Config(format!(
+                "{label} fingerprints must be hexadecimal"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalletRpcSecurityBinding {
+    pub identity: WalletIdentity,
+    #[serde(default)]
+    pub roles: Vec<WalletRole>,
+}
+
+impl WalletRpcSecurityBinding {
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        if self.roles.is_empty() {
+            return Err(ChainError::Config(format!(
+                "{label} entry for identity {:?} must define at least one role",
+                self.identity
+            )));
+        }
+        Ok(())
+    }
+
+    fn to_runtime_binding(&self) -> WalletSecurityBinding {
+        let roles: WalletRoleSet = self.roles.iter().copied().collect();
+        WalletSecurityBinding::new(self.identity.clone(), roles)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WalletAuthConfig {
