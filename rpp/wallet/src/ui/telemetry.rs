@@ -145,9 +145,13 @@ impl UiTelemetry {
         self.record_action(action.label(), outcome);
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     pub fn record_security_outcome(&self, action: SecurityAction, outcome: TelemetryOutcome) {
         self.record_action(action.label(), outcome);
     }
+
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    pub fn record_security_outcome(&self, _action: SecurityAction, _outcome: TelemetryOutcome) {}
 
     #[cfg(feature = "wallet_zsi")]
     pub fn record_zsi_outcome(&self, action: ZsiAction, outcome: TelemetryOutcome) {
@@ -209,6 +213,7 @@ impl WatchOnlyAction {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecurityAction {
     Snapshot,
@@ -218,6 +223,7 @@ pub enum SecurityAction {
     CertificateUpload,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityAction {
     fn label(self) -> &'static str {
         match self {
@@ -229,6 +235,10 @@ impl SecurityAction {
         }
     }
 }
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecurityAction;
 
 #[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -304,6 +314,10 @@ fn client_error_labels(error: &WalletRpcClientError) -> ClientErrorLabels {
         WalletRpcClientError::EmptyResponse => ClientErrorLabels {
             kind: "empty_response",
             code: None,
+        },
+        WalletRpcClientError::UnsupportedFeature { feature, .. } => ClientErrorLabels {
+            kind: "unsupported_feature",
+            code: Some((*feature).to_string()),
         },
         WalletRpcClientError::Rpc { code, .. } => ClientErrorLabels {
             kind: "rpc",
@@ -560,6 +574,7 @@ mod tests {
 
         telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
         telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
+        #[cfg(feature = "wallet_rpc_mtls")]
         telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
         #[cfg(feature = "wallet_zsi")]
         telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
@@ -576,6 +591,7 @@ mod tests {
             "ui.action.events{operation=watch_only.enable,outcome=err}"
         )
         .is_none());
+        #[cfg(feature = "wallet_rpc_mtls")]
         assert!(TestRecorder::counter_value(
             &inner,
             "ui.action.events{operation=security.assign,outcome=ok}"
@@ -599,6 +615,7 @@ mod tests {
 
         telemetry.record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
         telemetry.record_watch_only_outcome(WatchOnlyAction::Enable, TelemetryOutcome::Error);
+        #[cfg(feature = "wallet_rpc_mtls")]
         telemetry.record_security_outcome(SecurityAction::Assign, TelemetryOutcome::Success);
         #[cfg(feature = "wallet_zsi")]
         telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
@@ -619,6 +636,7 @@ mod tests {
             ),
             Some(1)
         );
+        #[cfg(feature = "wallet_rpc_mtls")]
         assert_eq!(
             TestRecorder::counter_value(
                 &inner,

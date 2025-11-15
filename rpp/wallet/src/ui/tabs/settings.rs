@@ -7,10 +7,14 @@ use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    GetPolicyResponse, PolicySnapshotDto, SecurityAssignParams, SecurityAssignmentDto,
-    SecurityCertificateUploadParams, SecurityCertificateUploadResponse, SecurityFingerprintDto,
-    SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetPolicyParams,
-    SetPolicyResponse, WalletRoleDto, WatchOnlyEnableParams, WatchOnlyStatusResponse,
+    GetPolicyResponse, PolicySnapshotDto, SetPolicyParams, SetPolicyResponse,
+    WatchOnlyEnableParams, WatchOnlyStatusResponse,
+};
+#[cfg(feature = "wallet_rpc_mtls")]
+use crate::rpc::dto::{
+    SecurityAssignParams, SecurityAssignmentDto, SecurityCertificateUploadParams,
+    SecurityCertificateUploadResponse, SecurityFingerprintDto, SecurityMtlsUpdateParams,
+    SecurityRemoveParams, SecuritySnapshotResponse, WalletRoleDto,
 };
 use crate::rpc::error::WalletRpcErrorCode;
 
@@ -18,7 +22,9 @@ use crate::telemetry::TelemetryOutcome;
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::modal;
 use crate::ui::preferences::{Preferences, ThemePreference};
-use crate::ui::telemetry::{self, BackupAction, SecurityAction, WatchOnlyAction};
+#[cfg(feature = "wallet_rpc_mtls")]
+use crate::ui::telemetry::SecurityAction;
+use crate::ui::telemetry::{self, BackupAction, WatchOnlyAction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Snapshot<T> {
@@ -204,6 +210,7 @@ impl WatchOnlyForm {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Debug, Default, Clone)]
 struct RbacAssignmentForm {
     identity: String,
@@ -237,6 +244,7 @@ impl RbacAssignmentForm {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Debug, Default, Clone)]
 struct CertificateUploadForm {
     certificate_path: String,
@@ -245,6 +253,7 @@ struct CertificateUploadForm {
     error: Option<String>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl CertificateUploadForm {
     fn reset(&mut self) {
         self.certificate_path.clear();
@@ -262,6 +271,7 @@ enum WatchOnlyField {
     Birthday,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CertificateField {
     Certificate,
@@ -277,8 +287,11 @@ enum Modal {
     BackupImport(BackupImportForm),
     WatchOnlyEnable(WatchOnlyForm),
     WatchOnlyDisable,
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityAssign(RbacAssignmentForm),
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityRemove(String),
+    #[cfg(feature = "wallet_rpc_mtls")]
     CertificateUpload(CertificateUploadForm),
 }
 
@@ -314,10 +327,15 @@ pub struct State {
     watch_only_feedback: Option<String>,
     watch_only_error: Option<String>,
     watch_only_restart_hint: bool,
+    #[cfg(feature = "wallet_rpc_mtls")]
     security: Snapshot<SecuritySnapshotResponse>,
+    #[cfg(feature = "wallet_rpc_mtls")]
     security_inflight: bool,
+    #[cfg(feature = "wallet_rpc_mtls")]
     security_feedback: Option<String>,
+    #[cfg(feature = "wallet_rpc_mtls")]
     security_error: Option<String>,
+    #[cfg(feature = "wallet_rpc_mtls")]
     pending_security_identity: Option<String>,
     modal: Option<Modal>,
 }
@@ -368,23 +386,41 @@ pub enum Message {
     SubmitWatchOnlyDisable,
     WatchOnlyDisabled(Result<WatchOnlyStatusResponse, RpcCallError>),
     DismissWatchOnlyFeedback,
+    #[cfg(feature = "wallet_rpc_mtls")]
     RefreshSecurity,
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityLoaded(Result<SecuritySnapshotResponse, RpcCallError>),
+    #[cfg(feature = "wallet_rpc_mtls")]
     ShowSecurityAssign,
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityAssignIdentityChanged(String),
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityAssignRoleToggled(WalletRoleDto, bool),
+    #[cfg(feature = "wallet_rpc_mtls")]
     SubmitSecurityAssign,
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityAssigned(Result<SecuritySnapshotResponse, RpcCallError>),
+    #[cfg(feature = "wallet_rpc_mtls")]
     RequestSecurityRemove(String),
+    #[cfg(feature = "wallet_rpc_mtls")]
     ConfirmSecurityRemove,
+    #[cfg(feature = "wallet_rpc_mtls")]
     SecurityRemoved(Result<SecuritySnapshotResponse, RpcCallError>),
+    #[cfg(feature = "wallet_rpc_mtls")]
     ToggleMtls(bool),
+    #[cfg(feature = "wallet_rpc_mtls")]
     MtlsToggled(Result<SecuritySnapshotResponse, RpcCallError>),
+    #[cfg(feature = "wallet_rpc_mtls")]
     ShowCertificateUpload,
+    #[cfg(feature = "wallet_rpc_mtls")]
     CertificateFieldChanged(CertificateField, String),
+    #[cfg(feature = "wallet_rpc_mtls")]
     SubmitCertificateUpload,
+    #[cfg(feature = "wallet_rpc_mtls")]
     CertificateUploaded(Result<SecurityCertificateUploadResponse, RpcCallError>),
+    #[cfg(feature = "wallet_rpc_mtls")]
     DismissSecurityFeedback,
+    #[cfg(feature = "wallet_rpc_mtls")]
     DismissSecurityError,
 }
 
@@ -416,11 +452,14 @@ impl State {
         self.watch_only_feedback = None;
         self.watch_only_error = None;
         self.watch_only_restart_hint = false;
-        self.security = Snapshot::Idle;
-        self.security_inflight = false;
-        self.security_feedback = None;
-        self.security_error = None;
-        self.pending_security_identity = None;
+        #[cfg(feature = "wallet_rpc_mtls")]
+        {
+            self.security = Snapshot::Idle;
+            self.security_inflight = false;
+            self.security_feedback = None;
+            self.security_error = None;
+            self.pending_security_identity = None;
+        }
         self.dismiss_modal();
         if self.policy_statements.is_empty() {
             self.policy_statements.push(String::new());
@@ -470,6 +509,7 @@ impl State {
         if self.watch_only.should_refresh() {
             commands.push(self.load_watch_only_status(client.clone()));
         }
+        #[cfg(feature = "wallet_rpc_mtls")]
         if self.security.should_refresh() {
             commands.push(self.load_security_snapshot(client));
         }
@@ -736,11 +776,14 @@ impl State {
                 self.watch_only_feedback = None;
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::RefreshSecurity => self.load_security_snapshot(client),
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SecurityLoaded(result) => {
                 self.apply_security_loaded(result);
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::ShowSecurityAssign => {
                 if self.security_inflight || !self.security_has_role(WalletRoleDto::Admin) {
                     return Command::none();
@@ -748,6 +791,7 @@ impl State {
                 self.modal = Some(Modal::SecurityAssign(RbacAssignmentForm::default()));
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SecurityAssignIdentityChanged(value) => {
                 if let Some(Modal::SecurityAssign(form)) = self.modal.as_mut() {
                     form.identity = value;
@@ -755,6 +799,7 @@ impl State {
                 }
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SecurityAssignRoleToggled(role, enabled) => {
                 if let Some(Modal::SecurityAssign(form)) = self.modal.as_mut() {
                     match role {
@@ -766,7 +811,9 @@ impl State {
                 }
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SubmitSecurityAssign => self.submit_security_assign(client),
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SecurityAssigned(result) => {
                 self.apply_security_update(
                     result,
@@ -775,6 +822,7 @@ impl State {
                 );
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::RequestSecurityRemove(identity) => {
                 if self.security_inflight || !self.security_has_role(WalletRoleDto::Admin) {
                     return Command::none();
@@ -783,7 +831,9 @@ impl State {
                 self.modal = Some(Modal::SecurityRemove(identity));
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::ConfirmSecurityRemove => self.submit_security_remove(client),
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SecurityRemoved(result) => {
                 self.apply_security_update(
                     result,
@@ -792,12 +842,14 @@ impl State {
                 );
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::ToggleMtls(enabled) => {
                 if !self.security_has_role(WalletRoleDto::Admin) {
                     return Command::none();
                 }
                 self.submit_security_toggle_mtls(client, enabled)
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::MtlsToggled(result) => {
                 self.apply_security_update(
                     result,
@@ -806,6 +858,7 @@ impl State {
                 );
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::ShowCertificateUpload => {
                 if self.security_inflight || !self.security_has_role(WalletRoleDto::Admin) {
                     return Command::none();
@@ -813,6 +866,7 @@ impl State {
                 self.modal = Some(Modal::CertificateUpload(CertificateUploadForm::default()));
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::CertificateFieldChanged(field, value) => {
                 if let Some(Modal::CertificateUpload(form)) = self.modal.as_mut() {
                     match field {
@@ -824,15 +878,19 @@ impl State {
                 }
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::SubmitCertificateUpload => self.submit_certificate_upload(client),
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::CertificateUploaded(result) => {
                 self.apply_certificate_uploaded(result);
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::DismissSecurityFeedback => {
                 self.security_feedback = None;
                 Command::none()
             }
+            #[cfg(feature = "wallet_rpc_mtls")]
             Message::DismissSecurityError => {
                 self.security_error = None;
                 Command::none()
@@ -849,8 +907,11 @@ impl State {
                 Modal::BackupImport(form) => import_modal(form),
                 Modal::WatchOnlyEnable(form) => watch_only_enable_modal(form),
                 Modal::WatchOnlyDisable => watch_only_disable_modal(),
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::SecurityAssign(form) => security_assign_modal(form),
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::SecurityRemove(identity) => security_remove_modal(identity),
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::CertificateUpload(form) => certificate_upload_modal(form),
             };
             return modal(content);
@@ -894,14 +955,20 @@ impl State {
                 Modal::BackupImport(form) => form.reset(),
                 Modal::WatchOnlyEnable(form) => form.reset(),
                 Modal::WatchOnlyDisable => {}
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::SecurityAssign(form) => form.reset(),
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::SecurityRemove(_) => {}
+                #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::CertificateUpload(form) => form.reset(),
             }
         }
         self.backup_pending_name = None;
         self.backup_pending_mode = None;
-        self.pending_security_identity = None;
+        #[cfg(feature = "wallet_rpc_mtls")]
+        {
+            self.pending_security_identity = None;
+        }
         self.modal = None;
     }
 
@@ -926,6 +993,7 @@ impl State {
         )
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn load_security_snapshot(&mut self, client: WalletRpcClient) -> Command<Message> {
         self.security.set_loading();
         self.security_error = None;
@@ -1002,6 +1070,7 @@ impl State {
         self.watch_only_inflight = false;
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn apply_security_loaded(&mut self, result: Result<SecuritySnapshotResponse, RpcCallError>) {
         match result {
             Ok(snapshot) => {
@@ -1098,6 +1167,7 @@ impl State {
         }
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn submit_security_assign(&mut self, client: WalletRpcClient) -> Command<Message> {
         if self.security_inflight {
             return Command::none();
@@ -1130,6 +1200,7 @@ impl State {
         )
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn submit_security_remove(&mut self, client: WalletRpcClient) -> Command<Message> {
         if self.security_inflight {
             return Command::none();
@@ -1149,6 +1220,7 @@ impl State {
         )
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn submit_security_toggle_mtls(
         &mut self,
         client: WalletRpcClient,
@@ -1168,6 +1240,7 @@ impl State {
         )
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn submit_certificate_upload(&mut self, client: WalletRpcClient) -> Command<Message> {
         if self.security_inflight {
             return Command::none();
@@ -1203,6 +1276,7 @@ impl State {
         )
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn security_has_role(&self, role: WalletRoleDto) -> bool {
         self.security
             .as_loaded()
@@ -1210,6 +1284,7 @@ impl State {
             .unwrap_or(false)
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn apply_security_update(
         &mut self,
         result: Result<SecuritySnapshotResponse, RpcCallError>,
@@ -1232,6 +1307,7 @@ impl State {
         }
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn apply_certificate_uploaded(
         &mut self,
         result: Result<SecurityCertificateUploadResponse, RpcCallError>,
@@ -1943,6 +2019,7 @@ impl State {
         container(column).width(Length::Fill).into()
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     fn security_section(&self) -> Element<Message> {
         let mut column = column![text("Security & RBAC").size(20)].spacing(12);
 
@@ -2067,6 +2144,18 @@ impl State {
             );
         }
 
+        container(column).width(Length::Fill).into()
+    }
+
+    #[cfg(not(feature = "wallet_rpc_mtls"))]
+    fn security_section(&self) -> Element<Message> {
+        let mut column = column![text("Security & RBAC").size(20)].spacing(12);
+        column = column.push(text(
+            "This build was compiled without wallet RPC mTLS support. Security bindings and mTLS settings from wallet.toml cannot be managed here.",
+        ));
+        column = column.push(text(
+            "Rebuild the wallet with the `wallet_rpc_mtls` feature to configure security assignments from the GUI.",
+        ));
         container(column).width(Length::Fill).into()
     }
 }
@@ -2259,6 +2348,7 @@ fn watch_only_disable_modal<'a>() -> iced::widget::Column<'a, Message> {
     .align_items(Alignment::Center)
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn security_assign_modal<'a>(form: &'a RbacAssignmentForm) -> iced::widget::Column<'a, Message> {
     let mut content = column![text("Assign RBAC roles").size(20)]
         .spacing(12)
@@ -2297,6 +2387,7 @@ fn security_assign_modal<'a>(form: &'a RbacAssignmentForm) -> iced::widget::Colu
     content.push(actions)
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn security_remove_modal<'a>(identity: &'a str) -> iced::widget::Column<'a, Message> {
     let actions = row![
         button(text("Cancel")).on_press(Message::DismissModal),
@@ -2313,6 +2404,7 @@ fn security_remove_modal<'a>(identity: &'a str) -> iced::widget::Column<'a, Mess
     .align_items(Alignment::Center)
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn certificate_upload_modal<'a>(
     form: &'a CertificateUploadForm,
 ) -> iced::widget::Column<'a, Message> {
@@ -2413,6 +2505,7 @@ fn optional_string(input: &str) -> Option<String> {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn role_label(role: WalletRoleDto) -> &'static str {
     match role {
         WalletRoleDto::Admin => "admin",
@@ -2421,6 +2514,7 @@ fn role_label(role: WalletRoleDto) -> &'static str {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn format_roles(roles: &[WalletRoleDto]) -> String {
     if roles.is_empty() {
         "none".to_string()
@@ -2562,6 +2656,7 @@ mod tests {
         assert!(!state.backup_inflight);
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     #[test]
     fn watch_only_enable_requires_descriptor() {
         let mut state = State::default();
@@ -2587,6 +2682,7 @@ mod tests {
         assert!(!state.watch_only_inflight);
     }
 
+    #[cfg(feature = "wallet_rpc_mtls")]
     #[test]
     fn security_assign_requires_identity_and_roles() {
         let mut state = State::default();

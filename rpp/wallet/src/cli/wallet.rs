@@ -18,10 +18,12 @@ use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::config::{WalletConfig as RuntimeWalletConfig, WalletRpcSecurityBinding};
+use rpp::runtime::wallet::rpc::WalletIdentity;
+#[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::wallet::rpc::{
-    WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding,
-    WalletSecurityPaths,
+    WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
 use rpp::runtime::RuntimeMode;
 
@@ -274,6 +276,9 @@ impl From<WalletRpcClientError> for WalletCliError {
                 WalletCliError::Transport(format!("HTTP status {} returned by wallet RPC", status))
             }
             WalletRpcClientError::EmptyResponse => WalletCliError::EmptyResponse,
+            WalletRpcClientError::UnsupportedFeature { details, .. } => {
+                WalletCliError::Other(anyhow!(details))
+            }
             WalletRpcClientError::Rpc {
                 code,
                 message,
@@ -313,6 +318,13 @@ fn join_values(values: &[Value]) -> String {
         .map(value_to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+fn wallet_mtls_feature_error() -> WalletCliError {
+    WalletCliError::Other(anyhow!(
+        "mTLS security support is not built into this wallet; rebuild with the `wallet_rpc_mtls` feature to manage security bindings."
+    ))
 }
 
 impl From<reqwest::Error> for WalletCliError {
@@ -1715,6 +1727,7 @@ impl SecurityIdentityOptions {
 #[derive(Debug, Args)]
 pub struct SecurityRolesCommand {}
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityRolesCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         let (config, _) = load_wallet_security_config(context)?;
@@ -1736,6 +1749,13 @@ impl SecurityRolesCommand {
     }
 }
 
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityRolesCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct SecurityAssignCommand {
     #[command(flatten)]
@@ -1745,6 +1765,7 @@ pub struct SecurityAssignCommand {
     pub roles: Vec<String>,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityAssignCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         if self.roles.is_empty() {
@@ -1794,12 +1815,20 @@ impl SecurityAssignCommand {
     }
 }
 
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityAssignCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct SecurityRemoveCommand {
     #[command(flatten)]
     pub identity: SecurityIdentityOptions,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityRemoveCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         let identity = self.identity.resolve()?;
@@ -1834,6 +1863,13 @@ impl SecurityRemoveCommand {
     }
 }
 
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityRemoveCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct SecurityMtlsCommand {
     /// Enable mutual TLS authentication for the wallet runtime.
@@ -1844,6 +1880,7 @@ pub struct SecurityMtlsCommand {
     pub disable: bool,
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityMtlsCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         let (mut config, path) = load_wallet_security_config(context)?;
@@ -1875,9 +1912,17 @@ impl SecurityMtlsCommand {
     }
 }
 
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityMtlsCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct SecurityFingerprintsCommand {}
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityFingerprintsCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         let (config, _) = load_wallet_security_config(context)?;
@@ -1896,6 +1941,13 @@ impl SecurityFingerprintsCommand {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityFingerprintsCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
     }
 }
 
@@ -1919,6 +1971,7 @@ pub enum SecuritySubcommand {
     Fingerprints(SecurityFingerprintsCommand),
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 impl SecurityCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         match &self.command {
@@ -1928,6 +1981,13 @@ impl SecurityCommand {
             SecuritySubcommand::Mtls(cmd) => cmd.execute(context).await,
             SecuritySubcommand::Fingerprints(cmd) => cmd.execute(context).await,
         }
+    }
+}
+
+#[cfg(not(feature = "wallet_rpc_mtls"))]
+impl SecurityCommand {
+    pub async fn execute(&self, _context: &InitContext) -> Result<(), WalletCliError> {
+        Err(wallet_mtls_feature_error())
     }
 }
 
@@ -2012,6 +2072,7 @@ impl WalletCommand {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn load_wallet_security_config(
     context: &InitContext,
 ) -> Result<(RuntimeWalletConfig, PathBuf), WalletCliError> {
@@ -2028,6 +2089,7 @@ fn load_wallet_security_config(
     Ok((config, path))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn open_rbac_store(config: &RuntimeWalletConfig) -> Result<WalletRbacStore, WalletCliError> {
     let paths = WalletSecurityPaths::from_data_dir(&config.data_dir);
     paths
@@ -2036,6 +2098,7 @@ fn open_rbac_store(config: &RuntimeWalletConfig) -> Result<WalletRbacStore, Wall
     WalletRbacStore::load(paths.rbac_store()).map_err(|err| WalletCliError::Other(anyhow!(err)))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn persist_security_bindings(config: &RuntimeWalletConfig) -> Result<(), WalletCliError> {
     let store = open_rbac_store(config)?;
     let runtime_bindings = config.wallet.security.runtime_bindings();
@@ -2061,6 +2124,7 @@ fn persist_security_bindings(config: &RuntimeWalletConfig) -> Result<(), WalletC
         .map_err(|err| WalletCliError::Other(anyhow!(err)))
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn parse_roles(values: &[String]) -> Result<WalletRoleSet, WalletCliError> {
     let mut roles = WalletRoleSet::new();
     for value in values {
@@ -2090,7 +2154,7 @@ fn parse_roles(values: &[String]) -> Result<WalletRoleSet, WalletCliError> {
     Ok(roles)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wallet_rpc_mtls"))]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -2149,6 +2213,7 @@ mod tests {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn format_identity(identity: &WalletIdentity) -> String {
     match identity {
         WalletIdentity::Token(hash) => format!("token:{hash}"),
@@ -2156,6 +2221,7 @@ fn format_identity(identity: &WalletIdentity) -> String {
     }
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
 fn format_roles(roles: &WalletRoleSet) -> String {
     if roles.is_empty() {
         "none".to_string()
