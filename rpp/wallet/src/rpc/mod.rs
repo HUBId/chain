@@ -3,6 +3,7 @@
 pub mod client;
 pub mod dto;
 pub mod error;
+#[cfg(feature = "wallet_zsi")]
 pub mod zsi;
 
 use std::collections::HashMap;
@@ -26,9 +27,12 @@ use dto::{
     SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
     SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto, SyncModeDto,
     SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
-    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiArtifactDto,
-    ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
-    ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
+    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+};
+#[cfg(feature = "wallet_zsi")]
+use dto::{
+    ZsiArtifactDto, ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse,
+    ZsiProofParams, ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse,
 };
 use error::WalletRpcErrorCode;
 use hex::{decode as hex_decode, encode as hex_encode};
@@ -40,7 +44,9 @@ use crate::backup::{
     backup_export, backup_import, backup_validate, BackupError, BackupExportOptions,
     BackupImportOutcome, BackupValidationMode,
 };
-use crate::db::{PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoRecord};
+#[cfg(feature = "wallet_zsi")]
+use crate::db::StoredZsiArtifact;
+use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProverOutput;
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
@@ -60,8 +66,10 @@ use crate::telemetry::{
 };
 use crate::wallet::{
     PolicyPreview, Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
-    WalletSyncError, WatchOnlyError, ZsiBinding, ZsiError, ZsiProofRequest, ZsiVerifyRequest,
+    WalletSyncError, WatchOnlyError, ZsiError,
 };
+#[cfg(feature = "wallet_zsi")]
+use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
 #[cfg(feature = "runtime")]
 use rpp::runtime::telemetry::metrics::{RuntimeMetrics, WalletAction, WalletActionResult};
 use zeroize::Zeroizing;
@@ -176,10 +184,15 @@ impl WalletRpcRouter {
                 WalletTelemetryAction::MultisigGetCosigners => WalletAction::MultisigGetCosigners,
                 WalletTelemetryAction::MultisigSetCosigners => WalletAction::MultisigSetCosigners,
                 WalletTelemetryAction::MultisigExport => WalletAction::MultisigExport,
+                #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiProve => WalletAction::ZsiProve,
+                #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiVerify => WalletAction::ZsiVerify,
+                #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiBindAccount => WalletAction::ZsiBindAccount,
+                #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiList => WalletAction::ZsiList,
+                #[cfg(feature = "wallet_zsi")]
                 WalletTelemetryAction::ZsiDelete => WalletAction::ZsiDelete,
                 WalletTelemetryAction::HwEnumerate => WalletAction::HwEnumerate,
                 WalletTelemetryAction::HwSign => WalletAction::HwSign,
@@ -280,6 +293,7 @@ impl WalletRpcRouter {
                 let params: BroadcastRawParams = parse_params(params)?;
                 self.broadcast_raw(params.tx_hex)
             }
+            #[cfg(feature = "wallet_zsi")]
             "zsi.prove" => {
                 let params: ZsiProofParams = parse_params(params)?;
                 let request = zsi_proof_params_to_request(params);
@@ -300,6 +314,7 @@ impl WalletRpcRouter {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             "zsi.verify" => {
                 let params: ZsiVerifyParams = parse_params(params)?;
                 let request = zsi_verify_params_to_request(params);
@@ -320,6 +335,7 @@ impl WalletRpcRouter {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             "zsi.bind_account" => {
                 let params: ZsiProofParams = parse_params(params)?;
                 let request = zsi_proof_params_to_request(params);
@@ -342,6 +358,7 @@ impl WalletRpcRouter {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             "zsi.list" => {
                 parse_params::<EmptyParams>(params)?;
                 match self.wallet_call(self.wallet.zsi_list()) {
@@ -359,6 +376,7 @@ impl WalletRpcRouter {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             "zsi.delete" => {
                 let params: ZsiDeleteParams = parse_params(params)?;
                 match self.wallet_call(
@@ -1292,6 +1310,7 @@ fn watch_only_status_to_dto(status: WatchOnlyStatus) -> WatchOnlyStatusResponse 
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_proof_params_to_request(params: ZsiProofParams) -> ZsiProofRequest {
     ZsiProofRequest {
         operation: params.operation,
@@ -1299,6 +1318,7 @@ fn zsi_proof_params_to_request(params: ZsiProofParams) -> ZsiProofRequest {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_verify_params_to_request(params: ZsiVerifyParams) -> ZsiVerifyRequest {
     ZsiVerifyRequest {
         operation: params.operation,
@@ -1307,6 +1327,7 @@ fn zsi_verify_params_to_request(params: ZsiVerifyParams) -> ZsiVerifyRequest {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_binding_to_dto(binding: ZsiBinding) -> ZsiBindingDto {
     ZsiBindingDto {
         operation: binding.operation,
@@ -1316,6 +1337,7 @@ fn zsi_binding_to_dto(binding: ZsiBinding) -> ZsiBindingDto {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_artifact_to_dto(artifact: StoredZsiArtifact<'static>) -> ZsiArtifactDto {
     ZsiArtifactDto {
         recorded_at_ms: artifact.recorded_at_ms,

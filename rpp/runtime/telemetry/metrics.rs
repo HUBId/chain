@@ -857,14 +857,19 @@ pub enum WalletRpcMethod {
     /// JSON-RPC: `rescan`.
     JsonRescan,
     /// JSON-RPC: `zsi_prove`.
+    #[cfg(feature = "wallet_zsi")]
     JsonZsiProve,
     /// JSON-RPC: `zsi_verify`.
+    #[cfg(feature = "wallet_zsi")]
     JsonZsiVerify,
     /// JSON-RPC: `zsi_bind_account`.
+    #[cfg(feature = "wallet_zsi")]
     JsonZsiBindAccount,
     /// JSON-RPC: `zsi_list`.
+    #[cfg(feature = "wallet_zsi")]
     JsonZsiList,
     /// JSON-RPC: `zsi_delete`.
+    #[cfg(feature = "wallet_zsi")]
     JsonZsiDelete,
     /// REST: `/wallet/state/root`.
     StateRoot,
@@ -958,10 +963,15 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonReleasePendingLocks => "json_release_pending_locks",
             Self::JsonSyncStatus => "json_sync_status",
             Self::JsonRescan => "json_rescan",
+            #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiProve => "json_zsi_prove",
+            #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiVerify => "json_zsi_verify",
+            #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiBindAccount => "json_zsi_bind_account",
+            #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiList => "json_zsi_list",
+            #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiDelete => "json_zsi_delete",
             Self::StateRoot => "state_root",
             Self::UiHistory => "ui_history",
@@ -1009,10 +1019,15 @@ pub enum WalletAction {
     MultisigGetCosigners,
     MultisigSetCosigners,
     MultisigExport,
+    #[cfg(feature = "wallet_zsi")]
     ZsiProve,
+    #[cfg(feature = "wallet_zsi")]
     ZsiVerify,
+    #[cfg(feature = "wallet_zsi")]
     ZsiBindAccount,
+    #[cfg(feature = "wallet_zsi")]
     ZsiList,
+    #[cfg(feature = "wallet_zsi")]
     ZsiDelete,
     HwEnumerate,
     HwSign,
@@ -1034,10 +1049,15 @@ impl MetricLabel for WalletAction {
             Self::MultisigGetCosigners => "multisig.get_cosigners",
             Self::MultisigSetCosigners => "multisig.set_cosigners",
             Self::MultisigExport => "multisig.export",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiProve => "zsi.prove",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiVerify => "zsi.verify",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiBindAccount => "zsi.bind_account",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiList => "zsi.list",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiDelete => "zsi.delete",
             Self::HwEnumerate => "hw.enumerate",
             Self::HwSign => "hw.sign",

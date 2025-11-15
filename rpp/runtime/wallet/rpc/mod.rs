@@ -700,6 +700,10 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         Some(6),
         ROLES_OPERATOR,
     ),
+];
+
+#[cfg(feature = "wallet_zsi")]
+const JSON_RPC_ZSI_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletRole])] = &[
     (
         "zsi.prove",
         WalletRpcMethod::JsonZsiProve,
@@ -759,6 +763,29 @@ impl WalletRpcServer {
                 Arc::clone(&audit),
             );
             handlers.insert(*name, handler);
+        }
+        #[cfg(feature = "wallet_zsi")]
+        if config.zsi_enabled() {
+            for (name, method, limit, roles) in JSON_RPC_ZSI_METHODS {
+                let handler = Self::build_handler(
+                    Arc::clone(&router),
+                    Arc::clone(&metrics),
+                    config,
+                    *name,
+                    *method,
+                    *limit,
+                    roles,
+                    Arc::clone(&audit),
+                );
+                handlers.insert(*name, handler);
+            }
+        }
+        #[cfg(not(feature = "wallet_zsi"))]
+        if config.zsi_enabled() {
+            return Err(ChainError::Config(
+                "wallet runtime configuration enables ZSI RPC methods but this binary was built without the `wallet_zsi` feature"
+                    .into(),
+            ));
         }
         let fallback = Self::build_handler(
             router,

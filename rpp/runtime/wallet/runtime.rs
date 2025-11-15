@@ -125,6 +125,7 @@ pub struct WalletRuntimeConfig {
     security: WalletSecurityConfig,
     rpc_security: WalletRpcSecurityRuntimeConfig,
     audit: WalletAuditRuntimeConfig,
+    zsi_enabled: bool,
 }
 
 impl WalletRuntimeConfig {
@@ -137,6 +138,7 @@ impl WalletRuntimeConfig {
             security: WalletSecurityConfig::default(),
             rpc_security: WalletRpcSecurityRuntimeConfig::default(),
             audit: WalletAuditRuntimeConfig::default(),
+            zsi_enabled: false,
         }
     }
 
@@ -171,6 +173,14 @@ impl WalletRuntimeConfig {
 
     pub fn security_settings(&self) -> &WalletRpcSecurityRuntimeConfig {
         &self.rpc_security
+    }
+
+    pub fn set_zsi_enabled(&mut self, enabled: bool) {
+        self.zsi_enabled = enabled;
+    }
+
+    pub fn zsi_enabled(&self) -> bool {
+        self.zsi_enabled
     }
 
     pub fn set_audit_settings(&mut self, settings: WalletAuditRuntimeConfig) {

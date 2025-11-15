@@ -1,6 +1,8 @@
 use crate::config::wallet::PolicyTierHooks;
 use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
 use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
+use crate::proof_backend::IdentityPublicInputs;
+use crate::zsi::{LifecycleProof, ZsiOperation, ZsiRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -743,17 +745,33 @@ pub struct TelemetryCountersResponse {
     pub counters: Vec<TelemetryCounterDto>,
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiProofParams {
     pub operation: ZsiOperation,
     pub record: ZsiRecord,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiProofParams {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiProveResponse {
     pub proof: LifecycleProof,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiProveResponse {
+    pub proof: LifecycleProof,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiVerifyParams {
     pub operation: ZsiOperation,
@@ -762,16 +780,40 @@ pub struct ZsiVerifyParams {
     pub proof: Vec<u8>,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiVerifyParams {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+    #[serde(with = "serde_bytes")]
+    pub proof: Vec<u8>,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiVerifyResponse {
     pub valid: bool,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiVerifyResponse {
+    pub valid: bool,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiBindResponse {
     pub binding: ZsiBindingDto,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiBindResponse {
+    pub binding: ZsiBindingDto,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiBindingDto {
     pub operation: ZsiOperation,
@@ -781,11 +823,29 @@ pub struct ZsiBindingDto {
     pub inputs: IdentityPublicInputs,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiBindingDto {
+    pub operation: ZsiOperation,
+    pub record: ZsiRecord,
+    #[serde(with = "serde_bytes")]
+    pub witness: Vec<u8>,
+    pub inputs: IdentityPublicInputs,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiListResponse {
     pub artifacts: Vec<ZsiArtifactDto>,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiListResponse {
+    pub artifacts: Vec<ZsiArtifactDto>,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiArtifactDto {
     pub recorded_at_ms: u64,
@@ -796,12 +856,38 @@ pub struct ZsiArtifactDto {
     pub proof: Vec<u8>,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiArtifactDto {
+    pub recorded_at_ms: u64,
+    pub identity: String,
+    pub commitment_digest: String,
+    pub backend: String,
+    #[serde(with = "serde_bytes")]
+    pub proof: Vec<u8>,
+}
+
+#[cfg(feature = "wallet_zsi")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiDeleteParams {
     pub identity: String,
     pub commitment_digest: String,
 }
 
+#[cfg(not(feature = "wallet_zsi"))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiDeleteParams {
+    pub identity: String,
+    pub commitment_digest: String,
+}
+
+#[cfg(feature = "wallet_zsi")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZsiDeleteResponse {
+    pub deleted: bool,
+}
+
+#[cfg(not(feature = "wallet_zsi"))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZsiDeleteResponse {
     pub deleted: bool,

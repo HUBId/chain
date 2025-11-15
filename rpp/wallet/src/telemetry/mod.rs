@@ -14,10 +14,15 @@ pub enum WalletTelemetryAction {
     MultisigGetCosigners,
     MultisigSetCosigners,
     MultisigExport,
+    #[cfg(feature = "wallet_zsi")]
     ZsiProve,
+    #[cfg(feature = "wallet_zsi")]
     ZsiVerify,
+    #[cfg(feature = "wallet_zsi")]
     ZsiBindAccount,
+    #[cfg(feature = "wallet_zsi")]
     ZsiList,
+    #[cfg(feature = "wallet_zsi")]
     ZsiDelete,
     HwEnumerate,
     HwSign,
@@ -37,10 +42,15 @@ impl WalletTelemetryAction {
             Self::MultisigGetCosigners => "multisig.get_cosigners",
             Self::MultisigSetCosigners => "multisig.set_cosigners",
             Self::MultisigExport => "multisig.export",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiProve => "zsi.prove",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiVerify => "zsi.verify",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiBindAccount => "zsi.bind_account",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiList => "zsi.list",
+            #[cfg(feature = "wallet_zsi")]
             Self::ZsiDelete => "zsi.delete",
             Self::HwEnumerate => "hw.enumerate",
             Self::HwSign => "hw.sign",
