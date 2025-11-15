@@ -33,6 +33,7 @@ pub enum WalletRpcErrorCode {
     EngineFailure,
     SerializationFailure,
     StatePoisoned,
+    RbacForbidden,
     WatchOnlyNotEnabled,
     Custom(String),
 }
@@ -65,6 +66,7 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::EngineFailure => Cow::Borrowed("ENGINE_FAILURE"),
             WalletRpcErrorCode::SerializationFailure => Cow::Borrowed("SERIALIZATION_FAILURE"),
             WalletRpcErrorCode::StatePoisoned => Cow::Borrowed("STATE_POISONED"),
+            WalletRpcErrorCode::RbacForbidden => Cow::Borrowed("RBAC_FORBIDDEN"),
             WalletRpcErrorCode::WatchOnlyNotEnabled => Cow::Borrowed("WATCH_ONLY_NOT_ENABLED"),
             WalletRpcErrorCode::Custom(other) => Cow::Borrowed(other.as_str()),
         }
@@ -97,6 +99,7 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::EngineFailure => -32080,
             WalletRpcErrorCode::SerializationFailure => -32081,
             WalletRpcErrorCode::StatePoisoned => -32082,
+            WalletRpcErrorCode::RbacForbidden => -32062,
             WalletRpcErrorCode::WatchOnlyNotEnabled => -32083,
             WalletRpcErrorCode::Custom(_) => -32090,
         }
@@ -162,6 +165,7 @@ impl<'de> Deserialize<'de> for WalletRpcErrorCode {
             "ENGINE_FAILURE" => WalletRpcErrorCode::EngineFailure,
             "SERIALIZATION_FAILURE" => WalletRpcErrorCode::SerializationFailure,
             "STATE_POISONED" => WalletRpcErrorCode::StatePoisoned,
+            "RBAC_FORBIDDEN" => WalletRpcErrorCode::RbacForbidden,
             "WATCH_ONLY_NOT_ENABLED" => WalletRpcErrorCode::WatchOnlyNotEnabled,
             other => WalletRpcErrorCode::Custom(other.to_string()),
         })

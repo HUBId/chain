@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::post, Json, Router};
 use parking_lot::Mutex;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::errors::ChainError;
@@ -36,6 +36,7 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const CODE_PARSE_ERROR: i32 = -32700;
 const CODE_UNAUTHORIZED: i32 = -32060;
 const CODE_RATE_LIMITED: i32 = -32061;
+const CODE_RBAC_FORBIDDEN: i32 = -32062;
 
 /// Wrapper type for wallet RPC authentication tokens.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +60,8 @@ pub struct RpcError {
     status: StatusCode,
     code: i32,
     message: String,
+    wallet_code: Option<WalletRpcErrorCode>,
+    details: Option<Value>,
 }
 
 impl RpcError {
@@ -68,6 +71,8 @@ impl RpcError {
             status: StatusCode::UNAUTHORIZED,
             code: CODE_UNAUTHORIZED,
             message: "wallet RPC authentication failed".to_string(),
+            wallet_code: None,
+            details: None,
         }
     }
 
@@ -78,6 +83,37 @@ impl RpcError {
             status: StatusCode::TOO_MANY_REQUESTS,
             code: CODE_RATE_LIMITED,
             message: "wallet RPC rate limit exceeded".to_string(),
+            wallet_code: None,
+            details: None,
+        }
+    }
+
+    pub fn rbac_forbidden(required: &'static [WalletRole], granted: &WalletRoleSet) -> Self {
+        let required_names = required.iter().map(WalletRole::as_str).collect::<Vec<_>>();
+        let granted_names = granted.iter().map(WalletRole::as_str).collect::<Vec<_>>();
+        let message = if required_names.is_empty() {
+            "wallet RBAC forbids this method".to_string()
+        } else {
+            format!(
+                "wallet RBAC forbids this method (requires one of: {}; granted: {})",
+                required_names.join(", "),
+                if granted_names.is_empty() {
+                    "none".to_string()
+                } else {
+                    granted_names.join(", ")
+                }
+            )
+        };
+        let details = json!({
+            "required_roles": required_names,
+            "granted_roles": granted_names,
+        });
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: CODE_RBAC_FORBIDDEN,
+            message,
+            wallet_code: Some(WalletRpcErrorCode::RbacForbidden),
+            details: Some(details),
         }
     }
 
@@ -89,6 +125,14 @@ impl RpcError {
     /// JSON-RPC error code associated with the failure.
     pub fn code(&self) -> i32 {
         self.code
+    }
+
+    pub fn wallet_code(&self) -> Option<&WalletRpcErrorCode> {
+        self.wallet_code.as_ref()
+    }
+
+    pub fn details(&self) -> Option<&Value> {
+        self.details.as_ref()
     }
 }
 
@@ -191,6 +235,7 @@ pub struct AuthenticatedRpcHandler<H, P> {
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
     rate_limiter: Option<RateLimiter>,
+    required_roles: &'static [WalletRole],
     _marker: PhantomData<fn(P)>,
 }
 
@@ -204,6 +249,7 @@ where
         metrics: Arc<RuntimeMetrics>,
         method: WalletRpcMethod,
         rate_limit: Option<NonZeroU64>,
+        required_roles: &'static [WalletRole],
     ) -> Self {
         Self {
             authenticator: Arc::new(authenticator),
@@ -211,6 +257,7 @@ where
             metrics,
             method,
             rate_limiter: rate_limit.map(|limit| RateLimiter::new(limit, RATE_LIMIT_WINDOW)),
+            required_roles,
             _marker: PhantomData,
         }
     }
@@ -240,6 +287,20 @@ where
             }
         }
 
+        if !self.required_roles.is_empty()
+            && !self
+                .required_roles
+                .iter()
+                .any(|role| invocation.request.roles.contains(role))
+        {
+            let duration = start.elapsed();
+            self.record_outcome(RpcResult::ClientError, duration);
+            return Err(RpcError::rbac_forbidden(
+                self.required_roles,
+                &invocation.request.roles,
+            ));
+        }
+
         let response = (self.handler)(invocation);
         let duration = start.elapsed();
         self.record_outcome(RpcResult::Success, duration);
@@ -267,12 +328,20 @@ pub fn authenticated_handler<H, P, R>(
     metrics: Arc<RuntimeMetrics>,
     method: WalletRpcMethod,
     rate_limit: Option<NonZeroU64>,
+    required_roles: &'static [WalletRole],
 ) -> AuthenticatedRpcHandler<H, P>
 where
     H: Fn(RpcInvocation<'_, P>) -> R + Send + Sync,
     P: Clone,
 {
-    AuthenticatedRpcHandler::new(authenticator, handler, metrics, method, rate_limit)
+    AuthenticatedRpcHandler::new(
+        authenticator,
+        handler,
+        metrics,
+        method,
+        rate_limit,
+        required_roles,
+    )
 }
 
 type RpcHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
@@ -361,51 +430,132 @@ fn rpc_error_code_from_error(error: &JsonRpcError) -> Option<WalletRpcErrorCode>
         .map(WalletRpcErrorCode::from)
 }
 
-const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[
-    ("get_balance", WalletRpcMethod::JsonGetBalance, Some(120)),
-    ("list_utxos", WalletRpcMethod::JsonListUtxos, Some(120)),
-    ("list_txs", WalletRpcMethod::JsonListTransactions, Some(60)),
+const ROLES_ANY: &[WalletRole] = &[];
+const ROLES_ADMIN: &[WalletRole] = &[WalletRole::Admin];
+const ROLES_OPERATOR: &[WalletRole] = &[WalletRole::Operator, WalletRole::Admin];
+const ROLES_VIEWER: &[WalletRole] = &[WalletRole::Viewer, WalletRole::Operator, WalletRole::Admin];
+
+const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletRole])] = &[
+    (
+        "get_balance",
+        WalletRpcMethod::JsonGetBalance,
+        Some(120),
+        ROLES_VIEWER,
+    ),
+    (
+        "list_utxos",
+        WalletRpcMethod::JsonListUtxos,
+        Some(120),
+        ROLES_VIEWER,
+    ),
+    (
+        "list_txs",
+        WalletRpcMethod::JsonListTransactions,
+        Some(60),
+        ROLES_VIEWER,
+    ),
     (
         "derive_address",
         WalletRpcMethod::JsonDeriveAddress,
         Some(60),
+        ROLES_OPERATOR,
     ),
     (
         "create_tx",
         WalletRpcMethod::JsonCreateTransaction,
         Some(30),
+        ROLES_OPERATOR,
     ),
-    ("sign_tx", WalletRpcMethod::JsonSignTransaction, Some(20)),
-    ("broadcast", WalletRpcMethod::JsonBroadcast, Some(20)),
+    (
+        "sign_tx",
+        WalletRpcMethod::JsonSignTransaction,
+        Some(20),
+        ROLES_OPERATOR,
+    ),
+    (
+        "broadcast",
+        WalletRpcMethod::JsonBroadcast,
+        Some(20),
+        ROLES_OPERATOR,
+    ),
     (
         "policy_preview",
         WalletRpcMethod::JsonPolicyPreview,
         Some(30),
+        ROLES_VIEWER,
     ),
-    ("get_policy", WalletRpcMethod::JsonGetPolicy, Some(30)),
-    ("set_policy", WalletRpcMethod::JsonSetPolicy, Some(10)),
-    ("estimate_fee", WalletRpcMethod::JsonEstimateFee, Some(120)),
+    (
+        "get_policy",
+        WalletRpcMethod::JsonGetPolicy,
+        Some(30),
+        ROLES_VIEWER,
+    ),
+    (
+        "set_policy",
+        WalletRpcMethod::JsonSetPolicy,
+        Some(10),
+        ROLES_ADMIN,
+    ),
+    (
+        "estimate_fee",
+        WalletRpcMethod::JsonEstimateFee,
+        Some(120),
+        ROLES_VIEWER,
+    ),
     (
         "list_pending_locks",
         WalletRpcMethod::JsonListPendingLocks,
         Some(60),
+        ROLES_VIEWER,
     ),
     (
         "release_pending_locks",
         WalletRpcMethod::JsonReleasePendingLocks,
         Some(30),
+        ROLES_OPERATOR,
     ),
-    ("sync_status", WalletRpcMethod::JsonSyncStatus, Some(60)),
-    ("rescan", WalletRpcMethod::JsonRescan, Some(6)),
-    ("zsi.prove", WalletRpcMethod::JsonZsiProve, Some(10)),
-    ("zsi.verify", WalletRpcMethod::JsonZsiVerify, Some(60)),
+    (
+        "sync_status",
+        WalletRpcMethod::JsonSyncStatus,
+        Some(60),
+        ROLES_VIEWER,
+    ),
+    (
+        "rescan",
+        WalletRpcMethod::JsonRescan,
+        Some(6),
+        ROLES_OPERATOR,
+    ),
+    (
+        "zsi.prove",
+        WalletRpcMethod::JsonZsiProve,
+        Some(10),
+        ROLES_OPERATOR,
+    ),
+    (
+        "zsi.verify",
+        WalletRpcMethod::JsonZsiVerify,
+        Some(60),
+        ROLES_VIEWER,
+    ),
     (
         "zsi.bind_account",
         WalletRpcMethod::JsonZsiBindAccount,
         Some(10),
+        ROLES_OPERATOR,
     ),
-    ("zsi.list", WalletRpcMethod::JsonZsiList, Some(60)),
-    ("zsi.delete", WalletRpcMethod::JsonZsiDelete, Some(30)),
+    (
+        "zsi.list",
+        WalletRpcMethod::JsonZsiList,
+        Some(60),
+        ROLES_VIEWER,
+    ),
+    (
+        "zsi.delete",
+        WalletRpcMethod::JsonZsiDelete,
+        Some(30),
+        ROLES_OPERATOR,
+    ),
 ];
 
 struct WalletRpcServer {
@@ -422,17 +572,25 @@ impl WalletRpcServer {
     ) -> Self {
         let security = config.security_context();
         let mut handlers = HashMap::new();
-        for (name, method, limit) in JSON_RPC_METHODS {
+        for (name, method, limit, roles) in JSON_RPC_METHODS {
             let handler = Self::build_handler(
                 Arc::clone(&router),
                 Arc::clone(&metrics),
                 config,
                 *method,
                 *limit,
+                roles,
             );
             handlers.insert(*name, handler);
         }
-        let fallback = Self::build_handler(router, metrics, config, WalletRpcMethod::Unknown, None);
+        let fallback = Self::build_handler(
+            router,
+            metrics,
+            config,
+            WalletRpcMethod::Unknown,
+            None,
+            ROLES_ANY,
+        );
         Self {
             handlers,
             fallback,
@@ -446,6 +604,7 @@ impl WalletRpcServer {
         config: &WalletRuntimeConfig,
         method: WalletRpcMethod,
         limit_hint: Option<u64>,
+        required_roles: &'static [WalletRole],
     ) -> JsonRpcHandler {
         let router_for_handler = Arc::clone(&router);
         let metrics_for_handler = Arc::clone(&metrics);
@@ -503,6 +662,7 @@ impl WalletRpcServer {
             metrics,
             method,
             rate_limit,
+            required_roles,
         )
     }
 
@@ -543,6 +703,8 @@ async fn wallet_rpc_handler(
                 None,
                 CODE_PARSE_ERROR,
                 format!("invalid JSON payload: {err}"),
+                None,
+                None,
             );
         }
     };
@@ -567,7 +729,14 @@ async fn wallet_rpc_handler(
     let handler = server.handler_for(method.as_str());
     match handler.call(invocation) {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(err) => rpc_error_response(err.status(), id, err.code(), err.to_string()),
+        Err(err) => rpc_error_response(
+            err.status(),
+            id,
+            err.code(),
+            err.to_string(),
+            err.wallet_code().cloned(),
+            err.details().cloned(),
+        ),
     }
 }
 
@@ -587,8 +756,16 @@ fn rpc_error_response(
     id: Option<Value>,
     code: i32,
     message: impl Into<String>,
+    wallet_code: Option<WalletRpcErrorCode>,
+    details: Option<Value>,
 ) -> Response {
-    let error = JsonRpcError::new(code, message, None);
+    let message = message.into();
+    let error = if let Some(wallet_code) = wallet_code {
+        let payload = wallet_code.data_payload(details);
+        JsonRpcError::new(code, message, Some(payload))
+    } else {
+        JsonRpcError::new(code, message, details)
+    };
     (status, Json(JsonRpcResponse::error(id, error))).into_response()
 }
 
