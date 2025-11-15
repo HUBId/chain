@@ -741,7 +741,8 @@ mod tests {
     use std::time::Duration;
 
     fn dummy_client() -> WalletRpcClient {
-        WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, Duration::from_secs(1)).unwrap()
+        WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, None, Duration::from_secs(1))
+            .unwrap()
     }
 
     fn config_with_birthday(height: u64) -> WalletConfig {

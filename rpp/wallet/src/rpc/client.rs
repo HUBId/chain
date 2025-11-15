@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use reqwest::{Client, StatusCode, Url};
+use reqwest::{Client, Identity, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,19 +37,25 @@ impl WalletRpcClient {
     pub fn from_endpoint(
         endpoint: &str,
         auth_token: Option<String>,
+        client_identity: Option<Identity>,
         timeout: Duration,
     ) -> Result<Self, WalletRpcClientError> {
         let url = Self::normalize_endpoint(endpoint)?;
-        Self::from_url(url, auth_token, timeout)
+        Self::from_url(url, auth_token, client_identity, timeout)
     }
 
     /// Builds a new client from an already parsed [`Url`].
     pub fn from_url(
         url: Url,
         auth_token: Option<String>,
+        client_identity: Option<Identity>,
         timeout: Duration,
     ) -> Result<Self, WalletRpcClientError> {
-        let client = Client::builder().timeout(timeout).build()?;
+        let mut builder = Client::builder().timeout(timeout);
+        if let Some(identity) = client_identity {
+            builder = builder.identity(identity);
+        }
+        let client = builder.build()?;
         Ok(Self {
             inner: client,
             url: Self::normalize_url(url),

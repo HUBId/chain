@@ -902,7 +902,7 @@ mod tests {
     use std::time::Duration;
 
     fn mock_client() -> WalletRpcClient {
-        WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, Duration::from_secs(1))
+        WalletRpcClient::from_endpoint("http://127.0.0.1:1", None, None, Duration::from_secs(1))
             .expect("construct mock client")
     }
 

@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -9,11 +10,19 @@ use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use clap::{Args, Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand_core::{OsRng, RngCore};
+use reqwest::Identity;
 use rpassword::prompt_password;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
+
+use rpp::runtime::config::{WalletConfig as RuntimeWalletConfig, WalletRpcSecurityBinding};
+use rpp::runtime::wallet::rpc::{
+    WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding,
+    WalletSecurityPaths,
+};
+use rpp::runtime::RuntimeMode;
 
 use crate::multisig::{Cosigner, MultisigScope};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
@@ -293,6 +302,12 @@ pub struct RpcOptions {
     /// Bearer token used to authenticate with the wallet RPC (if enabled).
     #[arg(long, value_name = "TOKEN")]
     pub auth_token: Option<String>,
+    /// Client certificate used for mutual TLS authentication (PEM format).
+    #[arg(long, value_name = "PATH")]
+    pub client_certificate: Option<PathBuf>,
+    /// Private key paired with the client certificate (PEM format).
+    #[arg(long, value_name = "PATH")]
+    pub client_private_key: Option<PathBuf>,
     /// Timeout for RPC requests in seconds.
     #[arg(long, value_name = "SECONDS", default_value = "30")]
     pub timeout: u64,
@@ -302,21 +317,53 @@ impl RpcOptions {
     fn resolved_endpoint(&self) -> String {
         self.endpoint
             .clone()
-            .or_else(|| std::env::var("RPP_WALLET_RPC_ENDPOINT").ok())
+            .or_else(|| env::var("RPP_WALLET_RPC_ENDPOINT").ok())
             .unwrap_or_else(|| DEFAULT_RPC_ENDPOINT.to_string())
     }
 
     fn resolved_auth_token(&self) -> Option<String> {
         self.auth_token
             .clone()
-            .or_else(|| std::env::var("RPP_WALLET_RPC_AUTH_TOKEN").ok())
+            .or_else(|| env::var("RPP_WALLET_RPC_AUTH_TOKEN").ok())
             .filter(|token| !token.is_empty())
+    }
+
+    fn resolved_client_identity(&self) -> Result<Option<Identity>, WalletCliError> {
+        let certificate_path = self.client_certificate.clone().or_else(|| {
+            env::var("RPP_WALLET_RPC_CLIENT_CERT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        });
+        let Some(cert_path) = certificate_path else {
+            return Ok(None);
+        };
+
+        let mut pem = fs::read(&cert_path).map_err(|err| WalletCliError::Other(err.into()))?;
+        let key_path = self.client_private_key.clone().or_else(|| {
+            env::var("RPP_WALLET_RPC_CLIENT_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        });
+        if let Some(key_path) = key_path {
+            let key = fs::read(&key_path).map_err(|err| WalletCliError::Other(err.into()))?;
+            if !pem.ends_with(b"\n") {
+                pem.push(b'\n');
+            }
+            pem.extend_from_slice(&key);
+        }
+
+        Identity::from_pem(&pem)
+            .map(Some)
+            .map_err(WalletCliError::from)
     }
 
     fn client(&self) -> Result<WalletRpcClient, WalletCliError> {
         WalletRpcClient::from_endpoint(
             &self.resolved_endpoint(),
             self.resolved_auth_token(),
+            self.resolved_client_identity()?,
             Duration::from_secs(self.timeout),
         )
         .map_err(WalletCliError::from)
@@ -356,6 +403,17 @@ impl InitContext {
         Self {
             wallet_config,
             data_dir_override,
+        }
+    }
+
+    pub fn resolve_wallet_config_path(&self) -> PathBuf {
+        if let Some(path) = self.wallet_config.clone() {
+            path
+        } else {
+            RuntimeMode::Wallet
+                .default_wallet_config_path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("config/wallet.toml"))
         }
     }
 }
@@ -1325,6 +1383,275 @@ impl RescanCommand {
     }
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct SecurityIdentityOptions {
+    /// Bearer token presented by the identity.
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        conflicts_with_all = ["token_hash", "fingerprint", "certificate"]
+    )]
+    pub token: Option<String>,
+    /// Pre-hashed token identifier (as reported by `security roles`).
+    #[arg(
+        long = "token-hash",
+        value_name = "HASH",
+        conflicts_with_all = ["token", "fingerprint", "certificate"]
+    )]
+    pub token_hash: Option<String>,
+    /// Certificate fingerprint (hex-encoded SHA-256).
+    #[arg(long, value_name = "HEX", conflicts_with_all = ["token", "token_hash", "certificate"])]
+    pub fingerprint: Option<String>,
+    /// Path to a PEM-encoded certificate whose fingerprint should be used.
+    #[arg(long, value_name = "PATH")]
+    pub certificate: Option<PathBuf>,
+}
+
+impl SecurityIdentityOptions {
+    fn resolve(&self) -> Result<WalletIdentity, WalletCliError> {
+        if let Some(token) = &self.token {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                return Err(WalletCliError::Other(anyhow!("token must not be empty")));
+            }
+            return Ok(WalletIdentity::from_bearer_token(trimmed));
+        }
+
+        if let Some(hash) = &self.token_hash {
+            let trimmed = hash.trim();
+            if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err(WalletCliError::Other(anyhow!(
+                    "token hash must be a 64-character hexadecimal string"
+                )));
+            }
+            return Ok(WalletIdentity::Token(trimmed.to_ascii_lowercase()));
+        }
+
+        if let Some(fingerprint) = &self.fingerprint {
+            return WalletIdentity::from_certificate_fingerprint(fingerprint)
+                .map_err(|err| WalletCliError::Other(anyhow!(err)));
+        }
+
+        if let Some(path) = &self.certificate {
+            let pem = fs::read_to_string(path).map_err(|err| WalletCliError::Other(err.into()))?;
+            return WalletIdentity::from_certificate_pem(&pem)
+                .map_err(|err| WalletCliError::Other(anyhow!(err)));
+        }
+
+        Err(WalletCliError::Other(anyhow!(
+            "identity must be specified using --token, --fingerprint, or --certificate"
+        )))
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityRolesCommand {}
+
+impl SecurityRolesCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (config, _) = load_wallet_security_config(context)?;
+        let store = open_rbac_store(&config)?;
+        let assignments = store.snapshot();
+        if assignments.is_empty() {
+            println!("No RBAC assignments stored.");
+            return Ok(());
+        }
+        println!("Wallet RBAC assignments:");
+        for (identity, roles) in assignments {
+            println!(
+                "  {} -> {}",
+                format_identity(&identity),
+                format_roles(&roles)
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityAssignCommand {
+    #[command(flatten)]
+    pub identity: SecurityIdentityOptions,
+    /// Wallet roles granted to the identity (repeatable: admin, operator, viewer).
+    #[arg(long = "role", value_name = "ROLE")]
+    pub roles: Vec<String>,
+}
+
+impl SecurityAssignCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        if self.roles.is_empty() {
+            return Err(WalletCliError::Other(anyhow!(
+                "at least one --role must be specified"
+            )));
+        }
+        let identity = self.identity.resolve()?;
+        let role_set = parse_roles(&self.roles)?;
+        let roles_vec: Vec<WalletRole> = role_set.iter().copied().collect();
+
+        let (mut config, path) = load_wallet_security_config(context)?;
+        let mut replaced = false;
+        for binding in &mut config.wallet.security.bindings {
+            if binding.identity == identity {
+                binding.roles = roles_vec.clone();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            config
+                .wallet
+                .security
+                .bindings
+                .push(WalletRpcSecurityBinding {
+                    identity: identity.clone(),
+                    roles: roles_vec.clone(),
+                });
+        }
+        config
+            .wallet
+            .security
+            .bindings
+            .sort_by(|a, b| a.identity.cmp(&b.identity));
+        config
+            .save(&path)
+            .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+        persist_security_bindings(&config)?;
+
+        println!(
+            "Assigned {} to roles: {}",
+            format_identity(&identity),
+            format_roles(&role_set)
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityRemoveCommand {
+    #[command(flatten)]
+    pub identity: SecurityIdentityOptions,
+}
+
+impl SecurityRemoveCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let identity = self.identity.resolve()?;
+        let (mut config, path) = load_wallet_security_config(context)?;
+        let before = config.wallet.security.bindings.len();
+        config
+            .wallet
+            .security
+            .bindings
+            .retain(|binding| binding.identity != identity);
+        if config.wallet.security.bindings.len() == before {
+            return Err(WalletCliError::Other(anyhow!(format!(
+                "identity {} not found in configuration",
+                format_identity(&identity)
+            ))));
+        }
+
+        config
+            .save(&path)
+            .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+        persist_security_bindings(&config)?;
+
+        println!(
+            "Removed RBAC assignment for {}.",
+            format_identity(&identity)
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityMtlsCommand {
+    /// Enable mutual TLS authentication for the wallet runtime.
+    #[arg(long, conflicts_with = "disable")]
+    pub enable: bool,
+    /// Disable mutual TLS authentication for the wallet runtime.
+    #[arg(long, conflicts_with = "enable")]
+    pub disable: bool,
+}
+
+impl SecurityMtlsCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (mut config, path) = load_wallet_security_config(context)?;
+        if !self.enable && !self.disable {
+            println!(
+                "mTLS is currently {}.",
+                format_bool(config.wallet.security.mtls_enabled)
+            );
+            return Ok(());
+        }
+
+        let desired = self.enable;
+        config.wallet.security.mtls_enabled = desired;
+        config
+            .save(&path)
+            .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+        println!(
+            "mTLS has been {}.",
+            if desired { "enabled" } else { "disabled" }
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityFingerprintsCommand {}
+
+impl SecurityFingerprintsCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (config, _) = load_wallet_security_config(context)?;
+        let fingerprints = &config.wallet.security.ca_fingerprints;
+        if fingerprints.is_empty() {
+            println!("No CA fingerprints configured.");
+            return Ok(());
+        }
+        println!("Trusted CA fingerprints:");
+        for entry in fingerprints {
+            if let Some(description) = entry.description.as_ref().filter(|value| !value.is_empty())
+            {
+                println!("  {} ({})", entry.fingerprint, description);
+            } else {
+                println!("  {}", entry.fingerprint);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct SecurityCommand {
+    #[command(subcommand)]
+    pub command: SecuritySubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SecuritySubcommand {
+    /// List RBAC assignments stored by the wallet runtime.
+    Roles(SecurityRolesCommand),
+    /// Assign wallet roles to an identity.
+    Assign(SecurityAssignCommand),
+    /// Remove an identity from the RBAC store.
+    Remove(SecurityRemoveCommand),
+    /// Inspect or toggle mutual TLS configuration.
+    Mtls(SecurityMtlsCommand),
+    /// Display trusted CA fingerprints recorded in configuration.
+    Fingerprints(SecurityFingerprintsCommand),
+}
+
+impl SecurityCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        match &self.command {
+            SecuritySubcommand::Roles(cmd) => cmd.execute(context).await,
+            SecuritySubcommand::Assign(cmd) => cmd.execute(context).await,
+            SecuritySubcommand::Remove(cmd) => cmd.execute(context).await,
+            SecuritySubcommand::Mtls(cmd) => cmd.execute(context).await,
+            SecuritySubcommand::Fingerprints(cmd) => cmd.execute(context).await,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WalletCommand {
     /// Initialise wallet directories and key material.
@@ -1349,6 +1676,8 @@ pub enum WalletCommand {
     Backup(BackupCommand),
     /// Manage watch-only wallet mode.
     WatchOnly(WatchOnlyCommand),
+    /// Manage wallet security configuration and RBAC assignments.
+    Security(SecurityCommand),
     /// Trigger a historical rescan.
     Rescan(RescanCommand),
 }
@@ -1392,7 +1721,105 @@ impl WalletCommand {
                 WatchOnlySubcommand::Disable(cmd) => cmd.execute().await,
             },
             WalletCommand::Rescan(cmd) => cmd.execute().await,
+            WalletCommand::Security(cmd) => cmd.execute(init_context).await,
         }
+    }
+}
+
+fn load_wallet_security_config(
+    context: &InitContext,
+) -> Result<(RuntimeWalletConfig, PathBuf), WalletCliError> {
+    let path = context.resolve_wallet_config_path();
+    let config = if path.exists() {
+        RuntimeWalletConfig::load(&path).map_err(|err| WalletCliError::Other(anyhow!(err)))?
+    } else {
+        RuntimeWalletConfig::default()
+    };
+    let mut config = config;
+    if let Some(dir) = &context.data_dir_override {
+        config.data_dir = dir.clone();
+    }
+    Ok((config, path))
+}
+
+fn open_rbac_store(config: &RuntimeWalletConfig) -> Result<WalletRbacStore, WalletCliError> {
+    let paths = WalletSecurityPaths::from_data_dir(&config.data_dir);
+    paths
+        .ensure()
+        .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+    WalletRbacStore::load(paths.rbac_store()).map_err(|err| WalletCliError::Other(anyhow!(err)))
+}
+
+fn persist_security_bindings(config: &RuntimeWalletConfig) -> Result<(), WalletCliError> {
+    let store = open_rbac_store(config)?;
+    let runtime_bindings = config.wallet.security.runtime_bindings();
+    let snapshot = store.snapshot();
+    let mut removals = Vec::new();
+    for identity in snapshot.keys() {
+        if !runtime_bindings
+            .iter()
+            .any(|binding| &binding.identity == identity)
+        {
+            removals.push(WalletSecurityBinding::new(
+                identity.clone(),
+                WalletRoleSet::new(),
+            ));
+        }
+    }
+    if !removals.is_empty() {
+        store.apply_bindings(&removals);
+    }
+    store.apply_bindings(&runtime_bindings);
+    store
+        .save()
+        .map_err(|err| WalletCliError::Other(anyhow!(err)))
+}
+
+fn parse_roles(values: &[String]) -> Result<WalletRoleSet, WalletCliError> {
+    let mut roles = WalletRoleSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(WalletCliError::Other(anyhow!(
+                "role names must not be empty"
+            )));
+        }
+        let role = match trimmed.to_ascii_lowercase().as_str() {
+            "admin" => WalletRole::Admin,
+            "operator" => WalletRole::Operator,
+            "viewer" => WalletRole::Viewer,
+            other => {
+                return Err(WalletCliError::Other(anyhow!(format!(
+                    "unknown wallet role: {other}"
+                ))))
+            }
+        };
+        roles.insert(role);
+    }
+    if roles.is_empty() {
+        return Err(WalletCliError::Other(anyhow!(
+            "at least one --role must be specified"
+        )));
+    }
+    Ok(roles)
+}
+
+fn format_identity(identity: &WalletIdentity) -> String {
+    match identity {
+        WalletIdentity::Token(hash) => format!("token:{hash}"),
+        WalletIdentity::Certificate(fingerprint) => format!("certificate:{fingerprint}"),
+    }
+}
+
+fn format_roles(roles: &WalletRoleSet) -> String {
+    if roles.is_empty() {
+        "none".to_string()
+    } else {
+        roles
+            .iter()
+            .map(WalletRole::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
