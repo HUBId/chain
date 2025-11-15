@@ -1,4 +1,7 @@
+#![cfg(feature = "wallet_zsi")]
 #![no_main]
+
+//! This fuzz target requires the `wallet_zsi` feature. Enable with `--features wallet_zsi`.
 
 use libfuzzer_sys::fuzz_target;
 use prover_mock_backend::MockBackend;
