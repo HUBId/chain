@@ -1,5 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
+#[cfg(feature = "wallet_hw")]
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{PolicyTierHooks, WalletFeeConfig, WalletPolicyConfig};
@@ -7,6 +9,8 @@ use crate::db::{
     PendingLock, PendingLockMetadata, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore,
     WalletStoreError,
 };
+#[cfg(feature = "wallet_hw")]
+use crate::hw::HardwareSigner;
 use crate::multisig::{load_cosigner_registry, load_scope, MultisigDraftMetadata, MultisigError};
 use crate::node_client::NodeClient;
 
@@ -172,6 +176,8 @@ pub struct WalletEngine {
     min_confirmations: u32,
     pending_lock_timeout: u64,
     tier_hooks: PolicyTierHooks,
+    #[cfg(feature = "wallet_hw")]
+    hardware_signer: Mutex<Option<Arc<dyn HardwareSigner>>>,
 }
 
 impl WalletEngine {
@@ -201,6 +207,8 @@ impl WalletEngine {
             min_confirmations: policy.min_confirmations,
             pending_lock_timeout: policy.pending_lock_timeout,
             tier_hooks: policy.tier.clone(),
+            #[cfg(feature = "wallet_hw")]
+            hardware_signer: Mutex::new(None),
         })
     }
 
@@ -234,6 +242,19 @@ impl WalletEngine {
 
     pub fn tier_hooks(&self) -> &PolicyTierHooks {
         &self.tier_hooks
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn set_hardware_signer(&self, signer: Option<Arc<dyn HardwareSigner>>) -> Result<(), ()> {
+        let mut slot = self.hardware_signer.lock().map_err(|_| ())?;
+        *slot = signer;
+        Ok(())
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn hardware_signer(&self) -> Result<Option<Arc<dyn HardwareSigner>>, ()> {
+        let slot = self.hardware_signer.lock().map_err(|_| ())?;
+        Ok(slot.as_ref().map(Arc::clone))
     }
 
     pub fn pending_locks(&self) -> Result<Vec<PendingLock>, EngineError> {

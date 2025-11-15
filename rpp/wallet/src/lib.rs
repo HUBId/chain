@@ -56,6 +56,10 @@ pub mod multisig;
 /// Runtime integration shims and stubs.
 pub mod runtime;
 
+/// Hardware wallet integration traits.
+#[cfg(any(test, feature = "wallet_hw"))]
+pub mod hw;
+
 #[cfg(feature = "wallet_gui")]
 pub mod ui;
 

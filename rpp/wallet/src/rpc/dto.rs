@@ -244,6 +244,49 @@ pub enum DraftSpendModelDto {
     Account { debit: u128 },
 }
 
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareDeviceDto {
+    pub fingerprint: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareEnumerateResponse {
+    pub devices: Vec<HardwareDeviceDto>,
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DerivationPathDto {
+    pub account: u32,
+    pub change: bool,
+    pub index: u32,
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareSignParams {
+    pub fingerprint: String,
+    pub path: DerivationPathDto,
+    /// Hex-encoded payload to sign.
+    pub payload: String,
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareSignResponse {
+    pub fingerprint: String,
+    pub path: DerivationPathDto,
+    /// Hex-encoded signature emitted by the hardware device.
+    pub signature: String,
+    /// Hex-encoded public key corresponding to the derivation path.
+    pub public_key: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateTxResponse {
     pub draft_id: String,

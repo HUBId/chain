@@ -22,6 +22,8 @@ use super::dto::{
     ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
     ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
+#[cfg(feature = "wallet_hw")]
+use super::dto::{HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse};
 use super::error::WalletRpcErrorCode;
 
 /// Typed JSON-RPC client for the wallet service.
@@ -170,6 +172,19 @@ impl WalletRpcClient {
             draft_id: draft_id.to_owned(),
         };
         self.call("sign_tx", Some(&params)).await
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub async fn hw_enumerate(&self) -> Result<HardwareEnumerateResponse, WalletRpcClientError> {
+        self.call("hw.enumerate", Option::<Value>::None).await
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub async fn hw_sign(
+        &self,
+        params: &HardwareSignParams,
+    ) -> Result<HardwareSignResponse, WalletRpcClientError> {
+        self.call("hw.sign", Some(params)).await
     }
 
     /// Broadcasts a signed draft transaction to the node.
