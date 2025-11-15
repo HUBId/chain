@@ -42,6 +42,7 @@ fn main() -> iced::Result {
     let client = match WalletRpcClient::from_endpoint(
         &options.endpoint,
         options.auth_token.clone(),
+        None,
         Duration::from_secs(options.timeout),
     ) {
         Ok(client) => client,

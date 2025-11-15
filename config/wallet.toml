@@ -11,6 +11,18 @@ listen = "127.0.0.1:9090"
 allowed_origin = null
 requests_per_minute = null
 
+[wallet.security]
+mtls_enabled = false
+
+# [[wallet.security.ca_fingerprints]]
+# fingerprint = "abcdef..."
+# description = "Trusted CA"
+
+# [[wallet.security.bindings]]
+# kind = "token"
+# id = "<sha256-of-token>"
+# roles = ["admin"]
+
 [wallet.auth]
 enabled = false
 token = null

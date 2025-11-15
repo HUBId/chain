@@ -2962,6 +2962,7 @@ target_validator_count = 77
 #[serde(default)]
 pub struct WalletServiceConfig {
     pub rpc: WalletRpcConfig,
+    pub security: WalletSecurityConfig,
     pub auth: WalletAuthConfig,
     pub keys: WalletKeysConfig,
     pub budgets: WalletBudgetsConfig,
@@ -2976,6 +2977,7 @@ impl Default for WalletServiceConfig {
     fn default() -> Self {
         Self {
             rpc: WalletRpcConfig::default(),
+            security: WalletSecurityConfig::default(),
             auth: WalletAuthConfig::default(),
             keys: WalletKeysConfig::default(),
             budgets: WalletBudgetsConfig::default(),
@@ -3016,7 +3018,7 @@ pub struct WalletRpcConfig {
 }
 
 impl WalletRpcConfig {
-    fn validate(&self) -> ChainResult<()> {
+    fn validate(&self, mtls_enabled: bool) -> ChainResult<()> {
         if let Some(origin) = &self.allowed_origin {
             if origin.trim().is_empty() {
                 return Err(ChainError::Config(
@@ -3032,7 +3034,7 @@ impl WalletRpcConfig {
                 ));
             }
         }
-        self.security.validate()?;
+        self.security.validate(mtls_enabled)?;
         Ok(())
     }
 }
@@ -3055,19 +3057,14 @@ fn default_wallet_rpc_listen() -> SocketAddr {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WalletRpcSecurityConfig {
-    pub enabled: bool,
     pub certificate: Option<PathBuf>,
     pub private_key: Option<PathBuf>,
     pub ca_certificate: Option<PathBuf>,
-    #[serde(default)]
-    pub ca_fingerprints: Vec<WalletRpcSecurityCaFingerprint>,
-    #[serde(default)]
-    pub bindings: Vec<WalletRpcSecurityBinding>,
 }
 
 impl WalletRpcSecurityConfig {
-    fn validate(&self) -> ChainResult<()> {
-        if self.enabled {
+    fn validate(&self, mtls_enabled: bool) -> ChainResult<()> {
+        if mtls_enabled {
             for (path, field) in [
                 (&self.certificate, "wallet.rpc.security.certificate"),
                 (&self.private_key, "wallet.rpc.security.private_key"),
@@ -3088,26 +3085,62 @@ impl WalletRpcSecurityConfig {
                     )));
                 }
             }
+        } else if self.certificate.is_some()
+            || self.private_key.is_some()
+            || self.ca_certificate.is_some()
+        {
+            return Err(ChainError::Config(
+                "wallet.rpc.security certificate, private_key, and ca_certificate require wallet.security.mtls_enabled"
+                    .into(),
+            ));
         }
-
-        for fingerprint in &self.ca_fingerprints {
-            fingerprint.validate("wallet.rpc.security.ca_fingerprints")?;
-        }
-        for binding in &self.bindings {
-            binding.validate("wallet.rpc.security.bindings")?;
-        }
-
         Ok(())
     }
 
-    pub fn runtime_settings(&self) -> WalletRpcSecurityRuntimeConfig {
+    pub fn runtime_settings(
+        &self,
+        security: &WalletSecurityConfig,
+    ) -> WalletRpcSecurityRuntimeConfig {
         WalletRpcSecurityRuntimeConfig::new(
-            self.enabled,
+            security.mtls_enabled,
             self.certificate.clone(),
             self.private_key.clone(),
             self.ca_certificate.clone(),
-            self.ca_fingerprints.clone(),
+            security.ca_fingerprints.clone(),
         )
+    }
+}
+
+impl Default for WalletRpcSecurityConfig {
+    fn default() -> Self {
+        Self {
+            certificate: None,
+            private_key: None,
+            ca_certificate: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletSecurityConfig {
+    #[serde(default)]
+    pub mtls_enabled: bool,
+    #[serde(default)]
+    pub ca_fingerprints: Vec<WalletRpcSecurityCaFingerprint>,
+    #[serde(default)]
+    pub bindings: Vec<WalletRpcSecurityBinding>,
+}
+
+impl WalletSecurityConfig {
+    fn validate(&self) -> ChainResult<()> {
+        for fingerprint in &self.ca_fingerprints {
+            fingerprint.validate("wallet.security.ca_fingerprints")?;
+        }
+        for binding in &self.bindings {
+            binding.validate("wallet.security.bindings")?;
+        }
+        Ok(())
     }
 
     pub fn runtime_bindings(&self) -> Vec<WalletSecurityBinding> {
@@ -3118,13 +3151,10 @@ impl WalletRpcSecurityConfig {
     }
 }
 
-impl Default for WalletRpcSecurityConfig {
+impl Default for WalletSecurityConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            certificate: None,
-            private_key: None,
-            ca_certificate: None,
+            mtls_enabled: false,
             ca_fingerprints: Vec::new(),
             bindings: Vec::new(),
         }
@@ -3596,7 +3626,10 @@ impl WalletConfig {
     }
 
     fn validate(&self) -> ChainResult<()> {
-        self.wallet.rpc.validate()?;
+        self.wallet.security.validate()?;
+        self.wallet
+            .rpc
+            .validate(self.wallet.security.mtls_enabled)?;
         self.wallet.keys.validate()?;
         self.wallet.budgets.validate()?;
         self.wallet.rescan.validate()?;
