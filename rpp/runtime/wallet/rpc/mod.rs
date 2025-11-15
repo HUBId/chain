@@ -388,6 +388,15 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[
     ),
     ("sync_status", WalletRpcMethod::JsonSyncStatus, Some(60)),
     ("rescan", WalletRpcMethod::JsonRescan, Some(6)),
+    ("zsi.prove", WalletRpcMethod::JsonZsiProve, Some(10)),
+    ("zsi.verify", WalletRpcMethod::JsonZsiVerify, Some(60)),
+    (
+        "zsi.bind_account",
+        WalletRpcMethod::JsonZsiBindAccount,
+        Some(10),
+    ),
+    ("zsi.list", WalletRpcMethod::JsonZsiList, Some(60)),
+    ("zsi.delete", WalletRpcMethod::JsonZsiDelete, Some(30)),
 ];
 
 struct WalletRpcServer {

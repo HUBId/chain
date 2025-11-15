@@ -18,7 +18,9 @@ use super::dto::{
     ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
     SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse,
     SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse,
-    TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
+    ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
+    ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
 use super::error::WalletRpcErrorCode;
 
@@ -181,6 +183,43 @@ impl WalletRpcClient {
         params: &BroadcastRawParams,
     ) -> Result<BroadcastRawResponse, WalletRpcClientError> {
         self.call("broadcast_raw", Some(params)).await
+    }
+
+    /// Request the wallet to generate a lifecycle proof.
+    pub async fn zsi_prove(
+        &self,
+        params: &ZsiProofParams,
+    ) -> Result<ZsiProveResponse, WalletRpcClientError> {
+        self.call("zsi.prove", Some(params)).await
+    }
+
+    /// Verify a lifecycle proof against the configured backend.
+    pub async fn zsi_verify(
+        &self,
+        params: &ZsiVerifyParams,
+    ) -> Result<ZsiVerifyResponse, WalletRpcClientError> {
+        self.call("zsi.verify", Some(params)).await
+    }
+
+    /// Bind an identity record to a witness payload.
+    pub async fn zsi_bind_account(
+        &self,
+        params: &ZsiProofParams,
+    ) -> Result<ZsiBindResponse, WalletRpcClientError> {
+        self.call("zsi.bind_account", Some(params)).await
+    }
+
+    /// List cached lifecycle proof artefacts.
+    pub async fn zsi_list(&self) -> Result<ZsiListResponse, WalletRpcClientError> {
+        self.call("zsi.list", Option::<Value>::None).await
+    }
+
+    /// Delete a cached lifecycle proof artefact.
+    pub async fn zsi_delete(
+        &self,
+        params: &ZsiDeleteParams,
+    ) -> Result<ZsiDeleteResponse, WalletRpcClientError> {
+        self.call("zsi.delete", Some(params)).await
     }
 
     pub async fn get_multisig_scope(

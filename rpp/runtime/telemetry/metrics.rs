@@ -817,6 +817,16 @@ pub enum WalletRpcMethod {
     JsonSyncStatus,
     /// JSON-RPC: `rescan`.
     JsonRescan,
+    /// JSON-RPC: `zsi_prove`.
+    JsonZsiProve,
+    /// JSON-RPC: `zsi_verify`.
+    JsonZsiVerify,
+    /// JSON-RPC: `zsi_bind_account`.
+    JsonZsiBindAccount,
+    /// JSON-RPC: `zsi_list`.
+    JsonZsiList,
+    /// JSON-RPC: `zsi_delete`.
+    JsonZsiDelete,
     /// REST: `/wallet/state/root`.
     StateRoot,
     /// REST: `/wallet/ui/history`.
@@ -896,6 +906,11 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonReleasePendingLocks => "json_release_pending_locks",
             Self::JsonSyncStatus => "json_sync_status",
             Self::JsonRescan => "json_rescan",
+            Self::JsonZsiProve => "json_zsi_prove",
+            Self::JsonZsiVerify => "json_zsi_verify",
+            Self::JsonZsiBindAccount => "json_zsi_bind_account",
+            Self::JsonZsiList => "json_zsi_list",
+            Self::JsonZsiDelete => "json_zsi_delete",
             Self::StateRoot => "state_root",
             Self::UiHistory => "ui_history",
             Self::UiSendPreview => "ui_send_preview",
