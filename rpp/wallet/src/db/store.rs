@@ -108,6 +108,56 @@ impl WalletStore {
         Ok(entries)
     }
 
+    /// Fetch a raw backup metadata value stored under the backup namespace.
+    pub fn get_backup_meta(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        self.get_raw(backup_meta_key(key))
+    }
+
+    /// Enumerate backup metadata entries stored under the backup namespace.
+    pub fn iter_backup_meta(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        self.collect_namespace(schema::BACKUP_META_NAMESPACE)
+    }
+
+    /// Fetch a serialized multisig scope artefact.
+    pub fn get_multisig_scope_entry(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        self.get_raw(multisig_scope_key(key))
+    }
+
+    /// Enumerate all serialized multisig scope artefacts.
+    pub fn iter_multisig_scope(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        self.collect_namespace(schema::MULTISIG_SCOPE_NAMESPACE)
+    }
+
+    /// Fetch a wallet security RBAC record.
+    pub fn get_security_rbac_entry(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        self.get_raw(security_rbac_key(key))
+    }
+
+    /// Enumerate wallet security RBAC records.
+    pub fn iter_security_rbac(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        self.collect_namespace(schema::SECURITY_RBAC_NAMESPACE)
+    }
+
+    /// Fetch a wallet security mTLS record.
+    pub fn get_security_mtls_entry(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        self.get_raw(security_mtls_key(key))
+    }
+
+    /// Enumerate wallet security mTLS records.
+    pub fn iter_security_mtls(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        self.collect_namespace(schema::SECURITY_MTLS_NAMESPACE)
+    }
+
+    /// Fetch a hardware signer registry entry.
+    pub fn get_hw_registry_entry(&self, key: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        self.get_raw(hw_registry_key(key))
+    }
+
+    /// Enumerate hardware signer registry entries.
+    pub fn iter_hw_registry(&self) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        self.collect_namespace(schema::HW_REGISTRY_NAMESPACE)
+    }
+
     /// Retrieve persisted key material.
     pub fn get_key_material(&self, label: &str) -> Result<Option<Vec<u8>>, WalletStoreError> {
         let mut guard = self.lock()?;
@@ -336,6 +386,28 @@ impl WalletStore {
         entries
     }
 
+    fn get_raw(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let value = guard.get(&key);
+        drop(guard);
+        Ok(value)
+    }
+
+    fn collect_namespace(&self, prefix: &[u8]) -> Result<Vec<(String, Vec<u8>)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let label = std::str::from_utf8(&key[prefix.len()..])
+                    .map_err(|err| WalletStoreError::CorruptKey(err.to_string()))?
+                    .to_string();
+                Ok((label, value))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>()?;
+        drop(guard);
+        Ok(entries)
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, FirewoodKv>, WalletStoreError> {
         self.kv.lock().map_err(|_| WalletStoreError::Poisoned)
     }
@@ -379,6 +451,46 @@ impl<'a> WalletStoreBatch<'a> {
 
     pub fn delete_meta(&mut self, key: &str) {
         self.guard.delete(&meta_key(key));
+    }
+
+    pub fn put_backup_meta(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(backup_meta_key(key), value.to_vec());
+    }
+
+    pub fn delete_backup_meta(&mut self, key: &str) {
+        self.guard.delete(&backup_meta_key(key));
+    }
+
+    pub fn put_multisig_scope_entry(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(multisig_scope_key(key), value.to_vec());
+    }
+
+    pub fn delete_multisig_scope_entry(&mut self, key: &str) {
+        self.guard.delete(&multisig_scope_key(key));
+    }
+
+    pub fn put_security_rbac_entry(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(security_rbac_key(key), value.to_vec());
+    }
+
+    pub fn delete_security_rbac_entry(&mut self, key: &str) {
+        self.guard.delete(&security_rbac_key(key));
+    }
+
+    pub fn put_security_mtls_entry(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(security_mtls_key(key), value.to_vec());
+    }
+
+    pub fn delete_security_mtls_entry(&mut self, key: &str) {
+        self.guard.delete(&security_mtls_key(key));
+    }
+
+    pub fn put_hw_registry_entry(&mut self, key: &str, value: &[u8]) {
+        self.guard.put(hw_registry_key(key), value.to_vec());
+    }
+
+    pub fn delete_hw_registry_entry(&mut self, key: &str) {
+        self.guard.delete(&hw_registry_key(key));
     }
 
     pub fn set_last_rescan_timestamp(
@@ -597,6 +709,10 @@ fn key_material_key(label: &str) -> Vec<u8> {
     namespaced(schema::KEYS_NAMESPACE, label.as_bytes())
 }
 
+fn backup_meta_key(key: &str) -> Vec<u8> {
+    namespaced(schema::BACKUP_META_NAMESPACE, key.as_bytes())
+}
+
 fn address_key(kind: AddressKind, index: u32) -> Vec<u8> {
     let mut key = kind.namespace().to_vec();
     key.extend_from_slice(&index.to_be_bytes());
@@ -633,6 +749,22 @@ fn pending_lock_key(outpoint: &UtxoOutpoint) -> Vec<u8> {
 
 fn watch_only_key(label: &str) -> Vec<u8> {
     namespaced(schema::WATCH_ONLY_NAMESPACE, label.as_bytes())
+}
+
+fn multisig_scope_key(label: &str) -> Vec<u8> {
+    namespaced(schema::MULTISIG_SCOPE_NAMESPACE, label.as_bytes())
+}
+
+fn security_rbac_key(label: &str) -> Vec<u8> {
+    namespaced(schema::SECURITY_RBAC_NAMESPACE, label.as_bytes())
+}
+
+fn security_mtls_key(label: &str) -> Vec<u8> {
+    namespaced(schema::SECURITY_MTLS_NAMESPACE, label.as_bytes())
+}
+
+fn hw_registry_key(label: &str) -> Vec<u8> {
+    namespaced(schema::HW_REGISTRY_NAMESPACE, label.as_bytes())
 }
 
 fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {

@@ -2,6 +2,10 @@
 
 The `rpp-wallet` crate bundles the wallet runtime, JSON-RPC surface, and CLI used by RPP operators. It shares storage and configuration conventions with the hybrid runtime so node operators can co-locate services.
 
+## Schema versioning & storage guards
+
+`WalletStore` persists its schema marker under `wallet/schema_version` and upgrades migrations on open. New storage surfaces such as the backup metadata bucket (`wallet/backup_meta/…`) and security registries (`wallet/security/{rbac,mtls}/…`) land in schema version 3. Callers **must** check `WalletStore::schema_version()` and refuse to operate when the result is less than `SCHEMA_VERSION_V3`; this prevents features like backup exports or RBAC provisioning from touching pre-migrated databases.【F:rpp/wallet/src/db/store.rs†L47-L64】【F:rpp/wallet/src/db/schema.rs†L4-L48】 Ensure the runtime or CLI opens the wallet once after upgrading so the buckets and metadata sentinels materialise before enabling those flows.
+
 ## Phase 2: What's new
 
 Phase 2 introduces policy, fee, locking, and prover upgrades that require operator attention.【F:docs/wallet_phase2_policies_prover.md†L1-L71】 Highlights include:
