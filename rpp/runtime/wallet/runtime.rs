@@ -124,6 +124,7 @@ pub struct WalletRuntimeConfig {
     pub requests_per_minute: Option<NonZeroU64>,
     security: WalletSecurityConfig,
     rpc_security: WalletRpcSecurityRuntimeConfig,
+    audit: WalletAuditRuntimeConfig,
 }
 
 impl WalletRuntimeConfig {
@@ -135,10 +136,16 @@ impl WalletRuntimeConfig {
             requests_per_minute: None,
             security: WalletSecurityConfig::default(),
             rpc_security: WalletRpcSecurityRuntimeConfig::default(),
+            audit: WalletAuditRuntimeConfig::default(),
         }
     }
 
     pub fn set_security_paths(&mut self, paths: WalletSecurityPaths) {
+        if self.audit.directory().is_none() {
+            if let Some(wallet_dir) = paths.root().parent() {
+                self.audit.set_directory(wallet_dir.join("audit"));
+            }
+        }
         self.security.set_paths(paths);
     }
 
@@ -164,6 +171,18 @@ impl WalletRuntimeConfig {
 
     pub fn security_settings(&self) -> &WalletRpcSecurityRuntimeConfig {
         &self.rpc_security
+    }
+
+    pub fn set_audit_settings(&mut self, settings: WalletAuditRuntimeConfig) {
+        self.audit = settings;
+    }
+
+    pub fn audit_settings(&self) -> &WalletAuditRuntimeConfig {
+        &self.audit
+    }
+
+    pub fn audit_settings_mut(&mut self) -> &mut WalletAuditRuntimeConfig {
+        &mut self.audit
     }
 }
 
@@ -211,6 +230,55 @@ impl WalletRpcSecurityRuntimeConfig {
 
     pub fn ca_fingerprints(&self) -> &[WalletRpcSecurityCaFingerprint] {
         &self.ca_fingerprints
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WalletAuditRuntimeConfig {
+    enabled: bool,
+    retention_days: u64,
+    directory: Option<PathBuf>,
+}
+
+impl WalletAuditRuntimeConfig {
+    pub fn new(enabled: bool, retention_days: u64, directory: Option<PathBuf>) -> Self {
+        Self {
+            enabled,
+            retention_days,
+            directory,
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub fn retention_days(&self) -> u64 {
+        self.retention_days
+    }
+
+    pub fn set_retention_days(&mut self, days: u64) {
+        self.retention_days = days;
+    }
+
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
+    }
+
+    pub fn set_directory(&mut self, directory: PathBuf) {
+        self.directory = Some(directory);
+    }
+
+    pub fn retention_duration(&self) -> Duration {
+        let seconds = self
+            .retention_days
+            .checked_mul(24 * 60 * 60)
+            .unwrap_or(u64::MAX);
+        Duration::from_secs(seconds)
     }
 }
 

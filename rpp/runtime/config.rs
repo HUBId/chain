@@ -39,7 +39,7 @@ use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, Tim
 use crate::runtime::wallet::rpc::{
     WalletIdentity, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
-use crate::runtime::wallet::runtime::WalletRpcSecurityRuntimeConfig;
+use crate::runtime::wallet::runtime::{WalletAuditRuntimeConfig, WalletRpcSecurityRuntimeConfig};
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
 
@@ -2963,6 +2963,7 @@ target_validator_count = 77
 pub struct WalletServiceConfig {
     pub rpc: WalletRpcConfig,
     pub security: WalletSecurityConfig,
+    pub audit: WalletAuditConfig,
     pub auth: WalletAuthConfig,
     pub keys: WalletKeysConfig,
     pub budgets: WalletBudgetsConfig,
@@ -2978,6 +2979,7 @@ impl Default for WalletServiceConfig {
         Self {
             rpc: WalletRpcConfig::default(),
             security: WalletSecurityConfig::default(),
+            audit: WalletAuditConfig::default(),
             auth: WalletAuthConfig::default(),
             keys: WalletKeysConfig::default(),
             budgets: WalletBudgetsConfig::default(),
@@ -3117,6 +3119,32 @@ impl Default for WalletRpcSecurityConfig {
             certificate: None,
             private_key: None,
             ca_certificate: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletAuditConfig {
+    pub enabled: bool,
+    pub retention_days: u64,
+}
+
+impl WalletAuditConfig {
+    pub fn runtime_settings(&self, data_dir: &Path) -> WalletAuditRuntimeConfig {
+        let mut settings = WalletAuditRuntimeConfig::default();
+        settings.set_enabled(self.enabled);
+        settings.set_retention_days(self.retention_days);
+        settings.set_directory(data_dir.join("wallet").join("audit"));
+        settings
+    }
+}
+
+impl Default for WalletAuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: 30,
         }
     }
 }
@@ -3649,6 +3677,9 @@ impl WalletConfig {
         fs::create_dir_all(&self.wallet.engine.backup_path)?;
         let security_paths = WalletSecurityPaths::from_data_dir(&self.data_dir);
         security_paths.ensure()?;
+        if self.wallet.audit.enabled {
+            fs::create_dir_all(self.data_dir.join("wallet").join("audit"))?;
+        }
         #[cfg(feature = "vendor_electrs")]
         self.ensure_electrs_directories()?;
         Ok(())
