@@ -1,16 +1,11 @@
-#![cfg(feature = "wallet_zsi")]
-
 use clap::{Args, Subcommand};
-use prover_backend_interface::{BackendResult, ProofBackend};
+use prover_backend_interface::{BackendError, BackendResult, ProofBackend};
 
-use super::telemetry::{self, ZsiAction};
 use crate::proof_backend::Blake2sHasher;
-use crate::telemetry::TelemetryOutcome;
 use crate::wallet::{ZsiProofRequest, ZsiVerifyRequest};
-use crate::zsi::{
-    ConsensusApproval, LifecycleReceipt, RevokeRequest, RotateRequest, ZsiLifecycle, ZsiOperation,
-    ZsiRecord, ZsiRequest,
-};
+use crate::zsi::{ConsensusApproval, LifecycleReceipt, ZsiOperation, ZsiRecord};
+
+const FEATURE_DISABLED: &str = "wallet_zsi feature disabled";
 
 fn parse_approval(value: &str) -> Result<ConsensusApproval, String> {
     let mut segments = value.splitn(3, ':');
@@ -204,83 +199,6 @@ impl ZsiWalletVerifyArgs {
     }
 }
 
-pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<LifecycleReceipt> {
-    telemetry::configure(None, None);
-    let lifecycle = ZsiLifecycle::new(backend);
-    match cli.command {
-        ZsiSubcommand::Issue {
-            identity,
-            genesis_id,
-            attestation,
-            approvals,
-        } => {
-            let result = lifecycle.issue(ZsiRequest {
-                identity,
-                genesis_id,
-                attestation,
-                approvals,
-            });
-            record_outcome(ZsiAction::Issue, &result);
-            result
-        }
-        ZsiSubcommand::Rotate {
-            identity,
-            previous_genesis,
-            previous_attestation,
-            next_genesis,
-            attestation,
-            approvals,
-        } => {
-            let previous = ZsiRecord {
-                identity: identity.clone(),
-                genesis_id: previous_genesis,
-                attestation_digest: digest(&previous_attestation),
-                approvals: approvals.clone(),
-            };
-            let result = lifecycle.rotate(RotateRequest {
-                previous,
-                next_genesis_id: next_genesis,
-                attestation,
-                approvals,
-            });
-            record_outcome(ZsiAction::Rotate, &result);
-            result
-        }
-        ZsiSubcommand::Revoke {
-            identity,
-            reason,
-            attestation,
-        } => {
-            let result = lifecycle.revoke(RevokeRequest {
-                identity,
-                reason,
-                attestation,
-            });
-            record_outcome(ZsiAction::Revoke, &result);
-            result
-        }
-        ZsiSubcommand::Audit {
-            identity,
-            genesis_id,
-            attestation,
-            approvals,
-        } => {
-            let record = ZsiRecord {
-                identity,
-                genesis_id,
-                attestation_digest: digest(&attestation),
-                approvals,
-            };
-            let result = lifecycle.audit(record);
-            record_outcome(ZsiAction::Audit, &result);
-            result
-        }
-    }
-}
-
-fn record_outcome<T>(action: ZsiAction, result: &BackendResult<T>) {
-    match result {
-        Ok(_) => telemetry::global().record_zsi_outcome(action, TelemetryOutcome::Success),
-        Err(_) => telemetry::global().record_zsi_outcome(action, TelemetryOutcome::Error),
-    }
+pub fn execute<B: ProofBackend>(_backend: B, _cli: ZsiCli) -> BackendResult<LifecycleReceipt> {
+    Err(BackendError::Unsupported(FEATURE_DISABLED))
 }
