@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet_rpc_mtls")]
+
 use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
