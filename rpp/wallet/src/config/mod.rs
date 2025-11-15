@@ -5,7 +5,7 @@ pub mod electrs;
 
 pub use wallet::{
     PolicyTierHooks, WalletConfig, WalletEngineConfig, WalletFeeConfig, WalletGuiConfig,
-    WalletGuiTheme, WalletPolicyConfig, WalletProverConfig,
+    WalletGuiTheme, WalletMultisigConfig, WalletPolicyConfig, WalletProverConfig,
 };
 
 #[cfg(feature = "vendor_electrs")]
