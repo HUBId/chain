@@ -16,7 +16,7 @@ use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 use crate::wallet::wallet::Wallet;
 use rpp_wallet::node_client::NodeClient;
 
-use super::rpc::AuthToken;
+use super::rpc::{AuthToken, WalletSecurityContext, WalletSecurityPaths};
 use super::sync::{SyncCheckpoint, SyncProvider};
 
 /// Trait implemented by types that expose wallet functionality to the runtime.
@@ -100,6 +100,7 @@ pub struct WalletRuntimeConfig {
     pub allowed_origin: Option<String>,
     pub auth_token: Option<AuthToken>,
     pub requests_per_minute: Option<NonZeroU64>,
+    security: WalletSecurityConfig,
 }
 
 impl WalletRuntimeConfig {
@@ -109,7 +110,73 @@ impl WalletRuntimeConfig {
             allowed_origin: None,
             auth_token: None,
             requests_per_minute: None,
+            security: WalletSecurityConfig::default(),
         }
+    }
+
+    pub fn set_security_paths(&mut self, paths: WalletSecurityPaths) {
+        self.security.set_paths(paths);
+    }
+
+    pub fn security_paths(&self) -> Option<&WalletSecurityPaths> {
+        self.security.paths()
+    }
+
+    pub fn ensure_security_context(&mut self) -> ChainResult<()> {
+        self.security.ensure_context()
+    }
+
+    pub fn security_context(&self) -> Arc<WalletSecurityContext> {
+        self.security.context()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WalletSecurityConfig {
+    paths: Option<WalletSecurityPaths>,
+    context: Arc<WalletSecurityContext>,
+    initialised: bool,
+}
+
+impl Default for WalletSecurityConfig {
+    fn default() -> Self {
+        Self {
+            paths: None,
+            context: Arc::new(WalletSecurityContext::empty()),
+            initialised: false,
+        }
+    }
+}
+
+impl WalletSecurityConfig {
+    fn set_paths(&mut self, paths: WalletSecurityPaths) {
+        self.paths = Some(paths);
+        self.initialised = false;
+    }
+
+    fn paths(&self) -> Option<&WalletSecurityPaths> {
+        self.paths.as_ref()
+    }
+
+    fn ensure_context(&mut self) -> ChainResult<()> {
+        if self.initialised {
+            return Ok(());
+        }
+
+        if let Some(paths) = &self.paths {
+            paths.ensure()?;
+            let context = WalletSecurityContext::load_from_store(paths.rbac_store())?;
+            self.context = Arc::new(context);
+        } else {
+            self.context = Arc::new(WalletSecurityContext::empty());
+        }
+
+        self.initialised = true;
+        Ok(())
+    }
+
+    fn context(&self) -> Arc<WalletSecurityContext> {
+        Arc::clone(&self.context)
     }
 }
 
@@ -143,6 +210,10 @@ impl<W: WalletService + 'static> GenericWalletRuntimeHandle<W> {
 
     pub fn requests_per_minute(&self) -> Option<NonZeroU64> {
         self.config.requests_per_minute
+    }
+
+    pub fn security_context(&self) -> Arc<WalletSecurityContext> {
+        self.config.security_context()
     }
 
     pub fn address(&self) -> &str {
@@ -208,6 +279,7 @@ impl WalletRuntime {
     where
         W: WalletService + 'static,
     {
+        config.ensure_security_context()?;
         let address = wallet.address();
         let checkpoint = sync_provider.latest_checkpoint();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);

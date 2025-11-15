@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use http::StatusCode;
@@ -23,7 +24,11 @@ fn wallet_rpc_requires_authentication() {
 
     let err = handler
         .call(RpcInvocation {
-            request: RpcRequest { bearer_token: None },
+            request: RpcRequest {
+                bearer_token: None,
+                identities: Vec::new(),
+                roles: BTreeSet::new(),
+            },
             payload: (),
         })
         .expect_err("missing auth should fail");
@@ -33,6 +38,8 @@ fn wallet_rpc_requires_authentication() {
         .call(RpcInvocation {
             request: RpcRequest {
                 bearer_token: Some("secret-token"),
+                identities: Vec::new(),
+                roles: BTreeSet::new(),
             },
             payload: (),
         })

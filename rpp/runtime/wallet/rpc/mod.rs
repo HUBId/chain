@@ -25,6 +25,13 @@ use rpp_wallet::rpc::dto::{
 use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use rpp_wallet::rpc::WalletRpcRouter;
 
+mod security;
+
+pub use security::{
+    WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityContext,
+    WalletSecurityPaths,
+};
+
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const CODE_PARSE_ERROR: i32 = -32700;
 const CODE_UNAUTHORIZED: i32 = -32060;
@@ -97,6 +104,8 @@ impl std::error::Error for RpcError {}
 #[derive(Clone, Debug)]
 pub struct RpcRequest<'a> {
     pub bearer_token: Option<&'a str>,
+    pub identities: Vec<WalletIdentity>,
+    pub roles: WalletRoleSet,
 }
 
 #[derive(Clone, Debug)]
@@ -402,6 +411,7 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>)] = &[
 struct WalletRpcServer {
     handlers: HashMap<&'static str, JsonRpcHandler>,
     fallback: JsonRpcHandler,
+    security: Arc<WalletSecurityContext>,
 }
 
 impl WalletRpcServer {
@@ -410,6 +420,7 @@ impl WalletRpcServer {
         metrics: Arc<RuntimeMetrics>,
         config: &WalletRuntimeConfig,
     ) -> Self {
+        let security = config.security_context();
         let mut handlers = HashMap::new();
         for (name, method, limit) in JSON_RPC_METHODS {
             let handler = Self::build_handler(
@@ -422,7 +433,11 @@ impl WalletRpcServer {
             handlers.insert(*name, handler);
         }
         let fallback = Self::build_handler(router, metrics, config, WalletRpcMethod::Unknown, None);
-        Self { handlers, fallback }
+        Self {
+            handlers,
+            fallback,
+            security,
+        }
     }
 
     fn build_handler(
@@ -499,8 +514,9 @@ impl WalletRpcServer {
 pub fn json_rpc_router(
     wallet_router: Arc<WalletRpcRouter>,
     metrics: Arc<RuntimeMetrics>,
-    config: &WalletRuntimeConfig,
+    config: &mut WalletRuntimeConfig,
 ) -> Result<Router, ChainError> {
+    config.ensure_security_context()?;
     let server = Arc::new(WalletRpcServer::new(
         wallet_router,
         Arc::clone(&metrics),
@@ -533,9 +549,13 @@ async fn wallet_rpc_handler(
     let id = request.id.clone();
     let method = request.method.clone();
     let token_owned = bearer_token(&headers);
+    let identities = request_identities(&headers, token_owned.as_deref());
+    let roles = server.security.resolve_roles(&identities);
     let invocation = RpcInvocation {
         request: RpcRequest {
             bearer_token: token_owned.as_deref(),
+            identities,
+            roles,
         },
         payload: request,
     };
@@ -566,6 +586,34 @@ fn rpc_error_response(
 ) -> Response {
     let error = JsonRpcError::new(code, message, None);
     (status, Json(JsonRpcResponse::error(id, error))).into_response()
+}
+
+fn request_identities(headers: &HeaderMap, bearer: Option<&str>) -> Vec<WalletIdentity> {
+    let mut identities = Vec::new();
+    if let Some(token) = bearer {
+        identities.push(WalletIdentity::from_bearer_token(token));
+    }
+    if let Some(identity) = certificate_identity(headers) {
+        identities.push(identity);
+    }
+    identities
+}
+
+fn certificate_identity(headers: &HeaderMap) -> Option<WalletIdentity> {
+    const HEADER_PEM: &str = "x-client-cert";
+    const HEADER_FINGERPRINT: &str = "x-client-cert-sha256";
+
+    if let Some(value) = headers.get(HEADER_FINGERPRINT) {
+        let fingerprint = value.to_str().ok()?;
+        return WalletIdentity::from_certificate_fingerprint(fingerprint).ok();
+    }
+
+    if let Some(value) = headers.get(HEADER_PEM) {
+        let pem = value.to_str().ok()?;
+        return WalletIdentity::from_certificate_pem(pem).ok();
+    }
+
+    None
 }
 
 fn build_cors_layer(config: &WalletRuntimeConfig) -> Result<CorsLayer, ChainError> {

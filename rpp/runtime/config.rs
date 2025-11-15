@@ -36,6 +36,7 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
+use crate::runtime::wallet::rpc::WalletSecurityPaths;
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
 
@@ -3454,6 +3455,8 @@ impl WalletConfig {
             fs::create_dir_all(parent)?;
         }
         fs::create_dir_all(&self.wallet.engine.backup_path)?;
+        let security_paths = WalletSecurityPaths::from_data_dir(&self.data_dir);
+        security_paths.ensure()?;
         #[cfg(feature = "vendor_electrs")]
         self.ensure_electrs_directories()?;
         Ok(())
