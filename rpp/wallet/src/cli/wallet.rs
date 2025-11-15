@@ -1804,6 +1804,65 @@ fn parse_roles(values: &[String]) -> Result<WalletRoleSet, WalletCliError> {
     Ok(roles)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn make_context(temp: &tempfile::TempDir) -> InitContext {
+        let config_path = temp.path().join("wallet.toml");
+        InitContext::new(Some(config_path), Some(temp.path().to_path_buf()))
+    }
+
+    fn load_security_store(config: &RuntimeWalletConfig) -> WalletRbacStore {
+        let paths = WalletSecurityPaths::from_data_dir(&config.data_dir);
+        WalletRbacStore::load(paths.rbac_store()).expect("load rbac store")
+    }
+
+    #[tokio::test]
+    async fn security_assign_and_remove_updates_rbac_store() {
+        let temp = tempdir().expect("tempdir");
+        let context = make_context(&temp);
+
+        let identity_options = SecurityIdentityOptions {
+            token: Some("super-secret".to_string()),
+            token_hash: None,
+            fingerprint: None,
+            certificate: None,
+        };
+
+        let assign = SecurityAssignCommand {
+            identity: identity_options.clone(),
+            roles: vec!["admin".into(), "viewer".into()],
+        };
+        assign.execute(&context).await.expect("assign roles");
+
+        let config_path = context.resolve_wallet_config_path();
+        let config = RuntimeWalletConfig::load(&config_path).expect("load config");
+        assert_eq!(config.wallet.security.bindings.len(), 1);
+        let binding = &config.wallet.security.bindings[0];
+        let expected_identity = WalletIdentity::from_bearer_token("super-secret");
+        assert_eq!(binding.identity, expected_identity);
+        assert!(binding.roles.contains(&WalletRole::Admin));
+        assert!(binding.roles.contains(&WalletRole::Viewer));
+
+        let store = load_security_store(&config);
+        let roles = store.roles_for(&expected_identity);
+        assert!(roles.contains(&WalletRole::Admin));
+        assert!(roles.contains(&WalletRole::Viewer));
+
+        let remove = SecurityRemoveCommand {
+            identity: identity_options,
+        };
+        remove.execute(&context).await.expect("remove identity");
+
+        let config = RuntimeWalletConfig::load(&config_path).expect("reload config");
+        assert!(config.wallet.security.bindings.is_empty());
+        let store = load_security_store(&config);
+        assert!(store.snapshot().is_empty());
+    }
+}
+
 fn format_identity(identity: &WalletIdentity) -> String {
     match identity {
         WalletIdentity::Token(hash) => format!("token:{hash}"),

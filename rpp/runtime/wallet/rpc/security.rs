@@ -345,6 +345,9 @@ impl WalletClientCertificates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use tempfile::tempdir;
 
     #[test]
     fn token_identity_hashes_secret() {
@@ -357,5 +360,69 @@ mod tests {
         let pem = "-----BEGIN CERTIFICATE-----\nZmFrZWNlcnQ=\n-----END CERTIFICATE-----";
         let identity = WalletIdentity::from_certificate_pem(pem).expect("identity");
         assert!(matches!(identity, WalletIdentity::Certificate(_)));
+    }
+
+    #[test]
+    fn certificate_parsing_normalises_fingerprint() {
+        let der = b"certificate-bytes";
+        let fingerprint_from_der = WalletIdentity::from_certificate_der(der);
+        let pem = format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
+            Base64::encode_string(der)
+        );
+        let fingerprint_from_pem =
+            WalletIdentity::from_certificate_pem(&pem).expect("fingerprint from pem");
+        assert_eq!(fingerprint_from_der, fingerprint_from_pem);
+    }
+
+    #[test]
+    fn rbac_store_loads_and_persists_assignments() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("rbac.json");
+
+        let store = WalletRbacStore::load(&path).expect("load empty store");
+        assert!(store.snapshot().is_empty(), "new store should start empty");
+
+        let identity = WalletIdentity::from_bearer_token("secret-token");
+        let mut roles = WalletRoleSet::new();
+        roles.insert(WalletRole::Admin);
+        roles.insert(WalletRole::Viewer);
+        let binding = WalletSecurityBinding::new(identity.clone(), roles.clone());
+
+        store.apply_bindings(&[binding]);
+        store.save().expect("save store");
+
+        let encoded = fs::read(&path).expect("store written to disk");
+        assert!(!encoded.is_empty(), "store should not be empty after save");
+
+        let loaded = WalletRbacStore::load(&path).expect("reload store");
+        let snapshot = loaded.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot.get(&identity), Some(&roles));
+    }
+
+    #[test]
+    fn client_certificate_fingerprints_are_recorded() {
+        let cert_a = b"client-cert-a";
+        let cert_b = b"client-cert-b";
+        let collection = WalletClientCertificates::from_der([cert_a.as_slice(), cert_b.as_slice()]);
+
+        assert!(!collection.is_empty());
+        let fingerprints: Vec<_> = collection.fingerprints().to_vec();
+        assert_eq!(fingerprints.len(), 2);
+
+        let expected_a = hex::encode(Sha256::digest(cert_a));
+        let expected_b = hex::encode(Sha256::digest(cert_b));
+        assert!(fingerprints.contains(&expected_a));
+        assert!(fingerprints.contains(&expected_b));
+
+        let identities = collection.identities();
+        assert_eq!(identities.len(), 2);
+        assert!(identities
+            .iter()
+            .any(|identity| matches!(identity, WalletIdentity::Certificate(value) if value == &expected_a)));
+        assert!(identities
+            .iter()
+            .any(|identity| matches!(identity, WalletIdentity::Certificate(value) if value == &expected_b)));
     }
 }
