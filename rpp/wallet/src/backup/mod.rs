@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::db::schema;
-use crate::db::{PolicySnapshot, WalletStore, WalletStoreBatch, WalletStoreError};
+use crate::db::{
+    PolicySnapshot, StoredZsiArtifact, WalletStore, WalletStoreBatch, WalletStoreError,
+};
 
 mod export;
 mod import;
@@ -46,6 +48,7 @@ pub struct BackupPayload {
     pub keystore: Option<Vec<u8>>,
     pub meta: Vec<MetaEntry>,
     pub policies: Vec<(String, PolicySnapshot)>,
+    pub zsi_artifacts: Vec<StoredZsiArtifact<'static>>,
     pub checksums: Option<BTreeMap<String, String>>,
 }
 
@@ -162,6 +165,7 @@ pub(super) fn compute_schema_checksum() -> String {
     hasher.update(schema::EXTENSION_PENDING_LOCKS.as_bytes());
     hasher.update(schema::EXTENSION_PROVER_META.as_bytes());
     hasher.update(schema::EXTENSION_CHECKPOINTS.as_bytes());
+    hasher.update(schema::ZSI_NAMESPACE);
     hasher.update(schema::META_LAST_RESCAN_TS_KEY.as_bytes());
     hasher.update(schema::META_FEE_CACHE_FETCHED_TS_KEY.as_bytes());
     hasher.update(schema::META_FEE_CACHE_EXPIRES_TS_KEY.as_bytes());
@@ -352,6 +356,12 @@ pub(super) fn collect_policies(
     Ok(store.iter_policy_snapshots()?)
 }
 
+pub(super) fn collect_zsi_artifacts(
+    store: &WalletStore,
+) -> Result<Vec<StoredZsiArtifact<'static>>, BackupError> {
+    Ok(store.iter_zsi_artifacts()?)
+}
+
 pub(super) fn apply_meta(batch: &mut WalletStoreBatch<'_>, meta: &[MetaEntry]) {
     for entry in meta {
         batch.put_meta(&entry.key, &entry.value);
@@ -360,6 +370,7 @@ pub(super) fn apply_meta(batch: &mut WalletStoreBatch<'_>, meta: &[MetaEntry]) {
 
 pub(super) use collect_meta as gather_meta;
 pub(super) use collect_policies as gather_policies;
+pub(super) use collect_zsi_artifacts as gather_zsi_artifacts;
 
 pub fn resolve_backup_path(dir: &Path, name: &str) -> Result<PathBuf, BackupError> {
     if name.contains('/') || name.contains('\\') {
@@ -408,6 +419,18 @@ pub fn compute_checksums(payload: &BackupPayload) -> BTreeMap<String, String> {
         "policies".to_string(),
         hex::encode(Sha256::digest(&policy_bytes)),
     );
+    let mut zsi_bytes = Vec::new();
+    for artifact in &payload.zsi_artifacts {
+        zsi_bytes.extend_from_slice(artifact.identity.as_bytes());
+        zsi_bytes.extend_from_slice(artifact.commitment_digest.as_bytes());
+        zsi_bytes.extend_from_slice(&artifact.recorded_at_ms.to_le_bytes());
+        zsi_bytes.extend_from_slice(artifact.backend.as_bytes());
+        zsi_bytes.extend_from_slice(artifact.proof.as_ref());
+    }
+    checksums.insert(
+        "zsi_artifacts".to_string(),
+        hex::encode(Sha256::digest(&zsi_bytes)),
+    );
     checksums
 }
 
@@ -416,6 +439,7 @@ mod tests {
     use super::*;
     use crate::indexer::checkpoints;
     use serde_json::Value;
+    use std::borrow::Cow;
     use tempfile::tempdir;
 
     fn store_with_data(base: &Path) -> WalletStore {
@@ -455,6 +479,14 @@ mod tests {
             batch
                 .put_policy_snapshot("default", &snapshot)
                 .expect("put policy");
+            let artifact = StoredZsiArtifact::new(
+                1_690_000_000_000,
+                "alice".into(),
+                "proof-digest".into(),
+                "mock-backend".into(),
+                Cow::Borrowed(&[1u8, 2, 3, 4]),
+            );
+            batch.put_zsi_artifact(&artifact).expect("put zsi artifact");
             checkpoints::persist_birthday_height(&mut batch, Some(777)).expect("persist birthday");
             batch.commit().expect("commit");
         }
@@ -478,6 +510,7 @@ mod tests {
             batch.delete_meta("network");
             batch.delete_meta("hint");
             batch.delete_policy_snapshot("default");
+            batch.delete_zsi_artifact("alice", "proof-digest");
             batch.commit().expect("clear commit");
         }
         std::fs::remove_file(&keystore_path).expect("remove keystore");
@@ -505,6 +538,10 @@ mod tests {
         assert_eq!(policies.len(), 1);
         assert_eq!(policies[0].0, "default");
         assert_eq!(policies[0].1.statements, vec!["allow *".to_string()]);
+        let zsi_artifacts = store.iter_zsi_artifacts().expect("zsi artifacts");
+        assert_eq!(zsi_artifacts.len(), 1);
+        assert_eq!(zsi_artifacts[0].identity, "alice");
+        assert_eq!(zsi_artifacts[0].commitment_digest, "proof-digest");
 
         let restored = std::fs::read(&keystore_path).expect("restored keystore");
         assert_eq!(restored, b"encrypted-keystore");

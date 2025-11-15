@@ -5,8 +5,8 @@ use serde_json::to_vec_pretty;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::{
-    compute_checksums, format_backup_name, gather_meta, gather_policies, BackupError,
-    BackupMetadata, BackupPayload,
+    compute_checksums, format_backup_name, gather_meta, gather_policies, gather_zsi_artifacts,
+    BackupError, BackupMetadata, BackupPayload,
 };
 use super::{ensure_backup_dir, prepare_envelope};
 use crate::db::WalletStore;
@@ -46,6 +46,7 @@ pub fn backup_export(
 
     let meta = gather_meta(store)?;
     let policies = gather_policies(store)?;
+    let zsi_artifacts = gather_zsi_artifacts(store)?;
 
     let keystore = if options.metadata_only {
         None
@@ -65,6 +66,7 @@ pub fn backup_export(
         keystore,
         meta,
         policies,
+        zsi_artifacts,
         checksums: None,
     };
 

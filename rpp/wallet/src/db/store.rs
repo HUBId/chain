@@ -8,8 +8,8 @@ use storage_firewood::{
 
 use crate::db::{
     codec::{
-        self, Address, CodecError, PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
-        UtxoRecord, WatchOnlyRecord,
+        self, Address, CodecError, PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry,
+        UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
     },
     migrations, schema,
 };
@@ -214,6 +214,33 @@ impl WalletStore {
             .collect::<Result<Vec<_>, _>>()?;
         drop(guard);
         Ok(locks)
+    }
+
+    /// Fetch a cached ZSI lifecycle proof artefact.
+    pub fn get_zsi_artifact(
+        &self,
+        identity: &str,
+        commitment_digest: &str,
+    ) -> Result<Option<StoredZsiArtifact<'static>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = zsi_key(identity, commitment_digest);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_zsi_artifact(&bytes)?.into_owned()))
+    }
+
+    /// Enumerate all cached ZSI lifecycle proof artefacts.
+    pub fn iter_zsi_artifacts(&self) -> Result<Vec<StoredZsiArtifact<'static>>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = schema::ZSI_NAMESPACE;
+        let artifacts = guard
+            .scan_prefix(prefix)
+            .map(|(_, value)| codec::decode_zsi_artifact(&value).map(StoredZsiArtifact::into_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(guard);
+        Ok(artifacts)
     }
 
     /// Fetch a cached transaction entry by txid.
@@ -454,6 +481,22 @@ impl<'a> WalletStoreBatch<'a> {
         self.guard.delete(&pending_lock_key(outpoint));
     }
 
+    pub fn put_zsi_artifact(
+        &mut self,
+        artifact: &StoredZsiArtifact<'_>,
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_zsi_artifact(artifact)?;
+        self.guard.put(
+            zsi_key(&artifact.identity, &artifact.commitment_digest),
+            value,
+        );
+        Ok(())
+    }
+
+    pub fn delete_zsi_artifact(&mut self, identity: &str, commitment_digest: &str) {
+        self.guard.delete(&zsi_key(identity, commitment_digest));
+    }
+
     pub fn put_watch_only(&mut self, record: &WatchOnlyRecord) -> Result<(), WalletStoreError> {
         let value = codec::encode_watch_only(record)?;
         self.guard
@@ -520,6 +563,11 @@ fn initialise_schema(kv: &mut FirewoodKv) -> Result<(), WalletStoreError> {
     if version < schema::SCHEMA_VERSION_V2 {
         mutated |= migrations::v2::apply(kv)?;
         version = schema::SCHEMA_VERSION_V2;
+    }
+
+    if version < schema::SCHEMA_VERSION_V3 {
+        mutated |= migrations::v3::apply(kv)?;
+        version = schema::SCHEMA_VERSION_V3;
     }
 
     if stored.is_none() || version != supported {
@@ -590,6 +638,17 @@ fn watch_only_key(label: &str) -> Vec<u8> {
 fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
     let mut key = prefix.to_vec();
     key.extend_from_slice(suffix);
+    key
+}
+
+fn zsi_key(identity: &str, commitment_digest: &str) -> Vec<u8> {
+    let mut key = schema::ZSI_NAMESPACE.to_vec();
+    let identity_bytes = identity.as_bytes();
+    let identity_len =
+        u32::try_from(identity_bytes.len()).expect("identity label exceeds u32::MAX bytes");
+    key.extend_from_slice(&identity_len.to_be_bytes());
+    key.extend_from_slice(identity_bytes);
+    key.extend_from_slice(commitment_digest.as_bytes());
     key
 }
 

@@ -106,6 +106,46 @@ impl<'a> TxCacheEntry<'a> {
     }
 }
 
+/// Persisted proof artefact associated with a ZSI lifecycle event.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredZsiArtifact<'a> {
+    pub recorded_at_ms: u64,
+    pub identity: String,
+    pub commitment_digest: String,
+    pub backend: String,
+    #[serde(borrow)]
+    #[serde(with = "serde_bytes")]
+    pub proof: Cow<'a, [u8]>,
+}
+
+impl<'a> StoredZsiArtifact<'a> {
+    pub fn new(
+        recorded_at_ms: u64,
+        identity: String,
+        commitment_digest: String,
+        backend: String,
+        proof: Cow<'a, [u8]>,
+    ) -> Self {
+        Self {
+            recorded_at_ms,
+            identity,
+            commitment_digest,
+            backend,
+            proof,
+        }
+    }
+
+    pub fn into_owned(self) -> StoredZsiArtifact<'static> {
+        StoredZsiArtifact {
+            recorded_at_ms: self.recorded_at_ms,
+            identity: self.identity,
+            commitment_digest: self.commitment_digest,
+            backend: self.backend,
+            proof: Cow::Owned(self.proof.into_owned()),
+        }
+    }
+}
+
 /// Auxiliary metadata captured for a pending lock.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingLockMetadata {
@@ -205,6 +245,14 @@ pub fn decode_tx_cache_entry<'a>(bytes: &'a [u8]) -> Result<TxCacheEntry<'a>, Co
     Ok(options().deserialize(bytes)?)
 }
 
+pub fn encode_zsi_artifact(artifact: &StoredZsiArtifact<'_>) -> Result<Vec<u8>, CodecError> {
+    Ok(options().serialize(artifact)?)
+}
+
+pub fn decode_zsi_artifact<'a>(bytes: &'a [u8]) -> Result<StoredZsiArtifact<'a>, CodecError> {
+    Ok(options().deserialize(bytes)?)
+}
+
 pub fn encode_watch_only(record: &WatchOnlyRecord) -> Result<Vec<u8>, CodecError> {
     Ok(options().serialize(record)?)
 }
@@ -300,6 +348,20 @@ mod tests {
         let encoded = encode_pending_lock(&lock).expect("encode lock");
         let decoded = decode_pending_lock(&encoded).expect("decode lock");
         assert_eq!(decoded, lock);
+    }
+
+    #[test]
+    fn zsi_artifact_roundtrip() {
+        let artifact = StoredZsiArtifact::new(
+            1_690_000_000_000,
+            "alice".into(),
+            "deadbeef".into(),
+            "mock-backend".into(),
+            Cow::Borrowed(&[1u8, 2, 3, 4]),
+        );
+        let encoded = encode_zsi_artifact(&artifact).expect("encode artifact");
+        let decoded = decode_zsi_artifact(&encoded).expect("decode artifact");
+        assert_eq!(decoded.into_owned(), artifact.into_owned());
     }
 
     #[test]

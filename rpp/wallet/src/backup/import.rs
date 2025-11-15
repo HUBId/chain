@@ -74,6 +74,7 @@ pub fn backup_import(
         keystore,
         meta,
         policies,
+        zsi_artifacts,
         ..
     } = payload;
 
@@ -83,6 +84,17 @@ pub fn backup_import(
     let desired_policies: BTreeSet<String> =
         policies.iter().map(|(label, _)| label.clone()).collect();
     let existing_policies = store.iter_policy_snapshots()?;
+
+    let desired_zsi: BTreeSet<(String, String)> = zsi_artifacts
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.identity.clone(),
+                artifact.commitment_digest.clone(),
+            )
+        })
+        .collect();
+    let existing_zsi = store.iter_zsi_artifacts()?;
 
     {
         let mut batch = store.batch()?;
@@ -100,6 +112,18 @@ pub fn backup_import(
         }
         for (label, snapshot) in &policies {
             batch.put_policy_snapshot(label, snapshot)?;
+        }
+        for artifact in existing_zsi {
+            let key = (
+                artifact.identity.clone(),
+                artifact.commitment_digest.clone(),
+            );
+            if !desired_zsi.contains(&key) {
+                batch.delete_zsi_artifact(&artifact.identity, &artifact.commitment_digest);
+            }
+        }
+        for artifact in &zsi_artifacts {
+            batch.put_zsi_artifact(artifact)?;
         }
         batch.commit()?;
     }
