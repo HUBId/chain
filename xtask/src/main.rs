@@ -220,6 +220,16 @@ struct WalletFeatureScenario<'a> {
 
 fn run_wallet_feature_matrix() -> Result<()> {
     let root = workspace_root();
+    run_command(
+        Command::new("cargo")
+            .current_dir(&root)
+            .arg("fmt")
+            .arg("-p")
+            .arg("rpp-wallet")
+            .arg("--")
+            .arg("--check"),
+        "wallet fmt check",
+    )?;
     let base_features = ["runtime", "prover-mock", "backup"];
     let scenarios = [
         WalletFeatureScenario {
@@ -261,6 +271,7 @@ fn run_wallet_feature_matrix() -> Result<()> {
 
     for scenario in scenarios {
         run_wallet_matrix_command(&root, "check", &scenario, &base_features)?;
+        run_wallet_matrix_command(&root, "clippy", &scenario, &base_features)?;
         run_wallet_matrix_command(&root, "test", &scenario, &base_features)?;
     }
 

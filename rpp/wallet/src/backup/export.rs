@@ -85,6 +85,7 @@ pub fn backup_export(
         to_vec_pretty(&envelope).map_err(|err| BackupError::Serialization(err.to_string()))?;
     fs::write(&path, encoded)?;
     plaintext.zeroize();
+    super::debug_assert_zeroized(plaintext.as_ref());
 
     Ok(BackupExportResult {
         path,

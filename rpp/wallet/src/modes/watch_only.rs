@@ -1,8 +1,16 @@
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::proof_backend::Blake2sHasher;
 
 const WATCH_ONLY_SEED_DOMAIN: &[u8] = b"rpp::wallet::watch_only::seed";
+
+fn debug_assert_zeroized(buf: &[u8]) {
+    debug_assert!(
+        buf.iter().all(|byte| *byte == 0),
+        "watch-only seed material should be zeroized",
+    );
+}
 
 /// Persisted configuration describing a watch-only wallet mode.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,7 +52,7 @@ impl WatchOnlyRecord {
     /// Deterministically derive a seed used by the wallet engine for address
     /// tracking when running in watch-only mode.
     pub fn derive_seed(&self) -> [u8; 32] {
-        let mut material = Vec::new();
+        let mut material = Zeroizing::new(Vec::new());
         material.extend_from_slice(WATCH_ONLY_SEED_DOMAIN);
         material.extend_from_slice(self.external_descriptor.as_bytes());
         if let Some(internal) = &self.internal_descriptor {
@@ -59,7 +67,10 @@ impl WatchOnlyRecord {
             material.extend_from_slice(b"::birthday::");
             material.extend_from_slice(&height.to_be_bytes());
         }
-        Blake2sHasher::hash(&material).into()
+        let seed = Blake2sHasher::hash(material.as_slice()).into();
+        material.zeroize();
+        debug_assert_zeroized(material.as_slice());
+        seed
     }
 }
 

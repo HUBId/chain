@@ -13,6 +13,7 @@ use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tokio::task;
 use tracing::{info, warn};
+use zeroize::Zeroize;
 
 #[cfg(feature = "prover-stwo")]
 use crate::engine::SpendModel;
@@ -89,9 +90,11 @@ impl WalletProver for MockWalletProver {
         self.jobs.run_job(move || {
             let start = Instant::now();
             let witness_header = WitnessHeader::new(ProofSystemKind::Mock, MOCK_CIRCUIT_ID);
-            let payload = bincode::serialize(&draft)
+            let mut payload = bincode::serialize(&draft)
                 .map_err(|err| ProverError::Serialization(err.to_string()))?;
             let witness = WitnessBytes::encode(&witness_header, &payload)?;
+            payload.zeroize();
+            debug_assert_zeroized(&payload);
             let witness_bytes = witness.as_slice().len();
             if limit > 0 && (witness_bytes as u64) > limit {
                 warn!(
@@ -105,6 +108,9 @@ impl WalletProver for MockWalletProver {
             }
             let proof_header = ProofHeader::new(ProofSystemKind::Mock, MOCK_CIRCUIT_ID);
             let proof = ProofBytes::encode(&proof_header, witness.as_slice())?;
+            let mut witness_buffer = witness.into_inner();
+            witness_buffer.zeroize();
+            debug_assert_zeroized(&witness_buffer);
             let proof_len = proof.as_ref().len();
             let duration_ms = start.elapsed().as_millis() as u64;
             info!(
@@ -170,6 +176,9 @@ impl WalletProver for StwoWalletProver {
                 });
             }
             let proof = backend.prove_tx(&proving_key, &witness)?;
+            let mut witness_buffer = witness.into_inner();
+            witness_buffer.zeroize();
+            debug_assert_zeroized(&witness_buffer);
             let proof_len = proof.as_ref().len();
             let duration_ms = start.elapsed().as_millis() as u64;
             info!(
@@ -296,9 +305,11 @@ fn build_stwo_witness(draft: &DraftTransaction) -> Result<(WitnessBytes, usize),
     use std::convert::TryInto;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let encoded =
+    let mut encoded =
         bincode::serialize(draft).map_err(|err| ProverError::Serialization(err.to_string()))?;
-    let entropy: [u8; 32] = Blake2sHasher::hash(&encoded).into();
+    let mut entropy: [u8; 32] = Blake2sHasher::hash(&encoded).into();
+    encoded.zeroize();
+    debug_assert_zeroized(&encoded);
     let signing_key = SigningKey::from_bytes(&entropy);
     let verifying_key = signing_key.verifying_key();
     let sender_address = wallet_address_from_public_key(&verifying_key);
@@ -381,6 +392,8 @@ fn build_stwo_witness(draft: &DraftTransaction) -> Result<(WitnessBytes, usize),
     let header = WitnessHeader::new(ProofSystemKind::Stwo, STWO_WITNESS_CIRCUIT);
     let witness_bytes = WitnessBytes::encode(&header, &witness)?;
     let len = witness_bytes.as_slice().len();
+    entropy.zeroize();
+    debug_assert_zeroized(&entropy);
     Ok((witness_bytes, len))
 }
 
@@ -406,6 +419,13 @@ fn select_recipient(draft: &DraftTransaction) -> (String, u128) {
 fn wallet_address_from_public_key(key: &ed25519_dalek::VerifyingKey) -> String {
     let hash: [u8; 32] = Blake2sHasher::hash(key.as_bytes()).into();
     hex::encode(hash)
+}
+
+fn debug_assert_zeroized(buf: &[u8]) {
+    debug_assert!(
+        buf.iter().all(|byte| *byte == 0),
+        "sensitive prover buffer should be zeroized",
+    );
 }
 
 #[cfg(test)]

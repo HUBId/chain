@@ -49,6 +49,7 @@ pub fn backup_validate(
     }
 
     plaintext.zeroize();
+    super::debug_assert_zeroized(plaintext.as_ref());
 
     Ok(BackupValidation {
         metadata: envelope.metadata,
@@ -69,6 +70,7 @@ pub fn backup_import(
     verify_schema_checksum(&envelope.metadata)?;
     verify_checksums(&envelope.metadata, &payload)?;
     plaintext.zeroize();
+    super::debug_assert_zeroized(plaintext.as_ref());
 
     let BackupPayload {
         keystore,
@@ -135,6 +137,7 @@ pub fn backup_import(
         let mut data = Zeroizing::new(keystore);
         fs::write(keystore_path, data.as_ref())?;
         data.zeroize();
+        super::debug_assert_zeroized(data.as_ref());
     }
 
     let rescan_from = checkpoints::birthday_height(store)?.unwrap_or(0);
