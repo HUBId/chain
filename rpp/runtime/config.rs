@@ -3161,6 +3161,35 @@ impl Default for WalletSecurityConfig {
     }
 }
 
+#[cfg(test)]
+mod wallet_security_tests {
+    use super::*;
+
+    #[test]
+    fn ca_fingerprint_metadata_is_preserved_in_runtime_settings() {
+        let mut service = WalletServiceConfig::default();
+        service.security.ca_fingerprints = vec![
+            WalletRpcSecurityCaFingerprint {
+                fingerprint: "aa55".into(),
+                description: Some("Primary CA".into()),
+            },
+            WalletRpcSecurityCaFingerprint {
+                fingerprint: "bb66".into(),
+                description: None,
+            },
+        ];
+
+        let runtime = service.runtime_settings(&service.security);
+        let entries = runtime.ca_fingerprints();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].fingerprint, "aa55");
+        assert_eq!(entries[0].description.as_deref(), Some("Primary CA"));
+        assert_eq!(entries[1].fingerprint, "bb66");
+        assert!(entries[1].description.is_none());
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletRpcSecurityCaFingerprint {
     pub fingerprint: String,
