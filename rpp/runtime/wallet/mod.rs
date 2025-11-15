@@ -7,6 +7,7 @@ pub use keys::{FileWalletKeyProvider, InMemoryWalletKeyProvider, WalletKeyProvid
 pub use rpc::json_rpc_router;
 pub use rpc::{
     AuthToken, AuthenticatedRpcHandler, RpcError, RpcInvocation, RpcRequest, StaticAuthenticator,
+    WalletIdentity, WalletRole, WalletRoleSet, WalletSecurityContext, WalletSecurityPaths,
 };
 pub use runtime::{
     GenericWalletRuntimeHandle, NodeAttachment, NodeConnector, SyncDriver, WalletRuntime,

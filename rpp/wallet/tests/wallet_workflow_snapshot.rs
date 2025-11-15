@@ -18,6 +18,7 @@ use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp::runtime::wallet::{
     json_rpc_router, DeterministicSync, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle,
+    WalletSecurityPaths,
 };
 use rpp_wallet::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
 use rpp_wallet::db::WalletStore;
@@ -689,9 +690,10 @@ impl WorkflowFixture {
     fn start_runtime(&self, sync: Arc<WalletSyncCoordinator>) -> Result<RuntimeHarness> {
         let metrics = RuntimeMetrics::noop();
         let mut config = WalletRuntimeConfig::new("127.0.0.1:0".parse().unwrap());
+        config.set_security_paths(WalletSecurityPaths::from_data_dir(self._tempdir.path()));
         let sync_handle: Arc<dyn SyncHandle> = sync.clone();
         let router = Arc::new(WalletRpcRouter::new(self.wallet(), Some(sync_handle)));
-        let rpc_router = json_rpc_router(Arc::clone(&router), Arc::clone(&metrics), &config)
+        let rpc_router = json_rpc_router(Arc::clone(&router), Arc::clone(&metrics), &mut config)
             .context("construct wallet RPC router")?;
         let handle = WalletRuntime::start(
             self.wallet(),
