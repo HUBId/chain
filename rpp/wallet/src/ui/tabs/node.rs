@@ -6,18 +6,27 @@ use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BlockFeeSummaryDto, ListPendingLocksResponse, MempoolInfoResponse, PendingLockDto,
     RecentBlocksResponse, ReleasePendingLocksResponse, RescanParams, RescanResponse, SyncModeDto,
-    SyncStatusResponse, TelemetryCountersResponse, ZsiArtifactDto, ZsiBindResponse, ZsiBindingDto,
-    ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
+    SyncStatusResponse, TelemetryCountersResponse,
+};
+#[cfg(feature = "wallet_zsi")]
+use crate::rpc::dto::{
+    ZsiArtifactDto, ZsiBindResponse, ZsiBindingDto, ZsiDeleteParams, ZsiDeleteResponse,
+    ZsiListResponse, ZsiProofParams,
 };
 
 use crate::telemetry::TelemetryOutcome;
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::{modal, ConfirmDialog};
 use crate::ui::error_map::{describe_rpc_error, technical_details};
-use crate::ui::telemetry::{self, ZsiAction};
+use crate::ui::telemetry;
+#[cfg(feature = "wallet_zsi")]
+use crate::ui::telemetry::ZsiAction;
+#[cfg(feature = "wallet_zsi")]
 use crate::zsi::bind::ZsiOperation;
+#[cfg(feature = "wallet_zsi")]
 use crate::zsi::lifecycle::{ConsensusApproval, ZsiRecord};
 
+#[cfg(feature = "wallet_zsi")]
 use hex::encode as hex_encode;
 
 #[cfg(feature = "wallet_hw")]
@@ -97,6 +106,7 @@ impl RescanPrompt {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ZsiBindField {
     Identity,
@@ -105,6 +115,7 @@ enum ZsiBindField {
     Approvals,
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Debug, Default, Clone)]
 struct ZsiBindingForm {
     operation: ZsiOperation,
@@ -115,6 +126,7 @@ struct ZsiBindingForm {
     error: Option<String>,
 }
 
+#[cfg(feature = "wallet_zsi")]
 impl ZsiBindingForm {
     fn reset(&mut self) {
         self.operation = ZsiOperation::Issue;
@@ -174,6 +186,7 @@ impl ZsiBindingForm {
     }
 }
 
+#[cfg(feature = "wallet_zsi")]
 #[derive(Debug, Clone)]
 enum ZsiModal {
     BindConfirm(ZsiProofParams),
@@ -191,12 +204,19 @@ pub struct State {
     recent_blocks: Snapshot<Vec<BlockFeeSummaryDto>>,
     pending_locks: Snapshot<Vec<PendingLockDto>>,
     telemetry: Snapshot<TelemetryCountersResponse>,
+    #[cfg(feature = "wallet_zsi")]
     zsi_artifacts: Snapshot<Vec<ZsiArtifactDto>>,
+    #[cfg(feature = "wallet_zsi")]
     zsi_bind_form: ZsiBindingForm,
+    #[cfg(feature = "wallet_zsi")]
     zsi_binding: Option<ZsiBindingDto>,
+    #[cfg(feature = "wallet_zsi")]
     zsi_op_inflight: bool,
+    #[cfg(feature = "wallet_zsi")]
     zsi_feedback: Option<String>,
+    #[cfg(feature = "wallet_zsi")]
     zsi_error: Option<String>,
+    #[cfg(feature = "wallet_zsi")]
     zsi_modal: Option<ZsiModal>,
     #[cfg(feature = "wallet_hw")]
     hardware_devices: Snapshot<Vec<HardwareDeviceDto>>,
@@ -221,20 +241,32 @@ pub enum Message {
     MempoolInfoLoaded(Result<MempoolInfoResponse, RpcCallError>),
     RecentBlocksLoaded(Result<Vec<BlockFeeSummaryDto>, RpcCallError>),
     TelemetryLoaded(Result<TelemetryCountersResponse, RpcCallError>),
+    #[cfg(feature = "wallet_zsi")]
     RefreshZsi,
+    #[cfg(feature = "wallet_zsi")]
     ZsiArtifactsLoaded(Result<Vec<ZsiArtifactDto>, RpcCallError>),
+    #[cfg(feature = "wallet_zsi")]
     ZsiBindFieldChanged(ZsiBindField, String),
+    #[cfg(feature = "wallet_zsi")]
     CycleZsiOperation,
+    #[cfg(feature = "wallet_zsi")]
     SubmitZsiBind,
+    #[cfg(feature = "wallet_zsi")]
     ConfirmZsiBind,
+    #[cfg(feature = "wallet_zsi")]
     CancelZsiAction,
+    #[cfg(feature = "wallet_zsi")]
     ZsiBindCompleted(Result<ZsiBindResponse, RpcCallError>),
+    #[cfg(feature = "wallet_zsi")]
     RequestZsiDelete {
         identity: String,
         commitment: String,
     },
+    #[cfg(feature = "wallet_zsi")]
     ConfirmZsiDelete,
+    #[cfg(feature = "wallet_zsi")]
     ZsiDeleteCompleted(Result<ZsiDeleteResponse, RpcCallError>),
+    #[cfg(feature = "wallet_zsi")]
     DismissZsiFeedback,
     #[cfg(feature = "wallet_hw")]
     HardwareDevicesLoaded(Result<Vec<HardwareDeviceDto>, RpcCallError>),
@@ -256,13 +288,16 @@ impl State {
         self.recent_blocks = Snapshot::Idle;
         self.pending_locks = Snapshot::Idle;
         self.telemetry = Snapshot::Idle;
-        self.zsi_artifacts = Snapshot::Idle;
-        self.zsi_bind_form = ZsiBindingForm::default();
-        self.zsi_binding = None;
-        self.zsi_op_inflight = false;
-        self.zsi_feedback = None;
-        self.zsi_error = None;
-        self.zsi_modal = None;
+        #[cfg(feature = "wallet_zsi")]
+        {
+            self.zsi_artifacts = Snapshot::Idle;
+            self.zsi_bind_form = ZsiBindingForm::default();
+            self.zsi_binding = None;
+            self.zsi_op_inflight = false;
+            self.zsi_feedback = None;
+            self.zsi_error = None;
+            self.zsi_modal = None;
+        }
         #[cfg(feature = "wallet_hw")]
         {
             self.hardware_devices = Snapshot::Idle;
@@ -326,12 +361,14 @@ impl State {
                 self.finish_refresh();
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::RefreshZsi => {
                 if !self.zsi_enabled() {
                     return Command::none();
                 }
                 self.load_zsi_artifacts(client)
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ZsiArtifactsLoaded(result) => {
                 match result {
                     Ok(artifacts) => {
@@ -350,14 +387,17 @@ impl State {
                 self.finish_refresh();
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ZsiBindFieldChanged(field, value) => {
                 self.zsi_bind_form.update_field(field, value);
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::CycleZsiOperation => {
                 self.zsi_bind_form.cycle_operation();
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::SubmitZsiBind => {
                 if self.zsi_op_inflight {
                     return Command::none();
@@ -373,6 +413,7 @@ impl State {
                 }
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ConfirmZsiBind => {
                 if self.zsi_op_inflight {
                     return Command::none();
@@ -390,10 +431,12 @@ impl State {
                     Message::ZsiBindCompleted,
                 )
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::CancelZsiAction => {
                 self.zsi_modal = None;
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ZsiBindCompleted(result) => {
                 self.zsi_op_inflight = false;
                 match result {
@@ -413,6 +456,7 @@ impl State {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::RequestZsiDelete {
                 identity,
                 commitment,
@@ -426,6 +470,7 @@ impl State {
                 });
                 Command::none()
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ConfirmZsiDelete => {
                 if self.zsi_op_inflight {
                     return Command::none();
@@ -454,6 +499,7 @@ impl State {
                     Message::ZsiDeleteCompleted,
                 )
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::ZsiDeleteCompleted(result) => {
                 self.zsi_op_inflight = false;
                 match result {
@@ -482,6 +528,7 @@ impl State {
                     }
                 }
             }
+            #[cfg(feature = "wallet_zsi")]
             Message::DismissZsiFeedback => {
                 self.zsi_feedback = None;
                 self.zsi_error = None;
@@ -640,6 +687,7 @@ impl State {
     }
 
     pub fn view(&self) -> Element<Message> {
+        #[cfg(feature = "wallet_zsi")]
         if let Some(modal_state) = &self.zsi_modal {
             let dialog = match modal_state {
                 ZsiModal::BindConfirm(params) => {
@@ -861,6 +909,7 @@ impl State {
         row.push(release_button).into()
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_summary_card(&self) -> Element<Message> {
         let lines = if !self.zsi_enabled() {
             vec!["Zero Sync disabled".into()]
@@ -880,6 +929,14 @@ impl State {
         };
 
         summary_card("Zero Sync", column_from(lines))
+    }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn zsi_summary_card(&self) -> Element<Message> {
+        summary_card(
+            "Zero Sync",
+            column![text("Zero Sync features are unavailable in this build.")],
+        )
     }
 
     fn prover_summary_card(&self) -> Element<Message> {
@@ -928,6 +985,7 @@ impl State {
         }
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_section(&self) -> Element<Message> {
         let mut header = row![text("Zero Sync artifacts").size(18)]
             .spacing(8)
@@ -966,6 +1024,20 @@ impl State {
         container(section).width(Length::Fill).into()
     }
 
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn zsi_section(&self) -> Element<Message> {
+        container(
+            column![
+                text("Zero Sync artifacts").size(18),
+                text("This build was compiled without Zero Sync support."),
+            ]
+            .spacing(8),
+        )
+        .width(Length::Fill)
+        .into()
+    }
+
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_artifacts_view(&self) -> Element<Message> {
         match &self.zsi_artifacts {
             Snapshot::Idle => container(text("Zero Sync artifacts have not been loaded yet."))
@@ -994,6 +1066,7 @@ impl State {
         }
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_bind_form_view(&self) -> Element<Message> {
         let mut operation_button = button(text(format!(
             "Operation: {}",
@@ -1235,17 +1308,20 @@ impl State {
             map_recent_blocks,
         ));
 
-        if self.zsi_enabled() {
-            self.zsi_artifacts.set_loading();
-            self.refresh_pending += 1;
-            commands.push(commands::rpc(
-                "zsi.list",
-                client.clone(),
-                |client| async move { client.zsi_list().await },
-                map_zsi_artifacts,
-            ));
-        } else {
-            self.zsi_artifacts = Snapshot::Loaded(Vec::new());
+        #[cfg(feature = "wallet_zsi")]
+        {
+            if self.zsi_enabled() {
+                self.zsi_artifacts.set_loading();
+                self.refresh_pending += 1;
+                commands.push(commands::rpc(
+                    "zsi.list",
+                    client.clone(),
+                    |client| async move { client.zsi_list().await },
+                    map_zsi_artifacts,
+                ));
+            } else {
+                self.zsi_artifacts = Snapshot::Loaded(Vec::new());
+            }
         }
 
         self.telemetry.set_loading();
@@ -1273,6 +1349,7 @@ impl State {
         Command::batch(commands)
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn load_zsi_artifacts(&mut self, client: WalletRpcClient) -> Command<Message> {
         if matches!(self.zsi_artifacts, Snapshot::Loading) {
             return Command::none();
@@ -1312,11 +1389,19 @@ impl State {
         false
     }
 
+    #[cfg(feature = "wallet_zsi")]
     fn zsi_enabled(&self) -> bool {
-        self.config
-            .as_ref()
-            .map(|config| config.zsi.enabled)
-            .unwrap_or(false)
+        cfg!(feature = "wallet_zsi")
+            && self
+                .config
+                .as_ref()
+                .map(|config| config.zsi.enabled)
+                .unwrap_or(false)
+    }
+
+    #[cfg(not(feature = "wallet_zsi"))]
+    fn zsi_enabled(&self) -> bool {
+        false
     }
 }
 
@@ -1328,6 +1413,7 @@ fn map_recent_blocks(result: Result<RecentBlocksResponse, RpcCallError>) -> Mess
     Message::RecentBlocksLoaded(result.map(|response| response.blocks))
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn map_zsi_artifacts(result: Result<ZsiListResponse, RpcCallError>) -> Message {
     Message::ZsiArtifactsLoaded(result.map(|response| response.artifacts))
 }
@@ -1343,6 +1429,7 @@ fn column_from(lines: Vec<String>) -> Column<'static, Message> {
         .fold(column![], |column, line| column.push(text(line)))
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_artifact_entry(artifact: &ZsiArtifactDto, op_inflight: bool) -> Element<Message> {
     let mut delete = button(text("Delete")).padding(8);
     if !op_inflight {
@@ -1372,6 +1459,7 @@ fn zsi_artifact_entry(artifact: &ZsiArtifactDto, op_inflight: bool) -> Element<M
     .into()
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn zsi_binding_view(binding: &ZsiBindingDto) -> Element<Message> {
     let mut lines = vec![
         format!("Operation: {}", binding.operation.as_str()),
@@ -1430,6 +1518,7 @@ fn hardware_device_entry(device: &HardwareDeviceDto) -> Element<Message> {
     .into()
 }
 
+#[cfg(feature = "wallet_zsi")]
 fn next_operation(current: ZsiOperation) -> ZsiOperation {
     match current {
         ZsiOperation::Issue => ZsiOperation::Rotate,
@@ -1519,6 +1608,9 @@ mod tests {
 
     use crate::rpc::client::WalletRpcClientError;
     use crate::rpc::error::WalletRpcErrorCode;
+    #[cfg(feature = "wallet_zsi")]
+    use crate::zsi::bind::ZsiOperation;
+    #[cfg(feature = "wallet_zsi")]
     use crate::zsi::lifecycle::ZsiRecord;
 
     fn dummy_client() -> WalletRpcClient {
@@ -1600,6 +1692,7 @@ mod tests {
         assert!(command.actions().is_empty());
     }
 
+    #[cfg(feature = "wallet_zsi")]
     #[test]
     fn zsi_bind_requires_confirmation() {
         let mut state = State::default();
@@ -1611,6 +1704,7 @@ mod tests {
         assert!(command.actions().is_empty());
     }
 
+    #[cfg(feature = "wallet_zsi")]
     #[test]
     fn zsi_bind_blocks_duplicates() {
         let mut state = State::default();
@@ -1633,6 +1727,7 @@ mod tests {
         assert!(state.zsi_op_inflight);
     }
 
+    #[cfg(feature = "wallet_zsi")]
     #[test]
     fn zsi_delete_requires_confirmation() {
         let mut state = State::default();
@@ -1649,6 +1744,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "wallet_zsi")]
     #[test]
     fn zsi_delete_blocks_duplicates() {
         let mut state = State::default();
@@ -1664,6 +1760,7 @@ mod tests {
         assert!(state.zsi_op_inflight);
     }
 
+    #[cfg(feature = "wallet_zsi")]
     #[test]
     fn zsi_errors_map_to_friendly_message() {
         let mut state = State::default();
