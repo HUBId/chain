@@ -16,9 +16,11 @@ use super::dto::{
     ListUtxosResponse, MempoolInfoResponse, MultisigExportParams, MultisigExportResponse,
     MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse,
     ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
-    SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse,
-    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse,
-    TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
+    SecurityAssignParams, SecurityCertificateUploadParams, SecurityCertificateUploadResponse,
+    SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetCosignersParams,
+    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
+    SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse,
+    WalletRoleDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
     ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
     ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
@@ -320,6 +322,45 @@ impl WalletRpcClient {
         &self,
     ) -> Result<WatchOnlyStatusResponse, WalletRpcClientError> {
         self.call("watch_only.disable", Option::<Value>::None).await
+    }
+
+    /// Fetches the wallet security snapshot including RBAC assignments and mTLS state.
+    pub async fn security_snapshot(
+        &self,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        self.call("security.snapshot", Option::<Value>::None).await
+    }
+
+    /// Applies a new RBAC assignment for the provided identity.
+    pub async fn security_assign(
+        &self,
+        params: &SecurityAssignParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        self.call("security.assign", Some(params)).await
+    }
+
+    /// Removes an RBAC assignment for the provided identity.
+    pub async fn security_remove(
+        &self,
+        params: &SecurityRemoveParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        self.call("security.remove", Some(params)).await
+    }
+
+    /// Toggles the wallet mTLS configuration state.
+    pub async fn security_update_mtls(
+        &self,
+        params: &SecurityMtlsUpdateParams,
+    ) -> Result<SecuritySnapshotResponse, WalletRpcClientError> {
+        self.call("security.mtls_update", Some(params)).await
+    }
+
+    /// Uploads certificate artifacts for the wallet RPC server.
+    pub async fn security_upload_certificate(
+        &self,
+        params: &SecurityCertificateUploadParams,
+    ) -> Result<SecurityCertificateUploadResponse, WalletRpcClientError> {
+        self.call("security.certificate_upload", Some(params)).await
     }
 
     /// Estimates the fee rate for a given confirmation target.

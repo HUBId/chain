@@ -559,6 +559,73 @@ pub struct ReleasePendingLocksResponse {
     pub released: Vec<PendingLockDto>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletRoleDto {
+    Admin,
+    Operator,
+    Viewer,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityAssignmentDto {
+    pub identity: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<WalletRoleDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityFingerprintDto {
+    pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecuritySnapshotResponse {
+    pub mtls_enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignments: Vec<SecurityAssignmentDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ca_fingerprints: Vec<SecurityFingerprintDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_roles: Vec<WalletRoleDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_fingerprints: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityAssignParams {
+    pub identity: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<WalletRoleDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityRemoveParams {
+    pub identity: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityMtlsUpdateParams {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityCertificateUploadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_certificate_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityCertificateUploadResponse {
+    pub stored: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupMetadataDto {
     pub version: u32,
