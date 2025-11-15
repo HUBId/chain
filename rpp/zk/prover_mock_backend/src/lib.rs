@@ -1,9 +1,11 @@
+use prover_backend_interface::Blake2sHasher;
 use prover_backend_interface::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
-    ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, SecurityLevel, TxCircuitDef,
-    TxPublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, IdentityPublicInputs,
+    ProofBackend, ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, SecurityLevel,
+    TxCircuitDef, TxPublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use serde::{Deserialize, Serialize};
+use serde_json;
 
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
@@ -24,6 +26,28 @@ pub struct MockProof {
     pub header: ProofHeader,
     pub witness_header: WitnessHeader,
     pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct MockConsensusApproval {
+    validator: String,
+    signature: String,
+    timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct MockZsiRecord {
+    identity: String,
+    genesis_id: String,
+    attestation_digest: String,
+    approvals: Vec<MockConsensusApproval>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct MockIdentityProof {
+    witness_header: WitnessHeader,
+    witness_digest: [u8; 32],
+    inputs: IdentityPublicInputs,
 }
 
 impl ProofBackend for MockBackend {
@@ -107,6 +131,72 @@ impl ProofBackend for MockBackend {
         let proof = ProofBytes::encode(&header, witness)?;
         let verifying_key = VerifyingKey(identifier.into_bytes());
         Ok((proof, verifying_key, circuit))
+    }
+
+    fn prove_identity(
+        &self,
+        _pk: &ProvingKey,
+        witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        let (witness_header, record): (WitnessHeader, MockZsiRecord) = witness.decode()?;
+        if witness_header.backend != ProofSystemKind::Mock {
+            return Err(BackendError::Failure(
+                "mock identity witness must use the mock proof system".into(),
+            ));
+        }
+        let inputs = derive_identity_inputs(&record);
+        let digest: [u8; 32] = Blake2sHasher::hash(witness.as_slice()).into();
+        let circuit = witness_header.circuit.clone();
+        let payload = MockIdentityProof {
+            witness_header,
+            witness_digest: digest,
+            inputs,
+        };
+        let header = ProofHeader::new(ProofSystemKind::Mock, circuit);
+        ProofBytes::encode(&header, &payload)
+    }
+
+    fn verify_identity(
+        &self,
+        _vk: &VerifyingKey,
+        proof: &ProofBytes,
+        inputs: &IdentityPublicInputs,
+    ) -> BackendResult<()> {
+        let (outer_header, inner): (ProofHeader, ProofBytes) = proof.decode()?;
+        if outer_header.backend != ProofSystemKind::Mock {
+            return Err(BackendError::Failure(
+                "mock identity proof must be encoded for the mock backend".into(),
+            ));
+        }
+        let (inner_header, payload): (ProofHeader, MockIdentityProof) = inner.decode()?;
+        if inner_header.backend != ProofSystemKind::Mock {
+            return Err(BackendError::Failure(
+                "mock identity payload must use the mock backend".into(),
+            ));
+        }
+        if payload.witness_header.circuit != outer_header.identifier
+            || payload.witness_header.circuit != inner_header.identifier
+        {
+            return Err(BackendError::Failure(
+                "mock identity circuit header mismatch".into(),
+            ));
+        }
+        if &payload.inputs != inputs {
+            return Err(BackendError::Failure(
+                "identity public inputs mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn derive_identity_inputs(record: &MockZsiRecord) -> IdentityPublicInputs {
+    let approvals = serde_json::to_vec(&record.approvals).unwrap_or_default();
+    IdentityPublicInputs {
+        wallet_address: Blake2sHasher::hash(record.identity.as_bytes()).into(),
+        vrf_tag: record.attestation_digest.as_bytes().to_vec(),
+        identity_root: Blake2sHasher::hash(record.genesis_id.as_bytes()).into(),
+        state_root: Blake2sHasher::hash(&approvals).into(),
     }
 }
 
