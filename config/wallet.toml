@@ -1,6 +1,7 @@
 # NOTE: Restart the wallet runtime after editing this file; live reload is not supported.
 # Phase 2 policy/fee/prover settings are documented in docs/wallet_phase2_policies_prover.md.
 # Phase 3 GUI settings are documented in docs/wallet_phase3_gui.md.
+# Phase 4 advanced wallet flows are documented in docs/wallet_phase4_advanced.md.
 data_dir = "./data"
 
 [wallet.keys]
@@ -10,6 +11,17 @@ key_path = "./keys/wallet.toml"
 listen = "127.0.0.1:9090"
 allowed_origin = null
 requests_per_minute = null
+
+# RPC security envelope. mTLS and RBAC are disabled by default; operators should
+# provision certificates, keys, and role bindings before enabling. See
+# docs/wallet_phase4_advanced.md#rpc-security-mtls-and-rbac for hardening steps.
+[wallet.rpc.security]
+mtls_required = false
+role_enforcement = false
+trusted_ca_dir = "./certs/ca"
+certificate = "./certs/server.crt"
+private_key = "./certs/server.key"
+role_bindings_path = "./config/rbac.toml"
 
 [wallet.security]
 mtls_enabled = false
@@ -32,6 +44,15 @@ certificate = null
 private_key = null
 ca_certificate = null
 
+# Hardware signing integration. Remains disabled until an operator connects a supported
+# device. Keep `fallback_to_software` true so automated jobs do not stall if the device is
+# unplugged. See docs/wallet_phase4_advanced.md#hardware-integration for provisioning.
+[wallet.hw]
+enabled = false
+transport = "hid"
+device_selector = null
+fallback_to_software = true
+
 [wallet.budgets]
 submit_transaction_per_minute = 120
 proof_generation_per_minute = 60
@@ -50,6 +71,40 @@ pipeline_depth = 64
 theme = "dark"
 auto_lock_secs = 300
 clipboard_auto_clear = true
+
+# Encrypted backup and recovery controls. Automatic exports stay disabled by default
+# and exports land in an operator-managed directory. Rotate passphrases as described in
+# docs/wallet_phase4_advanced.md#backuprecovery-formats-and-rotation.
+[wallet.backup]
+auto_export_enabled = false
+export_dir = "./backups"
+max_generations = 10
+passphrase_profile = "argon2id"
+
+# Watch-only mode mirrors chain state without local spending keys. Leave disabled unless
+# the xpub file and downstream RPC consumers are configured. Guidance lives in
+# docs/wallet_phase4_advanced.md#watch-only-mode.
+[wallet.watch_only]
+enabled = false
+xpub_path = "./keys/watch_only.toml"
+expose_rpc = false
+
+# Multisig hook registration. Hooks remain inactive until pointed at a signing
+# coordinator and quorum policy. Review docs/wallet_phase4_advanced.md#multisig-hooks
+# before enabling to avoid accidental partial signatures.
+[wallet.multisig]
+enabled = false
+coordinator_url = "https://multisig.local"
+quorum = 2
+participants = []
+
+# Zero State Import (ZSI) workflows for initial data seeding. Disabled by default to
+# prevent accidental replay of historical bundles. docs/wallet_phase4_advanced.md#zsi-workflows
+# walks through staging and verification.
+[wallet.zsi]
+enabled = false
+bundle_path = "./zsi"
+verify_checksums = true
 
 # Controls automatic lookback rescans and the batch size used when replaying history.
 # See docs/wallet_phase2_policies_prover.md for CLI overrides.
