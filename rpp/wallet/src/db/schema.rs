@@ -20,6 +20,8 @@ pub const POLICIES_NAMESPACE: &[u8] = b"wallet/policies/";
 pub const CHECKPOINTS_NAMESPACE: &[u8] = b"wallet/checkpoints/";
 /// Namespace storing watch-only configuration records.
 pub const WATCH_ONLY_NAMESPACE: &[u8] = b"wallet/watch_only/";
+/// Namespace storing cached Zero Sync identity artefacts.
+pub const ZSI_NAMESPACE: &[u8] = b"wallet/zsi/";
 
 /// File-system extension for pending lock snapshots.
 pub const EXTENSION_PENDING_LOCKS: &str = "wallet/pending_locks";
@@ -44,4 +46,5 @@ pub const WATCH_ONLY_STATE_KEY: &str = "state";
 /// Current on-disk schema version supported by the wallet store.
 pub const SCHEMA_VERSION_V1: u32 = 1;
 pub const SCHEMA_VERSION_V2: u32 = 2;
-pub const SCHEMA_VERSION_LATEST: u32 = SCHEMA_VERSION_V2;
+pub const SCHEMA_VERSION_V3: u32 = 3;
+pub const SCHEMA_VERSION_LATEST: u32 = SCHEMA_VERSION_V3;

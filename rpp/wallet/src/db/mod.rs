@@ -3,6 +3,7 @@ pub(crate) mod migrations;
 pub mod schema;
 pub mod store;
 
+pub use codec::StoredZsiArtifact;
 pub use codec::{
     Address, PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
     UtxoRecord, WatchOnlyRecord,
@@ -18,18 +19,19 @@ mod tests {
     use super::{
         codec, schema,
         store::{AddressKind, WalletStore},
-        PendingLock, PolicySnapshot, TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
+        PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoOutpoint, UtxoRecord,
+        WatchOnlyRecord,
     };
 
     #[test]
     fn store_initialises_schema_marker() {
         let dir = tempdir().expect("tempdir");
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V2);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V3);
     }
 
     #[test]
-    fn store_migrates_schema_to_v2() {
+    fn store_migrates_schema_to_v3() {
         let dir = tempdir().expect("tempdir");
         {
             let mut kv = storage_firewood::kv::FirewoodKv::open(dir.path()).expect("open kv");
@@ -40,7 +42,7 @@ mod tests {
             kv.commit().expect("commit");
         }
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V2);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V3);
     }
 
     #[test]
@@ -79,6 +81,14 @@ mod tests {
         batch
             .put_watch_only(&watch_only)
             .expect("watch-only record");
+        let artifact = StoredZsiArtifact::new(
+            1_700_000_000_000,
+            "alice".into(),
+            "proof-digest".into(),
+            "mock-backend".into(),
+            Cow::Borrowed(&[5u8, 6, 7, 8]),
+        );
+        batch.put_zsi_artifact(&artifact).expect("put zsi artifact");
         batch.commit().expect("commit");
 
         assert_eq!(
@@ -123,6 +133,17 @@ mod tests {
         assert_eq!(store.get_checkpoint("sync").unwrap(), Some(256));
         assert_eq!(store.iter_checkpoints().unwrap().len(), 1);
         assert_eq!(store.watch_only_record().unwrap(), Some(watch_only.clone()));
+        assert_eq!(
+            store
+                .get_zsi_artifact("alice", "proof-digest")
+                .unwrap()
+                .unwrap(),
+            artifact.clone().into_owned()
+        );
+        assert_eq!(
+            store.iter_zsi_artifacts().unwrap(),
+            vec![artifact.clone().into_owned()]
+        );
 
         let mut cleanup = store.batch().expect("cleanup batch");
         cleanup.delete_utxo(&utxo.outpoint);
@@ -130,6 +151,7 @@ mod tests {
         cleanup.delete_policy_snapshot("default");
         cleanup.delete_checkpoint("sync");
         cleanup.clear_watch_only();
+        cleanup.delete_zsi_artifact("alice", "proof-digest");
         cleanup.commit().expect("cleanup commit");
 
         assert!(store.get_utxo(&utxo.outpoint).unwrap().is_none());
@@ -137,6 +159,11 @@ mod tests {
         assert!(store.get_policy_snapshot("default").unwrap().is_none());
         assert!(store.get_checkpoint("sync").unwrap().is_none());
         assert!(store.watch_only_record().unwrap().is_none());
+        assert!(store
+            .get_zsi_artifact("alice", "proof-digest")
+            .unwrap()
+            .is_none());
+        assert!(store.iter_zsi_artifacts().unwrap().is_empty());
     }
 
     #[test]
