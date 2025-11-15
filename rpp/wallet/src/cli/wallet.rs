@@ -35,6 +35,8 @@ use crate::rpc::dto::{
     PendingLockDto, RescanParams, SetCosignersResponse, SetMultisigScopeResponse, SetPolicyParams,
     SyncModeDto, SyncStatusResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
 };
+#[cfg(feature = "wallet_hw")]
+use crate::rpc::dto::{DerivationPathDto, HardwareSignParams};
 use crate::rpc::error::WalletRpcErrorCode;
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
@@ -1128,6 +1130,116 @@ impl SendBroadcastRawCommand {
     }
 }
 
+#[cfg(feature = "wallet_hw")]
+#[derive(Debug, Args)]
+pub struct HardwareCommand {
+    #[command(subcommand)]
+    pub command: HardwareSubcommand,
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Debug, Subcommand)]
+pub enum HardwareSubcommand {
+    /// List hardware signing devices detected by the wallet.
+    Enumerate(HardwareEnumerateCommand),
+    /// Ask a hardware device to sign an arbitrary payload.
+    Sign(HardwareSignCommand),
+}
+
+#[cfg(feature = "wallet_hw")]
+impl HardwareCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        match &self.command {
+            HardwareSubcommand::Enumerate(cmd) => cmd.execute().await,
+            HardwareSubcommand::Sign(cmd) => cmd.execute().await,
+        }
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Debug, Args)]
+pub struct HardwareEnumerateCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+}
+
+#[cfg(feature = "wallet_hw")]
+impl HardwareEnumerateCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let response = client.hw_enumerate().await?;
+        if response.devices.is_empty() {
+            println!("No hardware signing devices detected.");
+            return Ok(());
+        }
+        println!("Detected hardware signing devices:\n");
+        for device in response.devices {
+            let label = device
+                .label
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("(no label)");
+            println!("  Fingerprint : {}", device.fingerprint);
+            println!("    Model     : {}", device.model);
+            println!("    Label     : {}\n", label);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+#[derive(Debug, Args)]
+pub struct HardwareSignCommand {
+    #[command(flatten)]
+    pub rpc: RpcOptions,
+    /// Hardware device fingerprint to target.
+    #[arg(long)]
+    pub fingerprint: String,
+    /// Account index for the derivation path.
+    #[arg(long)]
+    pub account: u32,
+    /// Use the change branch when deriving the key.
+    #[arg(long, default_value_t = false)]
+    pub change: bool,
+    /// Address index for the derivation path.
+    #[arg(long)]
+    pub index: u32,
+    /// Hex-encoded payload that should be signed.
+    #[arg(long, value_name = "HEX")]
+    pub payload: String,
+}
+
+#[cfg(feature = "wallet_hw")]
+impl HardwareSignCommand {
+    pub async fn execute(&self) -> Result<(), WalletCliError> {
+        let client = self.rpc.client()?;
+        let payload_clean = self.payload.trim();
+        let payload_bytes = hex::decode(payload_clean)
+            .map_err(|err| WalletCliError::Other(anyhow!(format!("invalid payload hex: {err}"))))?;
+        let params = HardwareSignParams {
+            fingerprint: self.fingerprint.clone(),
+            path: DerivationPathDto {
+                account: self.account,
+                change: self.change,
+                index: self.index,
+            },
+            payload: hex::encode(payload_bytes),
+        };
+        let response = client.hw_sign(&params).await?;
+        println!("Hardware signature\n");
+        println!("  Fingerprint : {}", response.fingerprint);
+        println!(
+            "  Path        : m/{}/{}/{}",
+            response.path.account,
+            if response.path.change { 1 } else { 0 },
+            response.path.index
+        );
+        println!("  Signature   : {}", response.signature);
+        println!("  Public key  : {}", response.public_key);
+        Ok(())
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct WatchOnlyCommand {
     #[command(subcommand)]
@@ -1672,6 +1784,9 @@ pub enum WalletCommand {
     Locks(LocksCommand),
     /// Manage transaction drafts.
     Send(SendCommand),
+    #[cfg(feature = "wallet_hw")]
+    /// Interact with hardware signing devices.
+    Hardware(HardwareCommand),
     /// Manage encrypted wallet backups.
     Backup(BackupCommand),
     /// Manage watch-only wallet mode.
@@ -1710,6 +1825,8 @@ impl WalletCommand {
                 SendSubcommand::Broadcast(cmd) => cmd.execute().await,
                 SendSubcommand::BroadcastRaw(cmd) => cmd.execute().await,
             },
+            #[cfg(feature = "wallet_hw")]
+            WalletCommand::Hardware(cmd) => cmd.execute().await,
             WalletCommand::Backup(BackupCommand { command }) => match command {
                 BackupSubcommand::Export(cmd) => cmd.execute().await,
                 BackupSubcommand::Validate(cmd) => cmd.execute().await,

@@ -799,6 +799,10 @@ pub enum WalletRpcMethod {
     JsonCreateTransaction,
     /// JSON-RPC: `sign_tx`.
     JsonSignTransaction,
+    /// JSON-RPC: `hw.enumerate`.
+    JsonHwEnumerate,
+    /// JSON-RPC: `hw.sign`.
+    JsonHwSign,
     /// JSON-RPC: `broadcast`.
     JsonBroadcast,
     /// JSON-RPC: `policy_preview`.
@@ -897,6 +901,8 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonDeriveAddress => "json_derive_address",
             Self::JsonCreateTransaction => "json_create_transaction",
             Self::JsonSignTransaction => "json_sign_transaction",
+            Self::JsonHwEnumerate => "json_hw_enumerate",
+            Self::JsonHwSign => "json_hw_sign",
             Self::JsonBroadcast => "json_broadcast",
             Self::JsonPolicyPreview => "json_policy_preview",
             Self::JsonGetPolicy => "json_get_policy",

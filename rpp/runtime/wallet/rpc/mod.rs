@@ -473,6 +473,18 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         ROLES_OPERATOR,
     ),
     (
+        "hw.enumerate",
+        WalletRpcMethod::JsonHwEnumerate,
+        Some(30),
+        ROLES_OPERATOR,
+    ),
+    (
+        "hw.sign",
+        WalletRpcMethod::JsonHwSign,
+        Some(20),
+        ROLES_OPERATOR,
+    ),
+    (
         "broadcast",
         WalletRpcMethod::JsonBroadcast,
         Some(20),

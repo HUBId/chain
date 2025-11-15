@@ -13,24 +13,25 @@ use dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
     BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
     BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastRawParams, BroadcastRawResponse,
-    BroadcastResponse, CosignerDto, CreateTxParams, CreateTxResponse, DeriveAddressParams,
-    DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto, EmptyParams,
-    EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetCosignersResponse,
-    GetMultisigScopeResponse, GetPolicyResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-    ListPendingLocksResponse, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
-    MultisigDraftMetadataDto, MultisigExportParams, MultisigExportResponse, MultisigScopeDto,
-    PendingLockDto, PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams,
-    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
-    SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
-    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse, ZsiArtifactDto, ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse,
-    ZsiListResponse, ZsiProofParams, ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse,
-    JSONRPC_VERSION,
+    BroadcastResponse, CosignerDto, CreateTxParams, CreateTxResponse, DerivationPathDto,
+    DeriveAddressParams, DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto,
+    EmptyParams, EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto,
+    GetCosignersResponse, GetMultisigScopeResponse, GetPolicyResponse, HardwareDeviceDto,
+    HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse, JsonRpcError,
+    JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse, ListTransactionsResponse,
+    ListUtxosResponse, MempoolInfoResponse, MultisigDraftMetadataDto, MultisigExportParams,
+    MultisigExportResponse, MultisigScopeDto, PendingLockDto, PolicyPreviewResponse,
+    PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetCosignersParams,
+    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
+    SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto, SyncModeDto,
+    SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
+    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiArtifactDto,
+    ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
+    ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
 use error::WalletRpcErrorCode;
-use hex::encode as hex_encode;
+use hex::{decode as hex_decode, encode as hex_encode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -45,6 +46,8 @@ use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
     SelectionError, SpendModel, WalletBalance,
 };
+#[cfg(feature = "wallet_hw")]
+use crate::hw::{HardwareDevice, HardwareSignRequest, HardwareSignature, HardwareSignerError};
 use crate::indexer::scanner::{SyncMode, SyncStatus};
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
@@ -199,6 +202,16 @@ impl WalletRpcRouter {
             "sign_tx" => {
                 let params: SignTxParams = parse_params(params)?;
                 self.sign_draft(params.draft_id)
+            }
+            #[cfg(feature = "wallet_hw")]
+            "hw.enumerate" => {
+                parse_params::<EmptyParams>(params)?;
+                self.hw_enumerate()
+            }
+            #[cfg(feature = "wallet_hw")]
+            "hw.sign" => {
+                let params: HardwareSignParams = parse_params(params)?;
+                self.hw_sign(params)
             }
             "broadcast" => {
                 let params: BroadcastParams = parse_params(params)?;
@@ -387,6 +400,28 @@ impl WalletRpcRouter {
         let bundle = self.wallet_call(self.wallet.create_draft(to, amount, fee_rate))?;
         let draft_id = self.store_draft(bundle.clone())?;
         self.respond_draft(&draft_id, &bundle)
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hw_enumerate(&self) -> Result<Value, RouterError> {
+        let devices = self.wallet.hardware_devices()?;
+        let devices = devices.into_iter().map(hardware_device_to_dto).collect();
+        to_value(HardwareEnumerateResponse { devices })
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hw_sign(&self, params: HardwareSignParams) -> Result<Value, RouterError> {
+        let payload = hex_decode(&params.payload)
+            .map_err(|err| RouterError::InvalidParams(format!("invalid payload hex: {err}")))?;
+        let path = dto_to_derivation_path(params.path);
+        let request = HardwareSignRequest::new(params.fingerprint.clone(), path.clone(), payload);
+        let signature = self.wallet.hardware_sign(request)?;
+        to_value(HardwareSignResponse {
+            fingerprint: signature.fingerprint,
+            signature: hex_encode(signature.signature),
+            public_key: hex_encode(signature.public_key),
+            path: derivation_path_to_dto(&signature.path),
+        })
     }
 
     fn respond_draft(&self, draft_id: &str, bundle: &DraftBundle) -> Result<Value, RouterError> {
@@ -957,6 +992,33 @@ fn zsi_artifact_to_dto(artifact: StoredZsiArtifact<'static>) -> ZsiArtifactDto {
     }
 }
 
+#[cfg(feature = "wallet_hw")]
+fn hardware_device_to_dto(device: HardwareDevice) -> HardwareDeviceDto {
+    HardwareDeviceDto {
+        fingerprint: device.fingerprint,
+        model: device.model,
+        label: device.label,
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+fn derivation_path_to_dto(path: &DerivationPath) -> DerivationPathDto {
+    DerivationPathDto {
+        account: path.account,
+        change: path.change,
+        index: path.index,
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+fn dto_to_derivation_path(dto: DerivationPathDto) -> DerivationPath {
+    DerivationPath {
+        account: dto.account,
+        change: dto.change,
+        index: dto.index,
+    }
+}
+
 fn watch_only_record_from_params(params: WatchOnlyEnableParams) -> WatchOnlyRecord {
     let mut record = WatchOnlyRecord::new(params.external_descriptor);
     if let Some(internal) = params.internal_descriptor {
@@ -981,6 +1043,54 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             Some(json!({ "kind": "multisig" })),
         ),
         WalletError::Zsi(zsi) => zsi_error_to_json(zsi),
+        #[cfg(feature = "wallet_hw")]
+        WalletError::Hardware(err) => hardware_error_to_json(err),
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareUnavailable => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            "hardware signer not configured",
+            None,
+        ),
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareStatePoisoned => json_error(
+            WalletRpcErrorCode::StatePoisoned,
+            "hardware signer state unavailable",
+            None,
+        ),
+    }
+}
+
+#[cfg(feature = "wallet_hw")]
+fn hardware_error_to_json(error: &HardwareSignerError) -> JsonRpcError {
+    match error {
+        HardwareSignerError::DeviceNotFound { fingerprint } => json_error(
+            WalletRpcErrorCode::InvalidParams,
+            format!("hardware device `{fingerprint}` not found"),
+            Some(json!({ "fingerprint": fingerprint })),
+        ),
+        HardwareSignerError::PathUnsupported { fingerprint, path } => json_error(
+            WalletRpcErrorCode::InvalidParams,
+            format!("hardware device `{fingerprint}` does not support derivation path {path}"),
+            Some(json!({
+                "fingerprint": fingerprint,
+                "path": {
+                    "account": path.account,
+                    "change": path.change,
+                    "index": path.index,
+                }
+            })),
+        ),
+        HardwareSignerError::Rejected { reason } => json_error(
+            WalletRpcErrorCode::Custom("HW_REJECTED".into()),
+            reason.clone(),
+            None,
+        ),
+        HardwareSignerError::Communication(reason) => {
+            json_error(WalletRpcErrorCode::EngineFailure, reason.clone(), None)
+        }
+        HardwareSignerError::Unsupported(reason) => {
+            json_error(WalletRpcErrorCode::InvalidRequest, reason.clone(), None)
+        }
     }
 }
 
@@ -1366,6 +1476,8 @@ fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
 #[cfg(test)]
 mod tests {
     use super::dto::WatchOnlyStatusResponse;
+    #[cfg(feature = "wallet_hw")]
+    use super::dto::{HardwareEnumerateResponse, HardwareSignResponse};
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{
@@ -1373,7 +1485,11 @@ mod tests {
     };
     use crate::db::UtxoOutpoint;
     use crate::db::WalletStore;
+    #[cfg(feature = "wallet_hw")]
+    use crate::engine::DerivationPath;
     use crate::engine::{DraftInput, DraftOutput, SpendModel};
+    #[cfg(feature = "wallet_hw")]
+    use crate::hw::{HardwareDevice, HardwareSignature, HardwareSignerError, MockHardwareSigner};
     use crate::indexer::scanner::SyncCheckpoints;
     use crate::node_client::{
         BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
@@ -1411,6 +1527,35 @@ mod tests {
         let (router, _store, dir) = router_fixture(sync);
         let _persist = dir.into_path();
         router
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_router() -> (WalletRpcRouter, MockHardwareSigner, tempfile::TempDir) {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [9u8; 32],
+            },
+            WalletPolicyConfig::default(),
+            WalletFeeConfig::default(),
+            WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            Arc::new(StubNodeClient::default()),
+            WalletPaths::new(keystore, backup),
+        )
+        .expect("wallet");
+        let signer = MockHardwareSigner::new(vec![
+            HardwareDevice::new("deadbeef", "TestSigner").with_label("Primary")
+        ]);
+        wallet
+            .configure_hardware_signer(Some(Arc::new(signer.clone())))
+            .expect("configure signer");
+        (WalletRpcRouter::new(Arc::new(wallet), None), signer, dir)
     }
 
     fn build_watch_only_router() -> WalletRpcRouter {
@@ -1889,5 +2034,78 @@ mod tests {
             vec!["Increase the fee rate to at least 25 sats/vB and retry.".to_string()]
         );
         let _persist = dir.into_path();
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hw_enumerate_lists_devices() {
+        let (router, _signer, _dir) = hardware_router();
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "hw.enumerate".to_string(),
+            params: None,
+        };
+        let response = router.handle(request);
+        assert!(response.error.is_none());
+        let result = response.result.expect("result");
+        let enumerate: HardwareEnumerateResponse = serde_json::from_value(result).expect("decode");
+        assert_eq!(enumerate.devices.len(), 1);
+        assert_eq!(enumerate.devices[0].fingerprint, "deadbeef");
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hw_sign_produces_signature() {
+        let (router, signer, _dir) = hardware_router();
+        signer.push_sign_response(Ok(HardwareSignature::new(
+            "deadbeef",
+            DerivationPath::new(0, false, 1),
+            [0x11u8; 64],
+            [0x22u8; 33],
+        )));
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "hw.sign".to_string(),
+            params: Some(json!({
+                "fingerprint": "deadbeef",
+                "path": { "account": 0, "change": false, "index": 1 },
+                "payload": hex_encode([0xAAu8; 32]),
+            })),
+        };
+        let response = router.handle(request);
+        assert!(response.error.is_none());
+        let result = response.result.expect("result");
+        let sign: HardwareSignResponse = serde_json::from_value(result).expect("decode");
+        assert_eq!(sign.fingerprint, "deadbeef");
+        assert_eq!(sign.signature, hex_encode([0x11u8; 64]));
+        assert_eq!(sign.public_key, hex_encode([0x22u8; 33]));
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hw_sign_rejection_returns_error() {
+        let (router, signer, _dir) = hardware_router();
+        signer.push_sign_response(Err(HardwareSignerError::rejected("user cancelled")));
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "hw.sign".to_string(),
+            params: Some(json!({
+                "fingerprint": "deadbeef",
+                "path": { "account": 0, "change": false, "index": 0 },
+                "payload": hex_encode([0x55u8; 16]),
+            })),
+        };
+        let response = router.handle(request);
+        let error = response.error.expect("error");
+        assert_eq!(
+            error.code,
+            WalletRpcErrorCode::Custom("HW_REJECTED".into()).as_i32()
+        );
+        assert_eq!(error.message, "user cancelled");
+        let data = error.data.expect("data");
+        assert_eq!(data["code"], json!("HW_REJECTED"));
     }
 }

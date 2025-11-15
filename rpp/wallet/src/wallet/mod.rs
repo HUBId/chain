@@ -14,7 +14,13 @@ use crate::engine::signing::{
     build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
 };
 use crate::engine::{
-    DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel, WalletBalance, WalletEngine,
+    DerivationPath, DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel,
+    WalletBalance, WalletEngine,
+};
+#[cfg(feature = "wallet_hw")]
+use crate::hw::{
+    HardwareDevice, HardwarePublicKey, HardwareSignRequest, HardwareSignature, HardwareSigner,
+    HardwareSignerError,
 };
 use crate::indexer::IndexerClient;
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
@@ -51,6 +57,15 @@ pub enum WalletError {
     Multisig(#[from] MultisigError),
     #[error("zsi error: {0}")]
     Zsi(#[from] ZsiError),
+    #[cfg(feature = "wallet_hw")]
+    #[error("hardware signer error: {0}")]
+    Hardware(#[from] HardwareSignerError),
+    #[cfg(feature = "wallet_hw")]
+    #[error("hardware signer not configured")]
+    HardwareUnavailable,
+    #[cfg(feature = "wallet_hw")]
+    #[error("hardware signer state unavailable")]
+    HardwareStatePoisoned,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -515,6 +530,56 @@ impl Wallet {
         self.engine.fee_estimator().last_quote()
     }
 
+    #[cfg(feature = "wallet_hw")]
+    pub fn configure_hardware_signer(
+        &self,
+        signer: Option<Arc<dyn HardwareSigner>>,
+    ) -> Result<(), WalletError> {
+        self.engine
+            .set_hardware_signer(signer)
+            .map_err(|_| WalletError::HardwareStatePoisoned)
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_backend(&self) -> Result<Arc<dyn HardwareSigner>, WalletError> {
+        match self
+            .engine
+            .hardware_signer()
+            .map_err(|_| WalletError::HardwareStatePoisoned)?
+        {
+            Some(signer) => Ok(signer),
+            None => Err(WalletError::HardwareUnavailable),
+        }
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn hardware_devices(&self) -> Result<Vec<HardwareDevice>, WalletError> {
+        let backend = self.hardware_backend()?;
+        backend.enumerate().map_err(WalletError::from)
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn hardware_public_key(
+        &self,
+        fingerprint: &str,
+        path: &DerivationPath,
+    ) -> Result<HardwarePublicKey, WalletError> {
+        let backend = self.hardware_backend()?;
+        backend
+            .get_public_key(fingerprint, path)
+            .map_err(WalletError::from)
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    pub fn hardware_sign(
+        &self,
+        request: HardwareSignRequest,
+    ) -> Result<HardwareSignature, WalletError> {
+        self.ensure_signing_allowed()?;
+        let backend = self.hardware_backend()?;
+        backend.sign(&request).map_err(WalletError::from)
+    }
+
     fn zsi_backend(&self) -> Result<Arc<dyn ProofBackend>, WalletError> {
         self.zsi.backend().map_err(WalletError::from)
     }
@@ -728,7 +793,9 @@ mod tests {
     use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverConfig};
     use crate::db::{UtxoOutpoint, UtxoRecord};
     use crate::engine::signing::ProverError;
-    use crate::engine::WalletEngine;
+    use crate::engine::{DerivationPath, WalletEngine};
+    #[cfg(feature = "wallet_hw")]
+    use crate::hw::{HardwareDevice, HardwareSignRequest, HardwareSignature, MockHardwareSigner};
     use crate::modes::watch_only::WatchOnlyRecord;
     use crate::multisig::{
         store_cosigner_registry, store_scope, Cosigner, CosignerRegistry, MultisigError,
@@ -806,6 +873,43 @@ mod tests {
 
     fn sample_wallet_configs() -> (WalletPolicyConfig, WalletFeeConfig) {
         (WalletPolicyConfig::default(), WalletFeeConfig::default())
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_wallet() -> (Wallet, MockHardwareSigner, tempfile::TempDir) {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        let mut batch = store.batch().expect("batch");
+        let outpoint = UtxoOutpoint::new([1u8; 32], 0);
+        let record = UtxoRecord::new(outpoint.clone(), 42_000, "owner".to_string(), None);
+        batch.put_utxo(&outpoint, &record).expect("seed utxo");
+        batch.commit().expect("commit utxo");
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let keystore = tempdir.path().join("keystore.toml");
+        let backup = tempdir.path().join("backups");
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [42u8; 32],
+            },
+            policy,
+            fees,
+            WalletProverConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            node_client,
+            WalletPaths::new(keystore, backup),
+        )
+        .expect("wallet");
+        let signer = MockHardwareSigner::new(vec![
+            HardwareDevice::new("a1b2", "TestSigner").with_label("Primary"),
+            HardwareDevice::new("c3d4", "TestSigner"),
+        ]);
+        wallet
+            .configure_hardware_signer(Some(Arc::new(signer.clone())))
+            .expect("configure signer");
+        (wallet, signer, tempdir)
     }
 
     fn build_wallet_with_prover(
@@ -1224,5 +1328,56 @@ mod tests {
         ));
         assert!(wallet.pending_locks().expect("locks after").is_empty());
         drop(tempdir);
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hardware_enumeration_returns_devices() {
+        let (wallet, signer, _dir) = hardware_wallet();
+        let devices = wallet.hardware_devices().expect("devices");
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].fingerprint, "a1b2");
+        assert_eq!(devices[0].label.as_deref(), Some("Primary"));
+        assert_eq!(devices[1].fingerprint, "c3d4");
+        assert!(signer
+            .enumerate()
+            .expect("mock enumerate")
+            .iter()
+            .any(|device| device.fingerprint == "a1b2"));
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hardware_signing_forwards_requests() {
+        let (wallet, signer, _dir) = hardware_wallet();
+        let path = DerivationPath::new(0, false, 7);
+        signer.push_sign_response(Ok(HardwareSignature::new(
+            "a1b2",
+            path.clone(),
+            [9u8; 64],
+            [8u8; 33],
+        )));
+        let request = HardwareSignRequest::new("a1b2", path.clone(), [1u8; 32]);
+        let signature = wallet.hardware_sign(request.clone()).expect("signature");
+        assert_eq!(signature.signature, vec![9u8; 64]);
+        assert_eq!(signature.public_key, vec![8u8; 33]);
+        let recorded = signer.last_sign_request().expect("recorded request");
+        assert_eq!(recorded.fingerprint, request.fingerprint);
+        assert_eq!(recorded.path, request.path);
+        assert_eq!(recorded.payload, request.payload);
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hardware_signing_propagates_rejection() {
+        let (wallet, signer, _dir) = hardware_wallet();
+        let path = DerivationPath::new(0, false, 0);
+        signer.push_sign_response(Err(HardwareSignerError::rejected("user cancelled")));
+        let request = HardwareSignRequest::new("a1b2", path, [2u8; 16]);
+        let err = wallet.hardware_sign(request).expect_err("rejection");
+        assert!(matches!(
+            err,
+            WalletError::Hardware(HardwareSignerError::Rejected { .. })
+        ));
     }
 }
