@@ -1,7 +1,9 @@
 use clap::{Args, Subcommand};
 use prover_backend_interface::{BackendResult, ProofBackend};
 
+use super::telemetry::{self, ZsiAction};
 use crate::proof_backend::Blake2sHasher;
+use crate::telemetry::TelemetryOutcome;
 use crate::wallet::{ZsiProofRequest, ZsiVerifyRequest};
 use crate::zsi::{
     ConsensusApproval, LifecycleReceipt, RevokeRequest, RotateRequest, ZsiLifecycle, ZsiOperation,
@@ -201,6 +203,7 @@ impl ZsiWalletVerifyArgs {
 }
 
 pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<LifecycleReceipt> {
+    telemetry::configure(None, None);
     let lifecycle = ZsiLifecycle::new(backend);
     match cli.command {
         ZsiSubcommand::Issue {
@@ -208,12 +211,16 @@ pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<Lifecy
             genesis_id,
             attestation,
             approvals,
-        } => lifecycle.issue(ZsiRequest {
-            identity,
-            genesis_id,
-            attestation,
-            approvals,
-        }),
+        } => {
+            let result = lifecycle.issue(ZsiRequest {
+                identity,
+                genesis_id,
+                attestation,
+                approvals,
+            });
+            record_outcome(ZsiAction::Issue, &result);
+            result
+        }
         ZsiSubcommand::Rotate {
             identity,
             previous_genesis,
@@ -228,22 +235,28 @@ pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<Lifecy
                 attestation_digest: digest(&previous_attestation),
                 approvals: approvals.clone(),
             };
-            lifecycle.rotate(RotateRequest {
+            let result = lifecycle.rotate(RotateRequest {
                 previous,
                 next_genesis_id: next_genesis,
                 attestation,
                 approvals,
-            })
+            });
+            record_outcome(ZsiAction::Rotate, &result);
+            result
         }
         ZsiSubcommand::Revoke {
             identity,
             reason,
             attestation,
-        } => lifecycle.revoke(RevokeRequest {
-            identity,
-            reason,
-            attestation,
-        }),
+        } => {
+            let result = lifecycle.revoke(RevokeRequest {
+                identity,
+                reason,
+                attestation,
+            });
+            record_outcome(ZsiAction::Revoke, &result);
+            result
+        }
         ZsiSubcommand::Audit {
             identity,
             genesis_id,
@@ -256,7 +269,16 @@ pub fn execute<B: ProofBackend>(backend: B, cli: ZsiCli) -> BackendResult<Lifecy
                 attestation_digest: digest(&attestation),
                 approvals,
             };
-            lifecycle.audit(record)
+            let result = lifecycle.audit(record);
+            record_outcome(ZsiAction::Audit, &result);
+            result
         }
+    }
+}
+
+fn record_outcome<T>(action: ZsiAction, result: &BackendResult<T>) {
+    match result {
+        Ok(_) => telemetry::global().record_zsi_outcome(action, TelemetryOutcome::Success),
+        Err(_) => telemetry::global().record_zsi_outcome(action, TelemetryOutcome::Error),
     }
 }

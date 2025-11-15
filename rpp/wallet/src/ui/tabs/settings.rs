@@ -14,10 +14,11 @@ use crate::rpc::dto::{
 };
 use crate::rpc::error::WalletRpcErrorCode;
 
+use crate::telemetry::TelemetryOutcome;
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::components::modal;
 use crate::ui::preferences::{Preferences, ThemePreference};
-use crate::ui::telemetry;
+use crate::ui::telemetry::{self, BackupAction, SecurityAction, WatchOnlyAction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Snapshot<T> {
@@ -705,7 +706,11 @@ impl State {
             }
             Message::SubmitWatchOnlyEnable => self.submit_watch_only_enable(client),
             Message::WatchOnlyEnabled(result) => {
-                self.apply_watch_only_update(result, "Watch-only mode enabled. Restart required.");
+                self.apply_watch_only_update(
+                    result,
+                    "Watch-only mode enabled. Restart required.",
+                    WatchOnlyAction::Enable,
+                );
                 Command::none()
             }
             Message::ConfirmWatchOnlyDisable => {
@@ -720,7 +725,11 @@ impl State {
             }
             Message::SubmitWatchOnlyDisable => self.submit_watch_only_disable(client),
             Message::WatchOnlyDisabled(result) => {
-                self.apply_watch_only_update(result, "Watch-only mode disabled. Restart required.");
+                self.apply_watch_only_update(
+                    result,
+                    "Watch-only mode disabled. Restart required.",
+                    WatchOnlyAction::Disable,
+                );
                 Command::none()
             }
             Message::DismissWatchOnlyFeedback => {
@@ -759,7 +768,11 @@ impl State {
             }
             Message::SubmitSecurityAssign => self.submit_security_assign(client),
             Message::SecurityAssigned(result) => {
-                self.apply_security_update(result, "RBAC assignment updated.");
+                self.apply_security_update(
+                    result,
+                    "RBAC assignment updated.",
+                    SecurityAction::Assign,
+                );
                 Command::none()
             }
             Message::RequestSecurityRemove(identity) => {
@@ -772,7 +785,11 @@ impl State {
             }
             Message::ConfirmSecurityRemove => self.submit_security_remove(client),
             Message::SecurityRemoved(result) => {
-                self.apply_security_update(result, "RBAC assignment removed.");
+                self.apply_security_update(
+                    result,
+                    "RBAC assignment removed.",
+                    SecurityAction::Remove,
+                );
                 Command::none()
             }
             Message::ToggleMtls(enabled) => {
@@ -782,7 +799,11 @@ impl State {
                 self.submit_security_toggle_mtls(client, enabled)
             }
             Message::MtlsToggled(result) => {
-                self.apply_security_update(result, "mTLS configuration updated.");
+                self.apply_security_update(
+                    result,
+                    "mTLS configuration updated.",
+                    SecurityAction::MtlsUpdate,
+                );
                 Command::none()
             }
             Message::ShowCertificateUpload => {
@@ -966,11 +987,15 @@ impl State {
     fn apply_watch_only_loaded(&mut self, result: Result<WatchOnlyStatusResponse, RpcCallError>) {
         match result {
             Ok(status) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Status, TelemetryOutcome::Success);
                 self.watch_only.set_loaded(status);
                 self.watch_only_error = None;
                 self.watch_only_restart_hint = false;
             }
             Err(error) => {
+                telemetry::global()
+                    .record_watch_only_outcome(WatchOnlyAction::Status, TelemetryOutcome::Error);
                 self.watch_only.set_error(&error);
             }
         }
@@ -980,10 +1005,14 @@ impl State {
     fn apply_security_loaded(&mut self, result: Result<SecuritySnapshotResponse, RpcCallError>) {
         match result {
             Ok(snapshot) => {
+                telemetry::global()
+                    .record_security_outcome(SecurityAction::Snapshot, TelemetryOutcome::Success);
                 self.security.set_loaded(snapshot);
                 self.security_error = None;
             }
             Err(error) => {
+                telemetry::global()
+                    .record_security_outcome(SecurityAction::Snapshot, TelemetryOutcome::Error);
                 self.security.set_error(&error);
             }
         }
@@ -1046,10 +1075,12 @@ impl State {
         &mut self,
         result: Result<WatchOnlyStatusResponse, RpcCallError>,
         success: &str,
+        action: WatchOnlyAction,
     ) {
         self.watch_only_inflight = false;
         match result {
             Ok(status) => {
+                telemetry::global().record_watch_only_outcome(action, TelemetryOutcome::Success);
                 self.watch_only.set_loaded(status);
                 self.watch_only_feedback = Some(success.into());
                 self.watch_only_restart_hint = true;
@@ -1057,6 +1088,7 @@ impl State {
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global().record_watch_only_outcome(action, TelemetryOutcome::Error);
                 let message = format_rpc_error(&error);
                 self.watch_only_error = Some(message.clone());
                 if let Some(Modal::WatchOnlyEnable(form)) = self.modal.as_mut() {
@@ -1182,16 +1214,19 @@ impl State {
         &mut self,
         result: Result<SecuritySnapshotResponse, RpcCallError>,
         feedback: &str,
+        action: SecurityAction,
     ) {
         self.security_inflight = false;
         match result {
             Ok(snapshot) => {
+                telemetry::global().record_security_outcome(action, TelemetryOutcome::Success);
                 self.security.set_loaded(snapshot);
                 self.security_feedback = Some(feedback.into());
                 self.security_error = None;
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global().record_security_outcome(action, TelemetryOutcome::Error);
                 self.security_error = Some(format_rpc_error(&error));
             }
         }
@@ -1204,6 +1239,10 @@ impl State {
         self.security_inflight = false;
         match result {
             Ok(response) => {
+                telemetry::global().record_security_outcome(
+                    SecurityAction::CertificateUpload,
+                    TelemetryOutcome::Success,
+                );
                 if response.stored {
                     self.security_feedback = Some(
                         "Certificate material uploaded. Restart the runtime to apply changes."
@@ -1216,6 +1255,10 @@ impl State {
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global().record_security_outcome(
+                    SecurityAction::CertificateUpload,
+                    TelemetryOutcome::Error,
+                );
                 self.security_error = Some(format_rpc_error(&error));
             }
         }
@@ -1367,6 +1410,8 @@ impl State {
         self.backup_pending_mode = None;
         match result {
             Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Export, TelemetryOutcome::Success);
                 self.backup_error = None;
                 self.backup_outcome = Some(BackupOutcome {
                     title: format!("Backup exported to {}", response.path),
@@ -1376,6 +1421,8 @@ impl State {
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Export, TelemetryOutcome::Error);
                 self.backup_error = Some(format_rpc_error(&error));
                 if let Some(Modal::BackupExport(form)) = self.modal.as_mut() {
                     form.passphrase.reset();
@@ -1437,6 +1484,8 @@ impl State {
         let mode = self.backup_pending_mode.take();
         match result {
             Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Validate, TelemetryOutcome::Success);
                 self.backup_error = None;
                 let mut details = Vec::new();
                 if let Some(mode) = mode {
@@ -1459,6 +1508,8 @@ impl State {
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Validate, TelemetryOutcome::Error);
                 self.backup_error = Some(format_rpc_error(&error));
                 if let Some(Modal::BackupValidate(form)) = self.modal.as_mut() {
                     form.clear_passphrase();
@@ -1514,6 +1565,8 @@ impl State {
         self.backup_pending_mode = None;
         match result {
             Ok(response) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Import, TelemetryOutcome::Success);
                 self.backup_error = None;
                 let details = vec![
                     format!(
@@ -1534,6 +1587,8 @@ impl State {
                 self.dismiss_modal();
             }
             Err(error) => {
+                telemetry::global()
+                    .record_backup_outcome(BackupAction::Import, TelemetryOutcome::Error);
                 self.backup_error = Some(format_rpc_error(&error));
                 if let Some(Modal::BackupImport(form)) = self.modal.as_mut() {
                     form.clear_passphrase();
