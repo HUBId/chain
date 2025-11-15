@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +41,27 @@ use crate::rpc::dto::{DerivationPathDto, HardwareSignParams};
 use crate::rpc::error::WalletRpcErrorCode;
 
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
+
+fn prompt_confirmation(prompt: &str) -> Result<bool, WalletCliError> {
+    print!("{prompt} [y/N]: ");
+    io::stdout()
+        .flush()
+        .map_err(|err| WalletCliError::Other(err.into()))?;
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|err| WalletCliError::Other(err.into()))?;
+    let decision = input.trim().to_ascii_lowercase();
+    Ok(matches!(decision.as_str(), "y" | "yes"))
+}
+
+fn require_confirmation(prompt: &str) -> Result<(), WalletCliError> {
+    if prompt_confirmation(prompt)? {
+        Ok(())
+    } else {
+        Err(WalletCliError::Other(anyhow!("operation aborted by user")))
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletCliError {
@@ -831,6 +853,9 @@ impl MultisigScopeCommand {
             MultisigScopeSubcommand::Set { scope } => {
                 let parsed = MultisigScope::parse(scope)
                     .map_err(|err| WalletCliError::Other(anyhow!(err)))?;
+                require_confirmation(
+                    "Update the multisig scope? Existing drafts may become invalid.",
+                )?;
                 let dto = MultisigScopeDto {
                     threshold: parsed.threshold(),
                     participants: parsed.participants(),
@@ -841,6 +866,7 @@ impl MultisigScopeCommand {
                 Ok(())
             }
             MultisigScopeSubcommand::Clear => {
+                require_confirmation("Clear the configured multisig scope?")?;
                 client.set_multisig_scope(None).await?;
                 println!("Cleared multisig scope");
                 Ok(())
@@ -883,6 +909,9 @@ impl MultisigCosignersCommand {
                     .iter()
                     .map(|value| parse_cosigner(value))
                     .collect::<Result<Vec<_>, _>>()?;
+                require_confirmation(
+                    "Replace the registered multisig cosigners with the provided list?",
+                )?;
                 let response = client.set_cosigners(&parsed).await?;
                 println!("Updated cosigner registry\n");
                 render_cosigners(&response.cosigners);
@@ -1293,6 +1322,9 @@ pub struct WatchOnlyEnableCommand {
 impl WatchOnlyEnableCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
+        require_confirmation(
+            "Enable watch-only mode? Signing and proving operations will be disabled.",
+        )?;
         let params = WatchOnlyEnableParams {
             external_descriptor: self.external_descriptor.clone(),
             internal_descriptor: self.internal_descriptor.clone(),
@@ -1315,6 +1347,7 @@ pub struct WatchOnlyDisableCommand {
 impl WatchOnlyDisableCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
+        require_confirmation("Disable watch-only mode and restore signing capabilities?")?;
         let status = client.watch_only_disable().await?;
         println!("Watch-only mode disabled\n");
         render_watch_only_status(&status);
@@ -1437,6 +1470,10 @@ pub struct BackupImportCommand {
 impl BackupImportCommand {
     pub async fn execute(&self) -> Result<(), WalletCliError> {
         let client = self.rpc.client()?;
+        require_confirmation(&format!(
+            "Import backup `{}` and overwrite local wallet state?",
+            self.name
+        ))?;
         let passphrase = Zeroizing::new(
             prompt_password("Enter backup passphrase: ")
                 .context("failed to read backup passphrase")?,
@@ -1648,6 +1685,10 @@ impl SecurityRemoveCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         let identity = self.identity.resolve()?;
         let (mut config, path) = load_wallet_security_config(context)?;
+        require_confirmation(&format!(
+            "Remove RBAC assignments for {}?",
+            format_identity(&identity)
+        ))?;
         let before = config.wallet.security.bindings.len();
         config
             .wallet
@@ -1696,6 +1737,13 @@ impl SecurityMtlsCommand {
         }
 
         let desired = self.enable;
+        if self.disable {
+            require_confirmation("Disable wallet runtime mTLS authentication for all clients?")?;
+        } else if self.enable {
+            require_confirmation(
+                "Enable wallet runtime mTLS authentication? Clients must present certificates.",
+            )?;
+        }
         config.wallet.security.mtls_enabled = desired;
         config
             .save(&path)

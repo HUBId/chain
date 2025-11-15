@@ -50,5 +50,23 @@ fn resolve_wallet_config_path(options: &RuntimeOptions) -> Option<PathBuf> {
 }
 
 fn report_cli_error(error: &WalletCliError) {
-    eprintln!("{error}");
+    match error {
+        WalletCliError::RpcError {
+            code,
+            friendly,
+            message,
+            json_code,
+            details,
+        } => {
+            let details_fragment = details
+                .as_ref()
+                .map(|value| format!(" details={value}"))
+                .unwrap_or_default();
+            eprintln!(
+                "wallet RPC error code={} json_code={} friendly={:?} message={:?}{}",
+                code, json_code, friendly, message, details_fragment
+            );
+        }
+        other => eprintln!("{other}"),
+    }
 }

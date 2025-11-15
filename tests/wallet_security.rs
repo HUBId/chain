@@ -32,6 +32,12 @@ use tempfile::tempdir;
 const VIEWER_METHOD: &str = "viewer.echo";
 const OPERATOR_METHOD: &str = "operator.echo";
 const ADMIN_METHOD: &str = "admin.echo";
+const BACKUP_IMPORT_METHOD: &str = "backup.import";
+const BACKUP_VALIDATE_METHOD: &str = "backup.validate";
+const WATCH_STATUS_METHOD: &str = "watch_only.status";
+const WATCH_ENABLE_METHOD: &str = "watch_only.enable";
+const MULTISIG_GET_SCOPE_METHOD: &str = "multisig.get_scope";
+const MULTISIG_SET_COSIGNERS_METHOD: &str = "multisig.set_cosigners";
 
 const ROLES_VIEWER: &[WalletRole] = &[WalletRole::Viewer, WalletRole::Operator, WalletRole::Admin];
 const ROLES_OPERATOR: &[WalletRole] = &[WalletRole::Operator, WalletRole::Admin];
@@ -204,22 +210,22 @@ fn viewer_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
 }
 
 fn operator_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
-    authenticated_handler(
-        StaticAuthenticator::new(None),
-        Arc::new(|invocation: RpcInvocation<'_, JsonRpcRequest>| {
-            JsonRpcResponse::success(
-                invocation.payload.id.clone(),
-                json!({ "method": invocation.payload.method }),
-            )
-        }),
+    success_handler(
         metrics,
         WalletRpcMethod::JsonCreateTransaction,
-        None,
         ROLES_OPERATOR,
     )
 }
 
 fn admin_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
+    success_handler(metrics, WalletRpcMethod::JsonSetPolicy, ROLES_ADMIN)
+}
+
+fn success_handler(
+    metrics: Arc<RuntimeMetrics>,
+    method: WalletRpcMethod,
+    roles: &'static [WalletRole],
+) -> TestHandler {
     authenticated_handler(
         StaticAuthenticator::new(None),
         Arc::new(|invocation: RpcInvocation<'_, JsonRpcRequest>| {
@@ -229,9 +235,9 @@ fn admin_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
             )
         }),
         metrics,
-        WalletRpcMethod::JsonSetPolicy,
+        method,
         None,
-        ROLES_ADMIN,
+        roles,
     )
 }
 
@@ -246,6 +252,54 @@ fn build_test_router(security: Arc<WalletSecurityContext>, metrics: Arc<RuntimeM
         operator_handler(Arc::clone(&metrics)),
     );
     handlers.insert(ADMIN_METHOD.to_string(), admin_handler(metrics));
+    handlers.insert(
+        BACKUP_IMPORT_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonBackupImport,
+            ROLES_ADMIN,
+        ),
+    );
+    handlers.insert(
+        BACKUP_VALIDATE_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonBackupValidate,
+            ROLES_OPERATOR,
+        ),
+    );
+    handlers.insert(
+        WATCH_STATUS_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonWatchOnlyStatus,
+            ROLES_VIEWER,
+        ),
+    );
+    handlers.insert(
+        WATCH_ENABLE_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonWatchOnlyEnable,
+            ROLES_ADMIN,
+        ),
+    );
+    handlers.insert(
+        MULTISIG_GET_SCOPE_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonMultisigGetScope,
+            ROLES_VIEWER,
+        ),
+    );
+    handlers.insert(
+        MULTISIG_SET_COSIGNERS_METHOD.to_string(),
+        success_handler(
+            Arc::clone(&metrics),
+            WalletRpcMethod::JsonMultisigSetCosigners,
+            ROLES_ADMIN,
+        ),
+    );
 
     let server = Arc::new(TestRpcServer { security, handlers });
 
@@ -458,6 +512,59 @@ async fn wallet_rpc_mtls_enforces_rbac() {
         operator_admin.json().await.expect("operator admin payload");
     let operator_error = operator_admin_payload.error.expect("operator error");
     assert_eq!(operator_error.code, -32062);
+
+    let backup_validate_viewer = send_request(&viewer_client, &base_url, BACKUP_VALIDATE_METHOD)
+        .await
+        .expect("viewer backup validate request");
+    assert_eq!(backup_validate_viewer.status(), StatusCode::FORBIDDEN);
+    let backup_validate_operator =
+        send_request(&operator_client, &base_url, BACKUP_VALIDATE_METHOD)
+            .await
+            .expect("operator backup validate request");
+    assert_eq!(backup_validate_operator.status(), StatusCode::OK);
+
+    let backup_import_operator = send_request(&operator_client, &base_url, BACKUP_IMPORT_METHOD)
+        .await
+        .expect("operator backup import request");
+    assert_eq!(backup_import_operator.status(), StatusCode::FORBIDDEN);
+    let backup_import_admin = send_request(&admin_client, &base_url, BACKUP_IMPORT_METHOD)
+        .await
+        .expect("admin backup import request");
+    assert_eq!(backup_import_admin.status(), StatusCode::OK);
+
+    let watch_status_viewer = send_request(&viewer_client, &base_url, WATCH_STATUS_METHOD)
+        .await
+        .expect("viewer watch status request");
+    assert_eq!(watch_status_viewer.status(), StatusCode::OK);
+
+    let watch_enable_operator = send_request(&operator_client, &base_url, WATCH_ENABLE_METHOD)
+        .await
+        .expect("operator watch enable request");
+    assert_eq!(watch_enable_operator.status(), StatusCode::FORBIDDEN);
+    let watch_enable_admin = send_request(&admin_client, &base_url, WATCH_ENABLE_METHOD)
+        .await
+        .expect("admin watch enable request");
+    assert_eq!(watch_enable_admin.status(), StatusCode::OK);
+
+    let multisig_get_scope_viewer =
+        send_request(&viewer_client, &base_url, MULTISIG_GET_SCOPE_METHOD)
+            .await
+            .expect("viewer multisig get scope request");
+    assert_eq!(multisig_get_scope_viewer.status(), StatusCode::OK);
+
+    let multisig_set_cosigners_operator =
+        send_request(&operator_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
+            .await
+            .expect("operator multisig set cosigners request");
+    assert_eq!(
+        multisig_set_cosigners_operator.status(),
+        StatusCode::FORBIDDEN
+    );
+    let multisig_set_cosigners_admin =
+        send_request(&admin_client, &base_url, MULTISIG_SET_COSIGNERS_METHOD)
+            .await
+            .expect("admin multisig set cosigners request");
+    assert_eq!(multisig_set_cosigners_admin.status(), StatusCode::OK);
 
     let admin_response = send_request(&admin_client, &base_url, ADMIN_METHOD)
         .await
