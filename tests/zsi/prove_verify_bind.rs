@@ -1,4 +1,4 @@
-#![cfg(feature = "wallet_zsi")]
+#![cfg(all(feature = "wallet-integration", feature = "wallet_zsi"))]
 
 //! These tests require the `wallet_zsi` feature. Enable with `--features wallet_zsi`.
 
@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use prover_mock_backend::MockBackend;
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
+
 use rpp_wallet::config::wallet::{
     WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };

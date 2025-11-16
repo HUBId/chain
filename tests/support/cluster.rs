@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{BufRead, BufReader, Read};
