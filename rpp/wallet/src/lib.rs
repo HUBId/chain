@@ -96,4 +96,4 @@ pub use engine::{
     DerivationPath, DraftBundle, DraftInput, DraftOutput, DraftTransaction, SpendModel,
     WalletBalance, WalletEngine,
 };
-pub use node_client::{ChainHead, NodeClient, NodeClientError, StubNodeClient};
+pub use node_client::*;

@@ -19,8 +19,8 @@ use tracing::{debug, info, warn};
 use crate::errors::{ChainError, ChainResult};
 use crate::runtime::config::WalletRpcSecurityCaFingerprint;
 use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
-use crate::wallet::wallet::Wallet;
-use rpp_wallet::node_client::NodeClient;
+pub use rpp_wallet_interface::WalletService;
+use rpp_wallet_interface::{NodeClient, WalletService, WalletServiceError};
 
 #[cfg(feature = "wallet_rpc_mtls")]
 use super::rpc::WalletClientCertificates;
@@ -58,25 +58,6 @@ use rustls::{RootCertStore, ServerConfig};
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
 #[cfg(feature = "wallet_rpc_mtls")]
 use tokio_rustls::TlsAcceptor;
-
-/// Trait implemented by types that expose wallet functionality to the runtime.
-pub trait WalletService: Send + Sync {
-    fn address(&self) -> String;
-
-    fn attach_node_client(&self, _client: Arc<dyn NodeClient>) -> ChainResult<()> {
-        Ok(())
-    }
-}
-
-impl WalletService for Wallet {
-    fn address(&self) -> String {
-        self.address().to_string()
-    }
-
-    fn attach_node_client(&self, _client: Arc<dyn NodeClient>) -> ChainResult<()> {
-        Ok(())
-    }
-}
 
 /// Connector responsible for wiring the wallet runtime to a node handle or proxy.
 pub trait NodeConnector<W: WalletService + ?Sized>: Send + Sync {
@@ -644,7 +625,9 @@ impl WalletRuntime {
         let attached_to_node = if let Some(connector) = connector {
             let attachment = connector.attach(wallet.as_ref())?;
             if let Some(node_client) = attachment.node_client() {
-                wallet.attach_node_client(node_client)?;
+                wallet
+                    .attach_node_client(node_client)
+                    .map_err(|err| wallet_service_error(err))?;
             }
             true
         } else {
@@ -681,6 +664,10 @@ fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
         Ok(value) => value,
         Err(err) => match err {},
     }
+}
+
+fn wallet_service_error(err: WalletServiceError) -> ChainError {
+    ChainError::Config(format!("wallet service error: {err}"))
 }
 
 async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {

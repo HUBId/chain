@@ -30,16 +30,17 @@ use crate::multisig::{
     clear_cosigner_registry, clear_scope, load_cosigner_registry, load_scope,
     store_cosigner_registry, store_scope, CosignerRegistry, MultisigError, MultisigScope,
 };
+use crate::node_client::MempoolStatus;
 use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::{
     Blake2sHasher, IdentityPublicInputs, ProofBackend, ProofBytes, WitnessBytes,
 };
-use crate::runtime::node::MempoolStatus;
 use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
 #[cfg(feature = "wallet_zsi")]
 use crate::zsi::ZsiBinder;
 use crate::zsi::{self, LifecycleProof, ZsiOperation, ZsiRecord};
 use prover_backend_interface::BackendError as ZsiBackendError;
+use rpp_wallet_interface::{WalletService, WalletServiceResult};
 use serde::{Deserialize, Serialize};
 
 mod runtime;
@@ -521,7 +522,8 @@ impl Wallet {
     pub fn broadcast(&self, draft: &DraftTransaction) -> Result<(), WalletError> {
         self.ensure_broadcast_allowed()?;
         let txid = lock_fingerprint(draft);
-        match self.node_client.submit_tx(draft) {
+        let submission = crate::node_client::submission_from_draft(draft);
+        match self.node_client.submit_tx(&submission) {
             Ok(()) => {
                 self.engine.release_locks_by_txid(&txid)?;
                 Ok(())
@@ -923,6 +925,16 @@ fn map_zsi_error(error: ZsiBackendError) -> WalletError {
     }
 }
 
+impl WalletService for Wallet {
+    fn address(&self) -> String {
+        self.address().to_string()
+    }
+
+    fn attach_node_client(&self, _client: Arc<dyn NodeClient>) -> WalletServiceResult<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,7 +944,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::config::wallet::{WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig};
+    use crate::config::wallet::{
+        WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig,
+    };
     use crate::db::{UtxoOutpoint, UtxoRecord};
     use crate::engine::signing::ProverError;
     use crate::engine::{DerivationPath, WalletEngine};

@@ -8,10 +8,12 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod node_client;
 pub mod rpc;
 pub mod telemetry;
 pub mod workflows;
 
+pub use node_client::*;
 pub use rpc::*;
 pub use telemetry::*;
 pub use workflows::*;

@@ -13,8 +13,6 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
-use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp::runtime::wallet::{
     json_rpc_router, DeterministicSync, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle,
@@ -33,7 +31,8 @@ use rpp_wallet::indexer::client::{
     TransactionPayload, TxOutpoint,
 };
 use rpp_wallet::node_client::{
-    BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientResult,
+    BlockFeeSummary, ChainHead, MempoolInfo, MempoolStatus, NodeClient, NodeClientResult,
+    QueueWeightsConfig, TransactionSubmission,
 };
 use rpp_wallet::rpc::dto::{
     BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
@@ -817,7 +816,7 @@ impl IndexerClient for TestIndexer {
 
 #[derive(Default)]
 struct RecordingNodeClient {
-    submissions: Mutex<Vec<DraftTransaction>>,
+    submissions: Mutex<Vec<TransactionSubmission>>,
     raw_submissions: Mutex<Vec<Vec<u8>>>,
     fee_rate: u64,
     mempool_info: MempoolInfo,
@@ -830,13 +829,17 @@ impl RecordingNodeClient {
     }
 
     fn last_submission(&self) -> Option<DraftTransaction> {
-        self.submissions.lock().unwrap().last().cloned()
+        self.submissions
+            .lock()
+            .unwrap()
+            .last()
+            .map(DraftTransaction::from)
     }
 }
 
 impl NodeClient for RecordingNodeClient {
-    fn submit_tx(&self, draft: &DraftTransaction) -> NodeClientResult<()> {
-        self.submissions.lock().unwrap().push(draft.clone());
+    fn submit_tx(&self, submission: &TransactionSubmission) -> NodeClientResult<()> {
+        self.submissions.lock().unwrap().push(submission.clone());
         Ok(())
     }
 

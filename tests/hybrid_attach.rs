@@ -9,6 +9,7 @@ use rpp_chain::runtime::wallet::runtime::{
 };
 use rpp_chain::runtime::wallet::sync::DeterministicSync;
 use rpp_wallet::node_client::{NodeClient, StubNodeClient};
+use rpp_wallet_interface::WalletServiceResult;
 use tokio::sync::watch;
 
 #[derive(Clone)]
@@ -22,7 +23,7 @@ impl WalletService for TestWallet {
         self.address.clone()
     }
 
-    fn attach_node_client(&self, _client: Arc<dyn NodeClient>) -> ChainResult<()> {
+    fn attach_node_client(&self, _client: Arc<dyn NodeClient>) -> WalletServiceResult<()> {
         self.node_client_attached.store(true, Ordering::SeqCst);
         Ok(())
     }
