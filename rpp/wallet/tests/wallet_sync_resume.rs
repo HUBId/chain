@@ -9,13 +9,10 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
 
-use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::MempoolStatus;
 use rpp_wallet::config::wallet::{
     WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
 };
 use rpp_wallet::db::WalletStore;
-use rpp_wallet::engine::DraftTransaction;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
 use rpp_wallet::indexer::client::{
     GetHeadersRequest, GetHeadersResponse, GetScripthashStatusRequest, GetScripthashStatusResponse,
@@ -23,7 +20,10 @@ use rpp_wallet::indexer::client::{
     IndexerClientError, ListScripthashUtxosRequest, ListScripthashUtxosResponse,
     TransactionPayload, TxOutpoint,
 };
-use rpp_wallet::node_client::{ChainHead, NodeClient, NodeClientResult};
+use rpp_wallet::node_client::{
+    ChainHead, MempoolStatus, NodeClient, NodeClientResult, QueueWeightsConfig,
+    TransactionSubmission,
+};
 use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletPaths};
 
@@ -370,7 +370,7 @@ impl IndexerClient for TestIndexer {
 struct TestNodeClient;
 
 impl NodeClient for TestNodeClient {
-    fn submit_tx(&self, _draft: &DraftTransaction) -> NodeClientResult<()> {
+    fn submit_tx(&self, _submission: &TransactionSubmission) -> NodeClientResult<()> {
         Ok(())
     }
 

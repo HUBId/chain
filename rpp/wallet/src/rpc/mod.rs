@@ -2267,7 +2267,10 @@ mod tests {
     }
 
     impl NodeClient for RejectingNodeClient {
-        fn submit_tx(&self, _draft: &DraftTransaction) -> NodeClientResult<()> {
+        fn submit_tx(
+            &self,
+            _submission: &crate::node_client::TransactionSubmission,
+        ) -> NodeClientResult<()> {
             Err(NodeClientError::rejected_with_hint(
                 "mempool rejection",
                 NodeRejectionHint::FeeRateTooLow { required: Some(25) },
@@ -2289,7 +2292,7 @@ mod tests {
             self.inner.chain_head()
         }
 
-        fn mempool_status(&self) -> NodeClientResult<crate::runtime::node::MempoolStatus> {
+        fn mempool_status(&self) -> NodeClientResult<crate::node_client::MempoolStatus> {
             self.inner.mempool_status()
         }
 

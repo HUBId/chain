@@ -370,7 +370,10 @@ mod tests {
         struct FailingNode;
 
         impl NodeClient for FailingNode {
-            fn submit_tx(&self, _draft: &DraftTransaction) -> Result<(), NodeClientError> {
+            fn submit_tx(
+                &self,
+                _submission: &crate::node_client::TransactionSubmission,
+            ) -> Result<(), NodeClientError> {
                 Ok(())
             }
 
@@ -386,9 +389,7 @@ mod tests {
                 Ok(ChainHead::new(0, [0u8; 32]))
             }
 
-            fn mempool_status(
-                &self,
-            ) -> Result<crate::runtime::node::MempoolStatus, NodeClientError> {
+            fn mempool_status(&self) -> Result<crate::node_client::MempoolStatus, NodeClientError> {
                 Err(NodeClientError::network(anyhow!("boom")))
             }
 

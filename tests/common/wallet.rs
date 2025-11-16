@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::wallet::sync::SyncStatus;
 use rpp_wallet::config::wallet::{
     WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
@@ -20,7 +18,8 @@ use rpp_wallet::indexer::client::{
     TransactionPayload, TxOutpoint,
 };
 use rpp_wallet::node_client::{
-    BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
+    BlockFeeSummary, ChainHead, MempoolInfo, MempoolStatus, NodeClient, NodeClientError,
+    NodeClientResult, QueueWeightsConfig, TransactionSubmission,
 };
 use rpp_wallet::proof_backend::ProofBackend;
 use rpp_wallet::telemetry::WalletActionTelemetry;
@@ -454,14 +453,14 @@ impl MockNodeClient {
 }
 
 impl NodeClient for MockNodeClient {
-    fn submit_tx(&self, draft: &rpp_wallet::engine::DraftTransaction) -> NodeClientResult<()> {
+    fn submit_tx(&self, submission: &TransactionSubmission) -> NodeClientResult<()> {
         let mut state = self.state.lock().unwrap();
         if let Some(error) = state.next_error.take() {
             return Err(error);
         }
         state.submissions.push(SubmittedDraft {
-            fee_rate: draft.fee_rate,
-            total_input_value: draft.total_input_value(),
+            fee_rate: submission.fee_rate,
+            total_input_value: submission.total_input_value(),
         });
         Ok(())
     }
