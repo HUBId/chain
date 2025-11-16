@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+#![cfg(all(feature = "wallet-integration", feature = "wallet_zsi"))]
+
 //! Wallet ZSI lifecycle integration tests.
 //!
 //! Exercises the high-level ZSI helpers with a deterministic backend to model

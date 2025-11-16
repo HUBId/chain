@@ -1,4 +1,8 @@
-#![cfg(feature = "backend-rpp-stark")]
+#![cfg(all(
+    feature = "backend-rpp-stark",
+    feature = "wallet-integration",
+    feature = "wallet-ui"
+))]
 
 use std::time::Duration;
 

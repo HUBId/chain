@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 

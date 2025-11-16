@@ -1,3 +1,5 @@
+#![cfg(all(feature = "wallet-integration", feature = "wallet-ui"))]
+
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;

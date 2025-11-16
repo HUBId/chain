@@ -1,3 +1,5 @@
+#![cfg(all(feature = "wallet-integration", feature = "wallet-ui"))]
+
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};

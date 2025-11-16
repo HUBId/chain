@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 //! Wallet policy and fee handling integration tests.
 //!
 //! These scenarios complete in under a second on the mock prover backend. When the

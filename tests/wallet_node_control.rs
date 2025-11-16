@@ -1,3 +1,5 @@
+#![cfg(all(feature = "wallet-integration", feature = "wallet-ui"))]
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::time::Duration;
 

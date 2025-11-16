@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 //! Wallet resume and rescan integration tests.
 //!
 //! These scenarios validate checkpoint handling, rescan scheduling, and node

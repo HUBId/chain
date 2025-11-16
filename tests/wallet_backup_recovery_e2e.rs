@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 //! Wallet backup and recovery integration tests.
 //!
 //! Exercises the backup export/import helpers against the mocked wallet

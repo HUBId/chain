@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 //! Wallet pending lock lifecycle integration tests.
 //!
 //! These tests exercise different lock release paths against both the mock and
