@@ -149,6 +149,36 @@ Use configuration toggles such as `[wallet.watch_only]`, `[wallet.backup]`, and
 features. There are no `wallet_watch_only`, `wallet_backup`, or `wallet_rpc_security`
 features; those names refer to configuration scopes.
 
+## Dependency snapshots
+
+`docs/wallet-deps/` captures the dependency graph for the default build,
+`--features wallet_gui`, and `--features "wallet_zsi wallet_hw wallet_multisig_hooks
+wallet_rpc_mtls"` via `cargo tree -p rpp-wallet`. Compare future changes against
+`default.txt`, `wallet_gui.txt`, and `wallet_security.txt` before adding or
+updating dependencies.【F:docs/wallet-deps/default.txt†L1-L40】【F:docs/wallet-deps/wallet_gui.txt†L1-L35】【F:docs/wallet-deps/wallet_security.txt†L1-L40】
+
+* GUI-only crates such as `iced`, `arboard`, and `qrcode` must remain gated behind
+  `wallet_gui`; they should only appear in `wallet_gui.txt` and must stay marked as
+  `optional = true` with GUI-specific features disabled by default.【F:rpp/wallet/Cargo.toml†L28-L41】【F:docs/wallet-deps/wallet_gui.txt†L1-L35】
+* Security features (`wallet_rpc_mtls`, `wallet_hw`, `wallet_zsi`,
+  `wallet_multisig_hooks`) should only pull in the TLS stack (`tokio-rustls`,
+  `rustls`, `rustls-pemfile`) and related helpers when explicitly enabled. Verify
+  the `wallet_security.txt` tree before promoting new TLS/hardware dependencies and
+  mark them as optional/default-features-disabled when applicable.【F:docs/wallet-deps/wallet_security.txt†L141-L240】
+
+Regenerate the logs after editing `Cargo.toml`:
+
+```
+mkdir -p docs/wallet-deps
+cargo tree -p rpp-wallet > docs/wallet-deps/default.txt
+cargo tree -p rpp-wallet --features wallet_gui > docs/wallet-deps/wallet_gui.txt
+cargo tree -p rpp-wallet --features "wallet_zsi wallet_hw wallet_multisig_hooks wallet_rpc_mtls" \
+  > docs/wallet-deps/wallet_security.txt
+```
+
+Commit updated trees together with dependency changes so reviewers can diff the
+graphs and spot regressions quickly.
+
 ### Wallet feature matrix
 
 `cargo xtask test-wallet-feature-matrix` runs `cargo check` and `cargo test` for the
