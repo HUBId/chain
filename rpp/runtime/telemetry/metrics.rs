@@ -67,13 +67,21 @@ pub fn init_runtime_metrics(
 pub struct RuntimeMetrics {
     proofs: ProofMetrics,
     consensus_block_duration: EnumF64Histogram<ConsensusStage>,
+    #[cfg(feature = "wallet-integration")]
     wallet_rpc_latency: EnumF64Histogram<WalletRpcMethod>,
+    #[cfg(feature = "wallet-integration")]
     wallet_action_total: RpcCounter<WalletAction, WalletActionResult>,
+    #[cfg(feature = "wallet-integration")]
     wallet_fee_estimate_latency: Histogram<f64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_prover_job_duration: Histogram<f64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_rescan_duration: Histogram<f64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_broadcast_rejected: Counter<u64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_runtime_watch_active: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_sync_driver_active: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
@@ -112,6 +120,7 @@ impl RuntimeMetrics {
                     .with_unit("ms")
                     .build(),
             ),
+            #[cfg(feature = "wallet-integration")]
             wallet_rpc_latency: EnumF64Histogram::new(
                 meter
                     .f64_histogram("rpp.runtime.wallet.rpc_latency")
@@ -119,6 +128,7 @@ impl RuntimeMetrics {
                     .with_unit("ms")
                     .build(),
             ),
+            #[cfg(feature = "wallet-integration")]
             wallet_action_total: RpcCounter::new(
                 meter
                     .u64_counter("rpp.runtime.wallet.action.total")
@@ -126,31 +136,37 @@ impl RuntimeMetrics {
                     .with_unit("1")
                     .build(),
             ),
+            #[cfg(feature = "wallet-integration")]
             wallet_fee_estimate_latency: meter
                 .f64_histogram("rpp.runtime.wallet.fee.estimate.latency_ms")
                 .with_description("Latency of wallet fee estimation requests in milliseconds")
                 .with_unit("ms")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
             wallet_prover_job_duration: meter
                 .f64_histogram("rpp.runtime.wallet.prover.job.duration_ms")
                 .with_description("Duration of wallet prover jobs in milliseconds")
                 .with_unit("ms")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
             wallet_rescan_duration: meter
                 .f64_histogram("rpp.runtime.wallet.scan.rescan.duration_ms")
                 .with_description("Latency of wallet rescan scheduling requests in milliseconds")
                 .with_unit("ms")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
             wallet_broadcast_rejected: meter
                 .u64_counter("rpp.runtime.wallet.broadcast.rejected")
                 .with_description("Total wallet transaction broadcast rejections grouped by reason")
                 .with_unit("1")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
             wallet_runtime_watch_active: meter
                 .u64_histogram("rpp.runtime.wallet.runtime.active")
                 .with_description("Samples indicating whether the wallet runtime loop is active")
                 .with_unit("1")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
             wallet_sync_driver_active: meter
                 .u64_histogram("rpp.runtime.wallet.sync.active")
                 .with_description("Samples indicating whether the wallet sync driver is active")
@@ -320,22 +336,37 @@ impl RuntimeMetrics {
     }
 
     /// Record the latency of a wallet RPC invocation.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_rpc_latency(&self, method: WalletRpcMethod, duration: Duration) {
         self.wallet_rpc_latency.record_duration(method, duration);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_rpc_latency(&self, _method: WalletRpcMethod, _duration: Duration) {}
+
     /// Record a wallet action result for in-memory and OTLP consumers.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_action(&self, action: WalletAction, outcome: WalletActionResult) {
         self.wallet_action_total.add(action, outcome, 1);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_action(&self, _action: WalletAction, _outcome: WalletActionResult) {}
+
     /// Record the latency of wallet fee estimation requests.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_fee_estimate_latency(&self, duration: Duration) {
         self.wallet_fee_estimate_latency
             .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &[]);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_fee_estimate_latency(&self, _duration: Duration) {}
+
     /// Record the duration of a wallet prover job grouped by backend and result.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_prover_job_duration(
         &self,
         backend: &str,
@@ -350,38 +381,74 @@ impl RuntimeMetrics {
             .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_prover_job_duration(
+        &self,
+        _backend: &str,
+        _proof_generated: bool,
+        _duration: Duration,
+    ) {
+    }
+
     /// Record the time taken to schedule a wallet rescan along with its outcome.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_rescan_duration(&self, scheduled: bool, duration: Duration) {
         let attributes = [KeyValue::new("scheduled", scheduled)];
         self.wallet_rescan_duration
             .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_rescan_duration(&self, _scheduled: bool, _duration: Duration) {}
+
     /// Increment the wallet broadcast rejection counter grouped by reason.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_broadcast_rejected(&self, reason: &str) {
         let attributes = [KeyValue::new("reason", reason.to_string())];
         self.wallet_broadcast_rejected.add(1, &attributes);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_broadcast_rejected(&self, _reason: &str) {}
+
     /// Record that the wallet runtime loop has started processing events.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_runtime_watch_started(&self) {
         self.wallet_runtime_watch_active.record(1, &[]);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_runtime_watch_started(&self) {}
+
     /// Record that the wallet runtime loop has stopped processing events.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_runtime_watch_stopped(&self) {
         self.wallet_runtime_watch_active.record(0, &[]);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_runtime_watch_stopped(&self) {}
+
     /// Record that the wallet sync driver became active.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_sync_driver_started(&self) {
         self.wallet_sync_driver_active.record(1, &[]);
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_sync_driver_started(&self) {}
+
     /// Record that the wallet sync driver has stopped.
+    #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_sync_driver_stopped(&self) {
         self.wallet_sync_driver_active.record(0, &[]);
     }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_sync_driver_stopped(&self) {}
 
     /// Record the latency and result of an RPC handler invocation.
     pub fn record_rpc_request(&self, method: RpcMethod, result: RpcResult, duration: Duration) {
@@ -1480,7 +1547,7 @@ impl<L: MetricLabel> EnumCounter<L> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wallet-integration"))]
 mod tests {
     use super::*;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MetricError};

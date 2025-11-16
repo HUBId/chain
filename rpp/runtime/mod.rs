@@ -139,13 +139,22 @@ impl RuntimeProfile {
 pub mod node_runtime;
 pub mod supervisor;
 pub mod telemetry;
+
+#[cfg(feature = "wallet-integration")]
 pub mod wallet;
+
+#[cfg(not(feature = "wallet-integration"))]
+#[allow(dead_code)]
+pub mod wallet {}
 
 pub use telemetry::metrics::{
     init_runtime_metrics, ConsensusStage, ProofKind, ProofRpcMethod, ProofVerificationBackend,
     ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, RpcMethod, RpcResult,
-    RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome, WalletRpcMethod,
+    RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
 };
+
+#[cfg(feature = "wallet-integration")]
+pub use telemetry::metrics::WalletRpcMethod;
 pub use telemetry::TelemetryExporterBuilder;
 pub mod vrf_gossip;
 
