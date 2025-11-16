@@ -1,4 +1,4 @@
-#![cfg(feature = "wallet_rpc_mtls")]
+#![cfg(all(feature = "wallet-integration", feature = "wallet_rpc_mtls"))]
 
 //! Wallet RBAC and mTLS integration tests.
 //!

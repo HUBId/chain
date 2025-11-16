@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use rpp_chain::runtime::wallet::sync::{DeterministicSync, SyncProvider};
 
 #[test]

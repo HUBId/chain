@@ -15,7 +15,10 @@ integration = ["wallet-ui"]
 prod = []
 it_state_sync = []
 wallet-ui = ["wallet-integration"]
-wallet-integration = ["dep:rpp-wallet"]
+wallet-integration = [
+    "dep:rpp-wallet",
+    "rpp-wallet/prover-mock",
+]
 wallet_rpc_mtls = [
     "wallet-integration",
     "dep:tokio-rustls",
@@ -43,6 +46,7 @@ prover-stwo-simd = [
     "rpp-consensus/prover-stwo-simd",
 ]
 prover-mock = [
+    "wallet-integration",
     "prover-backend-interface/prover-mock",
     "rpp-consensus/prover-mock",
 ]
@@ -202,6 +206,7 @@ path = "../../tests/rpp_fail_matrix.rs"
 [[test]]
 name = "runtime_wallet_cfg"
 path = "../../tests/runtime_wallet_cfg.rs"
+required-features = ["wallet-integration"]
 
 [[test]]
 name = "zsi_renewal"

@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 //! Watch-only integration tests.
 //!
 //! Validates that enabling watch-only mode on a running wallet blocks

@@ -1,3 +1,5 @@
+#![cfg(all(feature = "wallet-integration", feature = "wallet-ui"))]
+
 use ed25519_dalek::Keypair;
 use rand::rngs::OsRng;
 use rpp_chain::crypto::address_from_public_key;

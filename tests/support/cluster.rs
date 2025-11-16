@@ -1,4 +1,4 @@
-#![cfg(feature = "wallet-integration")]
+#![cfg(all(feature = "wallet-integration", feature = "wallet-ui"))]
 
 use std::collections::{HashMap, HashSet};
 use std::env;

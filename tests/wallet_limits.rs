@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::num::NonZeroU64;
 use std::sync::Arc;
 

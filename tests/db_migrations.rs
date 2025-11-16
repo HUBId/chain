@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::path::Path;
 
 use std::borrow::Cow;

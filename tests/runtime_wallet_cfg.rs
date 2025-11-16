@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(feature = "wallet-integration")]
 
 #[cfg(feature = "wallet-integration")]
 #[test]
