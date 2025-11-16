@@ -168,13 +168,13 @@ state transitions and instrumentation hooks.
 1. Build the GUI-enabled binary:
 
    ```bash
-   cargo build -p rpp-wallet --features "wallet_gui telemetry"
+   cargo build -p rpp-wallet --features "runtime wallet_gui telemetry"
    ```
 
 2. Launch the runtime with GUI support (from the repository root):
 
    ```bash
-   cargo run -p rpp-wallet --features wallet_gui -- gui
+   cargo run -p rpp-wallet --features "runtime wallet_gui" -- gui
    ```
 
 3. Provide a configuration file with the `[wallet.gui]` section described in
