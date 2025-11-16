@@ -1,3 +1,5 @@
+#![cfg(feature = "wallet-integration")]
+
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::sync::Arc;
 

@@ -12,11 +12,12 @@ use crate::types::{
     Address, Block, BlockProofBundle, SignedTransaction, TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{VrfProof, VrfSubmission};
+#[cfg(feature = "wallet-integration")]
 use crate::wallet::{
     ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, ScriptStatusMetadata,
     SendPreview, Wallet,
 };
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::wallet::{TrackedScriptSnapshot, TrackerSnapshot};
 
 /// Identifier used for epoch-specific consensus state.
@@ -223,6 +224,7 @@ pub struct NetworkMetaEvent {
 }
 
 /// Primary responsibilities of a validator node participating in consensus.
+#[cfg(feature = "wallet-integration")]
 pub trait ValidatorNode {
     fn wallet(&self) -> &Wallet;
     fn profile(&self) -> ChainResult<ValidatorProfile>;
@@ -253,18 +255,19 @@ pub trait ClientNode {
 }
 
 /// Standard wallet balance response returned by RPC handlers.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletBalanceResponse {
     pub address: Address,
     pub balance: u128,
     pub nonce: u64,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mempool_delta: Option<i64>,
 }
 
 /// Script digest metadata captured by the Electrs tracker for tracked scripts.
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletTrackedScript {
     pub script_hash: String,
@@ -273,7 +276,7 @@ pub struct WalletTrackedScript {
 }
 
 /// Snapshot of tracker state accompanying wallet history responses.
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletTrackerSnapshot {
     pub scripts: Vec<WalletTrackedScript>,
@@ -282,36 +285,43 @@ pub struct WalletTrackerSnapshot {
 }
 
 /// History payload returned by wallet RPC handlers including tracker metadata.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletHistoryResponse {
     pub entries: Vec<HistoryEntry>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script_metadata: Option<Vec<ScriptStatusMetadata>>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker: Option<WalletTrackerSnapshot>,
 }
 
+#[cfg(feature = "wallet-integration")]
 pub const WALLET_UI_HISTORY_CONTRACT: &str = "wallet-ui.history.v1";
+#[cfg(feature = "wallet-integration")]
 pub const WALLET_UI_SEND_CONTRACT: &str = "wallet-ui.send.v1";
+#[cfg(feature = "wallet-integration")]
 pub const WALLET_UI_RECEIVE_CONTRACT: &str = "wallet-ui.receive.v1";
+#[cfg(feature = "wallet-integration")]
 pub const WALLET_UI_NODE_CONTRACT: &str = "wallet-ui.node.v1";
 
 /// Versioned contract consumed by the wallet history tab.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletUiHistoryContract {
     pub version: &'static str,
     pub entries: Vec<HistoryEntry>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script_metadata: Option<Vec<ScriptStatusMetadata>>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker: Option<WalletTrackerSnapshot>,
 }
 
 /// Versioned contract consumed by the wallet send tab.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletUiSendContract {
     pub version: &'static str,
@@ -319,6 +329,7 @@ pub struct WalletUiSendContract {
 }
 
 /// Versioned contract consumed by the wallet receive tab.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletUiReceiveContract {
     pub version: &'static str,
@@ -326,6 +337,7 @@ pub struct WalletUiReceiveContract {
 }
 
 /// Versioned contract consumed by the wallet node tab.
+#[cfg(feature = "wallet-integration")]
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletUiNodeContract {
     pub version: &'static str,
@@ -334,7 +346,7 @@ pub struct WalletUiNodeContract {
     pub pipeline: Option<PipelineDashboardSnapshot>,
 }
 
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 impl From<TrackedScriptSnapshot> for WalletTrackedScript {
     fn from(snapshot: TrackedScriptSnapshot) -> Self {
         Self {
@@ -344,7 +356,7 @@ impl From<TrackedScriptSnapshot> for WalletTrackedScript {
     }
 }
 
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 impl From<TrackerSnapshot> for WalletTrackerSnapshot {
     fn from(snapshot: TrackerSnapshot) -> Self {
         Self {
