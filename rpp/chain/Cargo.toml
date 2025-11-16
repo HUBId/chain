@@ -10,10 +10,11 @@ readme.workspace = true
 build = "build.rs"
 
 [features]
-default = ["prover-mock"]
+default = ["prover-mock", "wallet-ui"]
 integration = []
 prod = []
 it_state_sync = []
+wallet-ui = []
 wallet_rpc_mtls = [
     "dep:tokio-rustls",
     "dep:rustls",
