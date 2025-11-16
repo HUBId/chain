@@ -19,6 +19,10 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::errors::{ChainError, ChainResult};
 use crate::runtime::telemetry::metrics::{RpcMethod, RpcResult, RuntimeMetrics, WalletRpcMethod};
 use crate::runtime::wallet::runtime::WalletRuntimeConfig;
+use crate::runtime::wallet_security::{
+    WalletClientCertificates, WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet,
+    WalletSecurityContext, WalletSecurityPaths,
+};
 use rpp_wallet::rpc::WalletRpcRouter;
 use rpp_wallet_interface::{
     BroadcastResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, RescanResponse,
@@ -27,204 +31,11 @@ use rpp_wallet_interface::{
 
 mod audit;
 
-#[cfg(feature = "wallet_rpc_mtls")]
-mod security;
-
-#[cfg(not(feature = "wallet_rpc_mtls"))]
-mod security {
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::path::{Path, PathBuf};
-
-    use crate::errors::ChainResult;
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum WalletRole {
-        Admin,
-        Operator,
-        Viewer,
-    }
-
-    impl WalletRole {
-        pub fn as_str(&self) -> &'static str {
-            match self {
-                WalletRole::Admin => "admin",
-                WalletRole::Operator => "operator",
-                WalletRole::Viewer => "viewer",
-            }
-        }
-    }
-
-    pub type WalletRoleSet = BTreeSet<WalletRole>;
-
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub enum WalletIdentity {
-        Token(String),
-        Certificate(String),
-    }
-
-    impl WalletIdentity {
-        pub fn from_bearer_token(token: &str) -> Self {
-            Self::Token(token.to_string())
-        }
-
-        pub fn from_certificate_der(_der: &[u8]) -> Self {
-            Self::Certificate(String::new())
-        }
-
-        pub fn from_certificate_pem(_pem: &str) -> ChainResult<Self> {
-            Ok(Self::Certificate(String::new()))
-        }
-
-        pub fn from_certificate_fingerprint(fingerprint: &str) -> ChainResult<Self> {
-            Ok(Self::Certificate(fingerprint.to_string()))
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct WalletSecurityBinding {
-        pub identity: WalletIdentity,
-        pub roles: WalletRoleSet,
-    }
-
-    impl WalletSecurityBinding {
-        pub fn new(identity: WalletIdentity, roles: WalletRoleSet) -> Self {
-            Self { identity, roles }
-        }
-    }
-
-    #[derive(Debug, Default)]
-    pub struct WalletRbacStore;
-
-    impl WalletRbacStore {
-        pub fn empty() -> Self {
-            Self
-        }
-
-        pub fn load(_path: impl AsRef<Path>) -> ChainResult<Self> {
-            Ok(Self)
-        }
-
-        pub fn save(&self) -> ChainResult<()> {
-            Ok(())
-        }
-
-        pub fn snapshot(&self) -> BTreeMap<WalletIdentity, WalletRoleSet> {
-            BTreeMap::new()
-        }
-
-        pub fn roles_for(&self, _identity: &WalletIdentity) -> WalletRoleSet {
-            WalletRoleSet::new()
-        }
-
-        pub fn apply_bindings(&self, _bindings: &[WalletSecurityBinding]) {}
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct WalletSecurityPaths {
-        root: PathBuf,
-    }
-
-    impl WalletSecurityPaths {
-        pub fn new(root: PathBuf) -> Self {
-            Self { root }
-        }
-
-        pub fn from_data_dir(data_dir: &Path) -> Self {
-            Self {
-                root: data_dir.join("wallet").join("security"),
-            }
-        }
-
-        pub fn ensure(&self) -> ChainResult<()> {
-            Ok(())
-        }
-
-        pub fn root(&self) -> &Path {
-            &self.root
-        }
-
-        pub fn rbac_store(&self) -> PathBuf {
-            self.root.join("rbac")
-        }
-    }
-
-    #[derive(Debug, Default)]
-    pub struct WalletSecurityContext;
-
-    impl WalletSecurityContext {
-        pub fn empty() -> Self {
-            Self
-        }
-
-        pub fn load_from_store(_path: impl AsRef<Path>) -> ChainResult<Self> {
-            Ok(Self)
-        }
-
-        pub fn from_store(_store: WalletRbacStore) -> Self {
-            Self
-        }
-
-        pub fn resolve_roles(&self, _identities: &[WalletIdentity]) -> WalletRoleSet {
-            WalletRoleSet::new()
-        }
-
-        pub fn resolve_bearer_roles(&self, _token: &str) -> WalletRoleSet {
-            WalletRoleSet::new()
-        }
-
-        pub fn resolve_certificate_roles(&self, _fingerprint: &str) -> ChainResult<WalletRoleSet> {
-            Ok(WalletRoleSet::new())
-        }
-
-        pub fn snapshot(&self) -> BTreeMap<WalletIdentity, WalletRoleSet> {
-            BTreeMap::new()
-        }
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub struct WalletClientCertificates {
-        fingerprints: Vec<String>,
-    }
-
-    impl WalletClientCertificates {
-        pub fn empty() -> Self {
-            Self {
-                fingerprints: Vec::new(),
-            }
-        }
-
-        pub fn from_der<'a, I>(_certs: I) -> Self
-        where
-            I: IntoIterator<Item = &'a [u8]>,
-        {
-            Self {
-                fingerprints: Vec::new(),
-            }
-        }
-
-        pub fn is_empty(&self) -> bool {
-            self.fingerprints.is_empty()
-        }
-
-        pub fn fingerprints(&self) -> &[String] {
-            &self.fingerprints
-        }
-
-        pub fn identities(&self) -> Vec<WalletIdentity> {
-            self.fingerprints
-                .iter()
-                .cloned()
-                .map(WalletIdentity::Certificate)
-                .collect()
-        }
-    }
-}
-
-pub use audit::WalletAuditLogger;
-pub use security::{
+pub use crate::runtime::wallet_security::{
     WalletClientCertificates, WalletIdentity, WalletRbacStore, WalletRole, WalletRoleSet,
     WalletSecurityContext, WalletSecurityPaths,
 };
+pub use audit::WalletAuditLogger;
 
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const CODE_PARSE_ERROR: i32 = -32700;
