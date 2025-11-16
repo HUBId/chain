@@ -43,7 +43,12 @@ pub mod ledger;
 pub mod migration;
 #[path = "../../runtime/node.rs"]
 pub mod node;
+#[cfg(feature = "wallet-integration")]
 #[path = "../../runtime/orchestration.rs"]
+pub mod orchestration;
+
+#[cfg(not(feature = "wallet-integration"))]
+#[path = "../../runtime/orchestration_stub.rs"]
 pub mod orchestration;
 #[cfg(feature = "backend-plonky3")]
 #[path = "../../proofs/plonky3/mod.rs"]
@@ -75,9 +80,10 @@ pub mod types;
 #[cfg(feature = "backend-rpp-stark")]
 pub mod zk;
 pub use rpp_crypto_vrf as vrf;
-#[cfg(all(feature = "wallet-ui", feature = "wallet-integration"))]
+#[cfg(feature = "wallet-integration")]
 #[path = "../../wallet/ui/mod.rs"]
 pub mod wallet;
 
 pub use rpp_consensus as consensus_engine;
+#[cfg(feature = "wallet-integration")]
 pub use rpp_wallet_interface as wallet_interface;
