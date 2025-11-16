@@ -75,7 +75,9 @@ pub mod types;
 #[cfg(feature = "backend-rpp-stark")]
 pub mod zk;
 pub use rpp_crypto_vrf as vrf;
+#[cfg(feature = "wallet-ui")]
 #[path = "../../wallet/ui/mod.rs"]
 pub mod wallet;
 
 pub use rpp_consensus as consensus_engine;
+pub use rpp_wallet_interface as wallet_interface;
