@@ -60,8 +60,9 @@ use crate::crypto::{
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::interfaces::WalletTrackerSnapshot;
+#[cfg(feature = "wallet-integration")]
 use crate::interfaces::{
     WalletBalanceResponse, WalletHistoryResponse, WalletUiHistoryContract, WalletUiNodeContract,
     WalletUiReceiveContract, WalletUiSendContract, WALLET_UI_HISTORY_CONTRACT,
@@ -102,14 +103,21 @@ use crate::types::{
     TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{PoseidonVrfInput, VrfProof, VrfSubmission};
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::wallet::ScriptStatusMetadata;
+#[cfg(feature = "wallet-integration")]
 use crate::wallet::{
     ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet,
     WalletAccountSummary,
 };
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
+#[cfg(not(feature = "wallet-integration"))]
+mod wallet_stub {
+    #[derive(Debug)]
+    pub struct Wallet;
+}
 use blake3::Hash as Blake3Hash;
 use parking_lot::{Mutex, RwLock};
 use rpp::node::VerificationErrorKind;
@@ -134,6 +142,8 @@ use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
 use rustls::{RootCertStore, ServerConfig};
 #[cfg(feature = "wallet_rpc_mtls")]
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
+#[cfg(not(feature = "wallet-integration"))]
+use wallet_stub::Wallet;
 
 #[path = "src/routes/mod.rs"]
 mod routes;
@@ -361,8 +371,9 @@ impl std::error::Error for PruningServiceError {}
 pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
+    #[cfg(feature = "wallet-integration")]
     wallet: Option<Arc<Wallet>>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     tracker: Option<WalletTrackerHandle>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
@@ -371,6 +382,7 @@ pub struct ApiContext {
     state_sync_server: Option<Arc<StateSyncServer>>,
     pruning_service: Option<Arc<dyn PruningServiceApi>>,
     metrics: Arc<RuntimeMetrics>,
+    #[cfg(feature = "wallet-integration")]
     wallet_runtime_active: bool,
     pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
     snapshot_runtime: Option<Arc<dyn SnapshotStreamRuntime>>,
@@ -391,29 +403,41 @@ impl ApiContext {
         pruning_service: Option<Arc<dyn PruningServiceApi>>,
         wallet_runtime_active: bool,
     ) -> Self {
-        #[cfg(feature = "vendor_electrs")]
+        #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
         let tracker = wallet.as_ref().and_then(|wallet| wallet.tracker_handle());
+
+        #[cfg(not(feature = "wallet-integration"))]
+        let _ = &wallet;
+        #[cfg(not(feature = "wallet-integration"))]
+        let _ = wallet_runtime_active;
 
         let state_sync_api = node
             .as_ref()
             .map(|handle| Arc::new(handle.clone()) as Arc<dyn StateSyncApi>);
 
-        let state_sync_server = node
-            .as_ref()
-            .and_then(|handle| handle.state_sync_server())
-            .or_else(|| {
-                wallet
-                    .as_ref()
-                    .and_then(|wallet| wallet.node_runtime_handle())
-                    .and_then(|handle| handle.state_sync_server())
-            });
+        let mut state_sync_server = node.as_ref().and_then(|handle| handle.state_sync_server());
+
+        #[cfg(feature = "wallet-integration")]
+        if state_sync_server.is_none() {
+            state_sync_server = wallet
+                .as_ref()
+                .and_then(|wallet| wallet.node_runtime_handle())
+                .and_then(|handle| handle.state_sync_server());
+        }
 
         let metrics = if let Some(handle) = node.as_ref() {
             handle.runtime_metrics()
-        } else if let Some(wallet) = wallet.as_ref() {
-            wallet.metrics()
         } else {
-            RuntimeMetrics::noop()
+            #[cfg(feature = "wallet-integration")]
+            if let Some(wallet) = wallet.as_ref() {
+                wallet.metrics()
+            } else {
+                RuntimeMetrics::noop()
+            }
+            #[cfg(not(feature = "wallet-integration"))]
+            {
+                RuntimeMetrics::noop()
+            }
         };
 
         let admission_dual_control = node.as_ref().map(|handle| handle.admission_dual_control());
@@ -421,8 +445,9 @@ impl ApiContext {
         Self {
             mode,
             node,
+            #[cfg(feature = "wallet-integration")]
             wallet,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             tracker,
             orchestrator,
             request_limit_per_minute,
@@ -431,6 +456,7 @@ impl ApiContext {
             state_sync_server,
             pruning_service,
             metrics,
+            #[cfg(feature = "wallet-integration")]
             wallet_runtime_active,
             pruning_status,
             snapshot_runtime: None,
@@ -444,6 +470,7 @@ impl ApiContext {
         *self.mode.read()
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn wallet_node_running(&self) -> bool {
         self.wallet
             .as_ref()
@@ -451,22 +478,45 @@ impl ApiContext {
             .unwrap_or(false)
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_node_running(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "wallet-integration")]
     fn wallet_node_handle(&self) -> Option<NodeHandle> {
         self.wallet
             .as_ref()
             .and_then(|wallet| wallet.node_runtime_handle())
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_node_handle(&self) -> Option<NodeHandle> {
+        None
+    }
+
     fn node_available(&self) -> bool {
         self.node.is_some() || self.wallet_node_running()
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn wallet_available(&self) -> bool {
         self.wallet_runtime_active && self.wallet.is_some()
     }
 
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_available(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "wallet-integration")]
     fn wallet_routes_enabled(&self) -> bool {
         self.wallet_runtime_active
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_routes_enabled(&self) -> bool {
+        false
     }
 
     fn admission_dual_control(&self) -> Option<Arc<DualControlApprovalService>> {
@@ -481,8 +531,14 @@ impl ApiContext {
         self.pruning_status.as_ref().map(Clone::clone)
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn wallet_enabled(&self) -> bool {
         self.wallet_available() && self.current_mode().includes_wallet()
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_enabled(&self) -> bool {
+        false
     }
 
     fn orchestrator_available(&self) -> bool {
@@ -501,8 +557,14 @@ impl ApiContext {
         }
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn wallet_handle(&self) -> Option<Arc<Wallet>> {
         self.wallet.as_ref().map(Arc::clone)
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    fn wallet_handle(&self) -> Option<Arc<Wallet>> {
+        None
     }
 
     fn state_sync_api(&self) -> Option<Arc<dyn StateSyncApi>> {
@@ -609,7 +671,7 @@ impl ApiContext {
         self.test_peerstore.as_ref().map(Arc::clone)
     }
 
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     fn tracker_state(&self) -> Option<TrackerState> {
         self.tracker.as_ref().map(|handle| handle.state())
     }
@@ -624,6 +686,7 @@ impl ApiContext {
         Ok(self.node_handle().expect("node handle available"))
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn require_wallet(&self) -> Result<Arc<Wallet>, (StatusCode, Json<ErrorResponse>)> {
         if !self.wallet_available() {
             return Err(not_started("wallet"));
@@ -656,6 +719,7 @@ impl ApiContext {
         }
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn wallet_for_mode(&self) -> Option<Arc<Wallet>> {
         if self.wallet_enabled() {
             self.wallet_handle()
@@ -707,6 +771,7 @@ impl ApiContext {
         self.auth_token_enabled
     }
 
+    #[cfg(feature = "wallet-integration")]
     fn ensure_validator_tier(
         &self,
         minimum: Tier,
@@ -728,6 +793,14 @@ impl ApiContext {
                 }),
             ));
         }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    fn ensure_validator_tier(
+        &self,
+        _minimum: Tier,
+    ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
         Ok(())
     }
 }
@@ -942,19 +1015,22 @@ struct ReceiveQuery {
     count: Option<usize>,
 }
 
+#[cfg(feature = "wallet-integration")]
 #[derive(Serialize)]
 struct ReceiveResponse {
     addresses: Vec<ReceiveTabAddress>,
 }
 
+#[cfg(feature = "wallet-integration")]
 struct WalletHistoryFragments {
     entries: Vec<HistoryEntry>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     script_metadata: Option<Vec<ScriptStatusMetadata>>,
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     tracker: Option<WalletTrackerSnapshot>,
 }
 
+#[cfg(feature = "wallet-integration")]
 #[derive(Serialize)]
 struct WalletNodeResponse {
     metrics: NodeTabMetrics,
@@ -971,6 +1047,7 @@ struct UiNodeStatusResponse {
     bft: Option<BftMembership>,
 }
 
+#[cfg(feature = "wallet-integration")]
 #[derive(Serialize)]
 struct UiReputationResponse {
     mode: RuntimeMode,
@@ -987,6 +1064,7 @@ struct StateRootResponse {
     state_root: String,
 }
 
+#[cfg(feature = "wallet-integration")]
 #[derive(Serialize)]
 struct WalletAccountResponse {
     summary: WalletAccountSummary,
@@ -1127,6 +1205,7 @@ fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
     RpcMethod::Other
 }
 
+#[cfg(feature = "wallet-integration")]
 fn wallet_rpc_method(_method: &Method, path: &str) -> Option<WalletRpcMethod> {
     if !path.starts_with("/wallet/") {
         return None;
@@ -1241,6 +1320,11 @@ fn wallet_rpc_method(_method: &Method, path: &str) -> Option<WalletRpcMethod> {
     }
 
     Some(WalletRpcMethod::Unknown)
+}
+
+#[cfg(not(feature = "wallet-integration"))]
+fn wallet_rpc_method(_method: &Method, _path: &str) -> Option<WalletRpcMethod> {
+    None
 }
 
 fn proof_rpc_method(path: &str) -> Option<ProofRpcMethod> {
@@ -1584,50 +1668,57 @@ where
         .route("/observability/audits/slashing", get(slashing_audit_stream))
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
-        .route("/accounts/:address", get(account_info))
-        .route("/wallet/state/root", get(wallet_state_root));
+        .route("/accounts/:address", get(account_info));
 
-    if enable_wallet_routes {
-        router = router
-            .route("/ui/history", get(ui_history))
-            .route("/ui/send/preview", post(ui_send_preview))
-            .route("/ui/receive", get(ui_receive))
-            .route("/wallet/ui/history", get(wallet_ui_history))
-            .route("/wallet/ui/send/preview", post(wallet_ui_send_preview))
-            .route("/wallet/ui/receive", get(wallet_ui_receive))
-            .route("/wallet/ui/node", get(wallet_ui_node))
-            .route("/wallet/account", get(wallet_account))
-            .route("/wallet/balance/:address", get(wallet_balance))
-            .route("/wallet/reputation/:address", get(wallet_reputation))
-            .route("/wallet/tier/:address", get(wallet_tier))
-            .route("/wallet/history", get(wallet_history))
-            .route("/wallet/send/preview", post(wallet_send_preview))
-            .route("/wallet/tx/build", post(wallet_build_transaction))
-            .route("/wallet/tx/sign", post(wallet_sign_transaction))
-            .route("/wallet/tx/prove", post(wallet_prove_transaction))
-            .route("/wallet/tx/submit", post(wallet_submit_transaction))
-            .route("/wallet/receive", get(wallet_receive_addresses))
-            .route("/wallet/node", get(wallet_node_view))
-            .route(
-                "/wallet/uptime/scheduler",
-                get(wallet_uptime_scheduler_status),
-            )
-            .route(
-                "/wallet/uptime/scheduler/trigger",
-                post(wallet_trigger_uptime_scheduler),
-            )
-            .route(
-                "/wallet/uptime/scheduler/offload",
-                post(wallet_offload_uptime_proof),
-            )
-            .route("/wallet/uptime/proof", post(wallet_generate_uptime))
-            .route("/wallet/uptime/submit", post(wallet_submit_uptime))
-            .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
-            .route("/wallet/pipeline/telemetry", get(wallet_pipeline_telemetry))
-            .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
-            .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
-            .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
+    #[cfg(feature = "wallet-integration")]
+    {
+        router = router.route("/ui/reputation", get(ui_reputation));
+        router = router.route("/wallet/state/root", get(wallet_state_root));
+        if enable_wallet_routes {
+            router = router
+                .route("/ui/history", get(ui_history))
+                .route("/ui/send/preview", post(ui_send_preview))
+                .route("/ui/receive", get(ui_receive))
+                .route("/wallet/ui/history", get(wallet_ui_history))
+                .route("/wallet/ui/send/preview", post(wallet_ui_send_preview))
+                .route("/wallet/ui/receive", get(wallet_ui_receive))
+                .route("/wallet/ui/node", get(wallet_ui_node))
+                .route("/wallet/account", get(wallet_account))
+                .route("/wallet/balance/:address", get(wallet_balance))
+                .route("/wallet/reputation/:address", get(wallet_reputation))
+                .route("/wallet/tier/:address", get(wallet_tier))
+                .route("/wallet/history", get(wallet_history))
+                .route("/wallet/send/preview", post(wallet_send_preview))
+                .route("/wallet/tx/build", post(wallet_build_transaction))
+                .route("/wallet/tx/sign", post(wallet_sign_transaction))
+                .route("/wallet/tx/prove", post(wallet_prove_transaction))
+                .route("/wallet/tx/submit", post(wallet_submit_transaction))
+                .route("/wallet/receive", get(wallet_receive_addresses))
+                .route("/wallet/node", get(wallet_node_view))
+                .route(
+                    "/wallet/uptime/scheduler",
+                    get(wallet_uptime_scheduler_status),
+                )
+                .route(
+                    "/wallet/uptime/scheduler/trigger",
+                    post(wallet_trigger_uptime_scheduler),
+                )
+                .route(
+                    "/wallet/uptime/scheduler/offload",
+                    post(wallet_offload_uptime_proof),
+                )
+                .route("/wallet/uptime/proof", post(wallet_generate_uptime))
+                .route("/wallet/uptime/submit", post(wallet_submit_uptime))
+                .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
+                .route("/wallet/pipeline/telemetry", get(wallet_pipeline_telemetry))
+                .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
+                .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
+                .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
+        }
     }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    let _ = enable_wallet_routes;
 
     if security.cors_enabled() {
         router = router.layer(middleware::from_fn_with_state(
@@ -1924,7 +2015,16 @@ async fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
 
 async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
     let mode = state.current_mode();
-    let address = if let Some(node) = state.node_for_mode() {
+    Json(HealthResponse {
+        status: "ok",
+        address: health_address(&state),
+        role: mode.as_str(),
+    })
+}
+
+#[cfg(feature = "wallet-integration")]
+fn health_address(state: &ApiContext) -> String {
+    if let Some(node) = state.node_for_mode() {
         node.address().to_string()
     } else if let Some(wallet) = state.wallet_for_mode() {
         wallet.address().clone()
@@ -1934,12 +2034,18 @@ async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
         wallet.address().clone()
     } else {
         String::from("unknown")
-    };
-    Json(HealthResponse {
-        status: "ok",
-        address,
-        role: mode.as_str(),
-    })
+    }
+}
+
+#[cfg(not(feature = "wallet-integration"))]
+fn health_address(state: &ApiContext) -> String {
+    if let Some(node) = state.node_for_mode() {
+        node.address().to_string()
+    } else if let Some(node) = state.node_handle() {
+        node.address().to_string()
+    } else {
+        String::from("unknown")
+    }
 }
 
 async fn health_live(State(state): State<ApiContext>) -> StatusCode {
@@ -1979,24 +2085,25 @@ async fn update_runtime_mode(
     Ok(Json(state.runtime_state()))
 }
 
+#[cfg(feature = "wallet-integration")]
 fn wallet_history_fragments(
     state: &ApiContext,
     wallet: &Wallet,
 ) -> Result<WalletHistoryFragments, (StatusCode, Json<ErrorResponse>)> {
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     let tracker_state = state.tracker_state();
 
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     if matches!(tracker_state.as_ref(), Some(TrackerState::Pending)) {
         return Err(tracker_sync_pending());
     }
 
     let entries = wallet.history().map_err(to_http_error)?;
 
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     let script_metadata = wallet.script_status_metadata();
 
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     let tracker = tracker_state.and_then(|state| match state {
         TrackerState::Ready(snapshot) => Some(WalletTrackerSnapshot::from(snapshot)),
         TrackerState::Pending | TrackerState::Disabled => None,
@@ -2004,13 +2111,14 @@ fn wallet_history_fragments(
 
     Ok(WalletHistoryFragments {
         entries,
-        #[cfg(feature = "vendor_electrs")]
+        #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
         script_metadata,
-        #[cfg(feature = "vendor_electrs")]
+        #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
         tracker,
     })
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn ui_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2018,14 +2126,15 @@ async fn ui_history(
     wallet_history_fragments(&state, wallet.as_ref())
         .map(|payload| WalletHistoryResponse {
             entries: payload.entries,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             script_metadata: payload.script_metadata,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             tracker: payload.tracker,
         })
         .map(Json)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_ui_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletUiHistoryContract>, (StatusCode, Json<ErrorResponse>)> {
@@ -2034,14 +2143,15 @@ async fn wallet_ui_history(
         .map(|payload| WalletUiHistoryContract {
             version: WALLET_UI_HISTORY_CONTRACT,
             entries: payload.entries,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             script_metadata: payload.script_metadata,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             tracker: payload.tracker,
         })
         .map(Json)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn ui_send_preview(
     State(state): State<ApiContext>,
     Json(request): Json<TxComposeRequest>,
@@ -2059,6 +2169,7 @@ async fn ui_send_preview(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_ui_send_preview(
     State(state): State<ApiContext>,
     Json(request): Json<TxComposeRequest>,
@@ -2080,6 +2191,7 @@ async fn wallet_ui_send_preview(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn ui_receive(
     State(state): State<ApiContext>,
     Query(query): Query<ReceiveQuery>,
@@ -2091,6 +2203,7 @@ async fn ui_receive(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_ui_receive(
     State(state): State<ApiContext>,
     Query(query): Query<ReceiveQuery>,
@@ -2130,6 +2243,7 @@ async fn ui_node_status(
     }
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn ui_reputation(
     State(state): State<ApiContext>,
 ) -> Result<Json<UiReputationResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2712,6 +2826,7 @@ async fn reputation_audit_stream(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_account(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletAccountResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2722,12 +2837,13 @@ async fn wallet_account(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_balance(
     State(state): State<ApiContext>,
     Path(address): Path<String>,
 ) -> Result<Json<WalletBalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     if matches!(state.tracker_state(), Some(TrackerState::Pending)) {
         return Err(tracker_sync_pending());
     }
@@ -2739,19 +2855,20 @@ async fn wallet_balance(
             address: summary.address,
             balance: summary.balance,
             nonce: summary.nonce,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             mempool_delta: summary.mempool_delta,
         })),
         None => Err(not_found("account not found")),
     }
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_reputation(
     State(state): State<ApiContext>,
     Path(address): Path<String>,
 ) -> Result<Json<Option<WalletAccountSummary>>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    #[cfg(feature = "vendor_electrs")]
+    #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
     if matches!(state.tracker_state(), Some(TrackerState::Pending)) {
         return Err(tracker_sync_pending());
     }
@@ -2761,6 +2878,7 @@ async fn wallet_reputation(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_tier(
     State(state): State<ApiContext>,
     Path(address): Path<String>,
@@ -2775,6 +2893,7 @@ async fn wallet_tier(
     }
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2782,14 +2901,15 @@ async fn wallet_history(
     wallet_history_fragments(&state, wallet.as_ref())
         .map(|payload| WalletHistoryResponse {
             entries: payload.entries,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             script_metadata: payload.script_metadata,
-            #[cfg(feature = "vendor_electrs")]
+            #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
             tracker: payload.tracker,
         })
         .map(Json)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_send_preview(
     State(state): State<ApiContext>,
     Json(request): Json<TxComposeRequest>,
@@ -2807,6 +2927,7 @@ async fn wallet_send_preview(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_build_transaction(
     State(state): State<ApiContext>,
     Json(request): Json<TxComposeRequest>,
@@ -2830,6 +2951,7 @@ async fn wallet_build_transaction(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_sign_transaction(
     State(state): State<ApiContext>,
     Json(request): Json<SignTxRequest>,
@@ -2840,6 +2962,7 @@ async fn wallet_sign_transaction(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_prove_transaction(
     State(state): State<ApiContext>,
     Json(request): Json<ProveTxRequest>,
@@ -2851,6 +2974,7 @@ async fn wallet_prove_transaction(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_submit_transaction(
     State(state): State<ApiContext>,
     Json(request): Json<SubmitTxRequest>,
@@ -2862,6 +2986,7 @@ async fn wallet_submit_transaction(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_receive_addresses(
     State(state): State<ApiContext>,
     Query(query): Query<ReceiveQuery>,
@@ -2873,6 +2998,7 @@ async fn wallet_receive_addresses(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_node_view(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletNodeResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2889,6 +3015,7 @@ async fn wallet_node_view(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_ui_node(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletUiNodeContract>, (StatusCode, Json<ErrorResponse>)> {
@@ -2906,6 +3033,7 @@ async fn wallet_ui_node(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_state_root(
     State(state): State<ApiContext>,
 ) -> Result<Json<StateRootResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2916,6 +3044,7 @@ async fn wallet_state_root(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_uptime_scheduler_status(
     State(state): State<ApiContext>,
 ) -> Result<Json<UptimeSchedulerStatus>, (StatusCode, Json<ErrorResponse>)> {
@@ -2923,6 +3052,7 @@ async fn wallet_uptime_scheduler_status(
     Ok(Json(node.uptime_scheduler_status()))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_trigger_uptime_scheduler(
     State(state): State<ApiContext>,
 ) -> Result<Json<UptimeSchedulerRun>, (StatusCode, Json<ErrorResponse>)> {
@@ -2933,6 +3063,7 @@ async fn wallet_trigger_uptime_scheduler(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_offload_uptime_proof(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletUptimeProofResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2943,6 +3074,7 @@ async fn wallet_offload_uptime_proof(
     }
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_generate_uptime(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletUptimeProofResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -2953,6 +3085,7 @@ async fn wallet_generate_uptime(
         .map_err(to_http_error)
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_submit_uptime(
     State(state): State<ApiContext>,
     Json(request): Json<SubmitUptimeRequest>,
@@ -2977,6 +3110,7 @@ enum PipelineStreamEvent {
     Error { error: PipelineError },
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_pipeline_stream(
     State(state): State<ApiContext>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
@@ -3012,6 +3146,7 @@ async fn wallet_pipeline_stream(
     ))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_pipeline_dashboard(
     State(state): State<ApiContext>,
 ) -> Result<Json<PipelineDashboardSnapshot>, (StatusCode, Json<ErrorResponse>)> {
@@ -3020,6 +3155,7 @@ async fn wallet_pipeline_dashboard(
     Ok(Json(wallet.pipeline_dashboard(orchestrator.as_ref())))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_pipeline_telemetry(
     State(state): State<ApiContext>,
 ) -> Result<Json<PipelineTelemetrySummary>, (StatusCode, Json<ErrorResponse>)> {
@@ -3029,6 +3165,7 @@ async fn wallet_pipeline_telemetry(
     Ok(Json(summary))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_pipeline_wait(
     State(state): State<ApiContext>,
     Json(request): Json<PipelineWaitRequest>,
@@ -3050,6 +3187,7 @@ async fn wallet_pipeline_wait(
     }))
 }
 
+#[cfg(feature = "wallet-integration")]
 async fn wallet_pipeline_shutdown(
     State(state): State<ApiContext>,
 ) -> Result<Json<PipelineShutdownResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -3232,7 +3370,7 @@ fn pruning_service_error_to_http(error: PruningServiceError) -> (StatusCode, Jso
     }
 }
 
-#[cfg(feature = "vendor_electrs")]
+#[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 fn tracker_sync_pending() -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -3503,6 +3641,7 @@ mod telemetry_tests {
         method_match && result_match
     }
 
+    #[cfg(feature = "wallet-integration")]
     #[tokio::test]
     async fn wallet_requests_emit_metrics() -> Result<(), MetricError> {
         let (metrics, exporter, provider) = setup_metrics();
