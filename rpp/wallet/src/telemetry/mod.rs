@@ -1,37 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum WalletTelemetryAction {
-    BackupExport,
-    BackupValidate,
-    BackupImport,
-    WatchOnlyStatus,
-    WatchOnlyEnable,
-    WatchOnlyDisable,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigGetScope,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigSetScope,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigGetCosigners,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigSetCosigners,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigExport,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiProve,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiVerify,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiBindAccount,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiList,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiDelete,
-    HwEnumerate,
-    HwSign,
-}
+pub use rpp_wallet_interface::telemetry::{
+    TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletTelemetryAction,
+};
 
 impl WalletTelemetryAction {
     pub fn label(&self) -> &'static str {
@@ -68,12 +40,6 @@ impl WalletTelemetryAction {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TelemetryOutcome {
-    Success,
-    Error,
-}
-
 impl TelemetryOutcome {
     pub fn label(&self) -> &'static str {
         match self {
@@ -81,18 +47,6 @@ impl TelemetryOutcome {
             Self::Error => "err",
         }
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TelemetryCounter {
-    pub name: String,
-    pub value: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TelemetryCounters {
-    pub enabled: bool,
-    pub counters: Vec<TelemetryCounter>,
 }
 
 #[derive(Debug, Default)]
