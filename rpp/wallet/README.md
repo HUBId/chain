@@ -2,6 +2,8 @@
 
 The `rpp-wallet` crate bundles the wallet runtime, JSON-RPC surface, and CLI used by RPP operators. It shares storage and configuration conventions with the hybrid runtime so node operators can co-locate services.
 
+> **Runtime feature opt-in.** The runtime adapters, JSON-RPC daemon, and CLI are now gated behind the `runtime` cargo feature to avoid pulling the node dependency graph into every build. Pass `--features "runtime …"` to any `cargo build`/`cargo run` command that needs node attachment; leave the flag off when working on storage, engines, or interface-only changes.
+
 ## Shared wallet interface crate
 
 RPC DTOs, telemetry counters, workflow payloads, and the `WalletService` trait now live in the sibling [`rpp-wallet-interface`](../wallet-interface) crate. `rpp-wallet` re-exports every interface type so downstream consumers keep importing from `rpp_wallet::*`, but when you touch shared payloads you must update both the interface crate and any wallet modules that rely on those types. Failing to do so will compile locally (thanks to the re-exports) but will break other crates that depend on `rpp-wallet-interface` directly. Use `cargo check -p rpp-wallet-interface && cargo check -p rpp-wallet` before submitting interface changes.
@@ -59,7 +61,7 @@ coverage.【F:docs/wallet_phase3_gui.md†L1-L169】 Highlights for operators:
   the graphical shell and event reporting. Omit `telemetry` if metrics are not
   required.【F:docs/wallet_phase3_gui.md†L129-L141】
 * **Launch command** – Start the GUI from the repo root with
-  `cargo run -p rpp-wallet --features wallet_gui -- gui` after configuring the
+  `cargo run -p rpp-wallet --features "runtime wallet_gui" -- gui` after configuring the
   `[wallet.gui]` section in `config/wallet.toml`.【F:docs/wallet_phase3_gui.md†L133-L137】【F:config/wallet.toml†L1-L55】
 * **Capabilities** – Multi-tab experience for overview, send, and prover
   workflows with policy-aware validation and prover progress tracking.【F:docs/wallet_phase3_gui.md†L60-L116】
@@ -100,25 +102,25 @@ complete rollout guide.【F:docs/wallet_phase4_advanced.md†L1-L176】 Highligh
 
 ```bash
 # Export an encrypted backup (manual rotation)
-cargo run -p rpp-wallet --features "backup" -- backup export --output ./backups/manual.rppb
+cargo run -p rpp-wallet --features "runtime backup" -- backup export --output ./backups/manual.rppb
 
 # Restore from backup with policy enforcement
-cargo run -p rpp-wallet --features "backup" -- backup restore --path ./backups/manual.rppb
+cargo run -p rpp-wallet --features "runtime backup" -- backup restore --path ./backups/manual.rppb
 
 # Launch watch-only daemon (read-only RPC)
-cargo run -p rpp-wallet -- watch-only start
+cargo run -p rpp-wallet --features runtime -- watch-only start
 
 # Register multisig coordinator hooks
-cargo run -p rpp-wallet --features "wallet_multisig_hooks" -- multisig register --config ./config/multisig.toml
+cargo run -p rpp-wallet --features "runtime wallet_multisig_hooks" -- multisig register --config ./config/multisig.toml
 
 # Import a ZSI bundle after staging checksums
-cargo run -p rpp-wallet --features "wallet_zsi" -- zsi import --bundle ./zsi/bootstrap.tar.gz
+cargo run -p rpp-wallet --features "runtime wallet_zsi" -- zsi import --bundle ./zsi/bootstrap.tar.gz
 
 # Start hardened RPC with GUI
-cargo run -p rpp-wallet --features "wallet_gui wallet_rpc_mtls" -- gui --require-mtls
+cargo run -p rpp-wallet --features "runtime wallet_gui wallet_rpc_mtls" -- gui --require-mtls
 
 # Pilot hardware signing workflows
-cargo run -p rpp-wallet --features "wallet_hw" -- hw test --transport hid
+cargo run -p rpp-wallet --features "runtime wallet_hw" -- hw test --transport hid
 ```
 
 Ensure the CLI commands run from the repository root so cargo finds the workspace manifest.
@@ -134,7 +136,7 @@ their runtime counterparts:
 
 | Feature flag | Default | Related configuration | Notes |
 | --- | --- | --- | --- |
-| `runtime` | Enabled | All `[wallet.*]` sections | Required for the JSON-RPC service and background tasks. Disable only when building the CLI without a daemon.【F:rpp/wallet/Cargo.toml†L7-L32】 |
+| `runtime` | Disabled | All `[wallet.*]` sections | Required for the JSON-RPC service, CLI, and node adapters. Enable it explicitly (`--features "runtime …"`) whenever you need wallet-daemon or CLI binaries to attach to a node.【F:rpp/wallet/Cargo.toml†L7-L32】 |
 | `backup` | Enabled | `[wallet.backup]` | Provides backup CLI commands and hashing dependencies. Configuration alone controls automation windows; there is no `wallet_backup` flag.【F:config/wallet.toml†L17-L33】 |
 | `wallet_multisig_hooks` | Disabled | `[wallet.multisig]` | Compiles the multisig RPC surface and CLI helpers. The runtime returns `WalletError::MultisigDisabled` when the config enables hooks but the feature is missing.【F:rpp/wallet/src/wallet/mod.rs†L358-L430】 |
 | `wallet_zsi` | Disabled | `[wallet.zsi]` | Enables Zero State Import RPCs, CLI commands, and telemetry. Config toggles gate actual imports and checksum enforcement.【F:rpp/wallet/src/lib.rs†L77-L111】 |

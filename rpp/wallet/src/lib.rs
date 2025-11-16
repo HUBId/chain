@@ -48,6 +48,7 @@ pub mod telemetry;
 pub mod modes;
 
 /// Command-line helpers for wallet subsystems.
+#[cfg(feature = "runtime")]
 pub mod cli;
 
 /// JSON-RPC facades exposed by the wallet runtime.
