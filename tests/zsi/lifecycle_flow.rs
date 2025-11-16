@@ -1,8 +1,9 @@
-#![cfg(feature = "wallet_zsi")]
+#![cfg(all(feature = "wallet-integration", feature = "wallet_zsi"))]
 
 //! These tests require the `wallet_zsi` feature. Enable with `--features wallet_zsi`.
 
 use prover_mock_backend::MockBackend;
+
 use rpp_wallet::cli::zsi::{execute, ZsiCli, ZsiSubcommand};
 use rpp_wallet::rpc::zsi as rpc_zsi;
 use rpp_wallet::zsi::{

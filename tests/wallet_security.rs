@@ -1,4 +1,4 @@
-#![cfg(feature = "wallet_rpc_mtls")]
+#![cfg(all(feature = "wallet-integration", feature = "wallet_rpc_mtls"))]
 
 use std::collections::HashMap;
 use std::fs;
