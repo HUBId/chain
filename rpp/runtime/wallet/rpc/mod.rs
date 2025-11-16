@@ -19,12 +19,11 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::errors::{ChainError, ChainResult};
 use crate::runtime::telemetry::metrics::{RpcMethod, RpcResult, RuntimeMetrics, WalletRpcMethod};
 use crate::runtime::wallet::runtime::WalletRuntimeConfig;
-use rpp_wallet::rpc::dto::{
-    BroadcastResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, RescanResponse,
-    SignTxResponse,
-};
-use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use rpp_wallet::rpc::WalletRpcRouter;
+use rpp_wallet_interface::{
+    BroadcastResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse, RescanResponse,
+    SignTxResponse, WalletRpcErrorCode,
+};
 
 mod audit;
 

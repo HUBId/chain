@@ -103,6 +103,7 @@ rpp-p2p = { path = "../p2p" }
 rpp-identity-tree = { path = "../identity-tree" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
 rpp-wallet = { path = "../wallet", default-features = false }
+rpp-wallet-interface = { path = "../wallet-interface" }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 semver = "=1.0.27"

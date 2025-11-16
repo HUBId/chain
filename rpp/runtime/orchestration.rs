@@ -25,8 +25,8 @@ use crate::node::{NodeHandle, PipelineObservation};
 use crate::reputation::Tier;
 use crate::runtime::node_runtime::{node::MetaTelemetryReport, NodeEvent, NodeHandle as P2pHandle};
 use crate::types::{Address, Block, TransactionProofBundle};
-use crate::wallet::workflows::TransactionWorkflow;
 use rpp_p2p::GossipTopic;
+use rpp_wallet_interface::TransactionWorkflow;
 
 /// Default buffer size for the gossip → mempool proof channel.
 const DEFAULT_QUEUE_DEPTH: usize = 64;
