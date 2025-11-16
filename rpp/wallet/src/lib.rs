@@ -97,3 +97,24 @@ pub use engine::{
     WalletBalance, WalletEngine,
 };
 pub use node_client::*;
+
+pub use rpp_wallet_interface::{
+    node_client::*,
+    rpc::*,
+    telemetry::*,
+    workflows::*,
+    Address,
+    AssetType,
+    Result as WalletInterfaceResult,
+    SendPreview,
+    Tier,
+    TransactionProofBundle,
+    UtxoOutpoint,
+    UtxoRecord,
+    WalletInterfaceError,
+};
+
+pub(crate) use rpp_wallet_interface::node_client as interface_node_client;
+pub(crate) use rpp_wallet_interface::rpc as interface_rpc;
+pub(crate) use rpp_wallet_interface::telemetry as interface_telemetry;
+pub(crate) use rpp_wallet_interface::workflows as interface_workflows;

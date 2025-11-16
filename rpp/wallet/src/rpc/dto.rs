@@ -3,7 +3,7 @@ use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
 use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
 use serde_json::Value;
 
-pub use rpp_wallet_interface::rpc::*;
+pub use crate::interface_rpc::*;
 
 impl JsonRpcResponse {
     pub fn success(id: Option<Value>, result: Value) -> Self {

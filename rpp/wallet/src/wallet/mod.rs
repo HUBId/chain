@@ -40,7 +40,7 @@ use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
 use crate::zsi::ZsiBinder;
 use crate::zsi::{self, LifecycleProof, ZsiOperation, ZsiRecord};
 use prover_backend_interface::BackendError as ZsiBackendError;
-use rpp_wallet_interface::{WalletService, WalletServiceResult};
+use crate::{WalletService, WalletServiceResult};
 use serde::{Deserialize, Serialize};
 
 mod runtime;
