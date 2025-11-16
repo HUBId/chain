@@ -15,6 +15,7 @@ members = [
   "rpp/chain",
   "rpp/pruning",
   "rpp/node",
+  "rpp/wallet-interface",
   "xtask",
   "tools/simnet", "tools/snapshot-verify", "tools/worm-export-stub", "tools/zsi-fixtures",
 ]
@@ -34,6 +35,7 @@ default-members = [
   "rpp/chain",
   "rpp/pruning",
   "rpp/node",
+  "rpp/wallet-interface",
 ]
 resolver = "2"
 
