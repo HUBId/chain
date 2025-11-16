@@ -20,12 +20,12 @@ use dto::{
     HardwareDeviceDto, HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse,
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
-    PolicyPreviewResponse, PolicySnapshotDto, RecentBlocksParams, RecentBlocksResponse,
-    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
-    SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse, SyncCheckpointDto,
-    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
-    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse, JSONRPC_VERSION,
+    PolicyPreviewResponse, PolicySnapshotDto, PolicyTierHooks as PolicyTierHooksDto,
+    RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
+    SignTxParams, SignTxResponse, SyncCheckpointDto, SyncModeDto, SyncStatusParams,
+    SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto,
+    UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -855,7 +855,7 @@ impl WalletRpcRouter {
             max_change_outputs: preview.max_change_outputs,
             spend_limit_daily: preview.spend_limit_daily,
             pending_lock_timeout: preview.pending_lock_timeout,
-            tier_hooks: preview.tier_hooks,
+            tier_hooks: map_policy_tier_hooks(&preview.tier_hooks),
         };
         to_value(response)
     }
@@ -1881,6 +1881,13 @@ fn policy_snapshot_to_dto(snapshot: PolicySnapshot) -> PolicySnapshotDto {
         revision: snapshot.revision,
         updated_at: snapshot.updated_at,
         statements: snapshot.statements,
+    }
+}
+
+fn map_policy_tier_hooks(hooks: &crate::config::wallet::PolicyTierHooks) -> PolicyTierHooksDto {
+    PolicyTierHooksDto {
+        enabled: hooks.enabled,
+        hook: hooks.hook.clone(),
     }
 }
 
