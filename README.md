@@ -39,7 +39,10 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   which are controlled solely through configuration sections like
   `[wallet.watch_only]` and `[wallet.backup]`. Mixing the two (for example,
   turning on watch-only config without compiling the mTLS feature) will surface
-  runtime errors.
+  runtime errors. For a feature-flag-centric overview of the
+  `wallet-integration` toggle, build commands, and the
+  `rpp-wallet-interface` helper, see
+  [docs/wallet_integration.md](docs/wallet_integration.md).
 - **Security, observability, and backend procedures** – Review the
   [security policy](./SECURITY.md) for reporting channels, the
   [observability guide and runbook](./docs/observability.md) for telemetry

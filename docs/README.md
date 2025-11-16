@@ -7,6 +7,7 @@ frequently consulted references.
 ## Core guides
 
 - [`rpp-node` operator guide](rpp_node_operator_guide.md)
+- [Wallet integration feature reference](wallet_integration.md)
 - [Configuration guide](configuration.md)
 - [Snapshot streaming protocol](network/snapshots.md)
 - [Validator quickstart](validator_quickstart.md)
