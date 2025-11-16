@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-pub use rpp_wallet_interface::telemetry::{
+pub use crate::interface_telemetry::{
     TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletTelemetryAction,
 };
 

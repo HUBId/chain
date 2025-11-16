@@ -1,4 +1,4 @@
-pub use rpp_wallet_interface::node_client::*;
+pub use crate::interface_node_client::*;
 
 use crate::engine::{DraftInput, DraftOutput, DraftTransaction, SpendModel};
 

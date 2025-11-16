@@ -2,6 +2,10 @@
 
 The `rpp-wallet` crate bundles the wallet runtime, JSON-RPC surface, and CLI used by RPP operators. It shares storage and configuration conventions with the hybrid runtime so node operators can co-locate services.
 
+## Shared wallet interface crate
+
+RPC DTOs, telemetry counters, workflow payloads, and the `WalletService` trait now live in the sibling [`rpp-wallet-interface`](../wallet-interface) crate. `rpp-wallet` re-exports every interface type so downstream consumers keep importing from `rpp_wallet::*`, but when you touch shared payloads you must update both the interface crate and any wallet modules that rely on those types. Failing to do so will compile locally (thanks to the re-exports) but will break other crates that depend on `rpp-wallet-interface` directly. Use `cargo check -p rpp-wallet-interface && cargo check -p rpp-wallet` before submitting interface changes.
+
 ## Schema versioning & storage guards
 
 `WalletStore` persists its schema marker under `wallet/schema_version` and upgrades migrations on open. New storage surfaces such as the backup metadata bucket (`wallet/backup_meta/…`) and security registries (`wallet/security/{rbac,mtls}/…`) land in schema version 3. Callers **must** check `WalletStore::schema_version()` and refuse to operate when the result is less than `SCHEMA_VERSION_V3`; this prevents features like backup exports or RBAC provisioning from touching pre-migrated databases.【F:rpp/wallet/src/db/store.rs†L47-L64】【F:rpp/wallet/src/db/schema.rs†L4-L48】 Ensure the runtime or CLI opens the wallet once after upgrading so the buckets and metadata sentinels materialise before enabling those flows. Pair these checks with the [Wallet Operator Runbook](../../docs/wallet_operator_runbook.md), which captures the prerequisite inventory and acceptance tests that change-management teams require before promoting a schema or configuration change.
