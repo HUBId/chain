@@ -65,6 +65,10 @@ pub struct TelemetryCounters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    // The telemetry payloads are ingested by monitoring pipelines, so the
+    // serialization tests below make sure success/error outcomes keep their shape.
 
     #[test]
     fn counters_round_trip() {
@@ -79,5 +83,33 @@ mod tests {
         let decoded: TelemetryCounters =
             serde_json::from_str(&encoded).expect("deserialize counters");
         assert_eq!(decoded, counters);
+    }
+
+    #[test]
+    fn counters_snapshot_covers_outcomes() {
+        let counters = TelemetryCounters {
+            enabled: false,
+            counters: vec![
+                TelemetryCounter {
+                    name: "backup.export.success".into(),
+                    value: 7,
+                },
+                TelemetryCounter {
+                    name: "backup.export.error".into(),
+                    value: 1,
+                },
+            ],
+        };
+        let serialized = serde_json::to_value(&counters).expect("serialize counters");
+        assert_eq!(
+            serialized,
+            json!({
+                "enabled": false,
+                "counters": [
+                    {"name": "backup.export.success", "value": 7},
+                    {"name": "backup.export.error", "value": 1}
+                ]
+            })
+        );
     }
 }

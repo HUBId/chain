@@ -84,6 +84,10 @@ pub struct TransactionWorkflow {
 mod tests {
     use super::*;
     use crate::{AssetType, TransactionProofBundle, UtxoOutpoint, UtxoRecord};
+    use serde_json::json;
+
+    // These tests safeguard the JSON payloads consumed by the runtime by
+    // exercising representative workflow states that downstream components rely on.
 
     fn sample_workflow() -> TransactionWorkflow {
         TransactionWorkflow {
@@ -163,5 +167,32 @@ mod tests {
         let encoded = serde_json::to_string(&status).expect("serialize status");
         let decoded: ReputationStatus = serde_json::from_str(&encoded).expect("deserialize status");
         assert_eq!(decoded, status);
+    }
+
+    #[test]
+    fn transaction_policy_json_shape_is_stable() {
+        let policy = sample_workflow().policy;
+        let json_policy = serde_json::to_value(&policy).expect("serialize policy");
+        assert_eq!(
+            json_policy,
+            json!({
+                "required_tier": "Tl1",
+                "status": {
+                    "tier": "Tl1",
+                    "score": 0.75,
+                    "timetoke_hours": 24,
+                    "zsi_validated": true,
+                },
+                "utxo": {
+                    "tier": "Tl1",
+                    "input_count": 1,
+                    "max_inputs": 4,
+                    "debit_value": 1_010,
+                    "max_debit_value": 10_000,
+                    "change_value": 0,
+                    "max_change_value": 10_000,
+                }
+            })
+        );
     }
 }

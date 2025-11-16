@@ -1158,6 +1158,10 @@ mod tests {
     use super::*;
     use serde::de::DeserializeOwned;
     use std::fmt::Debug;
+    use serde_json::json;
+
+    // The RPC types are called across process boundaries, so we cover several
+    // variants (requests, responses, and error payloads) to lock in the expected JSON shape.
 
     fn roundtrip<T>(value: &T)
     where
@@ -1302,5 +1306,54 @@ mod tests {
         let encoded = serde_json::to_string(&code).expect("encode");
         let decoded: WalletRpcErrorCode = serde_json::from_str(&encoded).expect("decode");
         assert_eq!(decoded, code);
+    }
+
+    #[test]
+    fn jsonrpc_error_payload_shape() {
+        let response = JsonRpcResponse {
+            jsonrpc: JSONRPC_VERSION,
+            id: Some(Value::from("req-7")),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32010,
+                message: "policy violation".into(),
+                data: Some(json!({
+                    "code": WalletRpcErrorCode::WalletPolicyViolation.as_str(),
+                    "details": {"draft_id": "draft-7"}
+                })),
+            }),
+        };
+        let serialized = serde_json::to_value(&response).expect("serialize response");
+        assert_eq!(
+            serialized,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "req-7",
+                "error": {
+                    "code": -32010,
+                    "message": "policy violation",
+                    "data": {
+                        "code": "WALLET_POLICY_VIOLATION",
+                        "details": {"draft_id": "draft-7"}
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn wallet_rpc_error_code_serialization_covers_variants() {
+        let known = WalletRpcErrorCode::PendingLockConflict;
+        assert_eq!(
+            serde_json::to_string(&known).expect("serialize known"),
+            "\"PENDING_LOCK_CONFLICT\""
+        );
+
+        let custom = WalletRpcErrorCode::Custom("ANALYTICS_FAILURE".into());
+        assert_eq!(
+            serde_json::to_string(&custom).expect("serialize custom"),
+            "\"ANALYTICS_FAILURE\""
+        );
+        assert_eq!(WalletRpcErrorCode::from("ANALYTICS_FAILURE"), custom);
     }
 }
