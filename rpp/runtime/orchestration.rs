@@ -26,7 +26,7 @@ use crate::reputation::Tier;
 use crate::runtime::node_runtime::{node::MetaTelemetryReport, NodeEvent, NodeHandle as P2pHandle};
 use crate::types::{Address, Block, TransactionProofBundle};
 use rpp_p2p::GossipTopic;
-use rpp_wallet_interface::TransactionWorkflow;
+use rpp_wallet_interface::{Tier as WalletTier, TransactionWorkflow};
 
 /// Default buffer size for the gossip → mempool proof channel.
 const DEFAULT_QUEUE_DEPTH: usize = 64;
@@ -613,7 +613,8 @@ impl PipelineOrchestrator {
         err
     )]
     pub async fn submit_transaction(&self, workflow: TransactionWorkflow) -> ChainResult<String> {
-        if workflow.policy.required_tier < Tier::Tl1 {
+        let required_tier = wallet_tier_to_runtime(workflow.policy.required_tier);
+        if required_tier < Tier::Tl1 {
             metrics::counter!(
                 METRIC_PIPELINE_SUBMISSIONS,
                 1,
@@ -630,7 +631,7 @@ impl PipelineOrchestrator {
             .node
             .get_account(sender.as_str())?
             .ok_or_else(|| ChainError::Transaction("origin account missing from ledger".into()))?;
-        if account.reputation.tier < workflow.policy.required_tier {
+        if account.reputation.tier < required_tier {
             metrics::counter!(
                 METRIC_PIPELINE_SUBMISSIONS,
                 1,
@@ -1158,6 +1159,17 @@ impl PipelineOrchestrator {
                 }
             }
         }
+    }
+}
+
+fn wallet_tier_to_runtime(tier: WalletTier) -> Tier {
+    match tier {
+        WalletTier::Tl0 => Tier::Tl0,
+        WalletTier::Tl1 => Tier::Tl1,
+        WalletTier::Tl2 => Tier::Tl2,
+        WalletTier::Tl3 => Tier::Tl3,
+        WalletTier::Tl4 => Tier::Tl4,
+        WalletTier::Tl5 => Tier::Tl5,
     }
 }
 

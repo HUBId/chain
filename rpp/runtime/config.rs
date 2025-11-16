@@ -37,18 +37,124 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
-use crate::runtime::wallet::rpc::{
+#[cfg(feature = "wallet-integration")]
+use crate::runtime::wallet::runtime::{WalletAuditRuntimeConfig, WalletRpcSecurityRuntimeConfig};
+use crate::runtime::wallet_security::{
     WalletIdentity, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
-use crate::runtime::wallet::runtime::{WalletAuditRuntimeConfig, WalletRpcSecurityRuntimeConfig};
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
+#[cfg(not(feature = "wallet-integration"))]
+use wallet_runtime_placeholders::{WalletAuditRuntimeConfig, WalletRpcSecurityRuntimeConfig};
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
 const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
 const MALACHITE_CONFIG_VERSION_DEFAULT: &str = "1.0.0";
 const MALACHITE_CONFIG_FILE: &str = "malachite.toml";
 const DEFAULT_MALACHITE_CONFIG_PATH: &str = "config/malachite.toml";
+
+#[cfg(not(feature = "wallet-integration"))]
+mod wallet_runtime_placeholders {
+    use super::WalletRpcSecurityCaFingerprint;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    #[derive(Clone, Debug, Default)]
+    pub struct WalletRpcSecurityRuntimeConfig {
+        enabled: bool,
+        certificate: Option<PathBuf>,
+        private_key: Option<PathBuf>,
+        ca_certificate: Option<PathBuf>,
+        ca_fingerprints: Vec<WalletRpcSecurityCaFingerprint>,
+    }
+
+    impl WalletRpcSecurityRuntimeConfig {
+        pub fn new(
+            enabled: bool,
+            certificate: Option<PathBuf>,
+            private_key: Option<PathBuf>,
+            ca_certificate: Option<PathBuf>,
+            ca_fingerprints: Vec<WalletRpcSecurityCaFingerprint>,
+        ) -> Self {
+            Self {
+                enabled,
+                certificate,
+                private_key,
+                ca_certificate,
+                ca_fingerprints,
+            }
+        }
+
+        pub fn enabled(&self) -> bool {
+            self.enabled
+        }
+
+        pub fn certificate(&self) -> Option<&Path> {
+            self.certificate.as_deref()
+        }
+
+        pub fn private_key(&self) -> Option<&Path> {
+            self.private_key.as_deref()
+        }
+
+        pub fn ca_certificate(&self) -> Option<&Path> {
+            self.ca_certificate.as_deref()
+        }
+
+        pub fn ca_fingerprints(&self) -> &[WalletRpcSecurityCaFingerprint] {
+            &self.ca_fingerprints
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct WalletAuditRuntimeConfig {
+        enabled: bool,
+        retention_days: u64,
+        directory: Option<PathBuf>,
+    }
+
+    impl WalletAuditRuntimeConfig {
+        pub fn new(enabled: bool, retention_days: u64, directory: Option<PathBuf>) -> Self {
+            Self {
+                enabled,
+                retention_days,
+                directory,
+            }
+        }
+
+        pub fn enabled(&self) -> bool {
+            self.enabled
+        }
+
+        pub fn set_enabled(&mut self, enabled: bool) {
+            self.enabled = enabled;
+        }
+
+        pub fn retention_days(&self) -> u64 {
+            self.retention_days
+        }
+
+        pub fn set_retention_days(&mut self, days: u64) {
+            self.retention_days = days;
+        }
+
+        pub fn directory(&self) -> Option<&Path> {
+            self.directory.as_deref()
+        }
+
+        pub fn set_directory(&mut self, directory: PathBuf) {
+            self.directory = Some(directory);
+        }
+
+        pub fn retention_duration(&self) -> Duration {
+            let seconds = self
+                .retention_days
+                .checked_mul(24 * 60 * 60)
+                .unwrap_or(u64::MAX);
+            Duration::from_secs(seconds)
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]

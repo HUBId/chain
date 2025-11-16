@@ -15,7 +15,7 @@ integration = ["wallet-ui"]
 prod = []
 it_state_sync = []
 wallet-ui = ["wallet-integration"]
-wallet-integration = ["dep:rpp-wallet-interface", "dep:rpp-wallet"]
+wallet-integration = ["dep:rpp-wallet"]
 wallet_rpc_mtls = [
     "wallet-integration",
     "dep:tokio-rustls",
@@ -105,7 +105,7 @@ rpp-p2p = { path = "../p2p" }
 rpp-identity-tree = { path = "../identity-tree" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
 rpp-wallet = { path = "../wallet", default-features = false, optional = true }
-rpp-wallet-interface = { path = "../wallet-interface", optional = true }
+rpp-wallet-interface = { path = "../wallet-interface" }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 semver = "=1.0.27"
@@ -198,6 +198,10 @@ path = "../../tests/feature_guard.rs"
 [[test]]
 name = "rpp_fail_matrix"
 path = "../../tests/rpp_fail_matrix.rs"
+
+[[test]]
+name = "runtime_wallet_cfg"
+path = "../../tests/runtime_wallet_cfg.rs"
 
 [[test]]
 name = "zsi_renewal"

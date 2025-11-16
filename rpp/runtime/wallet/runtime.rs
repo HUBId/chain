@@ -19,6 +19,8 @@ use tracing::{debug, info, warn};
 use crate::errors::{ChainError, ChainResult};
 use crate::runtime::config::WalletRpcSecurityCaFingerprint;
 use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
+#[cfg(feature = "wallet-integration")]
+use rpp_wallet::wallet::Wallet;
 pub use rpp_wallet_interface::WalletService;
 use rpp_wallet_interface::{NodeClient, WalletService, WalletServiceError};
 
@@ -361,6 +363,7 @@ pub struct GenericWalletRuntimeHandle<W: WalletService + 'static> {
     state: Arc<WalletRuntimeState>,
 }
 
+#[cfg(feature = "wallet-integration")]
 pub type WalletRuntimeHandle = GenericWalletRuntimeHandle<Wallet>;
 
 impl<W: WalletService + 'static> GenericWalletRuntimeHandle<W> {
