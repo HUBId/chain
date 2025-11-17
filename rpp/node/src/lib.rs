@@ -1,3 +1,4 @@
+pub mod cli;
 mod config;
 mod feature_guard;
 mod pipeline;
@@ -72,6 +73,7 @@ use crate::services::pruning::PruningService;
 use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
+pub use cli::{run_cli, CliError, CliResult};
 pub use rpp_chain::runtime::RuntimeMode;
 pub use state_sync::light_client::{
     LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
