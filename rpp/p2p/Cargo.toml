@@ -80,6 +80,8 @@ rand = { version = "=0.8.5", features = ["std"] }
 schnorrkel = "0.11"
 ed25519-dalek = "=2.1.1"
 rpp-pruning = { path = "../pruning" }
+s3 = { package = "rust-s3", version = "=0.34.0", default-features = false, features = ["sync-native-tls"] }
+time = { version = "=0.3.36", features = ["formatting"] }
 
 [dev-dependencies]
 tempfile = "3.10"
