@@ -18,6 +18,9 @@ wallet-ui = ["wallet-integration"]
 wallet-integration = [
     "dep:rpp-wallet",
     "rpp-wallet/prover-mock",
+    "rpp-wallet-interface/wallet_hw",
+    "rpp-wallet-interface/wallet_multisig_hooks",
+    "rpp-wallet-interface/wallet_zsi",
 ]
 wallet_rpc_mtls = [
     "wallet-integration",
@@ -26,6 +29,7 @@ wallet_rpc_mtls = [
     "dep:rustls-pemfile",
     "axum-server/tls-rustls",
     "rpp-wallet/wallet_rpc_mtls",
+    "rpp-wallet-interface/wallet_rpc_mtls",
 ]
 nightly-prover = [
     "dep:prover_stwo_backend",
@@ -71,7 +75,11 @@ backend-plonky3-gpu = [
     "prover-backend-interface/backend-plonky3-gpu",
 ]
 backend-rpp-stark = ["wallet-integration", "dep:rpp-stark", "rpp-wallet/backend-rpp-stark"]
-vendor_electrs = ["wallet-integration", "rpp-wallet/vendor_electrs"]
+vendor_electrs = [
+    "wallet-integration",
+    "rpp-wallet/vendor_electrs",
+    "rpp-wallet-interface/vendor_electrs",
+]
 
 [dependencies]
 anyhow = "=1.0.100"
@@ -109,7 +117,7 @@ rpp-p2p = { path = "../p2p" }
 rpp-identity-tree = { path = "../identity-tree" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
 rpp-wallet = { path = "../wallet", default-features = false, optional = true }
-rpp-wallet-interface = { path = "../wallet-interface" }
+rpp-wallet-interface = { path = "../wallet-interface", default-features = false }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 semver = "=1.0.27"

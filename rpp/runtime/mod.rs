@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{ChainError, ChainResult};
 pub use rpp_wallet_interface::runtime_config::RuntimeMode;
+pub use rpp_wallet_interface::{runtime_config, runtime_telemetry, runtime_wallet};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
