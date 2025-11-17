@@ -4,8 +4,9 @@ use std::sync::Arc;
 use anyhow::Error as AnyError;
 use hex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
+
+use crate::runtime_config::{MempoolStatus, QueueWeightsConfig};
 
 /// Lightweight summary describing the current chain head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,55 +113,6 @@ impl fmt::Display for NodeStatsKind {
             NodeStatsKind::MempoolInfo => write!(f, "mempool info"),
             NodeStatsKind::RecentBlocks => write!(f, "recent blocks"),
             NodeStatsKind::FeeEstimate => write!(f, "fee estimates"),
-        }
-    }
-}
-
-/// Aggregated status describing the contents of the runtime mempool.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MempoolStatus {
-    /// Pending transactions observed in the mempool.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transactions: Vec<Value>,
-    /// Pending identities.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub identities: Vec<Value>,
-    /// Pending votes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub votes: Vec<Value>,
-    /// Pending uptime proofs.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub uptime_proofs: Vec<Value>,
-    /// Queue weight configuration applied to the mempool.
-    pub queue_weights: QueueWeightsConfig,
-}
-
-impl Default for MempoolStatus {
-    fn default() -> Self {
-        Self {
-            transactions: Vec::new(),
-            identities: Vec::new(),
-            votes: Vec::new(),
-            uptime_proofs: Vec::new(),
-            queue_weights: QueueWeightsConfig::default(),
-        }
-    }
-}
-
-/// Relative weights assigned to priority queues in the mempool.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct QueueWeightsConfig {
-    /// Weight assigned to the priority queue.
-    pub priority: f64,
-    /// Weight assigned to the fee queue.
-    pub fee: f64,
-}
-
-impl Default for QueueWeightsConfig {
-    fn default() -> Self {
-        Self {
-            priority: 0.7,
-            fee: 0.3,
         }
     }
 }

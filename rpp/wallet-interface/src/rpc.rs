@@ -1157,8 +1157,8 @@ pub struct RescanResponse {
 mod tests {
     use super::*;
     use serde::de::DeserializeOwned;
-    use std::fmt::Debug;
     use serde_json::json;
+    use std::fmt::Debug;
 
     // The RPC types are called across process boundaries, so we cover several
     // variants (requests, responses, and error payloads) to lock in the expected JSON shape.

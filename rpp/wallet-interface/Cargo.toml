@@ -7,6 +7,12 @@ homepage.workspace = true
 repository.workspace = true
 readme = "README.md"
 
+[features]
+default = []
+wallet_rpc_mtls = []
+wallet_hw = []
+vendor_electrs = []
+
 [dependencies]
 anyhow = "1"
 hex.workspace = true
