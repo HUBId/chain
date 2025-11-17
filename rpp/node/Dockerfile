@@ -47,9 +47,9 @@ COPY xtask/Cargo.toml xtask/
 
 RUN cargo metadata --locked --format-version 1 > /dev/null
 
-# Build the rpp-node binary
+# Build the rpp-node runtime binaries and the standalone chain CLI
 COPY . .
-RUN cargo build --locked --release -p rpp-node
+RUN cargo build --locked --release -p rpp-node --bins
 
 FROM debian:bookworm-slim AS runtime
 
@@ -64,6 +64,7 @@ RUN useradd --system --create-home --home /app --shell /usr/sbin/nologin app
 WORKDIR /app
 
 COPY --from=builder /workspace/target/release/rpp-node /usr/local/bin/rpp-node
+COPY --from=builder /workspace/target/release/chain-cli /usr/local/bin/chain-cli
 
 # Entry point wrapper to inject environment-based RPC overrides
 RUN set -eux; \

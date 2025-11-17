@@ -108,6 +108,8 @@ This mechanism defines how the RPP Blockchain continuously rewards honest behavi
 | Path | Description |
 | --- | --- |
 | `rpp/node` | Executable entry points (`rpp-node`, `wallet`, `hybrid`, `validator`) and runtime wiring.【F:rpp/node/Cargo.toml†L1-L41】 |
+| `rpp/chain-cli` | Unified CLI crate that powers the node, wallet, hybrid, and validator subcommands (including VRF/admission helpers).【F:rpp/chain-cli/src/lib.rs†L61-L152】【F:rpp/chain-cli/src/lib.rs†L180-L232】 |
+| `rpp/node-runtime-api` | Shared runtime CLI arguments and bootstrap plumbing reused by every entry point and CLI utility.【F:rpp/node-runtime-api/src/lib.rs†L37-L115】【F:rpp/node-runtime-api/src/lib.rs†L135-L190】 |
 | `rpp/runtime` | Core node pipeline, state lifecycle, and gossip integration.【F:rpp/runtime/node.rs†L760-L796】【F:rpp/runtime/node.rs†L2544-L2680】 |
 | `rpp/consensus` | Malachite BFT consensus engine, reputation, rewards, and evidence handling.【F:rpp/consensus/src/state.rs†L948-L1199】 |
 | `rpp/p2p` | libp2p networking stack, gossip topics, and admission heuristics.【F:rpp/p2p/src/topics.rs†L6-L85】 |
@@ -193,6 +195,22 @@ pipeline.【F:scripts/run_hybrid_mode.sh†L10-L66】【F:scripts/run_wallet_mod
 Validator and hybrid modes require the STWO prover backend and abort during
 startup when the corresponding feature (`prover-stwo` or `prover-stwo-simd`) is
 missing.
+
+## Unified CLI entry points
+
+The `rpp-chain-cli` crate defines the full clap surface for node, wallet,
+hybrid, and validator subcommands—including validator VRF helpers, admission
+policy tooling, and snapshot controls—and is reused by every runtime entry
+point.【F:rpp/chain-cli/src/lib.rs†L61-L152】【F:rpp/chain-cli/src/lib.rs†L367-L461】
+To explore the CLI without bootstrapping the runtime, run
+`cargo run -p rpp-chain -- --help`, which exercises the lightweight stub binary
+located under `rpp/chain/src/bin/chain_cli.rs`.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】
+Operators can inspect the full runtime-aware CLI (and confirm which flags are
+supported by the shipping binaries) with `cargo run -p rpp-node -- --help`,
+which compiles the CLI crate and then hands control to the node’s runtime
+executor.【F:rpp/node/src/main.rs†L1-L6】 These commands mirror the `cargo xtask
+test-cli` smoke tests and are referenced throughout the operator guides to keep
+the CLI surface auditable in both developer and production builds.
 
 ## Docker smoke test
 

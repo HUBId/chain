@@ -1,6 +1,6 @@
 # CLI Refactor Dependency Inventory
 
-This document enumerates all `use` statements currently present in `rpp/node/src/cli.rs` (including nested modules) and assigns each dependency to one of three architectural categories:
+This document enumerates all `use` statements currently present in `rpp/chain-cli/src/lib.rs` (including nested modules) and assigns each dependency to one of three architectural categories. The crate hosts the clap surface shared by the runtime entrypoints and depends on `rpp-node-runtime-api` for the CLI plumbing exported to every binary.
 
 - **CLI** – crates and modules that exist to drive the command-line interface (argument parsing, console I/O, formatting helpers, utilities).
 - **Runtime-Facade** – thin layers that bridge the CLI into the broader runtime entry points exposed by `rpp` (e.g., `crate::run`, runtime configuration types, metrics handles).

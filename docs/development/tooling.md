@@ -56,6 +56,12 @@ to ensure the additional transport compiles alongside the default TCP stack.
 
 For operational guidance on the runtime CLI—including authentication, rate limits,
 and recovery procedures—consult the [`rpp-node` operator guide](../rpp_node_operator_guide.md).
+During development you can inspect the clap surface directly via
+`cargo run -p rpp-chain -- --help`, which shells out to the lightweight stub
+binary under `rpp/chain/src/bin/chain_cli.rs`, or
+`cargo run -p rpp-node -- --help`, which wires the same CLI crate into the
+runtime executor and validates the shared argument plumbing exported by
+`rpp-node-runtime-api`.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】【F:rpp/chain-cli/src/lib.rs†L61-L118】【F:rpp/node-runtime-api/src/lib.rs†L37-L115】【F:rpp/node/src/main.rs†L1-L6】
 
 ## WORM-Export-Stub
 
