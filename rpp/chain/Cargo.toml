@@ -164,6 +164,10 @@ metrics-exporter-prometheus = "=0.17.2"
 [build-dependencies]
 rustc_version = "=0.4.1"
 
+[[bin]]
+name = "chain-cli"
+path = "src/bin/chain_cli.rs"
+
 [[test]]
 name = "server_limits"
 path = "rpp/rpc/tests/server_limits.rs"
