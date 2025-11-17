@@ -1,10 +1,18 @@
 pub mod cli;
-mod config;
 mod feature_guard;
 mod pipeline;
 mod services;
 mod state_sync;
 mod telemetry;
+
+pub use rpp_node_runtime_api::{
+    BootstrapError, BootstrapErrorKind, BootstrapOptions, BootstrapResult, PruningCliOverrides,
+    PruningOverrides, RuntimeMode, RuntimeOptions,
+};
+
+pub mod config {
+    pub use rpp_node_runtime_api::{PruningCliOverrides, PruningOverrides};
+}
 
 use std::convert::Infallible;
 use std::env;
@@ -20,7 +28,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Args;
 use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
@@ -60,13 +67,11 @@ use rpp_chain::crypto::{
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::{
-    init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode,
-    TelemetryExporterBuilder,
+    init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, TelemetryExporterBuilder,
 };
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
-use crate::config::{PruningCliOverrides, PruningOverrides};
 use crate::pipeline::PipelineHookGuard;
 use crate::services::admission_reconciler::{AdmissionReconciler, AdmissionReconcilerSettings};
 use crate::services::pruning::PruningService;
@@ -74,13 +79,10 @@ use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
 pub use cli::{run_cli, CliError, CliResult};
-pub use rpp_chain::runtime::RuntimeMode;
 pub use state_sync::light_client::{
     LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
     StateSyncVerificationSummary, VerificationError, VerificationErrorKind, VerifiedChunkRange,
 };
-
-pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
 
 const WORM_EXPORT_MISCONFIGURED_METRIC: &str = "worm_export_misconfigured_total";
 const TELEMETRY_FAILURE_METRIC: &str = "telemetry_otlp_failures_total";
@@ -146,223 +148,6 @@ impl ValidatorSetupError {
         match self {
             ValidatorSetupError::Configuration(err) => BootstrapError::configuration(err),
             ValidatorSetupError::Network(err) => BootstrapError::startup(err),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BootstrapErrorKind {
-    Configuration,
-    Startup,
-    Runtime,
-}
-
-impl BootstrapErrorKind {
-    pub fn exit_code(self) -> i32 {
-        match self {
-            BootstrapErrorKind::Configuration => 2,
-            BootstrapErrorKind::Startup => 3,
-            BootstrapErrorKind::Runtime => 4,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BootstrapErrorKind::Configuration => "configuration",
-            BootstrapErrorKind::Startup => "startup",
-            BootstrapErrorKind::Runtime => "runtime",
-        }
-    }
-}
-
-impl fmt::Display for BootstrapErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug)]
-pub enum BootstrapError {
-    Configuration(anyhow::Error),
-    Startup(anyhow::Error),
-    Runtime(anyhow::Error),
-}
-
-impl BootstrapError {
-    pub fn configuration<E>(error: E) -> Self
-    where
-        E: Into<anyhow::Error>,
-    {
-        Self::Configuration(error.into())
-    }
-
-    pub fn startup<E>(error: E) -> Self
-    where
-        E: Into<anyhow::Error>,
-    {
-        Self::Startup(error.into())
-    }
-
-    pub fn runtime<E>(error: E) -> Self
-    where
-        E: Into<anyhow::Error>,
-    {
-        Self::Runtime(error.into())
-    }
-
-    pub fn exit_code(&self) -> i32 {
-        self.kind().exit_code()
-    }
-
-    pub fn kind(&self) -> BootstrapErrorKind {
-        match self {
-            BootstrapError::Configuration(_) => BootstrapErrorKind::Configuration,
-            BootstrapError::Startup(_) => BootstrapErrorKind::Startup,
-            BootstrapError::Runtime(_) => BootstrapErrorKind::Runtime,
-        }
-    }
-
-    pub fn inner(&self) -> &anyhow::Error {
-        match self {
-            BootstrapError::Configuration(err)
-            | BootstrapError::Startup(err)
-            | BootstrapError::Runtime(err) => err,
-        }
-    }
-}
-
-impl fmt::Display for BootstrapError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{0} error: {1}", self.kind(), self.inner())
-    }
-}
-
-impl std::error::Error for BootstrapError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.inner().as_ref())
-    }
-}
-
-/// Shared CLI arguments used across runtime entrypoints.
-#[derive(Debug, Clone, Args)]
-pub struct RuntimeOptions {
-    /// Optional path to a node configuration file loaded before starting the runtime.
-    /// The runtime does not watch for changes; restart after editing the file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<PathBuf>,
-
-    /// Optional path to a wallet configuration file loaded before starting the runtime.
-    /// The runtime does not watch for changes; restart after editing the file.
-    #[arg(long, value_name = "PATH")]
-    pub wallet_config: Option<PathBuf>,
-
-    /// Override the data directory defined in the node configuration
-    #[arg(long, value_name = "PATH")]
-    pub data_dir: Option<PathBuf>,
-
-    /// Override the RPC listen address defined in the node configuration
-    #[arg(long, value_name = "SOCKET")]
-    pub rpc_listen: Option<std::net::SocketAddr>,
-
-    /// Override the RPC authentication token defined in the node configuration
-    #[arg(long, value_name = "TOKEN")]
-    pub rpc_auth_token: Option<String>,
-
-    /// Override the RPC allowed origin defined in the node configuration
-    #[arg(long, value_name = "ORIGIN")]
-    pub rpc_allowed_origin: Option<String>,
-
-    /// Override the telemetry endpoint defined in the node configuration
-    #[arg(long, value_name = "URL")]
-    pub telemetry_endpoint: Option<String>,
-
-    /// Override the telemetry authentication token defined in the node configuration
-    #[arg(long, value_name = "TOKEN")]
-    pub telemetry_auth_token: Option<String>,
-
-    /// Override the telemetry sample interval (seconds) defined in the node configuration
-    #[arg(long, value_name = "SECONDS")]
-    pub telemetry_sample_interval: Option<u64>,
-
-    /// Override the log level (also respects RUST_LOG)
-    #[arg(long, value_name = "LEVEL")]
-    pub log_level: Option<String>,
-
-    /// (Deprecated) Logs are always emitted in structured JSON format
-    #[arg(long)]
-    pub log_json: bool,
-
-    /// Validate configuration and exit without starting the runtime
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Persist the resulting configuration into the current working directory
-    #[arg(long)]
-    pub write_config: bool,
-
-    /// Override the io-uring ring size defined in the node configuration
-    #[arg(
-        long = "storage-ring-size",
-        value_name = "ENTRIES",
-        env = "RPP_NODE_STORAGE_RING_SIZE"
-    )]
-    pub storage_ring_size: Option<u32>,
-
-    #[command(flatten)]
-    pub pruning: PruningCliOverrides,
-}
-
-impl RuntimeOptions {
-    pub fn into_bootstrap_options(self, mode: RuntimeMode) -> BootstrapOptions {
-        let RuntimeOptions {
-            config,
-            wallet_config,
-            data_dir,
-            rpc_listen,
-            rpc_auth_token,
-            rpc_allowed_origin,
-            telemetry_endpoint,
-            telemetry_auth_token,
-            telemetry_sample_interval,
-            log_level,
-            log_json,
-            dry_run,
-            write_config,
-            storage_ring_size,
-            pruning,
-        } = self;
-
-        let node_config = if mode.includes_node() {
-            config.clone()
-        } else {
-            None
-        };
-
-        let wallet_config = if mode.includes_wallet() {
-            match mode {
-                RuntimeMode::Wallet => wallet_config.or(config),
-                _ => wallet_config,
-            }
-        } else {
-            None
-        };
-
-        BootstrapOptions {
-            node_config,
-            wallet_config,
-            data_dir,
-            rpc_listen,
-            rpc_auth_token,
-            rpc_allowed_origin,
-            telemetry_endpoint,
-            telemetry_auth_token,
-            telemetry_sample_interval,
-            log_level,
-            log_json,
-            dry_run,
-            write_config,
-            storage_ring_size,
-            pruning: pruning.into_overrides(),
         }
     }
 }
@@ -521,25 +306,6 @@ fn normalize_bearer_token(raw: &Option<String>) -> Option<String> {
                 format!("Bearer {token}")
             }
         })
-}
-
-#[derive(Debug, Clone)]
-pub struct BootstrapOptions {
-    pub node_config: Option<PathBuf>,
-    pub wallet_config: Option<PathBuf>,
-    pub data_dir: Option<PathBuf>,
-    pub rpc_listen: Option<std::net::SocketAddr>,
-    pub rpc_auth_token: Option<String>,
-    pub rpc_allowed_origin: Option<String>,
-    pub telemetry_endpoint: Option<String>,
-    pub telemetry_auth_token: Option<String>,
-    pub telemetry_sample_interval: Option<u64>,
-    pub log_level: Option<String>,
-    pub log_json: bool,
-    pub dry_run: bool,
-    pub write_config: bool,
-    pub storage_ring_size: Option<u32>,
-    pub pruning: PruningOverrides,
 }
 
 pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {

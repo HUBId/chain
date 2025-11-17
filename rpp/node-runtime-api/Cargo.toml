@@ -1,0 +1,12 @@
+[package]
+name = "rpp-node-runtime-api"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.79"
+description = "Shared runtime configuration types for the RPP node entrypoints"
+repository = "https://github.com/ava-labs/chain"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+rpp-wallet-interface = { path = "../wallet-interface" }
