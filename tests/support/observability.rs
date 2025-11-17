@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use rpp_chain::config::{NodeConfig, WalletConfig};
+use rpp_chain::config::{NodeConfig, WalletConfig, WalletConfigExt};
 use tempfile::TempDir;
 
 /// Timeout applied when waiting for an rpp-node instance to emit its startup logs.

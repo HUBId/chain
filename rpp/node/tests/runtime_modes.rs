@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use libc;
-use rpp_chain::config::{NodeConfig, WalletConfig};
+use rpp_chain::config::{NodeConfig, WalletConfig, WalletConfigExt};
 use rpp_node::config::PruningCliOverrides;
 use rpp_node::{RuntimeMode, RuntimeOptions};
 use tempfile::TempDir;
