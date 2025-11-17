@@ -12,6 +12,8 @@ use rpp_wallet::vendor::electrs::mempool::{Mempool, MempoolSyncUpdate};
 use rpp_wallet::vendor::electrs::metrics::Metrics;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{Script, Txid};
 use rpp_wallet::vendor::electrs::types::ScriptHash;
+use serde::Serialize;
+use serde_json::Value;
 
 fn metrics() -> Metrics {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -71,16 +73,20 @@ fn sample_transaction(tag: u8, fee: u64) -> PendingTransactionSummary {
     }
 }
 
+fn encode_summary<T: Serialize>(summary: T) -> Value {
+    serde_json::to_value(summary).expect("serialize pending summary")
+}
+
 fn make_snapshot(weights: QueueWeightsConfig, fees: &[(u8, u64)]) -> MempoolStatus {
     let transactions = fees
         .iter()
-        .map(|(tag, fee)| sample_transaction(*tag, *fee))
+        .map(|(tag, fee)| encode_summary(sample_transaction(*tag, *fee)))
         .collect();
     MempoolStatus {
         transactions,
-        identities: vec![sample_identity(0x11)],
-        votes: vec![sample_vote(0x22)],
-        uptime_proofs: vec![sample_uptime(0x33)],
+        identities: vec![encode_summary(sample_identity(0x11))],
+        votes: vec![encode_summary(sample_vote(0x22))],
+        uptime_proofs: vec![encode_summary(sample_uptime(0x33))],
         queue_weights: weights,
     }
 }

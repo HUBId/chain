@@ -6,7 +6,7 @@ use log::warn;
 use serde::ser::{Serialize, SerializeSeq, Serializer};
 
 use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
+use rpp::runtime::node::{MempoolStatus, MempoolStatusExt, PendingTransactionSummary};
 
 use crate::vendor::electrs::daemon::Daemon;
 use crate::vendor::electrs::metrics::{Gauge, Metrics};
@@ -211,11 +211,18 @@ impl Mempool {
 
     pub fn apply_sync_update(&mut self, update: MempoolSyncUpdate) {
         let snapshot = update.snapshot;
+        let transaction_summaries = match snapshot.decode_transactions() {
+            Ok(summaries) => summaries,
+            Err(err) => {
+                warn!("discard invalid mempool snapshot: {err}");
+                return;
+            }
+        };
         let queue_weights = snapshot.queue_weights.clone();
-        let mut entries = HashMap::with_capacity(snapshot.transactions.len());
-        let mut weights = Vec::with_capacity(snapshot.transactions.len());
+        let mut entries = HashMap::with_capacity(transaction_summaries.len());
+        let mut weights = Vec::with_capacity(transaction_summaries.len());
 
-        for summary in &snapshot.transactions {
+        for summary in &transaction_summaries {
             match Entry::from_summary(summary, &queue_weights) {
                 Ok(entry) => {
                     weights.push(entry.queue_weight);

@@ -40,8 +40,9 @@ use tracing::Span;
 use tracing::{debug, error, info, info_span, warn};
 
 use hex;
+use rpp_wallet_interface::runtime_config::MempoolStatus;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json;
+use serde_json::{self, Value};
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
@@ -208,7 +209,7 @@ pub struct P2pCensorshipReport {
     pub entries: Vec<P2pCensorshipEntry>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingTransactionSummary {
     pub hash: String,
     pub from: Address,
@@ -322,7 +323,7 @@ fn storage_flush_span(operation: &'static str, height: u64, block_hash: &str) ->
     )
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingIdentitySummary {
     pub wallet_addr: Address,
     pub commitment: String,
@@ -334,7 +335,7 @@ pub struct PendingIdentitySummary {
     pub gossip_confirmations: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingVoteSummary {
     pub hash: String,
     pub voter: Address,
@@ -344,21 +345,65 @@ pub struct PendingVoteSummary {
     pub kind: BftVoteKind,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct MempoolStatus {
-    pub transactions: Vec<PendingTransactionSummary>,
-    pub identities: Vec<PendingIdentitySummary>,
-    pub votes: Vec<PendingVoteSummary>,
-    pub uptime_proofs: Vec<PendingUptimeSummary>,
-    pub queue_weights: QueueWeightsConfig,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingUptimeSummary {
     pub identity: Address,
     pub window_start: u64,
     pub window_end: u64,
     pub credited_hours: u64,
+}
+
+fn encode_pending_summaries<T>(entries: Vec<T>, label: &'static str) -> ChainResult<Vec<Value>>
+where
+    T: Serialize,
+{
+    entries
+        .into_iter()
+        .map(|entry| {
+            serde_json::to_value(entry).map_err(|err| {
+                ChainError::Config(format!("failed to encode {label} summary: {err}"))
+            })
+        })
+        .collect()
+}
+
+fn decode_pending_summaries<T>(entries: &[Value], label: &'static str) -> ChainResult<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    entries
+        .iter()
+        .map(|entry| {
+            serde_json::from_value(entry.clone()).map_err(|err| {
+                ChainError::Config(format!("failed to decode {label} summary: {err}"))
+            })
+        })
+        .collect()
+}
+
+pub trait MempoolStatusExt {
+    fn decode_transactions(&self) -> ChainResult<Vec<PendingTransactionSummary>>;
+    fn decode_identities(&self) -> ChainResult<Vec<PendingIdentitySummary>>;
+    fn decode_votes(&self) -> ChainResult<Vec<PendingVoteSummary>>;
+    fn decode_uptime_proofs(&self) -> ChainResult<Vec<PendingUptimeSummary>>;
+}
+
+impl MempoolStatusExt for MempoolStatus {
+    fn decode_transactions(&self) -> ChainResult<Vec<PendingTransactionSummary>> {
+        decode_pending_summaries(&self.transactions, "transaction")
+    }
+
+    fn decode_identities(&self) -> ChainResult<Vec<PendingIdentitySummary>> {
+        decode_pending_summaries(&self.identities, "identity")
+    }
+
+    fn decode_votes(&self) -> ChainResult<Vec<PendingVoteSummary>> {
+        decode_pending_summaries(&self.votes, "vote")
+    }
+
+    fn decode_uptime_proofs(&self) -> ChainResult<Vec<PendingUptimeSummary>> {
+        decode_pending_summaries(&self.uptime_proofs, "uptime proof")
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -5565,10 +5610,10 @@ impl NodeInner {
             })
             .collect();
         Ok(MempoolStatus {
-            transactions,
-            identities,
-            votes,
-            uptime_proofs,
+            transactions: encode_pending_summaries(transactions, "transaction")?,
+            identities: encode_pending_summaries(identities, "identity")?,
+            votes: encode_pending_summaries(votes, "vote")?,
+            uptime_proofs: encode_pending_summaries(uptime_proofs, "uptime proof")?,
             queue_weights: self.queue_weights(),
         })
     }

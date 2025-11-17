@@ -36,7 +36,7 @@ use crate::vendor::electrs::types::{
     encode_transaction_metadata, LedgerScriptPayload, ScriptHash, StatusDigest,
     StoredTransactionMetadata,
 };
-use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
+use rpp::runtime::node::{MempoolStatus, MempoolStatusExt, PendingTransactionSummary};
 #[cfg(feature = "backend-rpp-stark")]
 use rpp::{
     proofs::rpp::{
@@ -669,7 +669,10 @@ fn process_mempool(
     confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
 ) -> anyhow::Result<Vec<(HistoryEntry, Option<u64>)>> {
     let mut entries = Vec::new();
-    for tx in &status.transactions {
+    let transactions = status
+        .decode_transactions()
+        .map_err(|err| anyhow!("decode mempool transactions: {err}"))?;
+    for tx in &transactions {
         if let Some((entry, credit)) = mempool_entry(tx, scripthash, confirmed_unspent)? {
             entries.push((entry, credit));
         }
@@ -1226,7 +1229,8 @@ mod tests {
         confirmed: &HashMap<OutPoint, (usize, u64)>,
     ) -> (HistoryEntry, Option<u64>) {
         let mempool = MempoolStatus {
-            transactions: vec![summary],
+            transactions: vec![serde_json::to_value(summary)
+                .expect("serialize pending transaction summary")],
             identities: Vec::new(),
             votes: Vec::new(),
             uptime_proofs: Vec::new(),

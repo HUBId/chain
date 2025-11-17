@@ -11,6 +11,7 @@ use rpp_chain::node::Node;
 #[cfg(feature = "prover-stwo")]
 use rpp_chain::proof_system::ProofProver;
 use rpp_chain::proof_system::ProofVerifierRegistry;
+use rpp_chain::runtime::node::{MempoolStatusExt, PendingTransactionSummary};
 use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::storage::Storage;
 #[cfg(feature = "prover-stwo")]
@@ -142,8 +143,10 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
     let status = handle
         .mempool_status()
         .expect("fetch mempool status before restart");
-    let queued_hashes: Vec<_> = status
-        .transactions
+    let queued_transactions: Vec<PendingTransactionSummary> = status
+        .decode_transactions()
+        .expect("decode pending transactions before restart");
+    let queued_hashes: Vec<_> = queued_transactions
         .iter()
         .map(|tx| tx.hash.clone())
         .collect();
@@ -151,7 +154,7 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         queued_hashes, accepted_hashes,
         "mempool should retain initial submissions"
     );
-    for tx in &status.transactions {
+    for tx in &queued_transactions {
         assert!(
             tx.witness.is_some(),
             "pending transaction missing witness metadata"
@@ -182,8 +185,11 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
     let restarted_status = restarted_handle
         .mempool_status()
         .expect("fetch mempool status after restart");
+    let restarted_transactions: Vec<PendingTransactionSummary> = restarted_status
+        .decode_transactions()
+        .expect("decode pending transactions after restart");
     assert!(
-        restarted_status.transactions.is_empty(),
+        restarted_transactions.is_empty(),
         "mempool should be empty after restart"
     );
 
