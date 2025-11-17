@@ -8406,8 +8406,8 @@ dependencies = [
  "rpp-identity-tree",
  "rpp-p2p",
  "rpp-stark",
- "rpp-wallet",
  "rpp-wallet-interface",
+ "rpp-wallet-lib",
  "rustc_version",
  "rustls",
  "rustls-pemfile 1.0.4",
@@ -8628,6 +8628,33 @@ dependencies = [
 name = "rpp-wallet"
 version = "0.1.0"
 dependencies = [
+ "clap",
+ "rpp-node",
+ "rpp-wallet-lib",
+ "tokio",
+]
+
+[[package]]
+name = "rpp-wallet-interface"
+version = "0.0.12"
+dependencies = [
+ "anyhow",
+ "base64ct",
+ "clap",
+ "hex",
+ "parking_lot 0.12.5",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "rpp-wallet-lib"
+version = "0.1.0"
+dependencies = [
  "anyhow",
  "arboard",
  "argon2",
@@ -8664,23 +8691,6 @@ dependencies = [
  "toml 0.8.12",
  "tracing",
  "zeroize",
-]
-
-[[package]]
-name = "rpp-wallet-interface"
-version = "0.0.12"
-dependencies = [
- "anyhow",
- "base64ct",
- "clap",
- "hex",
- "parking_lot 0.12.5",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10987,7 +10997,7 @@ dependencies = [
  "parking_lot 0.12.5",
  "reqwest 0.12.24",
  "rpp-chain",
- "rpp-wallet",
+ "rpp-wallet-lib",
  "serde",
  "serde_json",
  "tempfile",

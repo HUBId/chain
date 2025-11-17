@@ -20,7 +20,7 @@ backend-rpp-stark = [
 ]
 
 [dependencies]
-rpp-wallet = { path = "../wallet", features = ["test-fixtures"] }
+rpp-wallet = { package = "rpp-wallet-lib", path = "../wallet", features = ["test-fixtures"] }
 rpp = { package = "rpp-chain", path = "../chain", default-features = false, features = ["wallet-ui"] }
 
 [dev-dependencies]

@@ -1,8 +1,11 @@
 [package]
-name = "rpp-wallet"
+name = "rpp-wallet-lib"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.79"
+
+[lib]
+name = "rpp_wallet"
 
 [features]
 default = ["prover-mock", "backup"]
@@ -11,6 +14,7 @@ wallet_hw = []
 wallet_zsi = []
 wallet_multisig_hooks = []
 wallet_rpc_mtls = []
+runtime = []
 test-fixtures = []
 nightly-prover = [
     "dep:prover_stwo_backend",
