@@ -16,17 +16,17 @@ pub struct PackedCM31(pub [PackedM31; 2]);
 
 impl PackedCM31 {
     /// Constructs a new instance with all vector elements set to `value`.
-    pub const fn broadcast(value: CM31) -> Self {
+    pub fn broadcast(value: CM31) -> Self {
         Self([PackedM31::broadcast(value.0), PackedM31::broadcast(value.1)])
     }
 
     /// Returns all `a` values such that each vector element is represented as `a + bi`.
-    pub const fn a(&self) -> PackedM31 {
+    pub fn a(&self) -> PackedM31 {
         self.0[0]
     }
 
     /// Returns all `b` values such that each vector element is represented as `a + bi`.
-    pub const fn b(&self) -> PackedM31 {
+    pub fn b(&self) -> PackedM31 {
         self.0[1]
     }
 

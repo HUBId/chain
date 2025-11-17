@@ -10,12 +10,12 @@ use crate::core::pcs::TreeVec;
 use crate::core::verifier::PREPROCESSED_TRACE_IDX;
 use crate::core::ColumnVec;
 
-pub struct Components<'a> {
-    pub components: Vec<&'a dyn Component>,
+pub struct Components<'a, C: Component + ?Sized> {
+    pub components: Vec<&'a C>,
     pub n_preprocessed_columns: usize,
 }
 
-impl Components<'_> {
+impl<'a, C: Component + ?Sized> Components<'a, C> {
     pub fn composition_log_degree_bound(&self) -> u32 {
         self.components
             .iter()

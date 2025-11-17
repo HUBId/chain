@@ -34,7 +34,7 @@ pub struct PackedM31(Simd<u32, N_LANES>);
 
 impl PackedM31 {
     /// Constructs a new instance with all vector elements set to `value`.
-    pub const fn broadcast(M31(value): M31) -> Self {
+    pub fn broadcast(M31(value): M31) -> Self {
         Self(Simd::splat(value))
     }
 
@@ -79,14 +79,14 @@ impl PackedM31 {
         self + self
     }
 
-    pub const fn into_simd(self) -> Simd<u32, N_LANES> {
+    pub fn into_simd(self) -> Simd<u32, N_LANES> {
         self.0
     }
 
     /// # Safety
     ///
     /// Vector elements must be in the range `[0, P]`.
-    pub const unsafe fn from_simd_unchecked(v: Simd<u32, N_LANES>) -> Self {
+    pub unsafe fn from_simd_unchecked(v: Simd<u32, N_LANES>) -> Self {
         Self(v)
     }
 
@@ -94,7 +94,7 @@ impl PackedM31 {
     ///
     /// Behavior is undefined if the pointer does not have the same alignment as
     /// [`PackedM31`]. The loaded `u32` values must be in the range `[0, P]`.
-    pub const unsafe fn load(mem_addr: *const u32) -> Self {
+    pub unsafe fn load(mem_addr: *const u32) -> Self {
         Self(ptr::read(mem_addr as *const u32x16))
     }
 
@@ -102,7 +102,7 @@ impl PackedM31 {
     ///
     /// Behavior is undefined if the pointer does not have the same alignment as
     /// [`PackedM31`].
-    pub const unsafe fn store(self, dst: *mut u32) {
+    pub unsafe fn store(self, dst: *mut u32) {
         ptr::write(dst as *mut u32x16, self.0)
     }
 }

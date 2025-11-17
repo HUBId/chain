@@ -32,9 +32,6 @@ compile_error!(
 Build without these features or use Nightly."
 );
 
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
-compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
-
 pub mod backend;
 #[cfg(any(test, feature = "scaffold"))]
 pub mod circuits;

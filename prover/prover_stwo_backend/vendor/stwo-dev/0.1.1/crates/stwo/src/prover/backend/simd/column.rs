@@ -53,7 +53,7 @@ impl BaseColumn {
         values.into_iter().collect()
     }
 
-    pub const fn from_simd(values: Vec<PackedBaseField>) -> Self {
+    pub fn from_simd(values: Vec<PackedBaseField>) -> Self {
         Self {
             length: values.len() * N_LANES,
             data: values,
@@ -388,7 +388,7 @@ impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
 }
 
 impl SecureColumnByCoords<SimdBackend> {
-    pub const fn packed_len(&self) -> usize {
+    pub fn packed_len(&self) -> usize {
         self.columns[0].data.len()
     }
 
@@ -437,12 +437,13 @@ impl SecureColumnByCoords<SimdBackend> {
         &mut self,
         chunk_size: usize,
     ) -> impl ExactSizeIterator<Item = SecureColumnByCoordsMutSlice<'_>> {
-        let [a, b, c, d] = self
-            .columns
-            .get_disjoint_mut([0, 1, 2, 3])
-            .unwrap()
-            .map(|x| x.chunks_mut(chunk_size));
-        izip!(a, b, c, d).map(|(a, b, c, d)| SecureColumnByCoordsMutSlice([a, b, c, d]))
+        let [a, b, c, d] = &mut self.columns;
+        let a_chunks = a.chunks_mut(chunk_size);
+        let b_chunks = b.chunks_mut(chunk_size);
+        let c_chunks = c.chunks_mut(chunk_size);
+        let d_chunks = d.chunks_mut(chunk_size);
+        izip!(a_chunks, b_chunks, c_chunks, d_chunks)
+            .map(|(a, b, c, d)| SecureColumnByCoordsMutSlice([a, b, c, d]))
     }
 
     #[cfg(feature = "parallel")]
@@ -588,7 +589,7 @@ impl From<VeryPackedSecureColumnByCoords> for SecureColumnByCoords<SimdBackend> 
 }
 
 impl VeryPackedSecureColumnByCoords {
-    pub const fn packed_len(&self) -> usize {
+    pub fn packed_len(&self) -> usize {
         self.columns[0].data.len()
     }
 
@@ -648,12 +649,12 @@ impl VeryPackedSecureColumnByCoords {
         &mut self,
         chunk_size: usize,
     ) -> Vec<VeryPackedSecureColumnByCoordsMutSlice<'_>> {
-        let [a, b, c, d] = self
-            .columns
-            .get_disjoint_mut([0, 1, 2, 3])
-            .unwrap()
-            .map(|x| x.chunks_mut(chunk_size));
-        izip!(a, b, c, d)
+        let [a, b, c, d] = &mut self.columns;
+        let a_chunks = a.chunks_mut(chunk_size);
+        let b_chunks = b.chunks_mut(chunk_size);
+        let c_chunks = c.chunks_mut(chunk_size);
+        let d_chunks = d.chunks_mut(chunk_size);
+        izip!(a_chunks, b_chunks, c_chunks, d_chunks)
             .map(|(a, b, c, d)| VeryPackedSecureColumnByCoordsMutSlice([a, b, c, d]))
             .collect_vec()
     }

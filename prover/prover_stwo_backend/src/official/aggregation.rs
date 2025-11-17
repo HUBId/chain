@@ -142,7 +142,7 @@ impl RecursiveAggregator {
         consensus_commitments: &[String],
         state_commitment: &str,
         state_roots: &StateCommitmentSnapshot,
-        /// Prefixed digest binding the pruning segment commitment tree.
+        // Prefixed digest binding the pruning segment commitment tree.
         pruning_binding_digest: &PrefixedDigest,
         pruning_segment_commitments: &[PrefixedDigest],
         block_height: u64,
