@@ -11,9 +11,10 @@ use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMete
 use rpp_runtime::runtime::telemetry::metrics::{
     ConsensusStage, ProofKind, ProofVerificationBackend, ProofVerificationKind,
     ProofVerificationOutcome, ProofVerificationStage, RpcMethod, RpcResult, WalFlushOutcome,
-    WalletAction, WalletActionResult, WalletRpcMethod,
+    WalletRpcMethod,
 };
 use rpp_runtime::RuntimeMetrics;
+use rpp_wallet_interface::runtime_telemetry::{WalletAction, WalletActionResult};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
