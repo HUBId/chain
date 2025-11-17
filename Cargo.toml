@@ -15,6 +15,7 @@ members = [
   "rpp/chain",
   "rpp/pruning",
   "rpp/node",
+  "rpp/wallet-runner",
   "rpp/wallet-interface",
   "rpp/wallet-integration-tests",
   "xtask",
@@ -36,6 +37,7 @@ default-members = [
   "rpp/chain",
   "rpp/pruning",
   "rpp/node",
+  "rpp/wallet-runner",
   "rpp/wallet-interface",
 ]
 resolver = "2"
@@ -50,7 +52,7 @@ prod = [
 nightly-prover = [
     "rpp-chain/nightly-prover",
     "rpp-consensus/nightly-prover",
-    "rpp-wallet/nightly-prover",
+    "rpp-wallet-lib/nightly-prover",
     "rpp-crypto-vrf/nightly-prover",
     "rpp-node/nightly-prover",
 ]
@@ -58,7 +60,7 @@ prover-stwo = [
     "nightly-prover",
     "rpp-chain/prover-stwo",
     "rpp-consensus/prover-stwo",
-    "rpp-wallet/prover-stwo",
+    "rpp-wallet-lib/prover-stwo",
     "rpp-node/prover-stwo",
     "prover_stwo_backend/prover-stwo",
 ]
@@ -67,11 +69,11 @@ prover-stwo-simd = [
     "prover-stwo",
     "rpp-chain/prover-stwo-simd",
     "rpp-consensus/prover-stwo-simd",
-    "rpp-wallet/prover-stwo-simd",
+    "rpp-wallet-lib/prover-stwo-simd",
     "rpp-node/prover-stwo-simd",
     "prover_stwo_backend/prover-stwo-simd",
 ]
-wallet_gui = ["rpp-wallet/wallet_gui"]
+wallet_gui = ["rpp-wallet-lib/wallet_gui"]
 backend-plonky3 = [
     "rpp-chain/backend-plonky3",
     "rpp-node/backend-plonky3",

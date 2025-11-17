@@ -117,7 +117,7 @@ rpp-crypto-vrf = { path = "../crypto-vrf" }
 rpp-p2p = { path = "../p2p" }
 rpp-identity-tree = { path = "../identity-tree" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
-rpp-wallet = { path = "../wallet", default-features = false, optional = true }
+rpp-wallet = { package = "rpp-wallet-lib", path = "../wallet", default-features = false, optional = true }
 rpp-wallet-interface = { path = "../wallet-interface", default-features = false }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }

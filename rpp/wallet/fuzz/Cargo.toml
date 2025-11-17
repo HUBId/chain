@@ -15,6 +15,7 @@ serde_json = "1.0"
 prover_mock_backend = { path = "../../zk/prover_mock_backend" }
 
 [dependencies.rpp-wallet]
+package = "rpp-wallet-lib"
 path = ".."
 default-features = false
 features = ["prover-mock"]

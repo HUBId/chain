@@ -71,10 +71,6 @@ name = "node"
 path = "../bin/node.rs"
 
 [[bin]]
-name = "wallet"
-path = "../bin/wallet.rs"
-
-[[bin]]
 name = "hybrid"
 path = "../bin/hybrid.rs"
 

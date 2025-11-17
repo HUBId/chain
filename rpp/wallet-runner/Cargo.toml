@@ -1,0 +1,35 @@
+[package]
+name = "rpp-wallet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.79"
+
+[features]
+default = ["prover-mock", "backup"]
+runtime = ["rpp-wallet/runtime"]
+unstable-all-provers = ["rpp-wallet/unstable-all-provers"]
+wallet_hw = ["rpp-wallet/wallet_hw"]
+wallet_zsi = ["rpp-wallet/wallet_zsi"]
+wallet_multisig_hooks = ["rpp-wallet/wallet_multisig_hooks"]
+wallet_rpc_mtls = ["rpp-wallet/wallet_rpc_mtls"]
+test-fixtures = ["rpp-wallet/test-fixtures"]
+nightly-prover = ["rpp-wallet/nightly-prover"]
+prover-stwo = ["rpp-wallet/prover-stwo"]
+prover-stwo-simd = ["rpp-wallet/prover-stwo-simd"]
+prover-mock = ["rpp-wallet/prover-mock"]
+backend-rpp-stark = ["rpp-wallet/backend-rpp-stark"]
+vendor_electrs = ["rpp-wallet/vendor_electrs"]
+vendor_electrs_telemetry = ["rpp-wallet/vendor_electrs_telemetry"]
+vendor_electrs_test_support = ["rpp-wallet/vendor_electrs_test_support"]
+wallet_gui = ["rpp-wallet/wallet_gui"]
+backup = ["rpp-wallet/backup"]
+
+[dependencies]
+clap.workspace = true
+rpp-node = { path = "../node" }
+rpp-wallet = { package = "rpp-wallet-lib", path = "../wallet", default-features = false }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+[[bin]]
+name = "rpp-wallet"
+path = "src/main.rs"

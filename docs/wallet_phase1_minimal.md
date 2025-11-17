@@ -171,7 +171,7 @@ material.
 
 1. **Initialise wallet directories and keys**
    ```shell
-   cargo run --bin wallet -- init --keys-path ./keys/wallet.toml
+   cargo run -p rpp-wallet -- init --keys-path ./keys/wallet.toml
    ```
    The command now prompts for a wallet passphrase and confirmation. Leave the
    prompt empty to use an empty passphrase or supply `--no-passphrase` to retain
@@ -191,14 +191,14 @@ material.
 
 2. **Check sync status**
    ```shell
-   cargo run --bin wallet -- sync
+   cargo run -p rpp-wallet -- sync
    ```
    Sample output highlights syncing state, last scanned height, pending range,
    and any recent error.
 
 3. **Derive a fresh receive address**
    ```shell
-   cargo run --bin wallet -- addr new
+   cargo run -p rpp-wallet -- addr new
    ```
    Example output:
    ```
@@ -210,17 +210,17 @@ material.
 
 4. **End-to-end send flow**
    ```shell
-   cargo run --bin wallet -- send preview
-   cargo run --bin wallet -- send create --to wallet1... --amount 50000
-   cargo run --bin wallet -- send sign --draft-id <draft>
-   cargo run --bin wallet -- send broadcast --draft-id <draft>
+   cargo run -p rpp-wallet -- send preview
+   cargo run -p rpp-wallet -- send create --to wallet1... --amount 50000
+   cargo run -p rpp-wallet -- send sign --draft-id <draft>
+   cargo run -p rpp-wallet -- send broadcast --draft-id <draft>
    ```
    The create step prints draft inputs/outputs, `send sign` reports proof
    details, and `send broadcast` confirms acceptance.
 
 5. **Trigger a historical rescan**
    ```shell
-   cargo run --bin wallet -- rescan --from-height 100_000
+   cargo run -p rpp-wallet -- rescan --from-height 100_000
    ```
    The CLI confirms whether the job was scheduled before returning.
 
