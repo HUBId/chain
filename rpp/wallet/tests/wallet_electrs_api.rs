@@ -1,8 +1,4 @@
-#![cfg(all(
-    feature = "runtime",
-    feature = "vendor_electrs",
-    feature = "backend-rpp-stark"
-))]
+#![cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
 
 use std::fs;
 use std::net::{SocketAddr, TcpListener};

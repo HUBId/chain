@@ -6,7 +6,7 @@ use hex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::runtime_config::{MempoolStatus, QueueWeightsConfig};
+use crate::runtime_config::MempoolStatus;
 
 /// Lightweight summary describing the current chain head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +121,7 @@ impl fmt::Display for NodeStatsKind {
 pub type NodeClientResult<T> = Result<T, NodeClientError>;
 
 /// Unified error surfaced when communicating with the execution node.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone)]
 pub enum NodeClientError {
     /// Transport-level failures such as networking errors or RPC timeouts.
     #[error("node unavailable: {message}")]
@@ -605,6 +605,7 @@ pub trait WalletService: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_config::QueueWeightsConfig;
 
     fn make_submission() -> TransactionSubmission {
         TransactionSubmission {

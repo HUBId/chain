@@ -1,4 +1,4 @@
-#![cfg(all(feature = "runtime", feature = "vendor_electrs"))]
+#![cfg(feature = "vendor_electrs")]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 

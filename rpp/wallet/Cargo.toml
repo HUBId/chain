@@ -6,7 +6,6 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-mock", "backup"]
-runtime = ["dep:rpp"]
 wallet_hw = []
 wallet_zsi = []
 wallet_multisig_hooks = []
@@ -46,7 +45,6 @@ storage-firewood = { path = "../../storage-firewood" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["sync", "rt", "signal", "macros", "time"] }
-rpp = { package = "rpp-chain", path = "../../rpp/chain", optional = true, default-features = false }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
 rpp-wallet-interface = { path = "../wallet-interface" }
 hex = "0.4"
@@ -76,6 +74,7 @@ uuid = { version = "1", features = ["v4"] }
 opentelemetry = "=0.30.0"
 opentelemetry_sdk = "=0.30.0"
 prover_mock_backend = { path = "../zk/prover_mock_backend" }
+rpp = { package = "rpp-chain", path = "../../rpp/chain", default-features = false }
 
 [[bin]]
 name = "rpp-wallet-gui"

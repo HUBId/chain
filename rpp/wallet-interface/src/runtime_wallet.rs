@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::runtime_config::{
-    WalletIdentity, WalletIdentityError, WalletRole, WalletRoleSet, WalletSecurityBinding,
+    WalletIdentity, WalletIdentityError, WalletRoleSet, WalletSecurityBinding,
 };
 
 fn hex_digest(data: &[u8]) -> String {
@@ -290,6 +290,7 @@ impl WalletClientCertificates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_config::WalletRole;
 
     use std::fs;
 
