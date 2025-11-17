@@ -8433,6 +8433,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpp-chain-cli"
+version = "0.0.12"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "reqwest 0.12.24",
+ "rpp-chain",
+ "rpp-node-runtime-api",
+ "rpp-p2p",
+ "serde",
+ "serde_json",
+ "snapshot-verify",
+ "tokio",
+]
+
+[[package]]
 name = "rpp-consensus"
 version = "0.1.0"
 dependencies = [
@@ -8506,6 +8523,8 @@ dependencies = [
  "predicates",
  "reqwest 0.12.24",
  "rpp-chain",
+ "rpp-chain-cli",
+ "rpp-node-runtime-api",
  "rpp-p2p",
  "rpp-pruning",
  "serde_json",
@@ -8520,6 +8539,15 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rpp-node-runtime-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rpp-wallet-interface",
 ]
 
 [[package]]
