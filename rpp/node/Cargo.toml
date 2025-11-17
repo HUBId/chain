@@ -58,6 +58,7 @@ time = "0.3"
 storage = { package = "firewood-storage", path = "../../storage" }
 storage-firewood = { path = "../../storage-firewood" }
 snapshot-verify = { path = "../../tools/snapshot-verify" }
+rpp-node-runtime-api = { path = "../node-runtime-api" }
 
 [dev-dependencies]
 assert_cmd = "2.0.17"
