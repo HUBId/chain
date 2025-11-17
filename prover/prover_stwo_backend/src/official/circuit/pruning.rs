@@ -12,6 +12,12 @@ use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSe
 
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
+pub type PrefixedDigest = [u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+
+fn empty_prefixed_digest() -> PrefixedDigest {
+    [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]
+}
+
 /// Witness for the pruning circuit describing the set of removed transactions.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PruningWitness {
@@ -19,7 +25,7 @@ pub struct PruningWitness {
     pub pruned_tx_root: String,
     pub original_transactions: Vec<String>,
     pub removed_transactions: Vec<String>,
-    #[serde(default, with = "serde_prefixed_digest")]
+    #[serde(default = "empty_prefixed_digest", with = "serde_prefixed_digest")]
     pub pruning_binding_digest: PrefixedDigest,
     #[serde(default, with = "serde_prefixed_digest_vec")]
     pub pruning_segment_commitments: Vec<PrefixedDigest>,
@@ -352,8 +358,6 @@ impl StarkCircuit for PruningCircuit {
     }
 }
 
-pub type PrefixedDigest = [u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-
 mod serde_prefixed_digest {
     use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
     use hex;
@@ -389,7 +393,7 @@ mod serde_prefixed_digest {
 mod serde_prefixed_digest_vec {
     use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
     use hex;
-    use serde::de::{SeqAccess, Visitor};
+    use serde::de::{Error as _, SeqAccess, Visitor};
     use serde::ser::SerializeSeq;
     use serde::{Deserialize, Deserializer, Serializer};
     use std::fmt;

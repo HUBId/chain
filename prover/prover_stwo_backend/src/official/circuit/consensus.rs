@@ -592,12 +592,6 @@ impl ConsensusCircuit {
             ));
         }
 
-        let mut extend_with = |values: &[String]| {
-            for value in values {
-                inputs.push(string_to_field(parameters, value));
-            }
-        };
-
         for (entry, output) in witness.vrf_entries.iter().zip(verified_outputs.iter()) {
             inputs.push(parameters.element_from_bytes(&output.output.randomness));
             inputs.push(parameters.element_from_bytes(&output.derived_randomness));
@@ -614,8 +608,12 @@ impl ConsensusCircuit {
             inputs.push(epoch_field);
             inputs.push(tier_seed_field);
         }
-        extend_with(&witness.witness_commitments);
-        extend_with(&witness.reputation_roots);
+        for value in &witness.witness_commitments {
+            inputs.push(string_to_field(parameters, value));
+        }
+        for value in &witness.reputation_roots {
+            inputs.push(string_to_field(parameters, value));
+        }
 
         let entry_len = witness.vrf_entries.len() as u64;
         inputs.push(parameters.element_from_u64(entry_len));

@@ -9,6 +9,10 @@ use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
+fn empty_prefixed_digest() -> PrefixedDigest {
+    [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]
+}
+
 /// Witness connecting previous proof commitments with the latest aggregation.
 
 #[derive(Clone, Debug, ::serde::Serialize, ::serde::Deserialize)]
@@ -26,7 +30,7 @@ pub struct RecursiveWitness {
     pub timetoke_root: String,
     pub zsi_root: String,
     pub proof_root: String,
-    #[serde(default, with = "serde::prefixed_digest")]
+    #[serde(default = "empty_prefixed_digest", with = "serde::prefixed_digest")]
     pub pruning_binding_digest: PrefixedDigest,
     #[serde(default, with = "serde::prefixed_digest_vec")]
     pub pruning_segment_commitments: Vec<PrefixedDigest>,
@@ -324,7 +328,7 @@ impl StarkCircuit for RecursiveCircuit {
 
 mod serde {
     use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
-    use serde::de::{SeqAccess, Visitor};
+    use serde::de::{Error as _, SeqAccess, Visitor};
     use serde::ser::SerializeSeq;
     use serde::{Deserialize, Deserializer, Serializer};
     use std::fmt;

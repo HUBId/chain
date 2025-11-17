@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 use crate::core::air::{Component, Components};
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
@@ -36,13 +34,10 @@ pub struct ComponentProvers<'a, B: Backend> {
 }
 
 impl<B: Backend> ComponentProvers<'_, B> {
-    pub fn components(&self) -> Components<'_> {
+    pub fn components(&self) -> Components<'_, (dyn ComponentProver<B> + '_)> {
+        let components: Vec<&(dyn ComponentProver<B> + '_)> = self.components.iter().copied().collect();
         Components {
-            components: self
-                .components
-                .iter()
-                .map(|c| *c as &dyn Component)
-                .collect_vec(),
+            components,
             n_preprocessed_columns: self.n_preprocessed_columns,
         }
     }

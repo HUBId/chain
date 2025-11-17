@@ -24,17 +24,19 @@ const IV: [u32; 8] = [
     0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
 ];
 
-const INITIAL_STATE: [u32x16; 8] = [
-    // |Key| = 0x00, |HashLength| = 0x20.
-    u32x16::splat(IV[0] ^ 0x01010020),
-    u32x16::splat(IV[1]),
-    u32x16::splat(IV[2]),
-    u32x16::splat(IV[3]),
-    u32x16::splat(IV[4]),
-    u32x16::splat(IV[5]),
-    u32x16::splat(IV[6]),
-    u32x16::splat(IV[7]),
-];
+fn initial_state() -> [u32x16; 8] {
+    [
+        // |Key| = 0x00, |HashLength| = 0x20.
+        u32x16::splat(IV[0] ^ 0x01010020),
+        u32x16::splat(IV[1]),
+        u32x16::splat(IV[2]),
+        u32x16::splat(IV[3]),
+        u32x16::splat(IV[4]),
+        u32x16::splat(IV[5]),
+        u32x16::splat(IV[6]),
+        u32x16::splat(IV[7]),
+    ]
+}
 
 pub const SIGMA: [[u8; 16]; 10] = [
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
@@ -87,7 +89,7 @@ impl MerkleOps<Blake2sMerkleHasher> for SimdBackend {
         let iter = res.par_chunks_mut(1 << LOG_N_LANES);
 
         iter.enumerate().for_each(|(i, chunk)| {
-            let mut state = INITIAL_STATE;
+            let mut state = initial_state();
             // No columns in the layer.
             if columns.is_empty() {
                 let (prev_chunk_u32s, t) = match prev_layer {
@@ -143,7 +145,9 @@ impl MerkleOps<Blake2sMerkleHasher> for SimdBackend {
     }
 }
 
-const ZEROS: u32x16 = u32x16::splat(0);
+fn zero_vector() -> u32x16 {
+    u32x16::splat(0)
+}
 
 // `t` is the number of compressed bytes including the current block.
 fn compress_unfinalized(state: [u32x16; 8], chunk: [u32x16; 16], t: u64) -> [u32x16; 8] {
@@ -152,9 +156,9 @@ fn compress_unfinalized(state: [u32x16; 8], chunk: [u32x16; 16], t: u64) -> [u32
         chunk,
         u32x16::splat(t as u32),
         // t >> 32 is 0 for our use case.
-        ZEROS,
-        ZEROS,
-        ZEROS,
+        zero_vector(),
+        zero_vector(),
+        zero_vector(),
     )
 }
 
@@ -163,9 +167,9 @@ fn compress_finalize(state: [u32x16; 8], last_block: [u32x16; 16], t: u64) -> [u
         state,
         last_block,
         u32x16::splat(t as u32),
-        ZEROS,
+        zero_vector(),
         u32x16::splat(0xFFFFFFFF),
-        ZEROS,
+        zero_vector(),
     )
 }
 
@@ -177,7 +181,7 @@ fn compress_finalize(state: [u32x16; 8], last_block: [u32x16; 16], t: u64) -> [u
 /// * `bytes_in_msg` - Number of bytes in the message. NOTE: number of bytes above 64 is most likely
 ///   incorrect.
 pub fn hash_16(msg_vecs: [u32x16; 16], bytes_in_msg: u64) -> [u32x16; 8] {
-    compress_finalize(INITIAL_STATE, msg_vecs, bytes_in_msg)
+    compress_finalize(initial_state(), msg_vecs, bytes_in_msg)
 }
 
 /// Applies [`u32::rotate_right(N)`] to each element of the vector

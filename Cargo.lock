@@ -7473,6 +7473,7 @@ dependencies = [
  "prover-backend-interface",
  "rand 0.8.5",
  "rpp-identity-tree",
+ "rpp-pruning",
  "rustc_version",
  "schnorrkel",
  "serde",

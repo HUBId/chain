@@ -4,7 +4,8 @@
 //! defined as
 //!   f(p) = sum_i alpha^{N-1-i} u_i(P).
 
-use itertools::Itertools;
+use std::array;
+
 use tracing::{span, Level};
 
 use crate::core::fields::m31::BaseField;
@@ -48,27 +49,44 @@ impl<B: Backend> DomainEvaluationAccumulator<B> {
         &mut self,
         n_cols_per_size: [(u32, usize); N],
     ) -> [ColumnAccumulator<'_, B>; N] {
-        self.sub_accumulations
-            .get_disjoint_mut(n_cols_per_size.map(|(log_size, _)| log_size as usize))
-            .unwrap_or_else(|e| panic!("invalid log_sizes: {e}"))
-            .into_iter()
-            .zip(n_cols_per_size)
-            .map(|(col, (log_size, n_cols))| {
-                let random_coeffs = self
-                    .random_coeff_powers
-                    .split_off(self.random_coeff_powers.len() - n_cols);
-                ColumnAccumulator {
-                    random_coeff_powers: random_coeffs,
-                    col: col.get_or_insert_with(|| SecureColumnByCoords::zeros(1 << log_size)),
-                }
-            })
-            .collect_vec()
+        let mut log_indices = n_cols_per_size.map(|(log_size, _)| log_size as usize);
+        log_indices.sort_unstable();
+        for pair in log_indices.windows(2) {
+            if pair[0] == pair[1] {
+                panic!("invalid log_sizes: duplicate index {}", pair[0]);
+            }
+        }
+        for &idx in &log_indices {
+            if idx >= self.sub_accumulations.len() {
+                panic!("invalid log_sizes: index {idx} out of range");
+            }
+        }
+
+        let slots: [*mut Option<SecureColumnByCoords<B>>; N] = array::from_fn(|i| {
+            let idx = n_cols_per_size[i].0 as usize;
+            // Safety: bounds checked above and indices are unique.
+            unsafe { self.sub_accumulations.as_mut_ptr().add(idx) }
+        });
+
+        let mut accumulators = Vec::with_capacity(N);
+        for (i, (log_size, n_cols)) in n_cols_per_size.into_iter().enumerate() {
+            let random_coeffs = self
+                .random_coeff_powers
+                .split_off(self.random_coeff_powers.len() - n_cols);
+            let col_slot = unsafe { &mut *slots[i] };
+            accumulators.push(ColumnAccumulator {
+                random_coeff_powers: random_coeffs,
+                col: col_slot.get_or_insert_with(|| SecureColumnByCoords::zeros(1 << log_size)),
+            });
+        }
+
+        accumulators
             .try_into()
             .unwrap_or_else(|_| unreachable!())
     }
 
     /// Returns the log size of the resulting polynomial.
-    pub const fn log_size(&self) -> u32 {
+    pub fn log_size(&self) -> u32 {
         (self.sub_accumulations.len() - 1) as u32
     }
 
