@@ -1,0 +1,27 @@
+[package]
+name = "rpp-chain-cli"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+
+authors = ["Ava Labs"]
+
+[dependencies]
+anyhow = "=1.0.100"
+clap.workspace = true
+hex.workspace = true
+reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+rpp-chain = { path = "../chain", default-features = false, features = ["wallet-ui", "wallet-integration"] }
+rpp-node-runtime-api = { path = "../node-runtime-api" }
+rpp-p2p = { path = "../p2p", default-features = false }
+serde = { version = "=1.0.225", features = ["derive"] }
+serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
+snapshot-verify = { path = "../../tools/snapshot-verify" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true

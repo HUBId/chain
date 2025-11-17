@@ -40,7 +40,6 @@ use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
 use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
-use reqwest::{Certificate, Client, Identity, StatusCode};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -79,6 +78,10 @@ use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
 pub use cli::{run_cli, CliError, CliResult};
+pub use rpp_chain_cli::{
+    validator_setup, ValidatorSetupError, ValidatorSetupOptions, ValidatorSetupReport,
+    ValidatorSetupTelemetryReport,
+};
 pub use state_sync::light_client::{
     LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
     StateSyncVerificationSummary, VerificationError, VerificationErrorKind, VerifiedChunkRange,
@@ -91,222 +94,6 @@ fn record_otlp_failure(sink: &'static str, phase: &'static str) {
     metrics::counter!(TELEMETRY_FAILURE_METRIC, "sink" => sink, "phase" => phase).increment(1);
 }
 
-#[derive(Debug, Clone)]
-pub struct ValidatorSetupOptions {
-    pub telemetry_probe_timeout: Duration,
-    pub skip_telemetry_probe: bool,
-}
-
-impl Default for ValidatorSetupOptions {
-    fn default() -> Self {
-        Self {
-            telemetry_probe_timeout: Duration::from_secs(5),
-            skip_telemetry_probe: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ValidatorSetupTelemetryReport {
-    pub enabled: bool,
-    pub skipped: bool,
-    pub http_endpoint: Option<String>,
-    pub http_status: Option<StatusCode>,
-    pub auth_applied: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ValidatorSetupReport {
-    pub secrets_backend: SecretsBackendConfig,
-    pub identifier: VrfKeyIdentifier,
-    pub public_key: String,
-    pub telemetry: ValidatorSetupTelemetryReport,
-}
-
-#[derive(Debug)]
-pub enum ValidatorSetupError {
-    Configuration(anyhow::Error),
-    Network(anyhow::Error),
-}
-
-impl ValidatorSetupError {
-    pub fn configuration<E>(error: E) -> Self
-    where
-        E: Into<anyhow::Error>,
-    {
-        Self::Configuration(error.into())
-    }
-
-    pub fn network<E>(error: E) -> Self
-    where
-        E: Into<anyhow::Error>,
-    {
-        Self::Network(error.into())
-    }
-
-    pub fn into_bootstrap_error(self) -> BootstrapError {
-        match self {
-            ValidatorSetupError::Configuration(err) => BootstrapError::configuration(err),
-            ValidatorSetupError::Network(err) => BootstrapError::startup(err),
-        }
-    }
-}
-
-pub async fn validator_setup(
-    config: &NodeConfig,
-    options: ValidatorSetupOptions,
-) -> Result<ValidatorSetupReport, ValidatorSetupError> {
-    config
-        .secrets
-        .validate_with_path(&config.vrf_key_path)
-        .map_err(ValidatorSetupError::configuration)?;
-    config
-        .secrets
-        .ensure_directories(&config.vrf_key_path)
-        .map_err(ValidatorSetupError::configuration)?;
-
-    let identifier = config
-        .secrets
-        .vrf_identifier(&config.vrf_key_path)
-        .map_err(ValidatorSetupError::configuration)?;
-    let store = config
-        .secrets
-        .build_keystore()
-        .map_err(ValidatorSetupError::configuration)?;
-    let keypair = generate_vrf_keypair().map_err(ValidatorSetupError::configuration)?;
-    store
-        .store(&identifier, &keypair)
-        .map_err(ValidatorSetupError::configuration)?;
-
-    let telemetry = probe_telemetry_endpoints(&config.rollout.telemetry, &options).await?;
-
-    Ok(ValidatorSetupReport {
-        secrets_backend: config.secrets.backend.clone(),
-        identifier,
-        public_key: vrf_public_key_to_hex(&keypair.public),
-        telemetry,
-    })
-}
-
-async fn probe_telemetry_endpoints(
-    telemetry: &TelemetryConfig,
-    options: &ValidatorSetupOptions,
-) -> Result<ValidatorSetupTelemetryReport, ValidatorSetupError> {
-    if !telemetry.enabled {
-        return Ok(ValidatorSetupTelemetryReport {
-            enabled: false,
-            skipped: false,
-            http_endpoint: None,
-            http_status: None,
-            auth_applied: false,
-        });
-    }
-
-    let builder = TelemetryExporterBuilder::new(telemetry);
-    builder
-        .build_metric_exporter()
-        .map_err(ValidatorSetupError::configuration)?;
-
-    let endpoint = builder.http_endpoint().map(str::to_string).ok_or_else(|| {
-        ValidatorSetupError::configuration("telemetry enabled but no HTTP endpoint configured")
-    })?;
-    let auth_token = telemetry_auth_token(telemetry);
-    let auth_applied = auth_token.is_some();
-    let client = telemetry_probe_client(telemetry, options.telemetry_probe_timeout)?;
-
-    if options.skip_telemetry_probe {
-        return Ok(ValidatorSetupTelemetryReport {
-            enabled: true,
-            skipped: true,
-            http_endpoint: Some(endpoint),
-            http_status: None,
-            auth_applied,
-        });
-    }
-
-    let mut request = client.get(endpoint.clone());
-    if let Some(token) = auth_token.as_ref() {
-        request = request.header("Authorization", token);
-    }
-
-    let response = request.send().await.map_err(ValidatorSetupError::network)?;
-    let status = response.status();
-
-    Ok(ValidatorSetupTelemetryReport {
-        enabled: true,
-        skipped: false,
-        http_endpoint: Some(endpoint),
-        http_status: Some(status),
-        auth_applied,
-    })
-}
-
-fn telemetry_probe_client(
-    telemetry: &TelemetryConfig,
-    timeout: Duration,
-) -> Result<Client, ValidatorSetupError> {
-    let mut builder = Client::builder().timeout(timeout);
-
-    if let Some(tls) = telemetry.http_tls.as_ref().or(telemetry.grpc_tls.as_ref()) {
-        if tls.insecure_skip_verify {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-
-        if let Some(ca) = tls.ca_certificate.as_ref() {
-            let pem = fs::read(ca).with_context(|| {
-                format!("failed to read telemetry CA certificate {}", ca.display())
-            });
-            let pem = pem.map_err(ValidatorSetupError::configuration)?;
-            let certificate = Certificate::from_pem(&pem)
-                .context("failed to parse telemetry CA certificate")
-                .map_err(ValidatorSetupError::configuration)?;
-            builder = builder.add_root_certificate(certificate);
-        }
-
-        if let (Some(cert), Some(key)) = (
-            tls.client_certificate.as_ref(),
-            tls.client_private_key.as_ref(),
-        ) {
-            let mut identity_bytes = fs::read(cert).with_context(|| {
-                format!(
-                    "failed to read telemetry client certificate {}",
-                    cert.display()
-                )
-            });
-            let mut identity_bytes = identity_bytes.map_err(ValidatorSetupError::configuration)?;
-            let key_bytes = fs::read(key)
-                .with_context(|| format!("failed to read telemetry client key {}", key.display()));
-            let key_bytes = key_bytes.map_err(ValidatorSetupError::configuration)?;
-            identity_bytes.extend_from_slice(&key_bytes);
-            let identity = Identity::from_pem(&identity_bytes)
-                .context("failed to parse telemetry client identity")
-                .map_err(ValidatorSetupError::configuration)?;
-            builder = builder.identity(identity);
-        }
-    }
-
-    builder
-        .build()
-        .context("failed to build telemetry probe client")
-        .map_err(ValidatorSetupError::configuration)
-}
-
-fn telemetry_auth_token(telemetry: &TelemetryConfig) -> Option<String> {
-    normalize_bearer_token(&telemetry.auth_token)
-}
-
-fn normalize_bearer_token(raw: &Option<String>) -> Option<String> {
-    raw.as_ref()
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-        .map(|token| {
-            if token.to_ascii_lowercase().starts_with("bearer ") {
-                token.to_string()
-            } else {
-                format!("Bearer {token}")
-            }
-        })
-}
 
 pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
     if matches!(mode, RuntimeMode::Validator | RuntimeMode::Hybrid)
