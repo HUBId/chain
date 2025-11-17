@@ -13,7 +13,11 @@
 //! snippets or manual wiring is needed.
 use std::fmt;
 
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+#[cfg(all(
+    feature = "prover-stwo",
+    feature = "prover-mock",
+    not(feature = "unstable-all-provers"),
+))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 
 pub use prover_backend_interface as proof_backend;

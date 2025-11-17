@@ -14,6 +14,7 @@ default = ["prover-mock", "wallet-ui"]
 integration = ["wallet-ui"]
 prod = []
 it_state_sync = []
+unstable-all-provers = ["rpp-consensus/unstable-all-provers"]
 wallet-ui = ["wallet-integration"]
 wallet-integration = [
     "dep:rpp-wallet",

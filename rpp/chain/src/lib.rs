@@ -18,7 +18,11 @@
 compile_error!(
     "the `prover-stwo` and `prover-stwo-simd` features require a nightly compiler or `RUSTC_BOOTSTRAP`"
 );
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+#[cfg(all(
+    feature = "prover-stwo",
+    feature = "prover-mock",
+    not(feature = "unstable-all-provers"),
+))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 #[path = "../../rpc/api.rs"]
 pub mod api;

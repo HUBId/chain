@@ -6,6 +6,7 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-mock", "backup"]
+unstable-all-provers = []
 wallet_hw = []
 wallet_zsi = []
 wallet_multisig_hooks = []
