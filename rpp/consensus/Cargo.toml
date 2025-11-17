@@ -6,6 +6,7 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-mock"]
+unstable-all-provers = ["prover_mock_backend/unstable-all-provers"]
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",

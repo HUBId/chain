@@ -7,7 +7,11 @@ use prover_backend_interface::{
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+#[cfg(all(
+    feature = "prover-stwo",
+    feature = "prover-mock",
+    not(feature = "unstable-all-provers"),
+))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 
 /// Lightweight mock backend that records inputs and produces deterministic
