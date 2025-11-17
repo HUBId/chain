@@ -151,7 +151,7 @@ Balance, History-Digests und VRF-Audits.【F:vendor/electrs/2024-05-20/src/track
 Unter `scenarios/wallet_tracker_rpp.toml` liegt ein CLI-Simulator, der Regtest,
 Runtime-Adapter und Tracker-Feature gemeinsam aktiviert. Die zugehörige
 Integration `vendor_electrs_tracker_scenario` erstellt Blöcke, synchronisiert den
-Index, fragt History- und Proof-Metadaten ab und prüft VRF-Audits.【F:scenarios/wallet_tracker_rpp.toml†L1-L20】【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L1-L239】
+Index, fragt History- und Proof-Metadaten ab und prüft VRF-Audits.【F:scenarios/wallet_tracker_rpp.toml†L1-L20】【F:rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs†L1-L239】
 
 **Lokale Validierung:**
 
@@ -164,7 +164,7 @@ cargo test  --manifest-path rpp/wallet/Cargo.toml \
 
 Die Tests befüllen Firewood, erzeugen deterministische Witness-Digests und
 stellen sicher, dass Proof-Envelopes sowie VRF-Audits für Wallet-Clients
-verfügbar sind.【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L96-L206】
+verfügbar sind.【F:rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs†L96-L206】
 > Hinweis: Beide Kommandos erwarten, dass die `rpp`-Runtime und das `rpp_stark`-
 > Backend im Workspace verfügbar sind. Im reinen Firewood-Checkout ohne diese
 > Crates schlägt der Build mit fehlenden Abhängigkeiten fehl.

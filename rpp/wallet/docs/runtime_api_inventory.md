@@ -1,6 +1,6 @@
 # Runtime API inventory for wallet decoupling
 
-This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src` (runtime shim, CLI, RPC) and `rpp/wallet/tests/**`. Each entry lists the file, the line(s) where the import appears, and the concrete items (modules, structs, enums, functions, or constants) that are currently pulled from the monolithic `rpp` crate.
+This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src` (runtime shim, CLI, RPC) and `rpp/wallet-integration-tests/tests/**`. Each entry lists the file, the line(s) where the import appears, and the concrete items (modules, structs, enums, functions, or constants) that are currently pulled from the monolithic `rpp` crate.
 
 ## `rpp/wallet/src`
 
@@ -22,13 +22,13 @@ This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src`
 - L79 (feature `runtime`): `rpp::runtime::telemetry::metrics::{RuntimeMetrics, WalletAction, WalletActionResult}` — runtime telemetry primitives recorded by the wallet RPC router.
 - L1916 (test helpers): `rpp::runtime::telemetry::metrics::RuntimeMetrics` — test fixture uses `RuntimeMetrics::noop()` while instantiating the router.
 
-## `rpp/wallet/tests`
+## `rpp/wallet-integration-tests/tests`
 
-### `tests/wallet_workflow_snapshot.rs`
+### `rpp/wallet-integration-tests/tests/wallet_workflow_snapshot.rs`
 - L16: `rpp::runtime::telemetry::metrics::RuntimeMetrics` — telemetry context passed to wallet runtime fixture.
 - L17–L20: `rpp::runtime::wallet::{json_rpc_router, DeterministicSync, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle, WalletSecurityPaths}` — wallet runtime orchestration and RPC router wiring imported directly from `rpp`.
 
-### `tests/vendor_electrs_tracker_scenario.rs`
+### `rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs`
 - L16: `rpp::errors::{ChainError, ChainResult}` — shared error/result types from core runtime.
 - L17–L20: `rpp::proofs::rpp::{encode_transaction_witness, AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint}` — proof serialization helpers needed by the tracker scenario.
 - L21: `rpp::runtime::config::NodeConfig` — runtime node configuration wrapper.
@@ -41,7 +41,7 @@ This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src`
 - L28: `rpp::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher}` — STARK helper utilities for digesting proofs.
 - L47: `rpp::runtime::types::proofs::RppStarkProof` — proof type for verifying ledger metadata exported from the tracker.
 
-### `tests/wallet_electrs_api.rs`
+### `rpp/wallet-integration-tests/tests/wallet_electrs_api.rs`
 - L21: `rpp::api::{self, ApiContext}` — API surface used to bootstrap wallet-facing HTTP endpoints.
 - L22: `rpp::config::NodeConfig` — node configuration loader.
 - L23: `rpp::crypto::{load_keypair, sign_message}` — signing helpers for transaction submission tests.
@@ -64,7 +64,7 @@ This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src`
 - L53–L58: `rpp::wallet::vendor::electrs::types::{bsl_txid, encode_ledger_memo, encode_ledger_script, encode_transaction_metadata, LedgerMemoPayload, LedgerScriptPayload, RppStarkProofAudit, RppStarkReportSummary, StatusDigest, StoredTransactionMetadata, StoredVrfAudit, VrfInputDescriptor, VrfOutputDescriptor}` — Electrs data models and helpers.
 - L59: `rpp::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher}` — STARK helper utilities.
 
-### `tests/vendor_electrs_init.rs`
+### `rpp/wallet-integration-tests/tests/vendor_electrs_init.rs`
 - L10: `rpp::errors::{ChainError, ChainResult}` — runtime error/result types.
 - L11: `rpp::runtime::config::NodeConfig` — runtime node configuration.
 - L12: `rpp::runtime::node::Node` — runtime daemon handle.
@@ -73,7 +73,7 @@ This inventory enumerates every `use rpp::…` dependency under `rpp/wallet/src`
 - L15: `rpp::runtime::types::BlockPayload` — block payload definition for runtime adapters.
 - L16: `rpp::runtime::RuntimeMetrics` — telemetry context passed to runtime adapters.
 
-### `tests/vendor_electrs_mempool.rs`
+### `rpp/wallet-integration-tests/tests/vendor_electrs_mempool.rs`
 - L5: `rpp::consensus::BftVoteKind` — consensus vote kind enum shared with the runtime.
 - L6: `rpp::runtime::config::QueueWeightsConfig` — mempool queue weighting config imported from runtime.
 - L7–L10: `rpp::runtime::node::{MempoolStatus, PendingIdentitySummary, PendingTransactionSummary, PendingUptimeSummary, PendingVoteSummary}` — runtime mempool DTOs powering the Electrs mempool adapter tests.

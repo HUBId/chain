@@ -146,7 +146,7 @@ Namespaces (Firewood CFs oder logische Buckets):
 - Zeroize & Config-Sanitizing.
 
 ### 6.8 Tests & Tooling
-- E2E-Tests `tests/wallet_workflow_snapshot.rs`, `tests/wallet_sync_resume.rs`.
+- E2E-Tests `rpp/wallet-integration-tests/tests/wallet_workflow_snapshot.rs`, `tests/wallet_sync_resume.rs`.
 - Fuzz-Targets erweitern.
 
 ## 7. Roadmap (Phasen)

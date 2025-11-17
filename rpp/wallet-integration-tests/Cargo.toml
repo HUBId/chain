@@ -1,0 +1,36 @@
+[package]
+name = "wallet-integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+vendor_electrs = [
+    "rpp-wallet/vendor_electrs",
+    "rpp/vendor_electrs",
+]
+vendor_electrs_test_support = [
+    "vendor_electrs",
+    "rpp-wallet/vendor_electrs_test_support",
+]
+backend-rpp-stark = [
+    "rpp-wallet/backend-rpp-stark",
+    "rpp/backend-rpp-stark",
+]
+
+[dependencies]
+rpp-wallet = { path = "../wallet", features = ["test-fixtures"] }
+rpp = { package = "rpp-chain", path = "../chain", default-features = false, features = ["wallet-ui"] }
+
+[dev-dependencies]
+anyhow = "1"
+assert_cmd = "2.0"
+hex = "0.4"
+parking_lot = "0.12"
+reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }

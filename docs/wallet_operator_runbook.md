@@ -77,7 +77,7 @@ when restoring from older seeds to avoid missing historical deposits.【F:docs/w
 3. **Receive funds** – Derive a new external address via `rpp-wallet address new`
 or GUI equivalent, send a regtest transfer, and watch Electrs indexers produce a
 new digest with proof/VRF metadata. Use the tracker scenario as a reference for
-expected audit envelopes (`proof.envelope`, `vrf.output.randomness`).【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L127-L287】
+expected audit envelopes (`proof.envelope`, `vrf.output.randomness`).【F:rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs†L127-L287】
 4. **Send funds** – Draft a spend with policy-compliant amounts. Ensure policy
 evaluations propagate to the UI/RPC when exceeding tier limits as described in
 the wallet operations guide, and that the prover completes with the expected
@@ -135,7 +135,7 @@ VRF audit objects in transaction metadata. Use `rpp-wallet history` or the GUI
 to inspect entries and verify they mirror the expected envelope hashes and VRF
 randomness as illustrated by the tracker scenario test.
 Capture these records during acceptance so auditors can compare production
-entries with the reference digest path.【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L127-L287】
+entries with the reference digest path.【F:rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs†L127-L287】
 2. **RBAC and token audit** – Changes to `wallet.rpc.security.role_bindings_path`
 and `[wallet.security.bindings]` must be recorded alongside this runbook and the
 `rpp-wallet rbac lint` output to prove the bindings were verified before

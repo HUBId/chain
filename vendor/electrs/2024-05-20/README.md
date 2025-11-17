@@ -208,7 +208,7 @@ Skripthash-Statusabfragen bedient.【F:rpp/wallet/src/vendor/electrs/init.rs†L
 * `wallet_tracker_rpp.toml` aktiviert Runtime und Tracker, erzeugt einen Demo-Block
   und überprüft die Index-Synchronisation inklusive History-/VRF-Daten. Das
   Szenario wird vom Integrationstest `vendor_electrs_tracker_scenario` geladen
-  und eignet sich als Smoke-Test für Firewood-basierte Workflows.【F:scenarios/wallet_tracker_rpp.toml†L1-L20】【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L1-L239】
+  und eignet sich als Smoke-Test für Firewood-basierte Workflows.【F:scenarios/wallet_tracker_rpp.toml†L1-L20】【F:rpp/wallet-integration-tests/tests/vendor_electrs_tracker_scenario.rs†L1-L239】
 * `wallet_tracker_p2p.toml` erweitert das Setup um P2P-spezifische Parameter:
   Netzwerk-ID, Auth-Token sowie explizite Gossip-Topics. Der Tracker abonniert
   den Broadcast-Kanal, wodurch sich P2P-Weg und Firewood-Fallback gemeinsam

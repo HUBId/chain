@@ -8436,7 +8436,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "argon2",
- "assert_cmd",
  "base64 0.22.1",
  "bincode",
  "chacha20poly1305",
@@ -8457,7 +8456,6 @@ dependencies = [
  "rand_core 0.6.4",
  "reqwest 0.12.24",
  "rpassword",
- "rpp-chain",
  "rpp-p2p",
  "rpp-wallet-interface",
  "serde",
@@ -8470,7 +8468,6 @@ dependencies = [
  "tokio",
  "toml 0.8.12",
  "tracing",
- "uuid",
  "zeroize",
 ]
 
@@ -10724,6 +10721,24 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
+]
+
+[[package]]
+name = "wallet-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "hex",
+ "parking_lot 0.12.5",
+ "reqwest 0.12.24",
+ "rpp-chain",
+ "rpp-wallet",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
