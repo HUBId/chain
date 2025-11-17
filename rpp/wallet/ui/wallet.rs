@@ -35,9 +35,7 @@ use crate::reputation::{
 };
 use crate::rpp::{UtxoOutpoint, UtxoRecord};
 #[cfg(feature = "vendor_electrs")]
-use crate::runtime::node::MempoolStatus;
-#[cfg(feature = "vendor_electrs")]
-use crate::runtime::node::PendingTransactionSummary;
+use crate::runtime::node::{MempoolStatus, MempoolStatusExt, PendingTransactionSummary};
 use crate::runtime::{ProofKind, RuntimeMetrics};
 use crate::state::StoredUtxo;
 use crate::storage::ledger::SlashingEvent;
@@ -616,15 +614,16 @@ impl Wallet {
         let mempool_status = tracker.mempool_status().cloned();
         drop(handles_guard);
 
-        let mut mempool: HashMap<String, PendingTransactionSummary> = mempool_status
-            .map(|status| {
+        let mut mempool: HashMap<String, PendingTransactionSummary> =
+            if let Some(status) = mempool_status {
                 status
-                    .transactions
+                    .decode_transactions()?
                     .into_iter()
                     .map(|summary| (summary.hash.clone(), summary))
                     .collect()
-            })
-            .unwrap_or_default();
+            } else {
+                HashMap::new()
+            };
 
         let statuses = self.tracker_statuses.read();
         if statuses.is_empty() && mempool.is_empty() {

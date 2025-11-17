@@ -325,7 +325,7 @@ fn tracker_applies_mempool_delta_with_digest_fallback() {
     };
 
     let mempool = MempoolStatus {
-        transactions: vec![pending],
+        transactions: vec![serde_json::to_value(&pending).expect("serialize pending summary")],
         identities: Vec::new(),
         votes: Vec::new(),
         uptime_proofs: Vec::new(),

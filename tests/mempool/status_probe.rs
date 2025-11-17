@@ -9,6 +9,8 @@ use rpp_chain::runtime::node::{
     MempoolStatus, PendingIdentitySummary, PendingUptimeSummary, PendingVoteSummary,
 };
 use rpp_chain::runtime::RuntimeMetrics;
+use serde::Serialize;
+use serde_json::Value;
 
 use super::helpers::{
     drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
@@ -141,6 +143,10 @@ fn sample_uptime(tag: usize) -> PendingUptimeSummary {
     }
 }
 
+fn encode_summary<T: Serialize>(summary: T) -> Value {
+    serde_json::to_value(summary).expect("serialize pending summary")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mempool_status_probe_flags_queue_saturation_alerts() -> Result<()> {
     let tempdir = tempdir()?;
@@ -211,9 +217,15 @@ async fn mempool_status_probe_flags_queue_saturation_alerts() -> Result<()> {
     );
 
     let mut multi_queue_snapshot = warning_snapshot.clone();
-    multi_queue_snapshot.identities = (0..mempool_limit).map(sample_identity).collect();
-    multi_queue_snapshot.votes = (0..(mempool_limit - 1)).map(sample_vote).collect();
-    multi_queue_snapshot.uptime_proofs = (0..(mempool_limit / 2 + 1)).map(sample_uptime).collect();
+    multi_queue_snapshot.identities = (0..mempool_limit)
+        .map(|tag| encode_summary(sample_identity(tag)))
+        .collect();
+    multi_queue_snapshot.votes = (0..(mempool_limit - 1))
+        .map(|tag| encode_summary(sample_vote(tag)))
+        .collect();
+    multi_queue_snapshot.uptime_proofs = (0..(mempool_limit / 2 + 1))
+        .map(|tag| encode_summary(sample_uptime(tag)))
+        .collect();
 
     let multi_alerts = probe.evaluate(&multi_queue_snapshot, mempool_limit);
     let identity_critical = multi_alerts
