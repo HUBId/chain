@@ -342,7 +342,7 @@ fn decode_pem(pem: &str) -> WalletIdentityResult<Vec<u8>> {
         }
         body.push_str(trimmed);
     }
-    Base64::decode_vec(body.as_bytes())
+    Base64::decode_vec(&body)
         .map_err(|err| WalletIdentityError::InvalidCertificatePem(err.to_string()))
 }
 

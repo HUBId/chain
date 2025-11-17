@@ -75,11 +75,8 @@ use crate::wallet::{
 };
 #[cfg(feature = "wallet_zsi")]
 use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
-#[cfg(feature = "runtime")]
-use rpp::runtime::RuntimeMetrics;
-#[cfg(feature = "runtime")]
 use rpp_wallet_interface::runtime_telemetry::{
-    RuntimeMetricsHandle, WalletAction, WalletActionResult,
+    noop_runtime_metrics, RuntimeMetricsHandle, WalletAction, WalletActionResult,
 };
 use zeroize::Zeroizing;
 
@@ -131,7 +128,6 @@ pub struct WalletRpcRouter {
     drafts: Mutex<HashMap<String, DraftState>>,
     next_id: AtomicU64,
     sync: Option<Arc<dyn SyncHandle>>,
-    #[cfg(feature = "runtime")]
     metrics: RuntimeMetricsHandle,
 }
 
@@ -140,7 +136,6 @@ const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
 const HARDWARE_DISABLED_ERROR: &str = "wallet hardware support disabled by configuration";
 
 impl WalletRpcRouter {
-    #[cfg(feature = "runtime")]
     pub fn new(
         wallet: Arc<Wallet>,
         sync: Option<Arc<dyn SyncHandle>>,
@@ -153,17 +148,6 @@ impl WalletRpcRouter {
             next_id: AtomicU64::new(1),
             sync,
             metrics,
-        }
-    }
-
-    #[cfg(not(feature = "runtime"))]
-    pub fn new(wallet: Arc<Wallet>, sync: Option<Arc<dyn SyncHandle>>) -> Self {
-        Self {
-            telemetry: wallet.telemetry_handle(),
-            wallet,
-            drafts: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-            sync,
         }
     }
 
@@ -181,7 +165,6 @@ impl WalletRpcRouter {
 
     fn record_action(&self, action: WalletTelemetryAction, outcome: TelemetryOutcome) {
         self.telemetry.record(action, outcome);
-        #[cfg(feature = "runtime")]
         {
             let action_label = match action {
                 WalletTelemetryAction::BackupExport => WalletAction::BackupExport,
@@ -1917,7 +1900,6 @@ mod tests {
         BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
         NodeRejectionHint, StubNodeClient,
     };
-    use rpp::runtime::telemetry::metrics::RuntimeMetrics;
     use serde_json::json;
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -1946,7 +1928,7 @@ mod tests {
             Arc::clone(&telemetry),
         )
         .expect("wallet");
-        let metrics = RuntimeMetrics::noop();
+        let metrics = noop_runtime_metrics();
         (
             WalletRpcRouter::new(Arc::new(wallet), sync, metrics),
             store,
@@ -1993,7 +1975,7 @@ mod tests {
         wallet
             .configure_hardware_signer(Some(Arc::new(signer.clone())))
             .expect("configure signer");
-        let metrics = RuntimeMetrics::noop();
+        let metrics = noop_runtime_metrics();
         (
             WalletRpcRouter::new(Arc::new(wallet), None, metrics),
             signer,
@@ -2023,7 +2005,7 @@ mod tests {
         )
         .expect("wallet");
         let _persist = dir.into_path();
-        let metrics = RuntimeMetrics::noop();
+        let metrics = noop_runtime_metrics();
         WalletRpcRouter::new(Arc::new(wallet), None, metrics)
     }
 
@@ -2418,7 +2400,8 @@ mod tests {
         )
         .expect("wallet");
         let sync = Arc::new(RecordingSync::default());
-        let router = WalletRpcRouter::new(Arc::new(wallet), Some(sync.clone()));
+        let router =
+            WalletRpcRouter::new(Arc::new(wallet), Some(sync.clone()), noop_runtime_metrics());
 
         let draft = DraftTransaction {
             inputs: vec![DraftInput {

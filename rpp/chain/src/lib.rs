@@ -35,6 +35,7 @@ pub mod errors;
 #[path = "gossip.rs"]
 pub mod gossip;
 pub use rpp_identity_tree as identity_tree;
+pub use rpp_wallet_interface::{runtime_config, runtime_telemetry, runtime_wallet};
 #[path = "../../rpc/interfaces.rs"]
 pub mod interfaces;
 #[path = "../../storage/ledger.rs"]

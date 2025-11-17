@@ -1,4 +1,4 @@
-use serde::de::IntoDeserializer;
+use serde::de::{value::Error as DeError, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -1031,7 +1031,7 @@ impl<'de> Deserialize<'de> for WalletRpcErrorCode {
 impl From<&str> for WalletRpcErrorCode {
     fn from(value: &str) -> Self {
         WalletRpcErrorCode::deserialize(value.into_deserializer())
-            .unwrap_or_else(|_| WalletRpcErrorCode::Custom(value.to_string()))
+            .unwrap_or_else(|_: DeError| WalletRpcErrorCode::Custom(value.to_string()))
     }
 }
 

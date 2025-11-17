@@ -1,8 +1,4 @@
-#![cfg(all(
-    feature = "runtime",
-    feature = "vendor_electrs",
-    feature = "vendor_electrs_test_support"
-))]
+#![cfg(all(feature = "vendor_electrs", feature = "vendor_electrs_test_support"))]
 
 use anyhow::Result;
 use tokio::runtime::Runtime;

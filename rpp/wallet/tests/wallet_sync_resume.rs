@@ -1,5 +1,3 @@
-#![cfg(feature = "runtime")]
-
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};

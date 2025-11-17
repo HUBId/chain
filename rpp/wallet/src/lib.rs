@@ -32,7 +32,6 @@ pub mod stwo;
 pub mod config;
 
 /// Zugriff auf optionale Drittanbieter-Integrationen.
-#[cfg(feature = "runtime")]
 pub mod vendor;
 
 /// Wallet backup and restore helpers.
@@ -48,7 +47,6 @@ pub mod telemetry;
 pub mod modes;
 
 /// Command-line helpers for wallet subsystems.
-#[cfg(feature = "runtime")]
 pub mod cli;
 
 /// JSON-RPC facades exposed by the wallet runtime.
@@ -100,19 +98,9 @@ pub use engine::{
 pub use node_client::*;
 
 pub use rpp_wallet_interface::{
-    node_client::*,
-    rpc::*,
-    telemetry::*,
-    workflows::*,
-    Address,
-    AssetType,
-    Result as WalletInterfaceResult,
-    SendPreview,
-    Tier,
-    TransactionProofBundle,
-    UtxoOutpoint,
-    UtxoRecord,
-    WalletInterfaceError,
+    node_client::*, rpc::*, telemetry::*, workflows::*, Address, AssetType,
+    Result as WalletInterfaceResult, SendPreview, Tier, TransactionProofBundle, UtxoOutpoint,
+    UtxoRecord, WalletInterfaceError,
 };
 
 pub(crate) use rpp_wallet_interface::node_client as interface_node_client;
