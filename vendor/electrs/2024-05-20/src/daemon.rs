@@ -27,7 +27,7 @@ use crate::vendor::electrs::types::{
 #[cfg(feature = "backend-rpp-stark")]
 use malachite::Natural;
 use rpp::proofs::rpp::TransactionWitness;
-use rpp::runtime::node::MempoolStatus;
+use rpp_wallet_interface::runtime_config::MempoolStatus;
 use rpp::runtime::types::{
     pruning_from_previous, Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof,
     PruningProofExt, SignedTransaction,

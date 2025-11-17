@@ -18,17 +18,16 @@ use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
-#[cfg(feature = "wallet_rpc_mtls")]
-use rpp::runtime::config::WalletRpcSecurityBinding;
-use rpp::runtime::config::{
-    WalletConfig as RuntimeWalletConfig, WalletConfigExt, WalletSecurityConfigExt,
-};
+use rpp::runtime::config::WalletConfigExt;
 use rpp::runtime::wallet::rpc::WalletIdentity;
 #[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::wallet::rpc::{
     WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
 use rpp::runtime::RuntimeMode;
+use rpp_wallet_interface::runtime_config::WalletConfig as RuntimeWalletConfig;
+#[cfg(feature = "wallet_rpc_mtls")]
+use rpp_wallet_interface::runtime_config::WalletRpcSecurityBinding;
 
 #[cfg(feature = "wallet_hw")]
 use super::telemetry::HardwareAction;

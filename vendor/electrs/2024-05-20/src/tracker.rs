@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use rpp::runtime::node::MempoolStatus;
+use rpp_wallet_interface::runtime_config::MempoolStatus;
 use rpp::runtime::types::Block as RuntimeBlock;
 use serde_json;
 use sha2::{Digest, Sha256};

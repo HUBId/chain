@@ -36,7 +36,8 @@ use crate::vendor::electrs::types::{
     encode_transaction_metadata, LedgerScriptPayload, ScriptHash, StatusDigest,
     StoredTransactionMetadata,
 };
-use rpp::runtime::node::{MempoolStatus, MempoolStatusExt, PendingTransactionSummary};
+use rpp::runtime::node::{MempoolStatusExt, PendingTransactionSummary};
+use rpp_wallet_interface::runtime_config::MempoolStatus;
 #[cfg(feature = "backend-rpp-stark")]
 use rpp::{
     proofs::rpp::{
@@ -983,7 +984,7 @@ mod tests {
     use crate::vendor::electrs::index::Index;
     use crate::vendor::electrs::rpp_ledger::bitcoin::Network;
     use crate::vendor::electrs::tracker::Tracker;
-    use rpp::runtime::config::QueueWeightsConfig;
+    use rpp_wallet_interface::runtime_config::QueueWeightsConfig;
     #[cfg(feature = "backend-rpp-stark")]
     use crate::vendor::electrs::rpp_ledger::bitcoin::{
         blockdata::block::Header as BlockHeader, OutPoint, Script, Txid,
