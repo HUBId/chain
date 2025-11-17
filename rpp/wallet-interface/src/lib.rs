@@ -10,11 +10,13 @@
 
 pub mod node_client;
 pub mod rpc;
+pub mod runtime_config;
 pub mod telemetry;
 pub mod workflows;
 
 pub use node_client::*;
 pub use rpc::*;
+pub use runtime_config::*;
 pub use telemetry::*;
 pub use workflows::*;
 
