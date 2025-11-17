@@ -1,10 +1,15 @@
 [package]
 name = "rpp-node-runtime-api"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.79"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
 description = "Shared runtime configuration types for the RPP node entrypoints"
-repository = "https://github.com/ava-labs/chain"
+readme.workspace = true
+
+authors = ["Ava Labs"]
 
 [dependencies]
 anyhow = "1.0"

@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 - Wire the Simnet regression orchestrator and CI/nightly job to chain VRF/quorum stress, snapshot rebuild, and gossip backpressure scenarios while exporting HTML/JSON artifacts for audit trails.【F:tools/simnet/src/bin/regression.rs†L1-L220】【F:.github/workflows/ci.yml†L1-L120】【F:.github/workflows/nightly.yml†L1-L130】
 - Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
 - Confirm contributors have the cleanup steps for stale nightly artifacts (`cargo clean -p prover_stwo_backend`, `rm -rf prover/target`, uninstall toolchains older than `nightly-2025-07-14`) and record the stable/nightly build separation verified on Rust 1.79 and the pinned nightly toolchain.
+- Integrate the new `rpp-chain-cli` and `rpp-node-runtime-api` crates into the workspace manifest, CI smoke checks, Docker image, and release packages so the standalone CLI binary and its help output stay available across every artefact.【F:Cargo.toml†L120-L135】【F:.github/workflows/ci.yml†L700-L736】【F:rpp/node/Dockerfile†L43-L77】【F:scripts/build_release.sh†L198-L243】
 
 ### 📚 Documentation
 
@@ -42,6 +43,7 @@ All notable changes to this project will be documented in this file.
 - Add production callouts that block `backend-plonky3`, reiterate the STWO feature
   requirements, and link the release pipeline checklist so operators understand
   the new compile-, packaging-, and runtime guards.【F:docs/rpp_node_operator_guide.md†L7-L23】【F:docs/poseidon_vrf.md†L9-L25】【F:RELEASE.md†L88-L123】
+- Document the `rpp/chain-cli` and `rpp/node-runtime-api` crates, including how to inspect `cargo run -p rpp-chain -- --help` and `cargo run -p rpp-node -- --help`, so contributors know where the unified CLI lives in the repo and how to exercise it locally.【F:README.md†L116-L146】【F:README.md†L238-L259】【F:docs/development/tooling.md†L56-L70】【F:docs/cli/README.md†L1-L13】
 - Summarize the compile-time, runtime, and release guardrails that keep the
   experimental `backend-plonky3` feature out of production builds, and document
   the failure modes operators should expect. The notes call out the
