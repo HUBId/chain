@@ -1,4 +1,3 @@
-pub mod cli;
 mod feature_guard;
 mod pipeline;
 mod services;
@@ -77,7 +76,7 @@ use crate::services::pruning::PruningService;
 use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
-pub use cli::{run_cli, CliError, CliResult};
+pub use rpp_chain_cli::{run_cli, CliError, CliResult};
 pub use rpp_chain_cli::{
     validator_setup, ValidatorSetupError, ValidatorSetupOptions, ValidatorSetupReport,
     ValidatorSetupTelemetryReport,
@@ -93,7 +92,6 @@ const TELEMETRY_FAILURE_METRIC: &str = "telemetry_otlp_failures_total";
 fn record_otlp_failure(sink: &'static str, phase: &'static str) {
     metrics::counter!(TELEMETRY_FAILURE_METRIC, "sink" => sink, "phase" => phase).increment(1);
 }
-
 
 pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
     if matches!(mode, RuntimeMode::Validator | RuntimeMode::Hybrid)
