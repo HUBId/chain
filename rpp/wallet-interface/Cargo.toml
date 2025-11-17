@@ -12,6 +12,8 @@ default = []
 wallet_rpc_mtls = []
 wallet_hw = []
 vendor_electrs = []
+wallet_zsi = []
+wallet_multisig_hooks = []
 
 [dependencies]
 anyhow = "1"

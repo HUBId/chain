@@ -76,7 +76,11 @@ use crate::wallet::{
 #[cfg(feature = "wallet_zsi")]
 use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
 #[cfg(feature = "runtime")]
-use rpp::runtime::telemetry::metrics::{RuntimeMetrics, WalletAction, WalletActionResult};
+use rpp::runtime::RuntimeMetrics;
+#[cfg(feature = "runtime")]
+use rpp_wallet_interface::runtime_telemetry::{
+    RuntimeMetricsHandle, WalletAction, WalletActionResult,
+};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug)]
@@ -128,7 +132,7 @@ pub struct WalletRpcRouter {
     next_id: AtomicU64,
     sync: Option<Arc<dyn SyncHandle>>,
     #[cfg(feature = "runtime")]
-    metrics: Arc<RuntimeMetrics>,
+    metrics: RuntimeMetricsHandle,
 }
 
 const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
@@ -140,7 +144,7 @@ impl WalletRpcRouter {
     pub fn new(
         wallet: Arc<Wallet>,
         sync: Option<Arc<dyn SyncHandle>>,
-        metrics: Arc<RuntimeMetrics>,
+        metrics: RuntimeMetricsHandle,
     ) -> Self {
         Self {
             telemetry: wallet.telemetry_handle(),

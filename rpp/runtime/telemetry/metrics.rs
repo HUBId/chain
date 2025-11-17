@@ -17,6 +17,8 @@ use opentelemetry_sdk::Resource;
 
 use super::exporter::TelemetryExporterBuilder;
 use crate::config::TelemetryConfig;
+use rpp_wallet_interface::runtime_telemetry::RuntimeMetrics as WalletRuntimeMetrics;
+pub use rpp_wallet_interface::runtime_telemetry::{WalletAction, WalletActionResult};
 
 const METER_NAME: &str = "rpp-runtime";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
@@ -635,6 +637,12 @@ impl RuntimeMetrics {
     }
 }
 
+impl WalletRuntimeMetrics for RuntimeMetrics {
+    fn record_wallet_action(&self, action: WalletAction, outcome: WalletActionResult) {
+        RuntimeMetrics::record_wallet_action(self, action, outcome);
+    }
+}
+
 pub struct ProofMetrics {
     generation_duration: EnumF64Histogram<ProofKind>,
     generation_size: EnumU64Histogram<ProofKind>,
@@ -1082,39 +1090,6 @@ impl MetricLabel for WalletRpcMethod {
     }
 }
 
-/// Wallet actions instrumented for telemetry counters.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum WalletAction {
-    BackupExport,
-    BackupValidate,
-    BackupImport,
-    WatchOnlyStatus,
-    WatchOnlyEnable,
-    WatchOnlyDisable,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigGetScope,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigSetScope,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigGetCosigners,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigSetCosigners,
-    #[cfg(feature = "wallet_multisig_hooks")]
-    MultisigExport,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiProve,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiVerify,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiBindAccount,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiList,
-    #[cfg(feature = "wallet_zsi")]
-    ZsiDelete,
-    HwEnumerate,
-    HwSign,
-}
-
 impl MetricLabel for WalletAction {
     const KEY: &'static str = "action";
 
@@ -1150,13 +1125,6 @@ impl MetricLabel for WalletAction {
             Self::HwSign => "hw.sign",
         }
     }
-}
-
-/// Result label emitted alongside [`WalletAction`].
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum WalletActionResult {
-    Success,
-    Error,
 }
 
 impl MetricLabel for WalletActionResult {
