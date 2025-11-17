@@ -16,7 +16,6 @@ use tokio::time::sleep;
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp::runtime::wallet::{
     json_rpc_router, DeterministicSync, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle,
-    WalletSecurityPaths,
 };
 use rpp_wallet::config::wallet::{
     WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
@@ -45,6 +44,7 @@ use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
 use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::wallet::WalletPaths;
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletSyncCoordinator};
+use rpp_wallet_interface::runtime_wallet::WalletSecurityPaths;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wallet_runtime_rpc_happy_path() -> Result<()> {

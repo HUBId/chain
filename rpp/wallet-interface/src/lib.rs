@@ -11,12 +11,15 @@
 pub mod node_client;
 pub mod rpc;
 pub mod runtime_config;
+/// Wallet RBAC store, context, and helper utilities shared between the runtime and CLI/tests.
+pub mod runtime_wallet;
 pub mod telemetry;
 pub mod workflows;
 
 pub use node_client::*;
 pub use rpc::*;
 pub use runtime_config::*;
+pub use runtime_wallet::*;
 pub use telemetry::*;
 pub use workflows::*;
 
