@@ -81,7 +81,9 @@ use std::{
     time::Duration,
 };
 
-pub use codec::Codec;
+pub use codec::{
+    read_handshake_payload, read_limited, write_payload, Codec, Payload, MAX_HANDSHAKE_BYTES,
+};
 use futures::channel::oneshot;
 use handler::Handler;
 pub use handler::ProtocolSupport;
