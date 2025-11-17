@@ -278,7 +278,7 @@ impl From<&PeerRecord> for StoredPeerRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredAccessLists {
     #[serde(default)]
     allowlist: Vec<StoredAllowlistEntry>,
