@@ -7,6 +7,9 @@ homepage.workspace = true
 repository.workspace = true
 readme = "README.md"
 
+[lib]
+doctest = false
+
 [features]
 default = []
 wallet_rpc_mtls = []
@@ -19,7 +22,7 @@ wallet_multisig_hooks = []
 anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
 hex.workspace = true
-base64ct = "1.6.0"
+base64ct = { version = "1.6.0", features = ["alloc"] }
 sha2.workspace = true
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json.workspace = true

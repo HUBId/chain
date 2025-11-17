@@ -17,9 +17,6 @@
 //!   `rpp::runtime::orchestration`) that the tracker uses to mirror the node
 //!   state. Enable this flag when testing the wallet against a live runtime or
 //!   the Firewood-backed daemon harness.
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
-compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
-
 pub use prover_backend_interface as proof_backend;
 
 #[cfg(feature = "prover-stwo")]
@@ -107,3 +104,6 @@ pub(crate) use rpp_wallet_interface::node_client as interface_node_client;
 pub(crate) use rpp_wallet_interface::rpc as interface_rpc;
 pub(crate) use rpp_wallet_interface::telemetry as interface_telemetry;
 pub(crate) use rpp_wallet_interface::workflows as interface_workflows;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod tests;

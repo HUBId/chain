@@ -10,6 +10,7 @@ wallet_hw = []
 wallet_zsi = []
 wallet_multisig_hooks = []
 wallet_rpc_mtls = []
+test-fixtures = []
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",
@@ -66,15 +67,12 @@ iced = { version = "0.12.1", optional = true, features = ["tokio", "qr_code"] }
 arboard = { version = "3.4", optional = true }
 qrcode = { version = "0.13", optional = true }
 metrics = { workspace = true }
+tempfile = "3.10"
 
 [dev-dependencies]
-assert_cmd = "2.0"
-tempfile = "3.10"
-uuid = { version = "1", features = ["v4"] }
 opentelemetry = "=0.30.0"
 opentelemetry_sdk = "=0.30.0"
 prover_mock_backend = { path = "../zk/prover_mock_backend" }
-rpp = { package = "rpp-chain", path = "../../rpp/chain", default-features = false }
 
 [[bin]]
 name = "rpp-wallet-gui"

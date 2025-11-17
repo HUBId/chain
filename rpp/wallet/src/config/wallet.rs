@@ -112,7 +112,6 @@ impl Default for WalletHwTransport {
     }
 }
 
-
 /// Configure storage paths and lifecycle metadata for the wallet engine.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]

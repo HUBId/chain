@@ -20,9 +20,6 @@
 //! uptime, consensus, and transaction checks.
 use std::fmt;
 
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
-compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
-
 pub mod blake2s {
     use blake2::{Blake2s256, Digest};
 

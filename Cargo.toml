@@ -16,6 +16,7 @@ members = [
   "rpp/pruning",
   "rpp/node",
   "rpp/wallet-interface",
+  "rpp/wallet-integration-tests",
   "xtask",
   "tools/simnet", "tools/snapshot-verify", "tools/worm-export-stub", "tools/zsi-fixtures",
 ]

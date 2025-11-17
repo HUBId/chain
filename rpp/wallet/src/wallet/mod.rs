@@ -39,8 +39,8 @@ use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
 #[cfg(feature = "wallet_zsi")]
 use crate::zsi::ZsiBinder;
 use crate::zsi::{self, LifecycleProof, ZsiOperation, ZsiRecord};
-use prover_backend_interface::BackendError as ZsiBackendError;
 use crate::{WalletService, WalletServiceResult};
+use prover_backend_interface::BackendError as ZsiBackendError;
 use serde::{Deserialize, Serialize};
 
 mod runtime;

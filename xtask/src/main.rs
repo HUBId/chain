@@ -275,6 +275,16 @@ fn run_wallet_feature_matrix() -> Result<()> {
         run_wallet_matrix_command(&root, "test", &scenario, &base_features)?;
     }
 
+    run_command(
+        Command::new("cargo")
+            .current_dir(&root)
+            .arg("test")
+            .arg("-p")
+            .arg("wallet-integration-tests")
+            .arg("--locked"),
+        "wallet integration tests",
+    )?;
+
     Ok(())
 }
 

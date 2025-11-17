@@ -1,15 +1,11 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use assert_cmd::Command;
 use reqwest::Client;
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tokio::time::sleep;
 
 use rpp::runtime::telemetry::metrics::RuntimeMetrics;
 use rpp::runtime::wallet::{
@@ -21,15 +17,9 @@ use rpp_wallet::config::wallet::{
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::engine::DraftTransaction;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
-use rpp_wallet::indexer::client::{
-    GetHeadersRequest, GetHeadersResponse, GetScripthashStatusRequest, GetScripthashStatusResponse,
-    GetTransactionRequest, GetTransactionResponse, IndexedHeader, IndexedUtxo, IndexerClient,
-    IndexerClientError, ListScripthashUtxosRequest, ListScripthashUtxosResponse,
-    TransactionPayload, TxOutpoint,
-};
+use rpp_wallet::indexer::client::{IndexedUtxo, IndexerClient, TransactionPayload, TxOutpoint};
 use rpp_wallet::node_client::{
-    BlockFeeSummary, ChainHead, MempoolInfo, MempoolStatus, NodeClient, NodeClientResult,
-    QueueWeightsConfig, TransactionSubmission,
+    BlockFeeSummary, ChainHead, MempoolInfo, MempoolStatus, QueueWeightsConfig,
 };
 use rpp_wallet::rpc::dto::{
     BroadcastParams, BroadcastResponse, CreateTxParams, CreateTxResponse, DeriveAddressParams,
@@ -40,6 +30,10 @@ use rpp_wallet::rpc::dto::{
 };
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
 use rpp_wallet::telemetry::WalletActionTelemetry;
+use rpp_wallet::tests::{
+    decode_address, extract_field, rpc_call, wait_for, wait_for_some, RecordingNodeClient,
+    TestIndexer,
+};
 use rpp_wallet::wallet::WalletPaths;
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletSyncCoordinator};
 use rpp_wallet_interface::runtime_wallet::WalletSecurityPaths;
@@ -736,221 +730,4 @@ impl RuntimeHarness {
             .await
             .context("shutdown wallet runtime handle")
     }
-}
-
-#[derive(Clone)]
-struct TestIndexer {
-    state: Arc<Mutex<TestIndexerState>>,
-}
-
-struct TestIndexerState {
-    latest_height: u64,
-    statuses: HashSet<[u8; 32]>,
-    utxos: HashMap<[u8; 32], Vec<IndexedUtxo>>,
-    transactions: HashMap<[u8; 32], TransactionPayload>,
-}
-
-impl TestIndexer {
-    fn new(latest_height: u64) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(TestIndexerState {
-                latest_height,
-                statuses: HashSet::new(),
-                utxos: HashMap::new(),
-                transactions: HashMap::new(),
-            })),
-        }
-    }
-
-    fn register_utxo(&self, address: &str, utxo: IndexedUtxo, payload: TransactionPayload) {
-        let mut state = self.state.lock().unwrap();
-        let hash = decode_address(address);
-        state.statuses.insert(hash);
-        state.utxos.entry(hash).or_default().push(utxo);
-        state.transactions.insert(payload.txid, payload);
-    }
-}
-
-impl IndexerClient for TestIndexer {
-    fn get_headers(
-        &self,
-        request: &GetHeadersRequest,
-    ) -> Result<GetHeadersResponse, IndexerClientError> {
-        let state = self.state.lock().unwrap();
-        let header = IndexedHeader::new(request.start_height, [0u8; 32], [0u8; 32], Vec::new());
-        Ok(GetHeadersResponse::new(state.latest_height, vec![header]))
-    }
-
-    fn get_scripthash_status(
-        &self,
-        request: &GetScripthashStatusRequest,
-    ) -> Result<GetScripthashStatusResponse, IndexerClientError> {
-        let state = self.state.lock().unwrap();
-        let status = state
-            .statuses
-            .contains(&request.scripthash)
-            .then(|| hex::encode(request.scripthash));
-        Ok(GetScripthashStatusResponse::new(status))
-    }
-
-    fn list_scripthash_utxos(
-        &self,
-        request: &ListScripthashUtxosRequest,
-    ) -> Result<ListScripthashUtxosResponse, IndexerClientError> {
-        let state = self.state.lock().unwrap();
-        let utxos = state
-            .utxos
-            .get(&request.scripthash)
-            .cloned()
-            .unwrap_or_default();
-        Ok(ListScripthashUtxosResponse::new(utxos))
-    }
-
-    fn get_transaction(
-        &self,
-        request: &GetTransactionRequest,
-    ) -> Result<GetTransactionResponse, IndexerClientError> {
-        let state = self.state.lock().unwrap();
-        let tx = state.transactions.get(&request.txid).cloned();
-        Ok(GetTransactionResponse::new(tx))
-    }
-}
-
-#[derive(Default)]
-struct RecordingNodeClient {
-    submissions: Mutex<Vec<TransactionSubmission>>,
-    raw_submissions: Mutex<Vec<Vec<u8>>>,
-    fee_rate: u64,
-    mempool_info: MempoolInfo,
-    recent_blocks: Vec<BlockFeeSummary>,
-}
-
-impl RecordingNodeClient {
-    fn submission_count(&self) -> usize {
-        self.submissions.lock().unwrap().len()
-    }
-
-    fn last_submission(&self) -> Option<DraftTransaction> {
-        self.submissions
-            .lock()
-            .unwrap()
-            .last()
-            .map(DraftTransaction::from)
-    }
-}
-
-impl NodeClient for RecordingNodeClient {
-    fn submit_tx(&self, submission: &TransactionSubmission) -> NodeClientResult<()> {
-        self.submissions.lock().unwrap().push(submission.clone());
-        Ok(())
-    }
-
-    fn submit_raw_tx(&self, tx: &[u8]) -> NodeClientResult<()> {
-        self.raw_submissions.lock().unwrap().push(tx.to_vec());
-        Ok(())
-    }
-
-    fn estimate_fee(&self, _confirmation_target: u16) -> NodeClientResult<u64> {
-        Ok(self.fee_rate.max(1))
-    }
-
-    fn chain_head(&self) -> NodeClientResult<ChainHead> {
-        Ok(ChainHead::new(0, [0u8; 32]))
-    }
-
-    fn mempool_status(&self) -> NodeClientResult<MempoolStatus> {
-        Ok(MempoolStatus {
-            transactions: Vec::new(),
-            identities: Vec::new(),
-            votes: Vec::new(),
-            uptime_proofs: Vec::new(),
-            queue_weights: QueueWeightsConfig::default(),
-        })
-    }
-
-    fn mempool_info(&self) -> NodeClientResult<MempoolInfo> {
-        Ok(self.mempool_info.clone())
-    }
-
-    fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>> {
-        Ok(self.recent_blocks.iter().take(limit).cloned().collect())
-    }
-}
-
-async fn rpc_call<T: DeserializeOwned>(
-    client: &Client,
-    endpoint: &str,
-    method: &str,
-    params: Option<Value>,
-) -> Result<T> {
-    let request = JsonRpcRequest {
-        jsonrpc: Some(JSONRPC_VERSION.to_string()),
-        id: Some(Value::from(1)),
-        method: method.to_string(),
-        params,
-    };
-    let response = client
-        .post(format!("{endpoint}/rpc"))
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| format!("send {method} request"))?;
-    if !response.status().is_success() {
-        bail!("wallet RPC returned HTTP status {}", response.status());
-    }
-    let payload: JsonRpcResponse = response.json().await.context("decode JSON-RPC response")?;
-    if let Some(error) = payload.error {
-        bail!("wallet RPC error ({}): {}", error.code, error.message);
-    }
-    let result = payload
-        .result
-        .context("wallet RPC response missing result field")?;
-    let typed = serde_json::from_value(result).context("decode JSON-RPC payload")?;
-    Ok(typed)
-}
-
-fn extract_field(output: &str, label: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let trimmed = line.trim();
-        if trimmed.starts_with(label) {
-            trimmed
-                .split_once(':')
-                .map(|(_, value)| value.trim().to_string())
-        } else {
-            None
-        }
-    })
-}
-
-async fn wait_for<F>(mut condition: F)
-where
-    F: FnMut() -> bool,
-{
-    for _ in 0..120 {
-        if condition() {
-            return;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition not satisfied within timeout");
-}
-
-async fn wait_for_some<F, T>(mut condition: F) -> T
-where
-    F: FnMut() -> Option<T>,
-{
-    for _ in 0..120 {
-        if let Some(value) = condition() {
-            return value;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    panic!("condition not satisfied within timeout");
-}
-
-fn decode_address(address: &str) -> [u8; 32] {
-    let bytes = hex::decode(address).expect("decode wallet address");
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(&bytes[..32]);
-    hash
 }
