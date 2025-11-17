@@ -3,6 +3,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -483,7 +484,17 @@ struct SubmitUptimeResponse {
     credited_hours: u64,
 }
 
-pub async fn run_cli() -> CliResult<()> {
+pub async fn run_cli() -> ExitCode {
+    match run_cli_inner().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::from(err.exit_code() as u8)
+        }
+    }
+}
+
+async fn run_cli_inner() -> CliResult<()> {
     let RootCli { command } = RootCli::parse();
     match command {
         RootCommand::Node(RuntimeCommand { options }) => {
