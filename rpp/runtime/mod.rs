@@ -1,68 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{ChainError, ChainResult};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeMode {
-    Node,
-    Wallet,
-    Hybrid,
-    Validator,
-}
-
-impl RuntimeMode {
-    pub fn includes_node(self) -> bool {
-        matches!(
-            self,
-            RuntimeMode::Node | RuntimeMode::Hybrid | RuntimeMode::Validator
-        )
-    }
-
-    pub fn includes_wallet(self) -> bool {
-        matches!(
-            self,
-            RuntimeMode::Wallet | RuntimeMode::Hybrid | RuntimeMode::Validator
-        )
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RuntimeMode::Node => "node",
-            RuntimeMode::Wallet => "wallet",
-            RuntimeMode::Hybrid => "hybrid",
-            RuntimeMode::Validator => "validator",
-        }
-    }
-
-    pub fn default_node_config_path(self) -> Option<&'static str> {
-        match self {
-            RuntimeMode::Node => Some("config/node.toml"),
-            RuntimeMode::Hybrid => Some("config/hybrid.toml"),
-            RuntimeMode::Validator => Some("config/validator.toml"),
-            RuntimeMode::Wallet => None,
-        }
-    }
-
-    pub fn default_wallet_config_path(self) -> Option<&'static str> {
-        match self {
-            RuntimeMode::Wallet | RuntimeMode::Hybrid | RuntimeMode::Validator => {
-                Some("config/wallet.toml")
-            }
-            RuntimeMode::Node => None,
-        }
-    }
-}
-
-impl Default for RuntimeMode {
-    fn default() -> Self {
-        RuntimeMode::Node
-    }
-}
+pub use rpp_wallet_interface::runtime_config::RuntimeMode;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
