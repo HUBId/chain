@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use metrics::counter;
-use rpp::runtime::config::{WalletConfig as RuntimeWalletConfig, WalletConfigExt};
+use rpp::runtime::config::WalletConfigExt;
 use rpp::runtime::RuntimeMode;
+use rpp_wallet_interface::runtime_config::WalletConfig as RuntimeWalletConfig;
 
 use crate::telemetry::TelemetryOutcome;
 

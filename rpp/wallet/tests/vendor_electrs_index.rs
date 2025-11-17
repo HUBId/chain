@@ -13,9 +13,7 @@ use rpp::proofs::rpp::{
     UtxoOutpoint,
 };
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp::runtime::config::QueueWeightsConfig;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
+use rpp::runtime::node::PendingTransactionSummary;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::types::proofs::ChainProof;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
@@ -50,6 +48,8 @@ use rpp_wallet::vendor::electrs::types::{
     RppStarkReportSummary, ScriptHash, StoredTransactionMetadata, StoredVrfAudit,
     VrfInputDescriptor, VrfOutputDescriptor,
 };
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet_interface::runtime_config::{MempoolStatus, QueueWeightsConfig};
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use uuid::Uuid;
 

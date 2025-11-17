@@ -5,8 +5,8 @@ use hex::FromHex;
 use log::warn;
 use serde::ser::{Serialize, SerializeSeq, Serializer};
 
-use rpp::runtime::config::QueueWeightsConfig;
-use rpp::runtime::node::{MempoolStatus, MempoolStatusExt, PendingTransactionSummary};
+use rpp::runtime::node::{MempoolStatusExt, PendingTransactionSummary};
+use rpp_wallet_interface::runtime_config::{MempoolStatus, QueueWeightsConfig};
 
 use crate::vendor::electrs::daemon::Daemon;
 use crate::vendor::electrs::metrics::{Gauge, Metrics};
@@ -266,7 +266,7 @@ fn script_hash_from_address(address: &str) -> ScriptHash {
 mod tests {
     use super::*;
 
-    use rpp::runtime::config::QueueWeightsConfig;
+    use rpp_wallet_interface::runtime_config::QueueWeightsConfig;
 
     fn sample_summary(tag: u8, fee: u64) -> PendingTransactionSummary {
         PendingTransactionSummary {

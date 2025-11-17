@@ -3,15 +3,14 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use rpp::consensus::BftVoteKind;
-use rpp::runtime::config::QueueWeightsConfig;
 use rpp::runtime::node::{
-    MempoolStatus, PendingIdentitySummary, PendingTransactionSummary, PendingUptimeSummary,
-    PendingVoteSummary,
+    PendingIdentitySummary, PendingTransactionSummary, PendingUptimeSummary, PendingVoteSummary,
 };
 use rpp_wallet::vendor::electrs::mempool::{Mempool, MempoolSyncUpdate};
 use rpp_wallet::vendor::electrs::metrics::Metrics;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{Script, Txid};
 use rpp_wallet::vendor::electrs::types::ScriptHash;
+use rpp_wallet_interface::runtime_config::{MempoolStatus, QueueWeightsConfig};
 use serde::Serialize;
 use serde_json::Value;
 
