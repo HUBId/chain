@@ -2,9 +2,11 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use base64ct::{Base64, Encoding};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
@@ -201,6 +203,36 @@ pub enum WalletIdentity {
     Certificate(String),
 }
 
+impl WalletIdentity {
+    /// Construct an identity from a bearer token by hashing it with SHA-256.
+    pub fn from_bearer_token(token: &str) -> Self {
+        Self::Token(hex_digest(token.as_bytes()))
+    }
+
+    /// Construct an identity from a DER-encoded certificate.
+    pub fn from_certificate_der(der: &[u8]) -> Self {
+        Self::Certificate(hex_digest(der))
+    }
+
+    /// Construct an identity from a PEM-encoded certificate.
+    pub fn from_certificate_pem(pem: &str) -> WalletIdentityResult<Self> {
+        let der = decode_pem(pem)?;
+        Ok(Self::from_certificate_der(&der))
+    }
+
+    /// Construct an identity from a pre-computed fingerprint.
+    pub fn from_certificate_fingerprint(fingerprint: &str) -> WalletIdentityResult<Self> {
+        let trimmed = fingerprint.trim();
+        if trimmed.is_empty() {
+            return Err(WalletIdentityError::EmptyFingerprint);
+        }
+        if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(WalletIdentityError::NonHexFingerprint);
+        }
+        Ok(Self::Certificate(trimmed.to_lowercase()))
+    }
+}
+
 /// Wallet roles recognised by the runtime RBAC layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -226,6 +258,23 @@ impl WalletRole {
 
 /// Collection type tracking the roles associated with a request or identity.
 pub type WalletRoleSet = BTreeSet<WalletRole>;
+
+/// Errors surfaced when constructing wallet identities.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WalletIdentityError {
+    /// The provided fingerprint was empty.
+    #[error("certificate fingerprint must not be empty")]
+    EmptyFingerprint,
+    /// The provided fingerprint contained non-hexadecimal characters.
+    #[error("certificate fingerprint must be hexadecimal")]
+    NonHexFingerprint,
+    /// The PEM payload was invalid.
+    #[error("invalid certificate pem: {0}")]
+    InvalidCertificatePem(String),
+}
+
+/// Result alias returned by wallet identity helpers.
+pub type WalletIdentityResult<T> = Result<T, WalletIdentityError>;
 
 /// Certificate fingerprint metadata surfaced in the configuration file.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -281,6 +330,68 @@ impl WalletRpcSecurityBinding {
     pub fn to_runtime_binding(&self) -> WalletSecurityBinding {
         let roles: WalletRoleSet = self.roles.iter().copied().collect();
         WalletSecurityBinding::new(self.identity.clone(), roles)
+    }
+}
+
+fn decode_pem(pem: &str) -> WalletIdentityResult<Vec<u8>> {
+    let mut body = String::new();
+    for line in pem.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("-----BEGIN") || trimmed.starts_with("-----END") {
+            continue;
+        }
+        body.push_str(trimmed);
+    }
+    Base64::decode_vec(body.as_bytes())
+        .map_err(|err| WalletIdentityError::InvalidCertificatePem(err.to_string()))
+}
+
+fn hex_digest(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_identity_hashes_secret() {
+        let identity = WalletIdentity::from_bearer_token("secret");
+        assert!(matches!(identity, WalletIdentity::Token(hash) if hash.len() == 64));
+    }
+
+    #[test]
+    fn certificate_identity_from_pem() {
+        let pem = "-----BEGIN CERTIFICATE-----\nZmFrZWNlcnQ=\n-----END CERTIFICATE-----";
+        let identity = WalletIdentity::from_certificate_pem(pem).expect("identity");
+        assert!(matches!(identity, WalletIdentity::Certificate(_)));
+    }
+
+    #[test]
+    fn certificate_parsing_normalises_fingerprint() {
+        let der = b"certificate-bytes";
+        let fingerprint_from_der = WalletIdentity::from_certificate_der(der);
+        let pem = format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
+            Base64::encode_string(der)
+        );
+        let fingerprint_from_pem =
+            WalletIdentity::from_certificate_pem(&pem).expect("fingerprint from pem");
+        assert_eq!(fingerprint_from_der, fingerprint_from_pem);
+    }
+
+    #[test]
+    fn fingerprint_parser_rejects_invalid_input() {
+        assert_eq!(
+            WalletIdentity::from_certificate_fingerprint(""),
+            Err(WalletIdentityError::EmptyFingerprint)
+        );
+        assert_eq!(
+            WalletIdentity::from_certificate_fingerprint("not-hex"),
+            Err(WalletIdentityError::NonHexFingerprint)
+        );
     }
 }
 

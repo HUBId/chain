@@ -1,109 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64ct::{Base64, Encoding};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::errors::{ChainError, ChainResult};
+use rpp_wallet_interface::runtime_config::WalletIdentityError;
+pub use rpp_wallet_interface::runtime_config::{
+    WalletIdentity, WalletRole, WalletRoleSet, WalletSecurityBinding,
+};
 
-/// Wallet roles recognised by the runtime RBAC layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WalletRole {
-    /// Full administrative control over the wallet runtime.
-    Admin,
-    /// Operational control (e.g. rescans, draft creation).
-    Operator,
-    /// Read-only access to wallet state.
-    Viewer,
-}
-
-impl WalletRole {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            WalletRole::Admin => "admin",
-            WalletRole::Operator => "operator",
-            WalletRole::Viewer => "viewer",
-        }
-    }
-}
-
-/// Collection type tracking the roles associated with a request or identity.
-pub type WalletRoleSet = BTreeSet<WalletRole>;
-
-/// Static assignment between an identity and the set of roles it should have.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WalletSecurityBinding {
-    pub identity: WalletIdentity,
-    #[serde(default)]
-    pub roles: WalletRoleSet,
-}
-
-impl WalletSecurityBinding {
-    pub fn new(identity: WalletIdentity, roles: WalletRoleSet) -> Self {
-        Self { identity, roles }
-    }
-}
-
-/// Identity extracted from an RPC request.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
-pub enum WalletIdentity {
-    /// Bearer token presented via the `Authorization` header.
-    Token(String),
-    /// TLS client certificate fingerprint (SHA-256).
-    Certificate(String),
-}
-
-impl WalletIdentity {
-    /// Construct an identity from a bearer token by hashing it with SHA-256.
-    pub fn from_bearer_token(token: &str) -> Self {
-        Self::Token(hex_digest(token.as_bytes()))
-    }
-
-    /// Construct an identity from a DER-encoded certificate.
-    pub fn from_certificate_der(der: &[u8]) -> Self {
-        Self::Certificate(hex_digest(der))
-    }
-
-    /// Construct an identity from a PEM-encoded certificate.
-    pub fn from_certificate_pem(pem: &str) -> ChainResult<Self> {
-        let der = decode_pem(pem)?;
-        Ok(Self::from_certificate_der(&der))
-    }
-
-    /// Construct an identity from a pre-computed fingerprint.
-    pub fn from_certificate_fingerprint(fingerprint: &str) -> ChainResult<Self> {
-        let trimmed = fingerprint.trim();
-        if trimmed.is_empty() {
-            return Err(ChainError::Config(
-                "certificate fingerprint must not be empty".to_string(),
-            ));
-        }
-        let normalised = trimmed.to_lowercase();
-        if normalised.chars().any(|ch| !ch.is_ascii_hexdigit()) {
-            return Err(ChainError::Config(
-                "certificate fingerprint must be hexadecimal".to_string(),
-            ));
-        }
-        Ok(Self::Certificate(normalised))
-    }
-}
-
-fn decode_pem(pem: &str) -> ChainResult<Vec<u8>> {
-    let mut body = String::new();
-    for line in pem.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("-----BEGIN") || trimmed.starts_with("-----END") {
-            continue;
-        }
-        body.push_str(trimmed);
-    }
-    Base64::decode_vec(body.as_bytes())
-        .map_err(|err| ChainError::Config(format!("invalid certificate pem: {err}")))
+fn wallet_identity_error(err: WalletIdentityError) -> ChainError {
+    ChainError::Config(err.to_string())
 }
 
 fn hex_digest(data: &[u8]) -> String {
@@ -289,7 +199,8 @@ impl WalletSecurityContext {
 
     /// Convenience helper for resolving roles from a certificate fingerprint.
     pub fn resolve_certificate_roles(&self, fingerprint: &str) -> ChainResult<WalletRoleSet> {
-        let identity = WalletIdentity::from_certificate_fingerprint(fingerprint)?;
+        let identity = WalletIdentity::from_certificate_fingerprint(fingerprint)
+            .map_err(wallet_identity_error)?;
         Ok(self.resolve_roles(&[identity]))
     }
 
@@ -348,32 +259,6 @@ mod tests {
     use std::fs;
 
     use tempfile::tempdir;
-
-    #[test]
-    fn token_identity_hashes_secret() {
-        let identity = WalletIdentity::from_bearer_token("secret");
-        assert!(matches!(identity, WalletIdentity::Token(hash) if hash.len() == 64));
-    }
-
-    #[test]
-    fn certificate_identity_from_pem() {
-        let pem = "-----BEGIN CERTIFICATE-----\nZmFrZWNlcnQ=\n-----END CERTIFICATE-----";
-        let identity = WalletIdentity::from_certificate_pem(pem).expect("identity");
-        assert!(matches!(identity, WalletIdentity::Certificate(_)));
-    }
-
-    #[test]
-    fn certificate_parsing_normalises_fingerprint() {
-        let der = b"certificate-bytes";
-        let fingerprint_from_der = WalletIdentity::from_certificate_der(der);
-        let pem = format!(
-            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
-            Base64::encode_string(der)
-        );
-        let fingerprint_from_pem =
-            WalletIdentity::from_certificate_pem(&pem).expect("fingerprint from pem");
-        assert_eq!(fingerprint_from_der, fingerprint_from_pem);
-    }
 
     #[test]
     fn rbac_store_loads_and_persists_assignments() {
@@ -456,11 +341,5 @@ mod tests {
         assert_eq!(token_only, operator_roles);
         let certificate_only = context.resolve_roles(&[certificate_identity]);
         assert_eq!(certificate_only, viewer_roles);
-    }
-
-    #[test]
-    fn fingerprint_parser_rejects_invalid_input() {
-        assert!(WalletIdentity::from_certificate_fingerprint("").is_err());
-        assert!(WalletIdentity::from_certificate_fingerprint("not-hex").is_err());
     }
 }

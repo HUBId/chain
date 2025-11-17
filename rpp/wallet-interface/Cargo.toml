@@ -17,6 +17,8 @@ vendor_electrs = []
 anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
 hex.workspace = true
+base64ct = "1.6.0"
+sha2.workspace = true
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
