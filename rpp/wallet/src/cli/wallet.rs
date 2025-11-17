@@ -18,9 +18,11 @@ use serde::Serialize;
 use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
-use rpp::runtime::config::WalletConfig as RuntimeWalletConfig;
 #[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::config::WalletRpcSecurityBinding;
+use rpp::runtime::config::{
+    WalletConfig as RuntimeWalletConfig, WalletConfigExt, WalletSecurityConfigExt,
+};
 use rpp::runtime::wallet::rpc::WalletIdentity;
 #[cfg(feature = "wallet_rpc_mtls")]
 use rpp::runtime::wallet::rpc::{
@@ -2089,7 +2091,9 @@ fn load_runtime_wallet_config_with_path(
     Ok((config, path))
 }
 
-fn load_runtime_wallet_config(context: &InitContext) -> Result<RuntimeWalletConfig, WalletCliError> {
+fn load_runtime_wallet_config(
+    context: &InitContext,
+) -> Result<RuntimeWalletConfig, WalletCliError> {
     let (config, _) = load_runtime_wallet_config_with_path(context)?;
     Ok(config)
 }

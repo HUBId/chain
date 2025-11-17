@@ -51,7 +51,7 @@ use tracing_subscriber::Layer;
 use rpp_chain::api::{ApiContext, PruningServiceApi};
 use rpp_chain::config::{
     NodeConfig, ReleaseChannel, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds,
-    WalletConfig, WormExportTargetConfig,
+    WalletConfig, WalletConfigExt, WormExportTargetConfig,
 };
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, VrfKeyIdentifier,

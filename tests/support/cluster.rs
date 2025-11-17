@@ -24,7 +24,7 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Instant};
 
-use rpp_chain::config::{GenesisAccount, NodeConfig, WalletConfig};
+use rpp_chain::config::{GenesisAccount, NodeConfig, WalletConfig, WalletConfigExt};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };

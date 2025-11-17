@@ -13,7 +13,9 @@ use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex,
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeyStore, VrfKeypair,
 };
-use rpp_chain::runtime::config::{NodeConfig, SecretsBackendConfig, SecretsConfig, WalletConfig};
+use rpp_chain::runtime::config::{
+    NodeConfig, SecretsBackendConfig, SecretsConfig, WalletConfig, WalletConfigExt,
+};
 use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;

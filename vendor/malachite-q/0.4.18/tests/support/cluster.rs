@@ -28,7 +28,7 @@ use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::{
-    config::WalletConfig,
+    config::{WalletConfig, WalletConfigExt},
     errors::{ChainError, ChainResult},
     storage::Storage,
     types::BlockPayload,
