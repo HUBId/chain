@@ -1,0 +1,30 @@
+[cli.prompt]
+confirmation = "{prompt} [y/N]: "
+operation_aborted = "operation aborted by user"
+
+[cli.rpc]
+wallet_policy_violation_multiple = "Draft violates {count} wallet policy rule(s); review the violation list."
+wallet_policy_violation_generic = "Draft violates wallet policy rules."
+fee_too_low_required = "Fee rate too low (requires at least {required} sats/vB)."
+fee_too_low_minimum = "Fee rate too low (minimum is {minimum} sats/vB)."
+pending_lock_conflict_with_amounts = "Insufficient unlocked funds (required {required}, available {available})."
+pending_lock_conflict_generic = "Wallet inputs are locked by another draft; release them or lower the amount."
+prover_timeout = "Wallet prover timed out after {timeout_secs} seconds."
+rescan_in_progress_with_pending = "A rescan from height {pending} is already scheduled (requested {requested})."
+rescan_in_progress_generic = "A rescan is already scheduled (requested {requested})."
+draft_not_found = "Draft `{draft_id}` was not found; verify the identifier."
+draft_unsigned = "Draft `{draft_id}` must be signed before broadcasting; run `send sign` first."
+
+[ui.identity]
+account_missing = "wallet account not found"
+zsi_required = "wallet identity must be ZSI-validated"
+insufficient_balance = "insufficient balance for requested transfer"
+snapshot_missing = "wallet utxo snapshot not available"
+inputs_unavailable = "wallet inputs unavailable for requested owner"
+ledger_input_missing = "ledger selected input not present in snapshot"
+selected_inputs_insufficient = "selected inputs insufficient"
+timetoke_insufficient = "wallet timetoke balance {available}h below required {required}h"
+reputation_below_minimum = "wallet reputation tier {tier} below governance minimum {minimum}"
+reputation_below_required = "wallet reputation tier {tier} below required {required}"
+utxo_value_overflow = "utxo value overflow"
+

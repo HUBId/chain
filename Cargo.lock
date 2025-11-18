@@ -8647,6 +8647,7 @@ dependencies = [
  "iced",
  "log",
  "metrics",
+ "once_cell",
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",
  "parking_lot 0.12.5",

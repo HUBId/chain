@@ -25,6 +25,7 @@ use crate::crypto::{
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{Ledger, ReputationAudit, DEFAULT_EPOCH_LENGTH};
+use crate::messages::ui_messages;
 use crate::node::NodeHandle;
 use crate::orchestration::{
     FlowSnapshot, PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
@@ -1389,7 +1390,7 @@ impl Wallet {
         let account = self
             .storage
             .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
         Ok(self.summarize_account(&account))
     }
 
@@ -1424,7 +1425,7 @@ impl Wallet {
         let (ledger, has_snapshot) = self.load_ledger_from_accounts(accounts)?;
         if !has_snapshot {
             return Err(ChainError::Config(
-                "wallet utxo snapshot not available".into(),
+                ui_messages().text("ui.identity.snapshot_missing"),
             ));
         }
         Ok(ledger.utxos_for_owner(owner))
@@ -1437,10 +1438,9 @@ impl Wallet {
         fee: u64,
         memo: Option<String>,
     ) -> ChainResult<Transaction> {
-        let account = self
-            .storage
-            .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Transaction("wallet account not found".into()))?;
+        let account = self.storage.read_account(&self.address)?.ok_or_else(|| {
+            ChainError::Transaction(ui_messages().text("ui.identity.account_missing"))
+        })?;
         let accounts = self.storage.load_accounts()?;
         let (ledger, _) = self.load_ledger_from_accounts(accounts)?;
         let thresholds = ledger.reputation_params().tier_thresholds;
@@ -1448,16 +1448,22 @@ impl Wallet {
         let derived_tier = transaction_tier_requirement(&account.reputation, &thresholds)
             .map_err(map_tier_requirement_error)?;
         if account.reputation.tier < minimum_tier {
-            return Err(ChainError::Transaction(format!(
-                "wallet reputation tier {:?} below governance minimum {:?}",
-                account.reputation.tier, minimum_tier
+            return Err(ChainError::Transaction(ui_messages().render(
+                "ui.identity.reputation_below_minimum",
+                [
+                    ("tier", format!("{:?}", account.reputation.tier)),
+                    ("minimum", format!("{:?}", minimum_tier)),
+                ],
             )));
         }
         let required_tier = derived_tier.max(minimum_tier);
         if account.reputation.tier < required_tier {
-            return Err(ChainError::Transaction(format!(
-                "wallet reputation tier {:?} below required {:?}",
-                account.reputation.tier, required_tier
+            return Err(ChainError::Transaction(ui_messages().render(
+                "ui.identity.reputation_below_required",
+                [
+                    ("tier", format!("{:?}", account.reputation.tier)),
+                    ("required", format!("{:?}", required_tier)),
+                ],
             )));
         }
         let total = amount
@@ -1484,10 +1490,9 @@ impl Wallet {
         fee: u64,
         memo: Option<String>,
     ) -> ChainResult<SendPreview> {
-        let account = self
-            .storage
-            .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Transaction("wallet account not found".into()))?;
+        let account = self.storage.read_account(&self.address)?.ok_or_else(|| {
+            ChainError::Transaction(ui_messages().text("ui.identity.account_missing"))
+        })?;
         let total = amount
             .checked_add(fee as u128)
             .ok_or_else(|| ChainError::Transaction("amount overflow".into()))?;
@@ -1640,7 +1645,7 @@ impl Wallet {
         let account = self
             .storage
             .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
         let feed_state = self.pipeline_feed.read().clone();
         #[cfg(feature = "vendor_electrs")]
         let tracker_metrics = {
@@ -1735,7 +1740,7 @@ impl Wallet {
         let account = self
             .storage
             .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
         Ok(ReputationAudit::from_account(&account))
     }
 
@@ -1787,13 +1792,17 @@ impl Wallet {
 fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
     match err {
         TierRequirementError::MissingZsiValidation => {
-            ChainError::Transaction("wallet identity must be ZSI-validated".into())
+            ChainError::Transaction(ui_messages().text("ui.identity.zsi_required"))
         }
         TierRequirementError::InsufficientTimetoke {
             required,
             available,
-        } => ChainError::Transaction(format!(
-            "wallet timetoke balance {available}h below required {required}h"
+        } => ChainError::Transaction(ui_messages().render(
+            "ui.identity.timetoke_insufficient",
+            [
+                ("required", format!("{required}")),
+                ("available", format!("{available}")),
+            ],
         )),
     }
 }

@@ -25,3 +25,23 @@ code review and future feature flags.
   the correct rule triggered the failure.
 * When consolidating UTXOs for validator-grade tiers (TL5), plan sweeps so they
   stay within the unlimited tier before promoting funds to lower tiers.
+
+## Customizing wallet messages
+
+Operators that white-label the wallet CLI or GUI can override the user-visible
+strings that ship with the runtime. The default catalog lives in
+`rpp/wallet/wallet_messages.toml` and includes the friendly RPC error text, CLI
+prompts, and identity workflow errors that surface in the GUI. To customise the
+copy:
+
+1. Copy `rpp/wallet/wallet_messages.toml` into your deployment assets and edit
+   the values you want to override.
+2. Point the wallet runtime, CLI, or GUI at the new catalog by exporting
+   `WALLET_MESSAGES_PATH=/path/to/overrides.toml` before launching the
+   binary. The loader caches the parsed file, and missing entries fall back to
+   the built-in English defaults.
+
+Avoid changing message keys or the documented RPC error codes; downstream tools
+parse those fields to decide whether an operation should be retried or reported
+as a policy violation. Keep the catalog focused on rewording text or translating
+it for your audience while leaving the machine-readable identifiers untouched.
