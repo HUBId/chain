@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::Ledger;
+use crate::messages::ui_messages;
 use crate::reputation::{
     minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
 };
@@ -215,16 +216,17 @@ impl<'a> WalletWorkflows<'a> {
         fee: u64,
         memo: Option<String>,
     ) -> ChainResult<TransactionWorkflow> {
+        let messages = ui_messages();
         let preview = self
             .wallet
             .preview_send(to.clone(), amount, fee, memo.clone())?;
         let sender_account = self
             .wallet
             .account_by_address(self.wallet.address())?
-            .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
         if !sender_account.reputation.zsi.validated {
             return Err(ChainError::Transaction(
-                "wallet identity must be ZSI-validated".into(),
+                messages.text("ui.identity.zsi_required"),
             ));
         }
         let status = status_from_account(&sender_account);
@@ -241,14 +243,14 @@ impl<'a> WalletWorkflows<'a> {
             .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
         if sender_account.balance < total_debit {
             return Err(ChainError::Transaction(
-                "insufficient balance for requested transfer".into(),
+                messages.text("ui.identity.insufficient_balance"),
             ));
         }
         let accounts = self.wallet.accounts_snapshot()?;
         let (ledger, has_snapshot) = self.wallet.load_ledger_from_accounts(accounts)?;
         if !has_snapshot {
             return Err(ChainError::Config(
-                "wallet utxo snapshot not available".into(),
+                messages.text("ui.identity.snapshot_missing"),
             ));
         }
         let thresholds = ledger.reputation_params().tier_thresholds;
@@ -256,22 +258,28 @@ impl<'a> WalletWorkflows<'a> {
         let derived_tier = transaction_tier_requirement(&sender_account.reputation, &thresholds)
             .map_err(map_tier_requirement_error)?;
         if sender_account.reputation.tier < minimum_tier {
-            return Err(ChainError::Transaction(format!(
-                "wallet reputation tier {:?} below governance minimum {:?}",
-                sender_account.reputation.tier, minimum_tier
+            return Err(ChainError::Transaction(messages.render(
+                "ui.identity.reputation_below_minimum",
+                [
+                    ("tier", format!("{:?}", sender_account.reputation.tier)),
+                    ("minimum", format!("{:?}", minimum_tier)),
+                ],
             )));
         }
         let required_tier = derived_tier.max(minimum_tier);
         if sender_account.reputation.tier < required_tier {
-            return Err(ChainError::Transaction(format!(
-                "wallet reputation tier {:?} below required {:?}",
-                sender_account.reputation.tier, required_tier
+            return Err(ChainError::Transaction(messages.render(
+                "ui.identity.reputation_below_required",
+                [
+                    ("tier", format!("{:?}", sender_account.reputation.tier)),
+                    ("required", format!("{:?}", required_tier)),
+                ],
             )));
         }
         let mut sender_pre_utxos = ledger.utxos_for_owner(self.wallet.address());
         if sender_pre_utxos.is_empty() {
             return Err(ChainError::Transaction(
-                "wallet inputs unavailable for requested owner".into(),
+                messages.text("ui.identity.inputs_unavailable"),
             ));
         }
         sender_pre_utxos.sort_by(|a, b| {
@@ -289,14 +297,14 @@ impl<'a> WalletWorkflows<'a> {
         let mut utxo_inputs = Vec::new();
         for outpoint in &ledger_inputs {
             let record = sender_pre_map.get(outpoint).ok_or_else(|| {
-                ChainError::Transaction("ledger selected input not present in snapshot".into())
+                ChainError::Transaction(messages.text("ui.identity.ledger_input_missing"))
             })?;
             utxo_inputs.push(record.clone());
         }
         let total_input_value = sum_values(&utxo_inputs)?;
-        let remaining = total_input_value
-            .checked_sub(total_debit)
-            .ok_or_else(|| ChainError::Transaction("selected inputs insufficient".into()))?;
+        let remaining = total_input_value.checked_sub(total_debit).ok_or_else(|| {
+            ChainError::Transaction(messages.text("ui.identity.selected_inputs_insufficient"))
+        })?;
         let utxo_evaluation = policy::evaluate_tiered_spend(
             sender_account.reputation.tier,
             utxo_inputs.len(),
@@ -391,11 +399,12 @@ impl<'a> WalletWorkflows<'a> {
     }
 
     pub fn uptime_proof(&self) -> ChainResult<UptimeWorkflow> {
+        let messages = ui_messages();
         let proof = self.wallet.generate_uptime_proof()?;
         let sender_account = self
             .wallet
             .account_by_address(self.wallet.address())?
-            .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+            .ok_or_else(|| ChainError::Config(messages.text("ui.identity.account_missing")))?;
         let status = status_from_account(&sender_account);
         let credited_hours = credited_hours(&proof);
         Ok(UptimeWorkflow {
@@ -457,15 +466,20 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
 }
 
 fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
+    let messages = ui_messages();
     match err {
         TierRequirementError::MissingZsiValidation => {
-            ChainError::Transaction("wallet identity must be ZSI-validated".into())
+            ChainError::Transaction(messages.text("ui.identity.zsi_required"))
         }
         TierRequirementError::InsufficientTimetoke {
             required,
             available,
-        } => ChainError::Transaction(format!(
-            "wallet timetoke balance {available}h below required {required}h"
+        } => ChainError::Transaction(messages.render(
+            "ui.identity.timetoke_insufficient",
+            [
+                ("required", format!("{required}")),
+                ("available", format!("{available}")),
+            ],
         )),
     }
 }
@@ -473,9 +487,9 @@ fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
 fn sum_values(records: &[UtxoRecord]) -> ChainResult<u128> {
     let mut total = 0u128;
     for record in records {
-        total = total
-            .checked_add(record.value)
-            .ok_or_else(|| ChainError::Transaction("utxo value overflow".into()))?;
+        total = total.checked_add(record.value).ok_or_else(|| {
+            ChainError::Transaction(ui_messages().text("ui.identity.utxo_value_overflow"))
+        })?;
     }
     Ok(total)
 }

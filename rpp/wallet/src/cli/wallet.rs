@@ -28,6 +28,7 @@ use rpp_wallet_interface::runtime_wallet::{
     WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
 
+use crate::messages::{cli_messages, MessageCatalog};
 use crate::runtime::config::WalletConfigExt;
 
 #[cfg(feature = "wallet_hw")]
@@ -57,7 +58,9 @@ use crate::telemetry::TelemetryOutcome;
 const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
 
 fn prompt_confirmation(prompt: &str) -> Result<bool, WalletCliError> {
-    print!("{prompt} [y/N]: ");
+    let prompt_text =
+        cli_messages().render("cli.prompt.confirmation", [("prompt", prompt.to_string())]);
+    print!("{prompt_text}");
     io::stdout()
         .flush()
         .map_err(|err| WalletCliError::Other(err.into()))?;
@@ -73,7 +76,8 @@ fn require_confirmation(prompt: &str) -> Result<(), WalletCliError> {
     if prompt_confirmation(prompt)? {
         Ok(())
     } else {
-        Err(WalletCliError::Other(anyhow!("operation aborted by user")))
+        let aborted = cli_messages().text("cli.prompt.operation_aborted");
+        Err(WalletCliError::Other(anyhow!(aborted)))
     }
 }
 
@@ -98,6 +102,7 @@ pub enum WalletCliError {
 }
 
 fn friendly_message(
+    catalog: &MessageCatalog,
     code: &WalletRpcErrorCode,
     rpc_message: &str,
     details: Option<&Value>,
@@ -109,23 +114,25 @@ fn friendly_message(
                 .and_then(|value| value.as_array())
                 .map(|array| array.len())
             {
-                format!("Draft violates {count} wallet policy rule(s); review the violation list.")
-            } else {
-                "Draft violates wallet policy rules.".to_string()
+                return catalog.render(
+                    "cli.rpc.wallet_policy_violation_multiple",
+                    [("count", count.to_string())],
+                );
             }
+            catalog.text("cli.rpc.wallet_policy_violation_generic")
         }
         WalletRpcErrorCode::FeeTooLow => {
             if let Some(details) = details.and_then(|value| value.as_object()) {
                 if let Some(required) = details.get("required") {
-                    return format!(
-                        "Fee rate too low (requires at least {} sats/vB).",
-                        value_to_string(required)
+                    return catalog.render(
+                        "cli.rpc.fee_too_low_required",
+                        [("required", value_to_string(required))],
                     );
                 }
                 if let Some(minimum) = details.get("minimum") {
-                    return format!(
-                        "Fee rate too low (minimum is {} sats/vB).",
-                        value_to_string(minimum)
+                    return catalog.render(
+                        "cli.rpc.fee_too_low_minimum",
+                        [("minimum", value_to_string(minimum))],
                     );
                 }
             }
@@ -139,21 +146,22 @@ fn friendly_message(
                         .get("total_available")
                         .or_else(|| details.get("available")),
                 ) {
-                    return format!(
-                        "Insufficient unlocked funds (required {}, available {}).",
-                        value_to_string(required),
-                        value_to_string(total)
+                    return catalog.render(
+                        "cli.rpc.pending_lock_conflict_with_amounts",
+                        [
+                            ("required", value_to_string(required)),
+                            ("available", value_to_string(total)),
+                        ],
                     );
                 }
             }
-            "Wallet inputs are locked by another draft; release them or lower the amount."
-                .to_string()
+            catalog.text("cli.rpc.pending_lock_conflict_generic")
         }
         WalletRpcErrorCode::ProverTimeout => {
             if let Some(timeout) = details.and_then(|value| value.get("timeout_secs")) {
-                return format!(
-                    "Wallet prover timed out after {} seconds.",
-                    value_to_string(timeout)
+                return catalog.render(
+                    "cli.rpc.prover_timeout",
+                    [("timeout_secs", value_to_string(timeout))],
                 );
             }
             rpc_message.to_string()
@@ -172,11 +180,15 @@ fn friendly_message(
                     }
                 });
                 if let Some(pending) = pending {
-                    return format!(
-                        "A rescan from height {pending} is already scheduled (requested {requested})."
+                    return catalog.render(
+                        "cli.rpc.rescan_in_progress_with_pending",
+                        [("pending", pending), ("requested", requested)],
                     );
                 }
-                return format!("A rescan is already scheduled (requested {requested}).");
+                return catalog.render(
+                    "cli.rpc.rescan_in_progress_generic",
+                    [("requested", requested)],
+                );
             }
             rpc_message.to_string()
         }
@@ -185,20 +197,18 @@ fn friendly_message(
                 .and_then(|value| value.get("draft_id"))
                 .map(value_to_string)
             {
-                format!("Draft `{id}` was not found; verify the identifier.")
-            } else {
-                rpc_message.to_string()
+                return catalog.render("cli.rpc.draft_not_found", [("draft_id", id)]);
             }
+            rpc_message.to_string()
         }
         WalletRpcErrorCode::DraftUnsigned => {
             if let Some(id) = details
                 .and_then(|value| value.get("draft_id"))
                 .map(value_to_string)
             {
-                format!("Draft `{id}` must be signed before broadcasting; run `send sign` first.")
-            } else {
-                rpc_message.to_string()
+                return catalog.render("cli.rpc.draft_unsigned", [("draft_id", id)]);
             }
+            rpc_message.to_string()
         }
         WalletRpcErrorCode::WitnessTooLarge => {
             if let Some(details) = details.and_then(|value| value.as_object()) {
@@ -288,7 +298,7 @@ impl From<WalletRpcClientError> for WalletCliError {
                 json_code,
                 details,
             } => {
-                let friendly = friendly_message(&code, &message, details.as_ref());
+                let friendly = friendly_message(cli_messages(), &code, &message, details.as_ref());
                 WalletCliError::RpcError {
                     code,
                     friendly,

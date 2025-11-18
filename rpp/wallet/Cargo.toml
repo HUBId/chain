@@ -68,6 +68,7 @@ ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rpassword = "7.3"
 zeroize = "1.8"
+once_cell = "=1.21.3"
 iced = { version = "0.12.1", optional = true, features = ["tokio", "qr_code"] }
 arboard = { version = "3.4", optional = true }
 qrcode = { version = "0.13", optional = true }

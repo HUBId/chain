@@ -40,6 +40,9 @@ pub mod db;
 /// Wallet telemetry helpers.
 pub mod telemetry;
 
+/// User-facing message catalog loader.
+pub mod messages;
+
 /// Wallet runtime operating modes (e.g. watch-only).
 pub mod modes;
 
