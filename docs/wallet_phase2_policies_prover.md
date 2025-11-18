@@ -1,8 +1,15 @@
 # Wallet Phase 2 Policies & Prover Guide
 
+> **Phase navigation:** Previous phase: [Wallet runtime configuration (Phase 1)](wallet_phase1_minimal.md) · Next phase:
+> [Wallet Phase 3 – GUI Guide](wallet_phase3_gui.md) · [Wallet documentation index](README.md#wallet-documentation-index)
+>
+> **Sections:** [Policies](#policies) · [GUI](#gui) · [Backup](#backup) · [Security](#security)
+
 Phase 2 extends the wallet runtime with configurable spend policies, a heuristics-driven fee estimator, durable pending-input locks, targeted rescans, and an opt-in proof backend. This guide explains how to operate those surfaces, which configuration keys and RPC methods they map to, and how to diagnose common failure modes.
 
-## Policy knobs
+## Policies
+
+### Policy knobs
 
 Wallet policy defaults live in `wallet.policy.*` and control address discovery, spend eligibility, and post-draft enforcement.【F:rpp/wallet/src/config/wallet.rs†L63-L118】 Key fields include:
 
@@ -15,7 +22,7 @@ Wallet policy defaults live in `wallet.policy.*` and control address discovery, 
 
 Runtime policy snapshots complement static config. Operators can inspect the compiled rules (`policy_preview`), fetch persisted statements (`get_policy`), or update them (`set_policy`) using the wallet RPC or CLI (`rpp-wallet policy get|set`).【F:rpp/wallet/src/rpc/mod.rs†L188-L201】【F:rpp/wallet/src/cli/wallet.rs†L522-L607】 Statements are versioned and timestamped inside the wallet store.【F:rpp/wallet/src/wallet/mod.rs†L150-L171】 Persisted revisions let you stage governance approvals without rebuilding the binary.
 
-## Fee estimator behaviour
+### Fee estimator behaviour
 
 Fee estimation combines operator overrides, node telemetry, and deterministic fallbacks:
 
@@ -25,7 +32,7 @@ Fee estimation combines operator overrides, node telemetry, and deterministic fa
 
 You can query the latest quote via `rpp-wallet fees estimate --target <blocks>` (`estimate_fee` RPC).【F:rpp/wallet/src/cli/wallet.rs†L609-L639】【F:rpp/wallet/src/rpc/mod.rs†L202-L205】 When the node rejects a broadcast for being underpriced, the sync status surfaces actionable hints to bump the rate.【F:rpp/wallet/src/wallet/runtime.rs†L433-L445】
 
-## Pending lock lifecycle
+### Pending lock lifecycle
 
 Every draft locks its inputs immediately so concurrent workflows cannot double-spend the same UTXO.【F:rpp/wallet/src/engine/mod.rs†L315-L344】 The wallet filters locked candidates out of future selections, which can make subsequent drafts fail with `insufficient funds` until the locks clear.【F:rpp/wallet/src/engine/utxo_sel.rs†L98-L140】 Locks carry backend metadata (`mock` vs `stwo`, witness size, proof duration) once the prover signs the draft.【F:rpp/wallet/src/wallet/mod.rs†L173-L193】 They are released when:
 
@@ -37,13 +44,23 @@ Every draft locks its inputs immediately so concurrent workflows cannot double-s
 
 The CLI also exposes `rpp-wallet locks list` to audit held inputs and prover metadata.【F:rpp/wallet/src/cli/wallet.rs†L641-L680】 Use these commands before escalating “lock conflict” incidents.
 
-## Rescan modes and scheduling
+## GUI
+
+Phase 2 itself does not introduce GUI components, but every change above feeds the user experience shipped in [Phase 3](wallet_phase3_gui.md). Keep policy statements, fee estimator defaults, and lock diagnostics healthy so the iced-based UI has the same authoritative state as the CLI when you upgrade.
+
+## Backup
+
+Durable backups remain optional in Phase 2. Continue taking periodic filesystem snapshots and plan to adopt the encrypted archives introduced in [Phase 4](wallet_phase4_advanced.md#backuprecovery-formats-and-rotation) once you complete the Phase 3 GUI rollout. Rescan workflows described below ensure the database can be rebuilt from peers if a manual restore is needed before backup automation lands.
+
+## Security
+
+### Rescan modes and scheduling
 
 The sync coordinator tracks three modes: full (from birthday), resume (from last checkpoint), and targeted rescan (explicit height).【F:rpp/wallet/src/indexer/scanner.rs†L40-L176】 A `rescan` RPC/CLI request accepts either `--from-height` or `--lookback-blocks` and queues a targeted pass once the latest height is known.【F:rpp/wallet/src/rpc/dto.rs†L332-L382】【F:rpp/wallet/src/rpc/mod.rs†L215-L233】【F:rpp/wallet/src/cli/wallet.rs†L803-L833】 Sync status responses expose the active mode, pending height ranges, and checkpoint timestamps so dashboards can track progress.【F:rpp/wallet/src/rpc/dto.rs†L326-L358】
 
 Configuration toggles under `wallet.rescan.*` control automatic safety sweeps. Setting `auto_trigger = true` instructs the runtime bootstrapper to schedule a lookback from `wallet.rescan.lookback_blocks` in `wallet.rescan.chunk_size` batches, which is logged during startup to confirm the knobs applied.【F:rpp/runtime/config.rs†L3233-L3264】【F:rpp/node/src/lib.rs†L814-L823】 Even with auto-trigger enabled, ad-hoc rescans remain available via the RPC for incident response.
 
-## Prover configuration (mock vs. STWO)
+### Prover configuration (mock vs. STWO)
 
 `wallet.prover.*` toggles determine whether drafts are proven and which backend to use.【F:rpp/wallet/src/config/wallet.rs†L154-L180】 By default the mock prover runs in-process (`--features prover-mock`), enforces `max_witness_bytes`, applies `job_timeout_secs`, and gates concurrency via a semaphore sized by `max_concurrency`.【F:rpp/wallet/src/engine/signing/prover.rs†L57-L125】【F:rpp/wallet/src/engine/signing/prover.rs†L212-L291】
 
@@ -54,7 +71,7 @@ Feature flags:
 * `prover-mock` (default) – lightweight mock circuit for dev/test.
 * `prover-stwo` / `prover-stwo-simd` – full STWO backend, optionally with SIMD acceleration.【F:rpp/wallet/Cargo.toml†L7-L23】
 
-## Wallet RPC error codes
+### Wallet RPC error codes
 
 Wallet RPC responses now embed a stable Phase 2 error code in `error.data.code` alongside
 structured diagnostics under `error.data.details`. External clients can key off the string
@@ -79,7 +96,7 @@ Clients can also encounter standard JSON-RPC codes (`INVALID_PARAMS`, `METHOD_NO
 Those use the same envelope, letting scripts branch on the code string while operators read the
 friendly CLI messaging.
 
-## Troubleshooting Phase 2 errors
+### Troubleshooting Phase 2 errors
 
 ### Fee rate too low
 * **Symptom:** Broadcast rejects with `fee rate too low (required N sats/vB)` and the sync status lists a fee hint.【F:rpp/wallet/src/wallet/runtime.rs†L433-L445】
@@ -94,3 +111,8 @@ friendly CLI messaging.
 * **Action:** Increase `wallet.prover.job_timeout_secs` or reduce concurrency (`max_concurrency`) to keep runtimes within resource budgets. Large drafts may also exceed `max_witness_bytes`; raise the limit or split the spend. When STWO is disabled, ensure `mock_fallback` remains `true` so the runtime can service proofs without rebuilding.【F:rpp/wallet/src/config/wallet.rs†L154-L180】【F:rpp/wallet/src/engine/signing/prover.rs†L40-L125】
 
 Refer back to this guide whenever you adjust the wallet config or roll out new prover infrastructure.
+
+---
+
+> **Phase navigation:** Previous phase: [Wallet runtime configuration (Phase 1)](wallet_phase1_minimal.md) · Next phase:
+> [Wallet Phase 3 – GUI Guide](wallet_phase3_gui.md) · [Wallet documentation index](README.md#wallet-documentation-index)

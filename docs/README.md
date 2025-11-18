@@ -49,6 +49,22 @@ frequently consulted references.
 - [API security](API_SECURITY.md)
 - [Governance](GOVERNANCE.md)
 
+## Wallet documentation index
+
+These references cover every wallet deployment phase along with the supporting
+runbooks and migration checklists. Follow the phase order below when enabling
+new capabilities.
+
+| Document | Summary |
+| --- | --- |
+| [Wallet Phase 1 – minimal runtime configuration](wallet_phase1_minimal.md) | Baseline configuration knobs, JSON-RPC reference, telemetry opt-in defaults, and CLI quickstart that early operators use to stage the runtime. |
+| [Wallet Phase 2 – policies & prover guide](wallet_phase2_policies_prover.md) | Policy tunables, fee estimator behaviour, pending lock lifecycle, rescans, prover setup, and troubleshooting workflows for spend readiness. |
+| [Wallet Phase 3 – GUI guide](wallet_phase3_gui.md) | MVU architecture overview, tab flows, telemetry, UX security affordances, and GUI-specific build/test steps layered atop the Phase 2 runtime. |
+| [Wallet Phase 4 – advanced operations](wallet_phase4_advanced.md) | Backup rotation, watch-only projections, multisig hooks, ZSI workflows, mTLS/RBAC security, hardware integrations, and migration guidance for enterprise rollouts. |
+| [Wallet operator runbook](wallet_operator_runbook.md) | Step-by-step acceptance checklist that validates prerequisites, feature flags, backup/restores, security envelopes, and regression automation for wallet releases. |
+| [Wallet policies](wallet/policies.md) & [operations](wallet/operations.md) | Tiered UTXO policy reference plus operational guidance for monitoring policy enforcement and coordinating validator-grade sweeps. |
+| [Wallet documentation in `MIGRATION.md`](../MIGRATION.md#wallet-database-schema-v3-upgrade) | Database schema v3 upgrade path, including backup prerequisites, migration commands, and rollback steps tied to the Phase 4 rollout. |
+
 For additional topics, explore the documentation tree (e.g. `docs/telemetry.md` and
 `docs/validator_quickstart.md`).
 

@@ -1,11 +1,22 @@
 # Wallet Phase 3 – Graphical User Interface
 
-Phase 3 introduces the optional `wallet_gui` feature flag that builds an iced-based
+> **Phase navigation:** Previous phase: [Wallet Phase 2 – Policies & Prover Guide](wallet_phase2_policies_prover.md) · Next
+> phase: [Wallet Phase 4 – Advanced Operations](wallet_phase4_advanced.md) · [Wallet documentation index](README.md#wallet-documentation-index)
+>
+> **Sections:** [Policies](#policies) · [GUI](#gui) · [Backup](#backup) · [Security](#security)
+
+Phase 3 introduces the optional `wallet_gui` feature flag that builds an iced-based
 multi-tab desktop experience on top of the existing wallet runtime. This guide
 covers the architecture, screen flows, error handling, security affordances, and
 telemetry emitted by the GUI layer.
 
-## Architecture overview
+## Policies
+
+The GUI mirrors the policies and prover workflows introduced in [Phase 2](wallet_phase2_policies_prover.md). Keep policy statements, fee estimator defaults, and pending lock lifecycle healthy before launching the GUI so the UI renders the same enforcement diagnostics as the CLI. Operators should continue to update policy statements via `rpp-wallet policy set` or the RPC, then reload the GUI to pick up the changes after the runtime restarts.
+
+## GUI
+
+### Architecture overview
 
 The GUI follows a **Model–View–Update (MVU)** architecture inspired by Elm:
 
@@ -58,7 +69,7 @@ User action ─▶ Message::Submit ─▶ Update reducer
 The reducer ensures all RPC side-effects remain deterministic and testable by
 keeping them outside the pure model mutation path.
 
-## Tab flows
+### Tab flows
 
 The GUI exposes three primary tabs. Each tab uses MVU messages scoped to its
 state slice while sharing the wallet summary header.
@@ -119,7 +130,7 @@ ProverWorker-->ProverModel: Progress(events)
 ProverModel->User: Update progress table
 ```
 
-## Error code mapping
+### Error code mapping
 
 The GUI maps JSON-RPC error codes into contextual banners and inline help:
 
@@ -134,20 +145,7 @@ The GUI maps JSON-RPC error codes into contextual banners and inline help:
 Error handling lives in `Message::RpcError` branches so tests can assert the
 copy and severity mapping without rendering widgets.
 
-## Security UX
-
-* **Passphrase prompts** – Unlocking the keystore triggers a modal that requires
-  the operator to confirm the action twice (checkbox + passphrase entry).
-  Prompts are always foreground modal dialogs to avoid key capture by background
-  windows.
-* **Clipboard policy** – Copying sensitive values (addresses, txids) uses a
-  guarded command that auto-clears the clipboard after 30 seconds when the OS
-  supports it. When auto-clear is unavailable, the UI shows a banner reminding
-  operators to clear the clipboard manually.
-* **Lock screen** – Inactivity for five minutes collapses the window into a
-  locked state requiring passphrase re-entry.
-
-## Telemetry events
+### Telemetry events
 
 The GUI emits the following events via the existing telemetry sink when the
 `telemetry` feature is enabled:
@@ -163,7 +161,7 @@ The GUI emits the following events via the existing telemetry sink when the
 Telemetry emission functions live alongside MVU updates so tests can assert both
 state transitions and instrumentation hooks.
 
-## Quickstart
+### Quickstart
 
 1. Build the GUI-enabled binary:
 
@@ -189,6 +187,30 @@ state transitions and instrumentation hooks.
    The `-- ui` filter scopes to iced MVU suites; omit it to run the full
    crate tests.
 
-These steps assume Phase 2 configuration is already in place. See
+These steps assume Phase 2 configuration is already in place. See
 [`docs/wallet_phase2_policies_prover.md`](wallet_phase2_policies_prover.md) for
 runtime prerequisites.
+
+## Security
+
+### Security UX
+
+* **Passphrase prompts** – Unlocking the keystore triggers a modal that requires
+  the operator to confirm the action twice (checkbox + passphrase entry).
+  Prompts are always foreground modal dialogs to avoid key capture by background
+  windows.
+* **Clipboard policy** – Copying sensitive values (addresses, txids) uses a
+  guarded command that auto-clears the clipboard after 30 seconds when the OS
+  supports it. When auto-clear is unavailable, the UI shows a banner reminding
+  operators to clear the clipboard manually.
+* **Lock screen** – Inactivity for five minutes collapses the window into a
+  locked state requiring passphrase re-entry.
+
+## Backup
+
+Backups continue to rely on manual exports (or filesystem snapshots) until you adopt the encrypted rotation schedule described in [Phase 4](wallet_phase4_advanced.md#backuprecovery-formats-and-rotation). GUI builds should still exercise `rpp-wallet backup export` and `restore` from the CLI during change windows so acceptance evidence covers both UX surfaces.
+
+---
+
+> **Phase navigation:** Previous phase: [Wallet Phase 2 – Policies & Prover Guide](wallet_phase2_policies_prover.md) · Next
+> phase: [Wallet Phase 4 – Advanced Operations](wallet_phase4_advanced.md) · [Wallet documentation index](README.md#wallet-documentation-index)

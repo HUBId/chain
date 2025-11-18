@@ -4,6 +4,8 @@ The `rpp-wallet` crate bundles the wallet runtime, JSON-RPC surface, and CLI use
 
 > **Runtime feature opt-in.** The runtime adapters, JSON-RPC daemon, and CLI are now gated behind the `runtime` cargo feature to avoid pulling the node dependency graph into every build. Pass `--features "runtime …"` to any `cargo build`/`cargo run` command that needs node attachment; leave the flag off when working on storage, engines, or interface-only changes.
 
+Operator- and security-focused documentation lives under [`docs/README.md`](../../docs/README.md#wallet-documentation-index). Start there for the four wallet phases, the Phase 4 runbook, policy references, and the schema migration playbook before changing configuration defaults.
+
 ## Shared wallet interface crate
 
 RPC DTOs, telemetry counters, workflow payloads, and the `WalletService` trait now live in the sibling [`rpp-wallet-interface`](../wallet-interface) crate. `rpp-wallet` re-exports every interface type so downstream consumers keep importing from `rpp_wallet::*`, but when you touch shared payloads you must update both the interface crate and any wallet modules that rely on those types. Failing to do so will compile locally (thanks to the re-exports) but will break other crates that depend on `rpp-wallet-interface` directly. Use `cargo check -p rpp-wallet-interface && cargo check -p rpp-wallet` before submitting interface changes.
