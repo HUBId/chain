@@ -20,6 +20,10 @@ ignored = ["opentelemetry-proto"]
 name = "benchmark"
 path = "src/main.rs"
 
+[[bench]]
+name = "wallet_perf"
+harness = false
+
 [dependencies]
 # Workspace dependencies
 clap = { workspace = true, features = ['string'] }
@@ -36,6 +40,7 @@ rand_distr.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 serde = { version = "=1.0.225", features = ["derive"] }
+tracing.workspace = true
 # Regular dependencies
 fastrace-opentelemetry = { version = "=0.13.0" }
 metrics-exporter-prometheus = { version = "=0.17.2", optional = true }
@@ -64,3 +69,7 @@ prometheus = [
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = "=0.5.1"
+pprof = { workspace = true, features = ["criterion", "flamegraph"] }
