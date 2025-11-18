@@ -33,8 +33,8 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
 - **Operational documentation** – Operator guides, runbooks, and interface
   specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
   Wallet operators should start with the [wallet documentation index](docs/README.md#wallet-documentation-index),
-  which links the four phase guides, security references, runbook, and
-  migration checklist. Enterprise deployments still need the
+  which links the four phase guides, security references, runbook, release
+  status, and migration checklist. Enterprise deployments still need the
   [Phase 4 advanced operations guide](docs/wallet_phase4_advanced.md) before
   enabling new knobs. The guide calls out which capabilities need cargo feature
   flags (`wallet_rpc_mtls`, `wallet_multisig_hooks`, etc.) during build time and
@@ -44,7 +44,9 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   runtime errors. For a feature-flag-centric overview of the
   `wallet-integration` toggle, build commands, and the
   `rpp-wallet-interface` helper, see
-  [docs/wallet_integration.md](docs/wallet_integration.md).
+  [docs/wallet_integration.md](docs/wallet_integration.md). For an at-a-glance
+  readiness summary covering phases, capabilities, deferred items, and
+  verification steps, consult [docs/wallet_release_status.md](docs/wallet_release_status.md).
 
 ### Wallet feature flags and `[wallet.*]` scopes
 
