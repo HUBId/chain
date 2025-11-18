@@ -185,15 +185,18 @@ graphs and spot regressions quickly.
 wallet feature guards for the following `rpp-wallet` build combinations:
 
 1. Default features.
-2. `runtime,prover-mock,backup` with `wallet_zsi` enabled.
-3. `runtime,prover-mock,backup` with `wallet_multisig_hooks` enabled.
-4. `runtime,prover-mock,backup` with `wallet_hw` enabled.
-5. `runtime,prover-mock,backup` with `wallet_rpc_mtls` enabled.
-6. `runtime,prover-mock,backup` with all wallet features enabled simultaneously.
+2. `runtime,prover-mock,backup` with `wallet_gui` enabled.
+3. `runtime,prover-mock,backup` with `wallet_zsi` enabled.
+4. `runtime,prover-mock,backup` with `wallet_multisig_hooks` enabled.
+5. `runtime,prover-mock,backup` with `wallet_hw` enabled.
+6. `runtime,prover-mock,backup` with `wallet_rpc_mtls` enabled.
+7. `runtime,prover-mock,backup` with all wallet features enabled simultaneously.
 
 The CI workflow runs this xtask on every pull request to surface integration issues when
 features are enabled individually or combined and to ensure the wallet guards keep
-rejecting misconfigured binaries.【F:.github/workflows/ci.yml†L551-L564】
+rejecting misconfigured binaries. With the GUI scenario in place, auditors can point to a
+single job proving that every requested feature set—default, GUI, ZSI, hardware, multisig,
+RPC mTLS, and the fully combined build—has automated build guards.【F:.github/workflows/ci.yml†L551-L564】
 
 ### Troubleshooting & security considerations
 

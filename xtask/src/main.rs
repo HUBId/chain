@@ -241,6 +241,12 @@ fn run_wallet_feature_matrix() -> Result<()> {
             no_default_features: false,
         },
         WalletFeatureScenario {
+            name: "wallet_gui",
+            wallet_features: &["wallet_gui"],
+            chain_features: &[],
+            no_default_features: true,
+        },
+        WalletFeatureScenario {
             name: "wallet_zsi",
             wallet_features: &["wallet_zsi"],
             chain_features: &[],
