@@ -690,34 +690,18 @@ PY
           path: artifacts/unit-suites/${{ matrix.name }}
 
   cli-smoke:
-    name: CLI smoke (${{ matrix.name }})
+    name: CLI smoke (default + runtime-cli)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: default
-            features: ""
-            no_default_features: ""
-          - name: backend-rpp-stark
-            features: "backend-rpp-stark"
-            no_default_features: ""
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: cli-smoke-${{ matrix.name }}
+          shared-key: cli-smoke
       - name: Run chain-cli smoke checks
         run: |
           set -euo pipefail
-          if [ -n "${{ matrix.no_default_features }}" ]; then
-            export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
-          fi
-          if [ -n "${{ matrix.features }}" ]; then
-            export XTASK_FEATURES='${{ matrix.features }}'
-          fi
           cargo xtask test-cli
           cargo run -p rpp-chain -- --help >/dev/null
           cargo run -p rpp-node -- --help >/dev/null

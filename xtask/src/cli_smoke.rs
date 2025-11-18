@@ -9,6 +9,25 @@ use crate::{apply_feature_flags, workspace_root};
 const SNAPSHOT_DIR: &str = "docs/cli/snapshots";
 const ARTIFACT_DIR: &str = "target/cli-smoke";
 
+#[derive(Clone, Copy)]
+struct SmokeProfile {
+    /// Identifier appended to snapshot and artefact directories.
+    name: &'static str,
+    /// How feature flags are configured for this run.
+    feature_mode: FeatureMode,
+}
+
+#[derive(Clone, Copy)]
+enum FeatureMode {
+    /// Re-use whatever feature overrides the environment supplies.
+    Inherit,
+    /// Force an explicit feature configuration.
+    Explicit {
+        no_default_features: bool,
+        features: Option<&'static str>,
+    },
+}
+
 struct SmokeCase {
     /// Identifier used for snapshot/artefact filenames.
     name: &'static str,
@@ -58,6 +77,20 @@ pub(crate) fn run_cli_smoke(args: &[String]) -> Result<()> {
             .with_context(|| format!("create artefact directory {}", artefact_root.display()))?;
     }
 
+    let profiles = [
+        SmokeProfile {
+            name: "default",
+            feature_mode: FeatureMode::Inherit,
+        },
+        SmokeProfile {
+            name: "runtime-cli",
+            feature_mode: FeatureMode::Explicit {
+                no_default_features: true,
+                features: Some("runtime-cli"),
+            },
+        },
+    ];
+
     let cases = [
         SmokeCase {
             name: "chain-cli-help",
@@ -85,8 +118,27 @@ pub(crate) fn run_cli_smoke(args: &[String]) -> Result<()> {
         },
     ];
 
-    for case in &cases {
-        validate_case(case, record, &snapshot_root, &artefact_root)?;
+    for profile in &profiles {
+        let profile_snapshot_root = snapshot_root.join(profile.name);
+        let profile_artefact_root = artefact_root.join(profile.name);
+        for case in &cases {
+            validate_case(
+                profile,
+                case,
+                record,
+                &profile_snapshot_root,
+                &profile_artefact_root,
+            )?;
+        }
+
+        if !record
+            && profile_artefact_root
+                .read_dir()
+                .map(|mut dir| dir.next().is_none())
+                .unwrap_or(true)
+        {
+            let _ = fs::remove_dir(&profile_artefact_root);
+        }
     }
 
     if !record && artefact_root.read_dir()?.next().is_none() {
@@ -98,17 +150,19 @@ pub(crate) fn run_cli_smoke(args: &[String]) -> Result<()> {
 }
 
 fn validate_case(
+    profile: &SmokeProfile,
     case: &SmokeCase,
     record: bool,
     snapshot_root: &Path,
     artefact_root: &Path,
 ) -> Result<()> {
-    let output = execute_cli(case.args)?;
+    let output = execute_cli(case.args, profile)?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
-            "chain-cli {:?} exited with status {}\nstdout:\n{}\nstderr:\n{}",
+            "{} profile: chain-cli {:?} exited with status {}\nstdout:\n{}\nstderr:\n{}",
+            profile.name,
             case.args,
             output.status,
             stdout,
@@ -119,7 +173,8 @@ fn validate_case(
     let stderr = String::from_utf8(&output.stderr).context("decode CLI stderr")?;
     if !stderr.trim().is_empty() {
         bail!(
-            "chain-cli {:?} produced stderr output:\n{}",
+            "{} profile: chain-cli {:?} produced stderr output:\n{}",
+            profile.name,
             case.args,
             stderr
         );
@@ -158,7 +213,8 @@ fn validate_case(
         fs::write(&artefact_path, actual.as_bytes())
             .with_context(|| format!("write artefact {}", artefact_path.display()))?;
         bail!(
-            "chain-cli {:?} output drifted from snapshot. Expected {}. Updated output written to {}.",
+            "{} profile: chain-cli {:?} output drifted from snapshot. Expected {}. Updated output written to {}.",
+            profile.name,
             case.args,
             snapshot_path.display(),
             artefact_path.display()
@@ -168,7 +224,7 @@ fn validate_case(
     Ok(())
 }
 
-fn execute_cli(args: &[&str]) -> Result<std::process::Output> {
+fn execute_cli(args: &[&str], profile: &SmokeProfile) -> Result<std::process::Output> {
     let mut command = Command::new("cargo");
     command
         .current_dir(workspace_root())
@@ -179,7 +235,22 @@ fn execute_cli(args: &[&str]) -> Result<std::process::Output> {
         .arg("chain-cli")
         .arg("--");
     command.args(args);
-    apply_feature_flags(&mut command);
+    match profile.feature_mode {
+        FeatureMode::Inherit => {
+            apply_feature_flags(&mut command);
+        }
+        FeatureMode::Explicit {
+            no_default_features,
+            features,
+        } => {
+            if no_default_features {
+                command.arg("--no-default-features");
+            }
+            if let Some(feature_list) = features {
+                command.arg("--features").arg(feature_list);
+            }
+        }
+    }
     command
         .output()
         .with_context(|| format!("run chain-cli {:?}", args))
