@@ -4,6 +4,18 @@ Welcome to the operator guidebook. Start with the runtime [modes overview](modes
 configuration specifics, checklists, and runbooks as needed. The sections below group the most
 frequently consulted references.
 
+## Backlog status
+
+- **Phasenübersicht:** Die abgeschlossenen Backlog-Tranchen und offenen
+  Aufgaben sind im [Roadmap Implementation Plan](roadmap_implementation_plan.md)
+  dokumentiert; dort sind Phase 1–4 mitsamt Nachweisen und verbleibenden
+  Nacharbeiten verlinkt.
+- **Offene Punkte:** Alle aufgeschobenen oder eingeschränkten Funktionen sind im
+  Abschnitt „Deferred items“ der [Wallet Release Status](wallet_release_status.md)
+  sowie in den Acceptance-Checklisten (z. B.
+  [Phase‑3](runbooks/phase3_acceptance.md)) aufgeführt. Neue Arbeiten landen ab
+  sofort ausschließlich in regulären Issues oder den jeweiligen Checklisten.
+
 ## Core guides
 
 - [`rpp-node` operator guide](rpp_node_operator_guide.md)
