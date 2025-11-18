@@ -10,7 +10,8 @@ readme.workspace = true
 build = "build.rs"
 
 [features]
-default = ["prover-mock", "wallet-ui"]
+default = ["runtime-cli", "prover-mock", "wallet-ui"]
+runtime-cli = ["dep:clap"]
 integration = ["wallet-ui"]
 prod = []
 it_state_sync = []
@@ -93,7 +94,7 @@ blake2 = "=0.10.6"
 blake3 = "=1.8.2"
 chacha20poly1305 = "=0.10.1"
 async-trait = "=0.1.89"
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive"], optional = true }
 ed25519-dalek = "=2.1.1"
 rand = { version = "=0.8.5", features = ["std", "std_rng"] }
 flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"], optional = true }
@@ -167,6 +168,7 @@ rustc_version = "=0.4.1"
 [[bin]]
 name = "chain-cli"
 path = "src/bin/chain_cli.rs"
+required-features = ["runtime-cli"]
 
 [[test]]
 name = "server_limits"
