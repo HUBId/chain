@@ -4,33 +4,51 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[allow(clippy::enum_variant_names)]
 pub enum WalletTelemetryAction {
+    /// Export a wallet backup archive.
     BackupExport,
+    /// Validate a wallet backup archive.
     BackupValidate,
+    /// Import a wallet backup archive.
     BackupImport,
+    /// Query the watch-only status.
     WatchOnlyStatus,
+    /// Enable watch-only mode.
     WatchOnlyEnable,
+    /// Disable watch-only mode.
     WatchOnlyDisable,
     #[cfg(feature = "wallet_multisig_hooks")]
+    /// Fetch the multisig policy scope.
     MultisigGetScope,
     #[cfg(feature = "wallet_multisig_hooks")]
+    /// Update the multisig policy scope.
     MultisigSetScope,
     #[cfg(feature = "wallet_multisig_hooks")]
+    /// Retrieve the configured multisig cosigners.
     MultisigGetCosigners,
     #[cfg(feature = "wallet_multisig_hooks")]
+    /// Update the configured multisig cosigners.
     MultisigSetCosigners,
     #[cfg(feature = "wallet_multisig_hooks")]
+    /// Export multisig configuration.
     MultisigExport,
     #[cfg(feature = "wallet_zsi")]
+    /// Generate a zero-knowledge proof.
     ZsiProve,
     #[cfg(feature = "wallet_zsi")]
+    /// Verify a zero-knowledge proof.
     ZsiVerify,
     #[cfg(feature = "wallet_zsi")]
+    /// Bind a wallet to a zero-knowledge account.
     ZsiBindAccount,
     #[cfg(feature = "wallet_zsi")]
+    /// List zero-knowledge records.
     ZsiList,
     #[cfg(feature = "wallet_zsi")]
+    /// Delete a zero-knowledge record.
     ZsiDelete,
+    /// Enumerate connected hardware wallets.
     HwEnumerate,
+    /// Sign via a hardware wallet.
     HwSign,
 }
 

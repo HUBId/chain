@@ -237,6 +237,8 @@ p3-util = { version = "=0.3.0" }
 
 
 [patch.crates-io]
+libp2p-core = { path = "vendor/libp2p/core" }
+libp2p-swarm = { path = "vendor/libp2p/swarm" }
 libp2p-identity = { path = "vendor/libp2p/identity" }
 yamux = { path = "rpp/p2p/vendor/yamux/0.13.7" }
 yamux-old = { package = "yamux", path = "rpp/p2p/vendor/yamux/0.12.1" }

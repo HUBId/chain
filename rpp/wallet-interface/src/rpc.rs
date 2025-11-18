@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use serde::de::{value::Error as DeError, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -180,20 +182,29 @@ pub struct DraftOutputDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Metadata describing a pending UTXO lock.
 pub struct PendingLockDto {
+    /// Transaction id of the locked UTXO.
     pub utxo_txid: String,
+    /// Output index of the locked UTXO.
     pub utxo_index: u32,
+    /// Timestamp (ms) when the lock was acquired.
     pub locked_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Transaction id currently spending the lock, if any.
     pub spending_txid: Option<String>,
     #[serde(default)]
+    /// Backend responsible for the lock.
     pub backend: String,
     #[serde(default)]
+    /// Witness bytes generated so far.
     pub witness_bytes: u64,
     #[serde(default)]
+    /// Proof generation duration in milliseconds.
     pub prove_duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
+    /// Size of the generated proof, if available.
     pub proof_bytes: Option<u64>,
 }
 
@@ -299,57 +310,84 @@ pub struct SignTxParams {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Metadata returned by the `draft.sign` RPC method.
 pub struct SignTxResponse {
+    /// Identifier of the signed draft.
     pub draft_id: String,
+    /// Signing backend that processed the request.
     pub backend: String,
+    /// Total witness bytes produced during signing.
     pub witness_bytes: usize,
+    /// Whether a zero-knowledge proof was generated.
     pub proof_generated: bool,
+    /// Optional size in bytes of the generated proof.
     pub proof_size: Option<usize>,
+    /// Time spent signing, in milliseconds.
     pub duration_ms: u64,
+    /// Locks acquired while signing.
     pub locks: Vec<PendingLockDto>,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Multisig scope describing threshold/participant counts.
 pub struct MultisigScopeDto {
+    /// Number of required signers.
     pub threshold: u8,
+    /// Total participants for the scope.
     pub participants: u8,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Remote cosigner descriptor.
 pub struct CosignerDto {
+    /// Fingerprint identifying the cosigner.
     pub fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional RPC endpoint for the cosigner.
     pub endpoint: Option<String>,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Multisig metadata returned alongside drafts.
 pub struct MultisigDraftMetadataDto {
+    /// Scope defining threshold/participants.
     pub scope: MultisigScopeDto,
-    pub cosigners: Vec<CosignerDto>,
+    /// Cosigners included in the draft.
+   pub cosigners: Vec<CosignerDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `draft.broadcast` RPC method.
 pub struct BroadcastParams {
+    /// Identifier of the draft to broadcast.
     pub draft_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of broadcasting a signed draft.
 pub struct BroadcastResponse {
+    /// Identifier of the broadcast draft.
     pub draft_id: String,
+    /// Whether the transaction was accepted by the node.
     pub accepted: bool,
+    /// Locks held while broadcasting.
     pub locks: Vec<PendingLockDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `draft.broadcast_raw` RPC method.
 pub struct BroadcastRawParams {
+    /// Raw transaction hex to broadcast.
     pub tx_hex: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result returned by `draft.broadcast_raw`.
 pub struct BroadcastRawResponse {
+    /// Whether the node accepted the transaction.
     pub accepted: bool,
 }
 
@@ -376,61 +414,85 @@ pub struct SetMultisigScopeResponse {
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// List of known cosigners returned by `multisig.get_cosigners`.
 pub struct GetCosignersResponse {
+    /// Registered cosigners.
     pub cosigners: Vec<CosignerDto>,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Payload accepted by `multisig.set_cosigners`.
 pub struct SetCosignersParams {
+    /// Updated list of cosigners.
     pub cosigners: Vec<CosignerDto>,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Response returned by `multisig.set_cosigners`.
 pub struct SetCosignersResponse {
+    /// Canonical cosigner state after applying the update.
     pub cosigners: Vec<CosignerDto>,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters used by `multisig.export`.
 pub struct MultisigExportParams {
+    /// Identifier of the draft to export.
     pub draft_id: String,
 }
 
 #[cfg(feature = "wallet_multisig_hooks")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result returned by `multisig.export`.
 pub struct MultisigExportResponse {
+    /// Identifier of the exported draft.
     pub draft_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional metadata included with the export.
     pub metadata: Option<MultisigDraftMetadataDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Policy properties previewed by the runtime.
 pub struct PolicyPreviewResponse {
+    /// Minimum confirmations required for spends.
     pub min_confirmations: u32,
+    /// Dust threshold enforced by the policy.
     pub dust_limit: u128,
+    /// Upper bound on change outputs per transaction.
     pub max_change_outputs: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional daily send limit enforced by hooks.
     pub spend_limit_daily: Option<u128>,
+    /// Timeout (in seconds) before pending locks expire.
     pub pending_lock_timeout: u64,
+    /// Hook configuration applied to the policy tiers.
     pub tier_hooks: PolicyTierHooks,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Snapshot returned by `policy.get`.
 pub struct GetPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Latest policy snapshot if one is configured.
     pub snapshot: Option<PolicySnapshotDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by `policy.set`.
 pub struct SetPolicyParams {
     #[serde(default)]
+    /// Policy statements expressed in miniscript.
     pub statements: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Response emitted by `policy.set`.
 pub struct SetPolicyResponse {
+    /// Snapshot captured after persisting the policy.
     pub snapshot: PolicySnapshotDto,
 }
 
@@ -607,11 +669,16 @@ pub struct BackupMetadataDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `backup.export` RPC method.
 pub struct BackupExportParams {
+    /// Passphrase that encrypts the exported archive.
     pub passphrase: String,
+    /// Confirmation of the `passphrase` field to prevent typos.
     pub confirmation: String,
+    /// Whether to export metadata without the encrypted keystore content.
     #[serde(default)]
     pub metadata_only: bool,
+    /// Include per-file checksums in the resulting archive manifest.
     #[serde(default = "default_include_checksums")]
     pub include_checksums: bool,
 }
@@ -621,14 +688,20 @@ fn default_include_checksums() -> bool {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Location and metadata returned after exporting a backup.
 pub struct BackupExportResponse {
+    /// Absolute path to the exported archive on disk.
     pub path: String,
+    /// Metadata describing the exported wallet state.
     pub metadata: BackupMetadataDto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Modes supported when validating a backup archive.
 pub enum BackupValidationModeDto {
+    /// Parse the archive without decrypting or verifying signatures.
     DryRun,
+    /// Fully decrypt and verify checksums for the archive contents.
     Full,
 }
 
@@ -639,32 +712,49 @@ impl Default for BackupValidationModeDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Request payload for the `backup.validate` RPC method.
 pub struct BackupValidateParams {
+    /// Friendly name assigned to the backup.
     pub name: String,
+    /// Passphrase used to decrypt the backup.
     pub passphrase: String,
+    /// Validation mode controlling how deeply the backup is inspected.
     #[serde(default)]
     pub mode: BackupValidationModeDto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of validating a backup archive.
 pub struct BackupValidateResponse {
+    /// Metadata describing the parsed backup contents.
     pub metadata: BackupMetadataDto,
+    /// Whether a keystore blob was present in the archive.
     pub has_keystore: bool,
+    /// Number of policy entries referenced by the backup.
     pub policy_count: usize,
+    /// Number of metadata entries bundled with the backup.
     pub meta_entries: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Input accepted by the `backup.import` RPC method.
 pub struct BackupImportParams {
+    /// Friendly label for the backup being imported.
     pub name: String,
+    /// Passphrase needed to decrypt the archive contents.
     pub passphrase: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Summary describing the outcome of importing a backup.
 pub struct BackupImportResponse {
+    /// Metadata associated with the imported backup.
     pub metadata: BackupMetadataDto,
+    /// Whether the encrypted keystore file was restored.
     pub restored_keystore: bool,
+    /// Whether the wallet policy definitions were restored.
     pub restored_policy: bool,
+    /// Chain height clients should rescan from to refresh state.
     pub rescan_from_height: u64,
 }
 
@@ -1093,63 +1183,91 @@ pub struct ZsiDeleteResponse {
 pub struct SyncStatusParams;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Snapshot describing the current sync state.
 pub struct SyncStatusResponse {
+    /// Whether a sync operation is currently running.
     pub syncing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Sync mode currently in effect.
     pub mode: Option<SyncModeDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Latest height observed by the sync worker.
     pub latest_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Number of script hashes processed so far.
     pub scanned_scripthashes: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Pending height ranges waiting to be scanned.
     pub pending_ranges: Vec<(u64, u64)>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Latest checkpoint details if available.
     pub checkpoints: Option<SyncCheckpointDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp of the most recent rescan.
     pub last_rescan_timestamp: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Description of the last sync error.
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Node-specific issue currently blocking sync.
     pub node_issue: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Additional hints for operators.
     pub hints: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Synchronization strategy requested by the wallet.
 pub enum SyncModeDto {
+    /// Perform a full sync from the provided start height.
     Full { start_height: u64 },
+    /// Resume syncing from the provided height.
     Resume { from_height: u64 },
+    /// Trigger a targeted rescan starting at `from_height`.
     Rescan { from_height: u64 },
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Latest checkpoint information about a running sync.
 pub struct SyncCheckpointDto {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Block height clients should resume from.
     pub resume_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Wallet birthday height if known.
     pub birthday_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp of the last incremental scan.
     pub last_scan_ts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp of the last full rescan.
     pub last_full_rescan_ts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp of the last compact block scan.
     pub last_compact_scan_ts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp of the last targeted rescan.
     pub last_targeted_rescan_ts: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `sync.rescan` RPC method.
 pub struct RescanParams {
     #[serde(default)]
+    /// Optional height to begin the rescan from.
     pub from_height: Option<u64>,
     #[serde(default)]
+    /// Optional number of blocks to scan backwards from the head.
     pub lookback_blocks: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Status returned by `sync.rescan`.
 pub struct RescanResponse {
+    /// Whether a rescan was scheduled.
     pub scheduled: bool,
+    /// Height the rescan will start from.
     pub from_height: u64,
 }
 

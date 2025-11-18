@@ -8,13 +8,18 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+/// Lightweight client for interacting with wallet-adjacent node APIs.
 pub mod node_client;
 pub mod rpc;
+/// Runtime configuration schemas exposed to wallets.
 pub mod runtime_config;
+/// Runtime telemetry hooks and helpers.
 pub mod runtime_telemetry;
 /// Wallet RBAC store, context, and helper utilities shared between the runtime and CLI/tests.
 pub mod runtime_wallet;
+/// Telemetry payloads reported by wallet components.
 pub mod telemetry;
+/// Workflow definitions shared between the wallet and runtime.
 pub mod workflows;
 
 pub use node_client::*;

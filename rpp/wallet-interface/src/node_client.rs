@@ -39,7 +39,10 @@ impl fmt::Display for ChainHead {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeRejectionHint {
     /// The submitted fee rate was too low for the current mempool state.
-    FeeRateTooLow { required: Option<u64> },
+    FeeRateTooLow {
+        /// Minimum fee rate (sats/vB) the node would accept, if provided.
+        required: Option<u64>,
+    },
     /// The transaction already exists in the mempool.
     AlreadyKnown,
     /// The transaction conflicted with existing mempool contents.
@@ -69,7 +72,10 @@ impl fmt::Display for NodeRejectionHint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodePolicyHint {
     /// The submission fee rate was below the minimum policy threshold.
-    FeeRateTooLow { minimum: u64 },
+    FeeRateTooLow {
+        /// Minimum fee rate (sats/vB) enforced by local policy.
+        minimum: u64,
+    },
     /// A referenced input could not be found.
     MissingInputs,
     /// The transaction would create a dust output.
@@ -422,11 +428,17 @@ impl SubmissionOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubmissionSpendModel {
     /// Spend an exact amount.
-    Exact { amount: u128 },
+    Exact {
+        /// Amount to spend from available funds.
+        amount: u128,
+    },
     /// Sweep all available funds.
     Sweep,
     /// Spend a specific account debit.
-    Account { debit: u128 },
+    Account {
+        /// Amount debited from the account balance.
+        debit: u128,
+    },
 }
 
 impl SubmissionSpendModel {

@@ -372,7 +372,7 @@ impl LinearAddress {
     #[inline]
     #[must_use]
     pub const fn is_aligned(self) -> bool {
-        self.0.get().is_multiple_of(Self::MIN_AREA_SIZE)
+        self.0.get() % Self::MIN_AREA_SIZE == 0
     }
 
     /// The maximum area size available for allocation.
