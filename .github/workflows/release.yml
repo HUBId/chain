@@ -237,12 +237,55 @@ EOF
           name: artifacts-${{ matrix.target }}
           path: dist/artifacts/${{ matrix.target }}
 
+  wallet-bundle:
+    name: Build wallet runtime bundle
+    needs: checks
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install GUI toolchain dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            libegl1-mesa-dev \
+            libxi-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-bundle
+      - name: Build wallet bundle
+        run: cargo xtask wallet-bundle --target x86_64-unknown-linux-gnu --profile release --version "${{ env.RELEASE_TAG }}" --output dist/artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-wallet
+          path: dist/artifacts/wallet
+
   publish:
     name: Sign and publish release
     needs:
       - checks
       - build-linux
       - build-macos
+      - wallet-bundle
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
@@ -427,6 +470,29 @@ PY
 
 Each JSON summary enumerates the manifest identifier, Firewood state root, and chunk count extracted from the persisted state-sync plan. Operators can validate the entries by recomputing `jq '.chunks | length'` against the corresponding `snapshot-<height>.json` plan and replaying the Light Client verification flow documented in the pruning operations runbook.
 EOF
+          } >> dist/release-notes.md
+      - name: Reference wallet runtime bundles in release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t bundles < <(find dist/artifacts -name 'wallet-bundle-*.tar.gz' -print | sort)
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "No wallet bundles detected; skipping release note update"
+            exit 0
+          fi
+          {
+            printf '\n## Wallet runtime bundles\n\n'
+            printf 'Each bundle ships the CLI, GUI, sample configs, `SHA256SUMS.txt`, and an external manifest signed with cosign. Verify the manifest before unpacking a tarball.\n\n'
+            for bundle in "${bundles[@]}"; do
+              rel=${bundle#dist/artifacts/}
+              manifest="${bundle%.tar.gz}-manifest.json"
+              if [[ -f "$manifest" ]]; then
+                manifest_rel=${manifest#dist/artifacts/}
+                printf -- '- `%s` (manifest `%s`)\n' "$rel" "$manifest_rel"
+              else
+                printf -- '- `%s`\n' "$rel"
+              fi
+            done
           } >> dist/release-notes.md
       - name: Publish GitHub release
         id: publish_release
