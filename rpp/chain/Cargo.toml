@@ -172,11 +172,11 @@ required-features = ["runtime-cli"]
 
 [[test]]
 name = "server_limits"
-path = "rpp/rpc/tests/server_limits.rs"
+path = "../rpc/tests/server_limits.rs"
 
 [[test]]
 name = "pruning"
-path = "rpp/rpc/tests/pruning.rs"
+path = "../rpc/tests/pruning.rs"
 
 [[test]]
 name = "pruning_validation"
@@ -196,7 +196,7 @@ path = "../../tests/storage/mod.rs"
 
 [[test]]
 name = "p2p"
-path = "rpp/rpc/tests/p2p.rs"
+path = "../rpc/tests/p2p.rs"
 
 [[test]]
 name = "consensus"
@@ -266,7 +266,7 @@ path = "../../tests/deployment/feature_gates.rs"
 
 [[test]]
 name = "wallet_ui_contract"
-path = "rpp/rpc/tests/wallet_ui_contract.rs"
+path = "../rpc/tests/wallet_ui_contract.rs"
 required-features = ["wallet-ui"]
 
 [[test]]
@@ -276,7 +276,7 @@ required-features = ["backend-rpp-stark"]
 
 [[test]]
 name = "admission"
-path = "rpp/rpc/tests/admission.rs"
+path = "../rpc/tests/admission.rs"
 
 [[test]]
 name = "rpc_snapshots"

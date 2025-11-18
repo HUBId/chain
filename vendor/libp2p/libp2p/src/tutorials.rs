@@ -18,7 +18,30 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-//! Rust-libp2p Tutorials to get started with.
+#![allow(unused_doc_comments)]
 
-pub mod hole_punching;
-pub mod ping;
+//! Rust-libp2p Tutorials to get started with.
+//!
+//! The upstream crate ships runnable tutorial binaries under
+//! `libp2p/src/tutorials`, but the vendored copy that chain depends on does
+//! not include those heavy example sources.  The module tree still exists so
+//! documentation links and references remain valid, but we provide inline
+//! placeholder modules rather than referencing missing files to keep `cargo
+//! fmt` and other tooling happy.
+
+#[cfg(doc)]
+pub mod hole_punching {
+    //! Placeholder module that keeps the documentation hierarchy intact while
+    //! trimming the vendored dependency size.
+    //!
+    //! The full tutorial is available in the upstream libp2p repository:
+    //! <https://github.com/libp2p/rust-libp2p/tree/master/src/tutorials>.
+}
+
+#[cfg(doc)]
+pub mod ping {
+    //! Placeholder module mirroring the upstream ping tutorial.
+    //!
+    //! This module intentionally omits executable code in this fork; consult
+    //! upstream documentation for runnable examples.
+}

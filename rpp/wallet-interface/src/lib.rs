@@ -7,6 +7,7 @@
 
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
+#![allow(ambiguous_glob_reexports)]
 
 /// Lightweight client for interacting with wallet-adjacent node APIs.
 pub mod node_client;

@@ -178,8 +178,8 @@ impl ProofBackend for MockBackend {
                 "mock identity payload must use the mock backend".into(),
             ));
         }
-        if payload.witness_header.circuit != outer_header.identifier
-            || payload.witness_header.circuit != inner_header.identifier
+        if payload.witness_header.circuit != outer_header.circuit
+            || payload.witness_header.circuit != inner_header.circuit
         {
             return Err(BackendError::Failure(
                 "mock identity circuit header mismatch".into(),
