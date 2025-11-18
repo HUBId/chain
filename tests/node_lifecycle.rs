@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use reqwest::StatusCode;
 use serde_json::Value;
 
-#[path = "../support/mod.rs"]
+#[path = "support/mod.rs"]
 mod support;
 
 #[path = "node_lifecycle/startup_errors.rs"]
