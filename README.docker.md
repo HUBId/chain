@@ -23,6 +23,7 @@ posture of demo deployments.
 | `simnet` | [`tools/simnet/Dockerfile`](tools/simnet/Dockerfile) | `simnet` (UID auto assigned) | Drives lightweight network simulations against a node. |
 | `fwdctl` | [`fwdctl/Dockerfile`](fwdctl/Dockerfile) | `fwdctl` (UID 10001) | Firewood control plane CLI packaged for cron/job execution. |
 | `validator-ui` | [`validator-ui/Dockerfile`](validator-ui/Dockerfile) | `app` (nginx unprivileged) | Serves the compiled validator UI assets behind nginx. |
+| `rpp-wallet` | [`deploy/docker/wallet-runtime/Dockerfile`](deploy/docker/wallet-runtime/Dockerfile) | `app` (UID auto assigned) | Ships the wallet CLI + GUI with configurable prover and advanced wallet features. |
 
 Each image is built from a multi-stage Dockerfile that keeps the runtime layer
 focused on the compiled artifact and the minimum utilities required for health

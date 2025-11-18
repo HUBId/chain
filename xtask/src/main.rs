@@ -40,6 +40,7 @@ mod cli_smoke;
 mod fuzz_debug;
 mod release;
 mod telemetry;
+mod wallet_bundle;
 use telemetry::MetricsReporter;
 
 pub(crate) fn workspace_root() -> PathBuf {
@@ -120,7 +121,7 @@ fn apply_integration_feature_flags(command: &mut Command) {
     command.arg("--features").arg(features);
 }
 
-fn run_command(mut command: Command, context: &str) -> Result<()> {
+pub(crate) fn run_command(mut command: Command, context: &str) -> Result<()> {
     let status = command.status()?;
     if status.success() {
         Ok(())
@@ -5248,6 +5249,7 @@ fn main() -> Result<()> {
         "collect-phase3-evidence" => collect_phase3_evidence(&argv),
         "verify-report" => verify_snapshot_verifier_report(&argv),
         "fuzz-debug" => fuzz_debug::run(&argv),
+        "wallet-bundle" => wallet_bundle::build_wallet_bundle(&argv),
         "help" => {
             usage();
             Ok(())
