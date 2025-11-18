@@ -3118,8 +3118,39 @@ impl WalletSecurityConfigExt for WalletSecurityConfig {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct WalletCapabilityHints {
+    electrs_section_present: bool,
+}
+
+impl WalletCapabilityHints {
+    pub const fn new(electrs_section_present: bool) -> Self {
+        Self {
+            electrs_section_present,
+        }
+    }
+
+    pub const fn electrs_requested(&self) -> bool {
+        self.electrs_section_present
+    }
+
+    fn detect(raw: &str) -> Self {
+        if let Ok(value) = raw.parse::<toml::Value>() {
+            if value.get("electrs").is_some() {
+                return Self::new(true);
+            }
+        }
+
+        Self::default()
+    }
+}
+
 pub trait WalletConfigExt {
     fn load(path: &Path) -> ChainResult<Self>
+    where
+        Self: Sized;
+
+    fn load_with_capabilities(path: &Path) -> ChainResult<(Self, WalletCapabilityHints)>
     where
         Self: Sized;
 
@@ -3141,11 +3172,17 @@ pub trait WalletConfigExt {
 
 impl WalletConfigExt for WalletConfig {
     fn load(path: &Path) -> ChainResult<Self> {
+        let (config, _) = Self::load_with_capabilities(path)?;
+        Ok(config)
+    }
+
+    fn load_with_capabilities(path: &Path) -> ChainResult<(Self, WalletCapabilityHints)> {
         let content = fs::read_to_string(path)?;
+        let hints = WalletCapabilityHints::detect(&content);
         let config: Self = toml::from_str(&content)
             .map_err(|err| ChainError::Config(format!("unable to parse wallet config: {err}")))?;
         config.validate().map_err(runtime_config_error)?;
-        Ok(config)
+        Ok((config, hints))
     }
 
     fn save(&self, path: &Path) -> ChainResult<()> {

@@ -57,11 +57,12 @@ use tracing_subscriber::Layer;
 use rpp_chain::api::{ApiContext, PruningServiceApi};
 use rpp_chain::config::{
     NodeConfig, ReleaseChannel, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds,
-    WalletConfig, WalletConfigExt, WormExportTargetConfig,
+    WalletCapabilityHints, WalletConfig, WalletConfigExt, WormExportTargetConfig,
 };
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, VrfKeyIdentifier,
 };
+use rpp_chain::errors::ChainError;
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::{
@@ -274,6 +275,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             .validate_for_mode(mode, node_bundle.as_ref().map(|bundle| &bundle.value))
             .map_err(BootstrapError::configuration)?;
     }
+
+    ensure_capabilities_supported(node_bundle.as_ref(), wallet_bundle.as_ref())?;
 
     let node_metadata = node_bundle
         .as_ref()
@@ -999,6 +1002,24 @@ impl std::error::Error for ConfigurationError {}
 struct ConfigBundle<T> {
     value: T,
     metadata: Option<ConfigMetadata>,
+    capabilities: CapabilityHints,
+}
+
+#[derive(Clone, Default)]
+struct CapabilityHints {
+    wallet: Option<WalletCapabilityHints>,
+}
+
+impl CapabilityHints {
+    fn for_wallet(hints: WalletCapabilityHints) -> Self {
+        Self {
+            wallet: Some(hints),
+        }
+    }
+
+    fn wallet(&self) -> Option<&WalletCapabilityHints> {
+        self.wallet.as_ref()
+    }
 }
 
 fn ensure_listener_conflicts(
@@ -1269,6 +1290,7 @@ fn load_node_configuration(
     Ok(Some(ConfigBundle {
         value: config,
         metadata: Some(resolved.into_metadata()),
+        capabilities: CapabilityHints::default(),
     }))
 }
 
@@ -1295,13 +1317,14 @@ fn load_wallet_configuration(
     }
 
     let display_path = resolved.path.display().to_string();
-    let config = WalletConfig::load(&resolved.path)
+    let (config, capabilities) = WalletConfig::load_with_capabilities(&resolved.path)
         .map_err(|err| anyhow!(err))
         .with_context(|| format!("failed to load configuration from {display_path}"))?;
 
     Ok(Some(ConfigBundle {
         value: config,
         metadata: Some(resolved.into_metadata()),
+        capabilities: CapabilityHints::for_wallet(capabilities),
     }))
 }
 
@@ -1450,6 +1473,82 @@ fn persist_node_config(
         .with_context(|| format!("failed to persist configuration to {}", resolved.display()))?;
     info!(path = %resolved.display(), "persisted node configuration");
     Ok(())
+}
+
+fn ensure_capabilities_supported(
+    node_bundle: Option<&ConfigBundle<NodeConfig>>,
+    wallet_bundle: Option<&ConfigBundle<WalletConfig>>,
+) -> BootstrapResult<()> {
+    let mut errors = Vec::new();
+
+    if let Some(bundle) = node_bundle {
+        errors.extend(node_capability_errors(&bundle.value));
+    }
+
+    if let Some(bundle) = wallet_bundle {
+        errors.extend(wallet_capability_errors(
+            &bundle.value,
+            bundle.capabilities.wallet(),
+        ));
+    }
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    let message = errors.join("; ");
+    Err(BootstrapError::configuration(ChainError::Config(message)))
+}
+
+fn node_capability_errors(config: &NodeConfig) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if config.rollout.feature_gates.recursive_proofs
+        && !cfg!(any(
+            feature = "prover-mock",
+            feature = "prover-stwo",
+            feature = "backend-plonky3",
+            feature = "backend-rpp-stark",
+        ))
+    {
+        errors.push(
+            "rollout.feature_gates.recursive_proofs requires compiling with at least one proof backend (`prover-mock`, `prover-stwo`, `backend-plonky3`, or `backend-rpp-stark`)"
+                .to_string(),
+        );
+    }
+
+    errors
+}
+
+fn wallet_capability_errors(
+    config: &WalletConfig,
+    hints: Option<&WalletCapabilityHints>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if config.gui.security_controls_enabled && !cfg!(feature = "wallet_rpc_mtls") {
+        errors.push(wallet_rpc_mtls_disabled_message(
+            "wallet.gui.security_controls_enabled",
+        ));
+    }
+
+    if !cfg!(feature = "vendor_electrs")
+        && hints.map_or(false, WalletCapabilityHints::electrs_requested)
+    {
+        errors.push(wallet_electrs_disabled_message());
+    }
+
+    errors
+}
+
+fn wallet_rpc_mtls_disabled_message(scope: &str) -> String {
+    format!(
+        "{scope} requires compiling with the `wallet_rpc_mtls` feature; rebuild this binary to configure wallet RPC security"
+    )
+}
+
+fn wallet_electrs_disabled_message() -> String {
+    "wallet.electrs requires compiling with the `vendor_electrs` feature; rebuild this binary with vendor support to enable the Electrs integration".to_string()
 }
 
 fn init_tracing(
@@ -2583,10 +2682,12 @@ mod tests {
         let node_bundle = ConfigBundle {
             value: node_config,
             metadata: None,
+            capabilities: CapabilityHints::default(),
         };
         let wallet_bundle = ConfigBundle {
             value: wallet_config,
             metadata: None,
+            capabilities: CapabilityHints::default(),
         };
 
         ensure_listener_conflicts(
@@ -2611,6 +2712,7 @@ mod tests {
                 PathBuf::from("/etc/rpp/node.toml"),
                 ConfigSource::CommandLine,
             )),
+            capabilities: CapabilityHints::default(),
         };
         let wallet_bundle = ConfigBundle {
             value: wallet_config,
@@ -2618,6 +2720,7 @@ mod tests {
                 PathBuf::from("/etc/rpp/wallet.toml"),
                 ConfigSource::CommandLine,
             )),
+            capabilities: CapabilityHints::default(),
         };
 
         let error = ensure_listener_conflicts(
@@ -2655,6 +2758,7 @@ mod tests {
                 PathBuf::from("/etc/rpp/node.toml"),
                 ConfigSource::CommandLine,
             )),
+            capabilities: CapabilityHints::default(),
         };
         let wallet_bundle = ConfigBundle {
             value: wallet_config,
@@ -2662,6 +2766,7 @@ mod tests {
                 PathBuf::from("/etc/rpp/wallet.toml"),
                 ConfigSource::CommandLine,
             )),
+            capabilities: CapabilityHints::default(),
         };
 
         let error = ensure_listener_conflicts(
@@ -2850,5 +2955,82 @@ mod tests {
         for span in spans {
             assert_eq!(span.resource, resource, "span resource mismatch");
         }
+    }
+
+    #[test]
+    fn recursive_proofs_require_proof_backend_when_not_available() {
+        if cfg!(any(
+            feature = "prover-mock",
+            feature = "prover-stwo",
+            feature = "backend-plonky3",
+            feature = "backend-rpp-stark",
+        )) {
+            return;
+        }
+
+        let node_bundle = ConfigBundle {
+            value: NodeConfig::default(),
+            metadata: None,
+            capabilities: CapabilityHints::default(),
+        };
+
+        let error = ensure_capabilities_supported(Some(&node_bundle), None)
+            .expect_err("recursive proofs should require an available proof backend");
+        assert_eq!(error.kind(), BootstrapErrorKind::Configuration);
+        assert!(
+            error
+                .to_string()
+                .contains("rollout.feature_gates.recursive_proofs"),
+            "unexpected error message: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn wallet_security_controls_require_wallet_rpc_mtls() {
+        if cfg!(feature = "wallet_rpc_mtls") {
+            return;
+        }
+
+        let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Wallet);
+        wallet_config.gui.security_controls_enabled = true;
+        let wallet_bundle = ConfigBundle {
+            value: wallet_config,
+            metadata: None,
+            capabilities: CapabilityHints::for_wallet(WalletCapabilityHints::new(false)),
+        };
+
+        let error = ensure_capabilities_supported(None, Some(&wallet_bundle))
+            .expect_err("wallet security controls should require wallet_rpc_mtls");
+        assert_eq!(error.kind(), BootstrapErrorKind::Configuration);
+        assert!(
+            error
+                .to_string()
+                .contains("wallet.gui.security_controls_enabled"),
+            "unexpected error message: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn wallet_electrs_configuration_requires_vendor_feature() {
+        if cfg!(feature = "vendor_electrs") {
+            return;
+        }
+
+        let wallet_bundle = ConfigBundle {
+            value: WalletConfig::for_mode(RuntimeMode::Wallet),
+            metadata: None,
+            capabilities: CapabilityHints::for_wallet(WalletCapabilityHints::new(true)),
+        };
+
+        let error = ensure_capabilities_supported(None, Some(&wallet_bundle))
+            .expect_err("wallet electrs configuration should require vendor feature");
+        assert_eq!(error.kind(), BootstrapErrorKind::Configuration);
+        assert!(
+            error.to_string().contains("wallet.electrs"),
+            "unexpected error message: {}",
+            error
+        );
     }
 }
