@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,19 +14,14 @@ const ARTIFACT_DIR: &str = "target/cli-smoke";
 struct SmokeProfile {
     /// Identifier appended to snapshot and artefact directories.
     name: &'static str,
-    /// How feature flags are configured for this run.
-    feature_mode: FeatureMode,
+    /// Environment overrides applied while executing this profile.
+    env_overrides: &'static [EnvOverride],
 }
 
 #[derive(Clone, Copy)]
-enum FeatureMode {
-    /// Re-use whatever feature overrides the environment supplies.
-    Inherit,
-    /// Force an explicit feature configuration.
-    Explicit {
-        no_default_features: bool,
-        features: Option<&'static str>,
-    },
+struct EnvOverride {
+    key: &'static str,
+    value: Option<&'static str>,
 }
 
 struct SmokeCase {
@@ -80,14 +76,29 @@ pub(crate) fn run_cli_smoke(args: &[String]) -> Result<()> {
     let profiles = [
         SmokeProfile {
             name: "default",
-            feature_mode: FeatureMode::Inherit,
+            env_overrides: &[
+                EnvOverride {
+                    key: "XTASK_NO_DEFAULT_FEATURES",
+                    value: None,
+                },
+                EnvOverride {
+                    key: "XTASK_FEATURES",
+                    value: None,
+                },
+            ],
         },
         SmokeProfile {
             name: "runtime-cli",
-            feature_mode: FeatureMode::Explicit {
-                no_default_features: true,
-                features: Some("runtime-cli"),
-            },
+            env_overrides: &[
+                EnvOverride {
+                    key: "XTASK_NO_DEFAULT_FEATURES",
+                    value: Some("1"),
+                },
+                EnvOverride {
+                    key: "XTASK_FEATURES",
+                    value: Some("runtime-cli"),
+                },
+            ],
         },
     ];
 
@@ -121,15 +132,19 @@ pub(crate) fn run_cli_smoke(args: &[String]) -> Result<()> {
     for profile in &profiles {
         let profile_snapshot_root = snapshot_root.join(profile.name);
         let profile_artefact_root = artefact_root.join(profile.name);
-        for case in &cases {
-            validate_case(
-                profile,
-                case,
-                record,
-                &profile_snapshot_root,
-                &profile_artefact_root,
-            )?;
-        }
+
+        with_profile_env(profile, || {
+            for case in &cases {
+                validate_case(
+                    profile,
+                    case,
+                    record,
+                    &profile_snapshot_root,
+                    &profile_artefact_root,
+                )?;
+            }
+            Ok(())
+        })?;
 
         if !record
             && profile_artefact_root
@@ -156,7 +171,7 @@ fn validate_case(
     snapshot_root: &Path,
     artefact_root: &Path,
 ) -> Result<()> {
-    let output = execute_cli(case.args, profile)?;
+    let output = execute_cli(case.args)?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -224,7 +239,7 @@ fn validate_case(
     Ok(())
 }
 
-fn execute_cli(args: &[&str], profile: &SmokeProfile) -> Result<std::process::Output> {
+fn execute_cli(args: &[&str]) -> Result<std::process::Output> {
     let mut command = Command::new("cargo");
     command
         .current_dir(workspace_root())
@@ -232,25 +247,10 @@ fn execute_cli(args: &[&str], profile: &SmokeProfile) -> Result<std::process::Ou
         .arg("--locked")
         .arg("--quiet")
         .arg("--bin")
-        .arg("chain-cli")
-        .arg("--");
+        .arg("chain-cli");
+    apply_feature_flags(&mut command);
+    command.arg("--");
     command.args(args);
-    match profile.feature_mode {
-        FeatureMode::Inherit => {
-            apply_feature_flags(&mut command);
-        }
-        FeatureMode::Explicit {
-            no_default_features,
-            features,
-        } => {
-            if no_default_features {
-                command.arg("--no-default-features");
-            }
-            if let Some(feature_list) = features {
-                command.arg("--features").arg(feature_list);
-            }
-        }
-    }
     command
         .output()
         .with_context(|| format!("run chain-cli {:?}", args))
@@ -258,4 +258,31 @@ fn execute_cli(args: &[&str], profile: &SmokeProfile) -> Result<std::process::Ou
 
 fn normalize(text: &str) -> String {
     text.replace('\r', "")
+}
+
+fn with_profile_env<F>(profile: &SmokeProfile, action: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let mut previous = Vec::with_capacity(profile.env_overrides.len());
+    for override_var in profile.env_overrides {
+        let old = env::var(override_var.key).ok();
+        previous.push((override_var.key, old));
+        match override_var.value {
+            Some(value) => env::set_var(override_var.key, value),
+            None => env::remove_var(override_var.key),
+        }
+    }
+
+    let result = action();
+
+    for (key, old) in previous.into_iter().rev() {
+        if let Some(value) = old {
+            env::set_var(key, value);
+        } else {
+            env::remove_var(key);
+        }
+    }
+
+    result
 }
