@@ -109,8 +109,9 @@ flows.
 `rpp-wallet hw test` to exercise the selected transport and ensure `HardwareUnavailable`
 or `HardwareDisabled` errors do not appear during normal sends.【F:config/wallet.toml†L47-L55】【F:rpp/wallet/src/wallet/mod.rs†L68-L82】
 12. **Regression validation** – Run `make wallet-regression` to execute
-`cargo xtask test-wallet-feature-matrix` across the supported feature sets before
-shipping artifacts. Capture the test log and attach it to the change record.【F:Makefile†L1-L40】
+`cargo xtask test-wallet-feature-matrix` across the supported feature sets and the
+wallet feature guards before shipping artifacts. Capture the test log and attach
+it to the change record.【F:Makefile†L1-L40】
 
 ## 5. Troubleshooting quick reference
 
@@ -161,6 +162,7 @@ make wallet-regression
 ```
 
 This wraps `cargo xtask test-wallet-feature-matrix` so you can prove the build
-supports every wallet feature combination before promoting an artifact. Only the
-`rpp-wallet` feature matrix is exercised, keeping runtime short while still
-providing coverage evidence for change control boards.【F:Makefile†L1-L40】
+supports every wallet feature combination and the guard coverage before
+promoting an artifact. Only the `rpp-wallet` feature matrix is exercised,
+keeping runtime short while still providing coverage evidence for change
+control boards.【F:Makefile†L1-L40】
