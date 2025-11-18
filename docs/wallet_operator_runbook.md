@@ -3,8 +3,9 @@
 This runbook codifies the prerequisites, configuration validation, feature-flag
 checks, acceptance walkthrough, and troubleshooting flows required to promote an
 RPP wallet deployment. It assumes familiarity with the sample configuration at
-`config/wallet.toml` and the Phase 4 capabilities described in the advanced
-operations guide.
+`config/wallet.toml`, the Phase 4 capabilities described in the advanced
+operations guide, and the orientation material in the
+[Wallet Operator Training Guide](./training/wallet_operator_training.md).
 
 ## 1. Prerequisite inventory
 
