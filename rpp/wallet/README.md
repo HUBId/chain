@@ -181,8 +181,8 @@ graphs and spot regressions quickly.
 
 ### Wallet feature matrix
 
-`cargo xtask test-wallet-feature-matrix` runs `cargo check` and `cargo test` for the
-following `rpp-wallet` build combinations:
+`cargo xtask test-wallet-feature-matrix` runs `cargo check`, `cargo test`, and the
+wallet feature guards for the following `rpp-wallet` build combinations:
 
 1. Default features.
 2. `runtime,prover-mock,backup` with `wallet_zsi` enabled.
@@ -192,7 +192,8 @@ following `rpp-wallet` build combinations:
 6. `runtime,prover-mock,backup` with all wallet features enabled simultaneously.
 
 The CI workflow runs this xtask on every pull request to surface integration issues when
-features are enabled individually or combined.【F:.github/workflows/ci.yml†L551-L564】
+features are enabled individually or combined and to ensure the wallet guards keep
+rejecting misconfigured binaries.【F:.github/workflows/ci.yml†L551-L564】
 
 ### Troubleshooting & security considerations
 

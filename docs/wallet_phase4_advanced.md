@@ -183,8 +183,9 @@ Watch-only projections and backup schedules are controlled solely through config
 
 Combine these with prover flags as needed. CI runs `cargo xtask test-wallet-feature-matrix`
 to execute `cargo check`/`cargo test` for the default wallet build, each individual feature,
-and the "all wallet features" combination. Use the same xtask locally to reproduce coverage
-failures.
+the "all wallet features" combination, and the wallet feature guard suite. Use the same
+xtask locally to reproduce coverage failures and prove the guard still rejects invalid
+configurations.
 
 ## Migration Guidance
 
