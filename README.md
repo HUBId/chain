@@ -43,6 +43,32 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   `wallet-integration` toggle, build commands, and the
   `rpp-wallet-interface` helper, see
   [docs/wallet_integration.md](docs/wallet_integration.md).
+
+### Wallet feature flags and `[wallet.*]` scopes
+
+The wallet crate maintains a feature matrix that maps each cargo flag to the
+configuration scopes it unlocks. The table below mirrors the crate-level
+documentation so reviewers have an at-a-glance reference while inspecting the
+top-level repo.【F:rpp/wallet/README.md†L136-L152】 Each row links back to the
+`cargo tree` audit snapshots from Issue #1 so dependency churn stays visible and
+calls out the runtime guardrails that emit errors when a config section is
+enabled without compiling the corresponding feature (Issue #2).
+
+| Cargo feature | Default build state | `[wallet.*]` configuration scopes | Runtime error when config toggles a missing feature | Cargo tree audit |
+| --- | --- | --- | --- | --- |
+| `runtime` | Disabled (opt-in per build) | All runtime surfaces (`[wallet.*]` RPC + CLI commands) | Runtime binaries and CLI entry points are omitted until the flag is passed via `--features "runtime …"`; any config edits simply no-op until the wallet is rebuilt with this feature.【F:rpp/wallet/README.md†L136-L140】 | [`docs/wallet-deps/default.txt`](docs/wallet-deps/default.txt)【F:docs/wallet-deps/default.txt†L1-L40】 |
+| `backup` | Enabled | `[wallet.backup]` | No runtime guard (the cargo feature is on by default; configuration alone governs automation windows).【F:rpp/wallet/README.md†L136-L141】 | [`docs/wallet-deps/default.txt`](docs/wallet-deps/default.txt)【F:docs/wallet-deps/default.txt†L1-L40】 |
+| `wallet_multisig_hooks` | Disabled | `[wallet.multisig]` | Wallet RPC and CLI return `wallet multisig support disabled at build time` (`WalletError::MultisigDisabled`), and `tests/feature_guard.rs` ensures the error surfaces when the config is toggled without enabling the feature.【F:rpp/wallet/src/wallet/mod.rs†L50-L83】【F:rpp/wallet/src/rpc/mod.rs†L437-L438】【F:tests/feature_guard.rs†L250-L279】 | [`docs/wallet-deps/wallet_security.txt`](docs/wallet-deps/wallet_security.txt)【F:docs/wallet-deps/wallet_security.txt†L1-L120】 |
+| `wallet_zsi` | Disabled | `[wallet.zsi]` | Wallet construction fails with `zsi workflows disabled by configuration` (`WalletError::Zsi(ZsiError::Disabled)`); the guard is unit-tested so CI catches mismatches.【F:rpp/wallet/src/wallet/mod.rs†L95-L105】【F:tests/feature_guard.rs†L281-L307】 | [`docs/wallet-deps/wallet_security.txt`](docs/wallet-deps/wallet_security.txt)【F:docs/wallet-deps/wallet_security.txt†L1-L120】 |
+| `wallet_rpc_mtls` | Disabled | `[wallet.rpc.security]`, `[wallet.security]`, and `wallet.gui.security_controls_enabled` | Config parsing returns `…requires compiling with the \\`wallet_rpc_mtls\\` feature; rebuild this binary…` when the security scopes are enabled. Both the runtime loader and the wallet CLI tests assert this guard (Issue #2).【F:rpp/wallet-interface/src/runtime_config.rs†L465-L509】【F:rpp/wallet-interface/src/runtime_config.rs†L1252-L1311】【F:tests/feature_guard.rs†L337-L360】【F:rpp/node/src/lib.rs†L1529-L1548】【F:rpp/node/src/lib.rs†L2989-L3013】 | [`docs/wallet-deps/wallet_security.txt`](docs/wallet-deps/wallet_security.txt)【F:docs/wallet-deps/wallet_security.txt†L1-L120】 |
+| `wallet_hw` | Disabled | `[wallet.hw]` | Wallet initialization aborts with `wallet hardware support disabled at build time` (`WalletError::HardwareFeatureDisabled`) and the feature guard test verifies the message before execution continues.【F:rpp/wallet/src/wallet/mod.rs†L70-L83】【F:tests/feature_guard.rs†L309-L335】 | [`docs/wallet-deps/wallet_security.txt`](docs/wallet-deps/wallet_security.txt)【F:docs/wallet-deps/wallet_security.txt†L1-L120】 |
+| `wallet_gui` | Disabled | `[wallet.gui]` (presentation defaults) | GUI binaries are omitted until `--features wallet_gui` is passed; configuration values remain inert in headless builds, so operators should rebuild before toggling GUI options.【F:rpp/wallet/README.md†L145-L153】 | [`docs/wallet-deps/wallet_gui.txt`](docs/wallet-deps/wallet_gui.txt)【F:docs/wallet-deps/wallet_gui.txt†L1-L35】 |
+
+Runtime guardrails double as documentation for auditors: the same strings CI
+asserts in `tests/feature_guard.rs` (Issue #2) are the messages surfaced to users
+when mismatched config is detected.【F:tests/feature_guard.rs†L250-L360】 The
+`docs/wallet-deps/*.txt` logs should be regenerated whenever these flags pull in
+new optional dependencies so the audit trail stays in sync (Issue #1).
 - **Security, observability, and backend procedures** – Review the
   [security policy](./SECURITY.md) for reporting channels, the
   [observability guide and runbook](./docs/observability.md) for telemetry

@@ -2,6 +2,18 @@
 # Phase 2 policy/fee/prover settings are documented in docs/wallet_phase2_policies_prover.md.
 # Phase 3 GUI settings are documented in docs/wallet_phase3_gui.md.
 # Phase 4 advanced wallet flows are documented in docs/wallet_phase4_advanced.md.
+#
+# Wallet feature matrix (authoritative copy lives in README.md → "Wallet feature flags and `[wallet.*]` scopes"):
+# | Cargo feature | Default | `[wallet.*]` scopes | Runtime guard when misconfigured |
+# | runtime | disabled | All RPC/CLI sections | Wallet binaries omit JSON-RPC/CLI entry points until rebuilt with `--features "runtime …"` |
+# | backup | enabled | `[wallet.backup]` | N/A (config-only toggle) |
+# | wallet_multisig_hooks | disabled | `[wallet.multisig]` | `wallet multisig support disabled at build time` |
+# | wallet_zsi | disabled | `[wallet.zsi]` | `zsi workflows disabled by configuration` |
+# | wallet_rpc_mtls | disabled | `[wallet.rpc.security]`, `[wallet.security]`, `wallet.gui.security_controls_enabled` | `…requires compiling with the \`wallet_rpc_mtls\` feature…` |
+# | wallet_hw | disabled | `[wallet.hw]` | `wallet hardware support disabled at build time` |
+# | wallet_gui | disabled | `[wallet.gui]` | GUI binaries omitted until rebuilt with `--features wallet_gui` |
+#
+# Consult that matrix before enabling any of the sections below.
 data_dir = "./data"
 
 [wallet.keys]
@@ -58,8 +70,8 @@ submit_transaction_per_minute = 120
 proof_generation_per_minute = 60
 pipeline_depth = 64
 
-# GUI presentation options. Enable by building with `--features wallet_gui` and
-# see docs/wallet_phase3_gui.md for MVU architecture, tab flows, and telemetry.
+# GUI presentation options; see docs/wallet_phase3_gui.md for MVU architecture,
+# tab flows, and telemetry.
 #
 # Example:
 # [wallet.gui]
@@ -89,10 +101,8 @@ enabled = false
 xpub_path = "./keys/watch_only.toml"
 expose_rpc = false
 
-# Multisig hook registration. Requires compiling with the
-# `wallet_multisig_hooks` feature; otherwise the runtime surfaces
-# `WalletError::MultisigDisabled` and omits the JSON-RPC endpoints. See
-# docs/wallet_phase4_advanced.md#multisig-hooks for integration guidance.
+# Multisig hook registration. See docs/wallet_phase4_advanced.md#multisig-hooks
+# for integration guidance.
 [wallet.multisig]
 enabled = false
 
