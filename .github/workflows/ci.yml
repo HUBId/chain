@@ -699,7 +699,7 @@ PY
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cli-smoke
-      - name: Run chain-cli smoke checks
+      - name: Run chain-cli smoke checks (dual default/runtime-cli passes)
         run: |
           set -euo pipefail
           cargo xtask test-cli
