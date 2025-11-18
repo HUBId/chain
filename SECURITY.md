@@ -92,7 +92,7 @@ roles:
 | --- | --- | --- | --- | --- |
 | GitHub Actions environments (CI tokens, release PATs, registry passwords) | GitHub Actions encrypted secrets | Every 90 days, or immediately after team membership changes | GitHub CLI (`gh secret set`) with workflow validation via `.github/workflows/ci.yml` dispatch runs | Security Engineering duty officer |
 | Deployment keys for validator, wallet, and pipeline infrastructure | Vault KV backends or restricted filesystem stores | Every 60 days; additionally before major upgrades or cluster re-provisioning | `vault kv put` or OS key stores, with spot checks using `rpp-node` dry runs | Infrastructure/SRE rotation |
-| VRF and runtime secrets (telemetry tokens, admission credentials) | Runtime secrets backend configured per validator | Every 30 days, aligned with validator maintenance windows | `rpp-node validator vrf rotate` and REST helpers, also exercised in automation described in [`docs/validator_tooling.md`](docs/validator_tooling.md) | Validator operations rotation |
+| VRF and runtime secrets (telemetry tokens, admission credentials) | Runtime secrets backend configured per validator | Every 30 days, aligned with validator maintenance windows | `cargo run -p rpp-chain -- validator vrf rotate` and REST helpers, also exercised in automation described in [`docs/validator_tooling.md`](docs/validator_tooling.md) | Validator operations rotation |
 
 ### Emergency revocation
 
@@ -113,11 +113,11 @@ roles:
 * **CI credentials:** Dispatch `ci.yml` and `release.yml` workflows to confirm
   GitHub secrets decrypt correctly and downstream registries accept the new
   tokens.【F:.github/workflows/ci.yml†L1-L400】【F:.github/workflows/release.yml†L1-L320】
-* **Deployment keys:** Run non-destructive dry runs (`rpp-node <mode> --dry-run`)
+* **Deployment keys:** Run non-destructive dry runs (`cargo run -p rpp-chain -- <mode> --dry-run`)
   against each environment to ensure secrets resolve and permission checks pass
   before opening traffic.【F:docs/checklists/operator.md†L8-L20】
 * **Runtime secrets:** Inspect the rotated material with
-  `rpp-node validator vrf inspect` or the `/validator/vrf` RPC endpoint to verify
+  `cargo run -p rpp-chain -- validator vrf inspect` or the `/validator/vrf` RPC endpoint to verify
   that the correct backend and identifier are active, as documented in the
   validator tooling guide.【F:docs/validator_tooling.md†L15-L64】
 

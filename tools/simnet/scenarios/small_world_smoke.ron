@@ -9,7 +9,7 @@
     {
       "label": "node-help",
       "program": "cargo",
-      "args": ["run", "--quiet", "--package", "rpp-node", "--", "--help"],
+      "args": ["run", "--quiet", "--package", "rpp-chain", "--", "--help"],
       "startup_timeout_ms": 5000,
       "working_dir": "../.."
     }

@@ -3207,7 +3207,7 @@ fn report_timetoke_slo_usage() {
 
 fn snapshot_health_usage() {
     eprintln!(
-        "usage: cargo xtask snapshot-health [--config <path>] [--rpc-url <url>] [--auth-token <token>] [--manifest <path>] [--output <path>] [--rpp-node-bin <path>]\n\nPolls active snapshot sessions via the validator RPC, executes the `rpp-node validator snapshot status` CLI for each session, and verifies chunk progress against the persisted manifest totals.",
+        "usage: cargo xtask snapshot-health [--config <path>] [--rpc-url <url>] [--auth-token <token>] [--manifest <path>] [--output <path>] [--rpp-node-bin <path>]\n\nPolls active snapshot sessions via the validator RPC, executes the `cargo run -p rpp-chain -- validator snapshot status` CLI for each session, and verifies chunk progress against the persisted manifest totals.",
     );
 }
 

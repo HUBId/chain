@@ -11,8 +11,8 @@ monitoring that operators rely on during production incidents.【F:tests/mempool
 
 * RPC access (and bearer token if the node enforces RPC auth).
 * `jq` installed locally for parsing JSON responses.
-* Access to the validator CLI (`rpp-node`/`chain-cli`) on the host for
-  telemetry snapshots.【F:docs/validator_tooling.md†L1-L53】
+* Access to the validator CLI via `cargo run -p rpp-chain -- validator …` on the
+  host for telemetry snapshots.【F:docs/validator_tooling.md†L1-L53】
 
 Export the RPC endpoint and auth token before running the commands:
 
@@ -50,7 +50,7 @@ export RPP_RPC_TOKEN="$(cat /var/run/rpp/rpc.token)"   # adjust for your deploym
 
    ```sh
    # Stream witness proof gossip as NDJSON until the backlog empties
-   rpp-node validator telemetry --rpc-url "$RPC_URL" --pretty --auth-token "$RPP_RPC_TOKEN" \
+   cargo run -p rpp-chain -- validator telemetry --rpc-url "$RPC_URL" --pretty --auth-token "$RPP_RPC_TOKEN" \
      | jq '{witness_events: .consensus.witness_events}'
    ```
 
@@ -110,7 +110,7 @@ export RPP_RPC_TOKEN="$(cat /var/run/rpp/rpc.token)"   # adjust for your deploym
    tests, making it a convenient final verification before declaring recovery.【F:tests/mempool/spam_recovery.rs†L39-L44】【F:tests/mempool/spam_recovery.rs†L124-L145】【F:docs/validator_tooling.md†L29-L53】
 
    ```sh
-   rpp-node validator telemetry --rpc-url "$RPC_URL" --pretty --auth-token "$RPP_RPC_TOKEN" \
+   cargo run -p rpp-chain -- validator telemetry --rpc-url "$RPC_URL" --pretty --auth-token "$RPP_RPC_TOKEN" \
      | jq '{witness_events: .consensus.witness_events, mempool: .mempool}'
    ```
 4. When the backlog stabilises and telemetry matches pre-incident levels, lower

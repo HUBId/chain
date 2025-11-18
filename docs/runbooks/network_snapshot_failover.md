@@ -51,7 +51,7 @@ authentication is enabled; missing headers return `401 Unauthorized`.【F:docs/n
 
 The nightly workflow runs `cargo xtask snapshot-health` against the production
 validator RPC and persists the JSON report as the `snapshot-health-report`
-artifact. The task invokes `rpp-node validator snapshot status` for every active
+artifact. The task invokes `cargo run -p rpp-chain -- validator snapshot status` for every active
 session, cross-checks the reported chunk/update indices against the local
 manifest totals, and emits structured JSON logs so any divergence fails the job
 and pages on-call engineers.【F:.github/workflows/nightly.yml†L29-L64】【F:xtask/src/main.rs†L214-L596】
@@ -99,7 +99,7 @@ Release-Workflow veröffentlicht zusätzlich das Artefakt
    entries. `404 Not Found` indicates the session expired or never existed. The
    CLI alternative auto-loads the RPC URL/token from `validator.toml`:
    ```text
-  rpp-node validator snapshot status --session <session>
+  cargo run -p rpp-chain -- validator snapshot status --session <session>
   snapshot status:
     session: <session>
     peer: 12D3KooW...
@@ -118,7 +118,7 @@ Release-Workflow veröffentlicht zusätzlich das Artefakt
      -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
      http://<consumer-host>:<port>/p2p/snapshots/<session> | jq
    ```
-   `rpp-node validator snapshot status --session <session>` prints the same
+   `cargo run -p rpp-chain -- validator snapshot status --session <session>` prints the same
    fields and propagates RPC failures verbatim (for example: `RPC returned 404:
    snapshot session <session> not found`). Record any `error:` value for the
    incident log.
@@ -158,7 +158,7 @@ If the provider validator crashed or shows storage errors:
    ```
    The equivalent CLI shortcut handles authentication automatically:
    ```text
-   rpp-node validator snapshot resume --session <session> --peer <provider-peer-id> --plan-id <plan-id>
+   cargo run -p rpp-chain -- validator snapshot resume --session <session> --peer <provider-peer-id> --plan-id <plan-id>
    snapshot session resumed:
      session: <session>
      peer: <provider-peer-id>
@@ -192,7 +192,7 @@ If the provider validator crashed or shows storage errors:
    ```
    or via CLI:
    ```text
-   rpp-node validator snapshot status --session <session>
+   cargo run -p rpp-chain -- validator snapshot status --session <session>
    ```
 
 The resume semantics and error payloads mirror the behaviour exercised by the
@@ -224,12 +224,12 @@ log before closing the alert.
 
 | Endpoint | Scenario | Status | Notes |
 | --- | --- | --- | --- |
-| `POST /p2p/snapshots` / `rpp-node validator snapshot start` | Start/resume with valid offsets | `200 OK` | Returns `SnapshotStreamStatus` with updated indices. |
-| `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume with regressed offsets | `500 Internal Server Error` | Error message contains `"precedes next expected chunk"`. |
-| `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume skipping ahead | `500 Internal Server Error` | Error message contains `"skips ahead of next expected chunk"`. |
-| `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume with mismatched plan | `500 Internal Server Error` | Error message contains `"plan id"`; fetch the latest status to obtain the new `plan_id`. |
-| `DELETE /p2p/snapshots/<session>` / `rpp-node validator snapshot cancel` | Cancel active session | `204 No Content` | Removes the persisted session; follow with `status` to confirm deletion. |
-| `GET /p2p/snapshots/<session>` / `rpp-node validator snapshot status` | Unknown session ID | `404 Not Found` | Indicates record expired or was cleared. |
+| `POST /p2p/snapshots` / `cargo run -p rpp-chain -- validator snapshot start` | Start/resume with valid offsets | `200 OK` | Returns `SnapshotStreamStatus` with updated indices. |
+| `POST /p2p/snapshots` / `cargo run -p rpp-chain -- validator snapshot resume` | Resume with regressed offsets | `500 Internal Server Error` | Error message contains `"precedes next expected chunk"`. |
+| `POST /p2p/snapshots` / `cargo run -p rpp-chain -- validator snapshot resume` | Resume skipping ahead | `500 Internal Server Error` | Error message contains `"skips ahead of next expected chunk"`. |
+| `POST /p2p/snapshots` / `cargo run -p rpp-chain -- validator snapshot resume` | Resume with mismatched plan | `500 Internal Server Error` | Error message contains `"plan id"`; fetch the latest status to obtain the new `plan_id`. |
+| `DELETE /p2p/snapshots/<session>` / `cargo run -p rpp-chain -- validator snapshot cancel` | Cancel active session | `204 No Content` | Removes the persisted session; follow with `status` to confirm deletion. |
+| `GET /p2p/snapshots/<session>` / `cargo run -p rpp-chain -- validator snapshot status` | Unknown session ID | `404 Not Found` | Indicates record expired or was cleared. |
 | Any snapshot endpoint | Missing/invalid bearer token | `401 Unauthorized` | Add `Authorization: Bearer ${RPP_RPC_TOKEN}` header or rely on the CLI’s auto-injected token. |
 
 Error semantics match the documented RPC contract and the regression coverage in

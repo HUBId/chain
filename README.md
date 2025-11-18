@@ -202,15 +202,16 @@ The `rpp-chain-cli` crate defines the full clap surface for node, wallet,
 hybrid, and validator subcommands—including validator VRF helpers, admission
 policy tooling, and snapshot controls—and is reused by every runtime entry
 point.【F:rpp/chain-cli/src/lib.rs†L61-L152】【F:rpp/chain-cli/src/lib.rs†L367-L461】
-To explore the CLI without bootstrapping the runtime, run
-`cargo run -p rpp-chain -- --help`, which exercises the lightweight stub binary
-located under `rpp/chain/src/bin/chain_cli.rs`.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】
-Operators can inspect the full runtime-aware CLI (and confirm which flags are
-supported by the shipping binaries) with `cargo run -p rpp-node -- --help`,
-which compiles the CLI crate and then hands control to the node’s runtime
-executor.【F:rpp/node/src/main.rs†L1-L6】 These commands mirror the `cargo xtask
-test-cli` smoke tests and are referenced throughout the operator guides to keep
-the CLI surface auditable in both developer and production builds.
+Explore the CLI or validate configuration/dry-run workflows with
+`cargo run -p rpp-chain -- …`; the stub binary under
+`rpp/chain/src/bin/chain_cli.rs` resolves configuration, performs `--dry-run`
+checks, and exercises validator tooling without starting the runtime
+executors.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】 Reserve the `rpp-node`
+binary for production deployments and mode launches (node/hybrid/wallet/
+validator). When you need to confirm the shipping runtime still exposes the
+same CLI surface, run the built binary directly, e.g.
+`target/release/rpp-node -- --help`, mirroring what `cargo xtask test-cli`
+exercises in CI.
 
 ## Docker smoke test
 

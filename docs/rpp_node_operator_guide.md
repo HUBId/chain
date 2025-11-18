@@ -2,9 +2,13 @@
 
 This guide documents the CLI tooling that ships with the repository. The
 `rpp-node` binary hosts the runtime launchers for every supported mode and the
-validator maintenance subcommands. No standalone `rpc-cli` tool exists in this
-workspace—the shipped operator interface is the `rpp-node` CLI and the REST/RPC
-workflows exposed by the running node.
+validator maintenance subcommands. Operators should run `cargo run -p rpp-chain
+-- …` for configuration checks, dry-run validation, and validator tooling—the
+stub binary exercises the shared CLI surface without booting the runtime. The
+`rpp-node` binary and its mode-specific entry points remain reserved for
+production deployments and on-host supervisors. No standalone `rpc-cli` tool
+exists in this workspace—the shipped operator interface is the unified CLI plus
+the REST/RPC workflows exposed by the running node.
 
 > **Phase 2 update:** The `backend-plonky3` feature now enables the vendor
 > Plonky3 prover/verifier pipeline. Production builds may target either the
@@ -70,9 +74,11 @@ rpp-node validator [runtime options] [validator subcommand]
 
 Pass `--config`/`--wallet-config` to target custom configuration files or rely
 on the precedence chain described in the validator quickstart when the defaults
-are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` to
-validate configuration without starting long-running tasks; the CLI exits after
-bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
+are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Use `cargo run -p
+rpp-chain -- <mode> --dry-run --config <path>` to validate configuration without
+starting long-running tasks; the CLI exits after bootstrap so operators can gate
+deployments in CI while the production binary stays reserved for supervisors and
+release artefacts.【F:docs/validator_quickstart.md†L195-L210】
 
 > **Networking reminder:** Whenever a runtime mode changes the node profile,
 > re-apply the [gossip tuning checklist](./networking.md#gossip-tuning-checklist)
@@ -125,7 +131,8 @@ produktiven Vendor-Artefakten.【F:rpp/node/src/feature_guard.rs†L1-L5】
 
 ## Validator tooling
 
-Invoke validator-specific helpers through `rpp-node validator`. Subcommands cover
+Invoke validator-specific helpers through `cargo run -p rpp-chain -- validator`.
+Subcommands cover
 VRF rotation, telemetry diagnostics, and uptime proof management, all backed by
 the active node configuration.【F:rpp/node/src/main.rs†L48-L183】 Detailed
 workflows—including sample invocations and expected output—live in the
@@ -133,14 +140,14 @@ workflows—including sample invocations and expected output—live in the
 
 ### Snapshot streaming CLI
 
-`rpp-node validator snapshot` wraps the `/p2p/snapshots` RPCs so operators can
+`cargo run -p rpp-chain -- validator snapshot` wraps the `/p2p/snapshots` RPCs so operators can
 start, resume, inspect, and cancel consumer sessions without constructing HTTP
 requests by hand. The CLI resolves the active validator configuration, derives
 the RPC base URL from `network.rpc.listen`, and automatically attaches the
 configured bearer token unless an explicit `--auth-token` override is provided.
 
 ```text
-$ rpp-node validator snapshot start --peer 12D3KooWexamplePeer
+$ cargo run -p rpp-chain -- validator snapshot start --peer 12D3KooWexamplePeer
 snapshot session started:
   session: 42
   peer: 12D3KooWexamplePeer
@@ -151,7 +158,7 @@ snapshot session started:
   verified: unknown
   error: none
 
-$ rpp-node validator snapshot status --session 42
+$ cargo run -p rpp-chain -- validator snapshot status --session 42
 snapshot status:
   session: 42
   peer: 12D3KooWexamplePeer
@@ -162,7 +169,7 @@ snapshot status:
   verified: unknown
   error: none
 
-$ rpp-node validator snapshot resume --session 42 --peer 12D3KooWexamplePeer --plan-id plan-2024-05-18
+$ cargo run -p rpp-chain -- validator snapshot resume --session 42 --peer 12D3KooWexamplePeer --plan-id plan-2024-05-18
 snapshot session resumed:
   session: 42
   peer: 12D3KooWexamplePeer
@@ -173,7 +180,7 @@ snapshot session resumed:
   verified: false
   error: none
 
-$ rpp-node validator snapshot cancel --session 42
+$ cargo run -p rpp-chain -- validator snapshot cancel --session 42
 snapshot session 42 cancelled
 ```
 
@@ -191,7 +198,7 @@ Text ausgibt, und sind verpflichtende Artefakte für die Phase‑3-Abnahme.【F:
 
 ### Snapshot verification CLI
 
-`rpp-node validator snapshot verify` kapselt den Offline-Verifier aus
+`cargo run -p rpp-chain -- validator snapshot verify` kapselt den Offline-Verifier aus
 `tools/snapshot-verify` und nutzt die Validator-Konfiguration, um Manifest,
 Signatur, Chunk-Verzeichnis und Verifierschlüssel automatisch aufzulösen. Ohne
 Overrides liest der Befehl `<snapshot_dir>/manifest/chunks.json`, erwartet die
@@ -209,7 +216,7 @@ verwenden, um einzelne Pfade bzw. einen alternativen Public Key zu setzen.【F:r
 > Konsumenten keine unsignierten Manifeste sehen.
 
 ```text
-$ rpp-node validator snapshot verify --config config/validator.toml
+$ cargo run -p rpp-chain -- validator snapshot verify --config config/validator.toml
 {
   "manifest_path": "./data/snapshots/manifest/chunks.json",
   "signature_path": "./data/snapshots/manifest/chunks.json.sig",
@@ -362,18 +369,18 @@ Common tasks include:
 
 ```sh
 # Rotate VRF keys using the configured secrets backend
-rpp-node validator vrf rotate --config config/validator.toml
+cargo run -p rpp-chain -- validator vrf rotate --config config/validator.toml
 
 # Inspect collector health by querying the validator telemetry endpoint
-rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --pretty
+cargo run -p rpp-chain -- validator telemetry --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --pretty
 
 # Submit and inspect uptime proofs via the validator RPC
-rpp-node validator uptime submit --wallet-config config/wallet.toml --auth-token $RPP_RPC_TOKEN
-rpp-node validator uptime status --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --json
+cargo run -p rpp-chain -- validator uptime submit --wallet-config config/wallet.toml --auth-token $RPP_RPC_TOKEN
+cargo run -p rpp-chain -- validator uptime status --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --json
 ```
 
 Verwende für `/state-sync`-Operationen die Snapshot-Subcommands statt ad-hoc
-`curl`-Aufrufen. `rpp-node validator snapshot status --session <id>` spiegelt die
+`curl`-Aufrufen. `cargo run -p rpp-chain -- validator snapshot status --session <id>` spiegelt die
 Light-Client-SSE-Header, sodass Du den Ablauf direkt in der CLI nachvollziehen
 kannst. Das Runbook [`network_snapshot_failover`](./runbooks/network_snapshot_failover.md)
 führt Peer-Rotation und Failover-Schritte aus, während die

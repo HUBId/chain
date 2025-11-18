@@ -92,7 +92,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 ## Cross-Cutting Deliverables
 - **Dokumentation:** Architekturgrafik, Config-Referenz, Operator-Guides.
 - **CI-Integration:** Linting, Unit-Tests, Integrationstests, Simulation Entry-Points.
-- **Snapshot-Health-Monitoring:** Die Nightly-Action `snapshot-health` ruft `cargo xtask snapshot-health` auf, der für alle aktiven Sessions `rpp-node validator snapshot status` ausführt, Fortschritt und Manifest-Summen vergleicht und den JSON-Report als Artefakt sichert. Abweichungen schlagen die Pipeline und alarmieren den Bereitschaftsdienst.【F:.github/workflows/nightly.yml†L29-L64】【F:xtask/src/main.rs†L214-L596】
+- **Snapshot-Health-Monitoring:** Die Nightly-Action `snapshot-health` ruft `cargo xtask snapshot-health` auf, der für alle aktiven Sessions `cargo run -p rpp-chain -- validator snapshot status` ausführt, Fortschritt und Manifest-Summen vergleicht und den JSON-Report als Artefakt sichert. Abweichungen schlagen die Pipeline und alarmieren den Bereitschaftsdienst.【F:.github/workflows/nightly.yml†L29-L64】【F:xtask/src/main.rs†L214-L596】
 - **Fuzzing:** Nightly GitHub-Action `nightly-fuzz` führt `cargo fuzz run` für `handle_meta`, `handle_blocks`, `handle_votes` und `admission_evaluate_publish` mit Seed `0x5A17F00D` aus (`-max_total_time=120`, `-timeout=5`). Die jeweils aktualisierten Corpora werden nach `rpp/p2p/fuzz/corpus/<target>` exportiert und als Workflow-Artefakt abgelegt. Regressionen werden über `rpp/p2p/tests/fuzz_regressions.rs` aus diesen minimierten Fällen gespeist.
 - **Observability:** Logs (structured), Tracing spans, Metrics.
 

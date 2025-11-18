@@ -23,7 +23,7 @@ milestone.
       `docs/interfaces/snapshot_verify_report.schema.json`. Führe das Ergebnis im
       Übergabeprotokoll auf.【F:xtask/src/main.rs†L1594-L1677】【F:docs/interfaces/snapshot_verify_report.schema.json†L1-L173】
 - [ ] **CLI-Verifikation nachvollzogen.** Dokumentiere mindestens einen Lauf von
-      `rpp-node validator snapshot verify --config <pfad>` gegen das produktive
+      `cargo run -p rpp-chain -- validator snapshot verify --config <pfad>` gegen das produktive
       Bundle. Der Report muss `signature_valid=true` und keine Chunk-Abweichungen
       melden; bei Fehlern liefert das CLI Exit-Code `2` (Signatur) oder `3`
       (Segmentabweichungen). Hänge den JSON-Output an die Übergabeunterlagen, damit

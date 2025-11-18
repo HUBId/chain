@@ -6,7 +6,7 @@ usage() {
 Usage: smoke_otlp_export.sh [options] [-- <binary args...>]
 
 Options:
-  -b, --binary PATH     Run the binary at PATH instead of "cargo run -p rpp-node".
+  -b, --binary PATH     Run the binary at PATH instead of "cargo run -p rpp-chain".
   -m, --mode MODE       Runtime mode to exercise (node, wallet, hybrid, validator).
       --subcommand CMD  Optional subcommand to invoke after the runtime mode.
   -s, --expect SIGNAL   Override the telemetry span/name expected in collector logs.
@@ -242,7 +242,7 @@ if [[ -n "${BINARY_OVERRIDE}" ]]; then
 elif [[ -n "${RPP_NODE_BIN:-}" ]]; then
   COMMAND_PREFIX=("${RPP_NODE_BIN}")
 else
-  COMMAND_PREFIX=("cargo" "run" "--quiet" "-p" "rpp-node" "--")
+  COMMAND_PREFIX=("cargo" "run" "--quiet" "-p" "rpp-chain" "--")
 fi
 
 MODE_ARGS=("start" "--mode" "${MODE}")

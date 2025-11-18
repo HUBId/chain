@@ -26,7 +26,7 @@ Folgeschritte:
   * Das Release-Verfahren setzt dagegen auf die Stable-Toolchain: `.github/workflows/release.yml` installiert `stable` und ruft `./scripts/build_release.sh` auf, das die gleichen Flags lokal erzwingt.
 * Quellenreferenz: Ausgangspunkt ist das Archiv `prover/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
 * Runtime-Gating: Validator- und Hybrid-Läufe brechen nun sofort mit einem Hinweis auf das fehlende Feature ab, wenn der Build ohne `--features prod,prover-stwo` (oder `prover-stwo-simd`) erfolgt. Produktions-Builds sollten daher `./scripts/build_release.sh --target <triple>` verwenden; das Skript erzwingt `--locked --package rpp-node --bins --profile release --no-default-features --features prod,prover-stwo` und verweigert `prover-mock`.
-* Verifikation vor Deployments: Nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Der Lauf muss ohne den neuen Fehler „requires the `prover-stwo` feature“ zurückkehren, andernfalls ist das Backend nicht aktiv.
+* Verifikation vor Deployments: Nach dem Build `cargo +nightly-2025-07-14 run -p rpp-chain -- validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Der Lauf muss ohne den neuen Fehler „requires the `prover-stwo` feature“ zurückkehren, andernfalls ist das Backend nicht aktiv.
 
 #### Import – constraint-framework-Staging (2025-10-17)
 

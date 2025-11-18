@@ -39,7 +39,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
 1. Export the validator RPC token (`export RPP_RPC_TOKEN=...`).
 2. Identify the affected consumer RPC endpoint (host:port).
 3. Collect the active snapshot session ID from the alert, the incident log, or
-   via `GET /p2p/snapshots` / `rpp-node validator snapshot status`.
+   via `GET /p2p/snapshots` / `cargo run -p rpp-chain -- validator snapshot status`.
 4. Confirm the Timetoke replay peer is still allowlisted with the expected tier
    (for example `Tl3`) using the admission policy tools before making changes.【F:docs/runbooks/admission.md†L21-L59】
 
@@ -91,7 +91,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
    validate that providers serve complete snapshots.【F:tests/observability/snapshot_timetoke_metrics.rs†L187-L210】
 4. Inspect the consumer session for stalled chunk or update indices:
    ```sh
-   rpp-node validator snapshot status --session <session-id> --config /etc/rpp/validator.toml
+   cargo run -p rpp-chain -- validator snapshot status --session <session-id> --config /etc/rpp/validator.toml
    ```
    Record the `last_chunk_index`, `last_update_index`, `verified`, and any `error`
    values for correlation with the metrics dashboards.【F:docs/runbooks/network_snapshot_failover.md†L82-L118】
@@ -113,7 +113,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
 
 1. Cancel the stuck session to clear the local replay cursor:
    ```sh
-   rpp-node validator snapshot cancel --session <session-id> --config /etc/rpp/validator.toml
+   cargo run -p rpp-chain -- validator snapshot cancel --session <session-id> --config /etc/rpp/validator.toml
    ```
    The RPC equivalent (`DELETE /p2p/snapshots/<session>`) removes the persisted
    state and ensures a fresh resume starts at chunk index 0.【F:docs/runbooks/network_snapshot_failover.md†L174-L211】
@@ -132,7 +132,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
 
 1. Start a fresh snapshot session targeting the healthy provider:
    ```sh
-   rpp-node validator snapshot start \
+   cargo run -p rpp-chain -- validator snapshot start \
      --peer <provider-peer-id> \
      --config /etc/rpp/validator.toml
    ```

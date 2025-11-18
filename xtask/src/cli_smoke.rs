@@ -246,6 +246,8 @@ fn execute_cli(args: &[&str]) -> Result<std::process::Output> {
         .arg("run")
         .arg("--locked")
         .arg("--quiet")
+        .arg("--package")
+        .arg("rpp-chain")
         .arg("--bin")
         .arg("chain-cli");
     apply_feature_flags(&mut command);

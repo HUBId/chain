@@ -46,7 +46,7 @@ preflight OPTIONS requests.【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs
 For example, to grant a dashboard temporary access during a maintenance window:
 
 ```sh
-rpp-node validator --rpc-allowed-origin https://dash.example --dry-run
+cargo run -p rpp-chain -- validator --rpc-allowed-origin https://dash.example --dry-run
 ```
 
 Passing an empty string (`--rpc-allowed-origin ""`) clears the allow-list until the
