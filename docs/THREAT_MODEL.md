@@ -12,7 +12,7 @@ in [`docs/`](./) and links to component-specific hardening guides.
 - **Secrets and key material.** Validator nodes load VRF keys from the configured
   secrets backend, which may be the local filesystem or a remote service such as
   Vault. The runtime exposes helpers to rotate and inspect this material through
-  `rpp-node validator vrf` subcommands.【F:rpp/node/src/main.rs†L29-L115】【F:rpp/node/src/main.rs†L146-L199】
+  `cargo run -p rpp-chain -- validator vrf` subcommands.【F:rpp/node/src/main.rs†L29-L115】【F:rpp/node/src/main.rs†L146-L199】
 - **RPC and telemetry surfaces.** The Axum-based RPC server multiplexes
   operational, wallet, consensus, and telemetry endpoints and supports optional
   bearer-token authentication and request rate limiting.【F:rpp/rpc/api.rs†L195-L256】【F:rpp/rpc/api.rs†L960-L1047】

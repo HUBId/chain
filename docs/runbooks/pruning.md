@@ -32,8 +32,8 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    `[pruning].retention_depth` in the node configuration and redeploy the runtime to persist the
    new baseline.【F:config/node.toml†L23-L29】
 2. **Apply temporary overrides** via the CLI in emergency responses:
-   - `rpp-node validator --pruning-cadence-secs <seconds>`
-   - `rpp-node validator --pruning-retention-depth <blocks>`
+   - `cargo run -p rpp-chain -- validator --pruning-cadence-secs <seconds>`
+   - `cargo run -p rpp-chain -- validator --pruning-retention-depth <blocks>`
    These flags take effect before the runtime spawns background services. Requests with zero values
    are rejected and the runtime keeps the previous settings, so double-check inputs before
    restarting.【F:rpp/node/src/config.rs†L5-L49】【F:rpp/node/src/lib.rs†L1408-L1423】

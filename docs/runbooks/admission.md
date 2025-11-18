@@ -49,10 +49,10 @@ Checklisten setzen voraus, dass du das Incident-Log und die Ticket-Referenz
 
 ### Pending-Approval-Queue
 
-- [ ] **CLI:** `rpp-node validator admission pending list --format table`
+- [ ] **CLI:** `cargo run -p rpp-chain -- validator admission pending list --format table`
       ausführen und Pending-ID, Antragsteller:in, Grund sowie angefragte Peer-
       Änderungen in das Incident-Log übernehmen.【F:rpp/node/src/main.rs†L937-L1022】
-- [ ] **Diff prüfen:** `rpp-node validator admission pending show --id <ID>
+- [ ] **Diff prüfen:** `cargo run -p rpp-chain -- validator admission pending show --id <ID>
       --format diff` nutzen, um Allow-/Blocklist-Deltas zu validieren und
       Screenshots/Diffs an das Ticket zu hängen.
 - [ ] **Audit vorbereiten:** Sicherstellen, dass `GET /p2p/admission/audit`
@@ -66,13 +66,13 @@ Checklisten setzen voraus, dass du das Incident-Log und die Ticket-Referenz
 - [ ] **Payload validieren:** Pending-Details erneut mit `pending show`
       abrufen und sicherstellen, dass Grund, Peer-Tier und Actor korrekt
       dokumentiert sind.
-- [ ] **Policy-Gesundheit:** `rpp-node validator admission status` ausführen,
+- [ ] **Policy-Gesundheit:** `cargo run -p rpp-chain -- validator admission status` ausführen,
       um Drift-Indikatoren (`policy_drift_detected_total`) vor der Freigabe zu
       prüfen.【F:rpp/node/src/main.rs†L1145-L1254】
-- [ ] **Freigabe dokumentieren:** `rpp-node validator admission pending approve
+- [ ] **Freigabe dokumentieren:** `cargo run -p rpp-chain -- validator admission pending approve
       --id <ID> --approver <rolle:person>` ausführen und CLI-Ausgabe im
       Incident-Log speichern.
-- [ ] **Post-Check:** `rpp-node validator admission policies get` (oder
+- [ ] **Post-Check:** `cargo run -p rpp-chain -- validator admission policies get` (oder
       `GET /p2p/admission/policies`) ausführen und die aktualisierte Liste als
       JSON im Ticket verlinken.
 
@@ -82,7 +82,7 @@ Checklisten setzen voraus, dass du das Incident-Log und die Ticket-Referenz
       ausführen und den Ablehnungsgrund dokumentieren (z. B. falsches Tier,
       fehlende Peer-ID).
 - [ ] **Audit sichern:** Ablehnung mit
-      `rpp-node validator admission pending reject --id <ID> --approver
+      `cargo run -p rpp-chain -- validator admission pending reject --id <ID> --approver
       <rolle:person> --reason "<Begründung>"` durchführen und Output sichern.
 - [ ] **Monitor prüfen:** Admission-Alerts (`policy_drift_detected_total`,
       `admission.approval_missing_total`) im Dashboard kontrollieren, um
@@ -95,13 +95,13 @@ Checklisten setzen voraus, dass du das Incident-Log und die Ticket-Referenz
 - [ ] **Audit-Trail sammeln:** Jüngste Einträge mit
       `GET /p2p/admission/audit?limit=10` exportieren und im Incident-Log
       ablegen.
-- [ ] **Backup prüfen:** `rpp-node validator admission backups list` und
+- [ ] **Backup prüfen:** `cargo run -p rpp-chain -- validator admission backups list` und
       `backups download` nutzen, um den letzten bekannten guten Snapshot zu
       identifizieren.【F:rpp/node/src/main.rs†L1023-L1144】
-- [ ] **Restore vorbereiten:** `rpp-node validator admission restore --backup
+- [ ] **Restore vorbereiten:** `cargo run -p rpp-chain -- validator admission restore --backup
       <NAME> --actor <ops> --reason "Rollback nach Fehlversuch" --approval
       operations:<ops> --approval security:<sec>` ausführen und Output sichern.
-- [ ] **Verifikation:** Direkt danach `rpp-node validator admission verify
+- [ ] **Verifikation:** Direkt danach `cargo run -p rpp-chain -- validator admission verify
       --audit-limit 50` laufen lassen, um Signaturen und Audit-Kette zu prüfen
       und Ergebnis dokumentieren.
 - [ ] **Lessons Learned:** Fehlversuch im Ticket nachverfolgen, SRE/Compliance
@@ -127,13 +127,13 @@ configuration automatically:
 
 ```sh
 # List available snapshots
-rpp-node validator admission backups list
+cargo run -p rpp-chain -- validator admission backups list
 
 # Download the newest snapshot to disk
-rpp-node validator admission backups download --backup "${BACKUP}" --output /tmp/admission.json
+cargo run -p rpp-chain -- validator admission backups download --backup "${BACKUP}" --output /tmp/admission.json
 
 # Restore a snapshot with the standard dual approvals
-rpp-node validator admission restore \
+cargo run -p rpp-chain -- validator admission restore \
   --backup "${BACKUP}" \
   --actor ops.oncall \
   --reason "rollback to previous allowlist" \
@@ -158,7 +158,7 @@ window of audit entries against the trusted public keys shipped with the node
 configuration:
 
 ```sh
-rpp-node validator admission verify --audit-limit 100
+cargo run -p rpp-chain -- validator admission verify --audit-limit 100
 ```
 
 The command fetches the current policies and audit history via RPC, rebuilds
@@ -184,7 +184,7 @@ below:
    to the new secret and update `active_key` to the matching identifier.【F:rpp/runtime/config.rs†L952-L1005】
 3. Restart the validator. On boot the peerstore will re-sign the snapshot with
    the active key and continue signing audit entries automatically.【F:rpp/p2p/src/peerstore.rs†L699-L758】
-4. Run `rpp-node validator admission verify` and attach the CLI output to the
+4. Run `cargo run -p rpp-chain -- validator admission verify` and attach the CLI output to the
    change ticket as evidence that the new key is active and trusted.
 
 Retire obsolete keys from the trust store only after the signed artifacts have

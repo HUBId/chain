@@ -237,7 +237,7 @@ dashboards and alerts operators should wire up immediately after bootstrap.
 - **Back up secrets:** Store encrypted copies of validator, libp2p, and VRF keys
   off the host. Without them the node cannot rejoin the set after hardware
   failure.
-- **Use the validator tooling:** The `rpp-node validator` CLI rotates VRF keys,
+- **Use the validator tooling:** The `cargo run -p rpp-chain -- validator` CLI rotates VRF keys,
   exports backups, validates secrets/telemetry via `validator setup`, and
   manages uptime proofs through `validator uptime submit`/`validator uptime status`
   without restarting the process. Pair the CLI with the `/state-sync/session` RPC

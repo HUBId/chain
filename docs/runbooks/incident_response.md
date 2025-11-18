@@ -37,7 +37,7 @@ Peer-Wechsel einleitest.
 ### First Action Checklist
 
 - [ ] **CLI:** Erfasse den Session-Status über
-      [`rpp-node validator snapshot status`](./network_snapshot_failover.md#step-1--verify-control-plane-health)
+      [`cargo run -p rpp-chain -- validator snapshot status`](./network_snapshot_failover.md#step-1--verify-control-plane-health)
       und sichere den Output im Incident-Log.
 - [ ] **Dashboards:** Öffne die [Snapshot- & Light-Client-Metriken](../observability/pipeline.md#snapshot--light-client-sync-metrics)
       und exportiere die Panels für `snapshot_stream_lag_seconds`,
@@ -68,7 +68,7 @@ Belege, bevor du Änderungen akzeptierst oder zurückrollst.
 
 - [ ] **CLI:** Ziehe den aktuellen Stand mit
       [`GET /p2p/admission/policies`](../runbooks/observability.md#admission-audit-abfragen)
-      oder `rpp-node validator admission backups download` und lege den Dump im
+      oder `cargo run -p rpp-chain -- validator admission backups download` und lege den Dump im
       Incident-Log ab.
 - [ ] **Dashboards:** Kontrolliere die Admission-Metriken im
       [Pipeline-Dashboard](../observability/pipeline.md#snapshot--light-client-sync-metrics)
@@ -113,7 +113,7 @@ Stütze dich auf die vier Incident-Listen aus dem [Admission-Runbook](./admissio
 die Eskalation konkret eine Pending-Queue, Freigabe, Ablehnung oder einen
 Restore betrifft:
 
-- [ ] **Pending-Approval:** `rpp-node validator admission pending list/show`
+- [ ] **Pending-Approval:** `cargo run -p rpp-chain -- validator admission pending list/show`
       laufen lassen, Diff/Screenshots ins Incident-Log legen und das Security-
       Team aktiv informieren.
 - [ ] **Freigabe:** Vor der Approve-Entscheidung den Policy-Status prüfen
@@ -159,7 +159,7 @@ unmittelbar Belege und eskaliere gemäß folgender Kette:
 - [ ] Prüfe den produktiven Report mit
       `cargo xtask verify-report --report dist/artifacts/<target>/snapshot-verify-report.json`
       gegen das Schema `docs/interfaces/snapshot_verify_report.schema.json`.
-- [ ] Führe `rpp-node validator snapshot verify --config <pfad>` gegen das
+- [ ] Führe `cargo run -p rpp-chain -- validator snapshot verify --config <pfad>` gegen das
       zuletzt veröffentlichte Bundle aus, um Chunk-Abweichungen auszuschließen.
 
 **Logs, Alerts & Artefakte**
@@ -197,7 +197,7 @@ Typische Signale sind rote Nightly-Checks (`worm-export-smoke`) oder der Alert
       `target/worm-export-smoke/` mitsamt `worm-export-summary.json`.
 - [ ] Sammle die Laufzeit-Logs aus dem Validator (`journalctl -u rpp-node --grep
       "worm export"`) sowie das Admission-Audit via
-      `rpp-node validator admission backups download`.
+      `cargo run -p rpp-chain -- validator admission backups download`.
 - [ ] Falls das Produktivsystem betroffen ist, pausiere Exporte kurzfristig über
       den Betriebs-Workflow (z. B. `systemctl stop rpp-node`) nach Rücksprache mit
       Compliance und dokumentiere Uhrzeit sowie Ticket.
@@ -339,7 +339,7 @@ Artefakte für die Erstdiagnose.
       `retry_chunks` gegenüber den Phase‑C-Grenzwerten (SLO ≤ 120 s Resume,
       ≤ 25 Retries) und notiere Abweichungen.
 - [ ] Führe `cargo xtask snapshot-health --report <pfad>` oder
-      `rpp-node validator snapshot status` gegen das betroffene Cluster aus,
+      `cargo run -p rpp-chain -- validator snapshot status` gegen das betroffene Cluster aus,
       um den aktuellen Stream-Lag zu bestätigen.
 
 **Investigation & Artefakte**

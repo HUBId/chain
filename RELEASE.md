@@ -128,10 +128,10 @@ Before publishing release artifacts, double-check the following guardrails:
    compile when `backend-plonky3` is paired with `prod` or `validator`. The
    compile-time guard keeps the experimental stub out of production releases even
    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-7. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
-   `rpp-node hybrid --dry-run`) to see the runtime guard in action—startup fails
-   immediately if the STWO backend was omitted, ensuring the published artifacts
-   activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
+7. Dry-run validator or hybrid binaries (`cargo run -p rpp-chain -- validator --dry-run` /
+   `cargo run -p rpp-chain -- hybrid --dry-run`) to see the runtime guard in
+   action—startup fails immediately if the STWO backend was omitted, ensuring the
+   published artifacts activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
 8. Capture the Plonky3 graduation evidence bundle: archive the
    `target/simnet/consensus-quorum` artefacts produced by the stress harness,
    export the Grafana dashboard JSON described in the Plonky3 runbook, and note

@@ -33,7 +33,7 @@ which enumerates the artefacts and commands auditors expect before a rollout.【
      absent and that `backend-plonky3` is present in the metadata.
 2. **Key material**
    - Seed proving/verifying key caches by executing
-     `rpp-node validator proofs preload --backend plonky3` or by letting the
+     `cargo run -p rpp-chain -- validator proofs preload --backend plonky3` or by letting the
      first production block generation populate `backend_health.plonky3.*`.
    - Verify that the cache directory at `proof_cache_dir` (default
      `data/proofs/`) contains all circuit families listed in the
@@ -86,7 +86,7 @@ which enumerates the artefacts and commands auditors expect before a rollout.【
      next five blocks.
 2. **Tamper acceptance**
    - Immediately quarantine the offending validator witness data and trigger an
-     emergency key rotation via `rpp-node validator vrf rotate`.
+     emergency key rotation via `cargo run -p rpp-chain -- validator vrf rotate`.
    - Review `scripts/analyze_simnet.py` thresholds; if tamper rejection logic
      regressed, roll back to the last known good release.
 3. **Prover failures**

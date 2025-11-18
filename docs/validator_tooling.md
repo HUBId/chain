@@ -11,9 +11,9 @@ the documented REST endpoints.
 The CLI offers a dedicated namespace for validator operations while the
 light-client state-sync workflows are exercised through the public RPC API.
 
-### `rpp-node validator`
+### `cargo run -p rpp-chain -- validator`
 
-The `rpp-node validator` namespace bundles two feature areas:
+The validator CLI is invoked via `cargo run -p rpp-chain -- validator …` for tooling workflows while the `rpp-node validator` runtime entry point stays reserved for production launches. The CLI namespace bundles two feature areas:
 
 1. **VRF key management**
    * Rotate the VRF keypair and persist it through the configured secrets
@@ -21,7 +21,7 @@ The `rpp-node validator` namespace bundles two feature areas:
      by the REST examples; omit the flag if RPC auth is disabled:
 
      ```sh
-     rpp-node validator vrf rotate --config config/validator.toml \
+     cargo run -p rpp-chain -- validator vrf rotate --config config/validator.toml \
        --auth-token $RPP_RPC_TOKEN
      ```
 
@@ -34,7 +34,7 @@ The `rpp-node validator` namespace bundles two feature areas:
      same optional `--auth-token` flag when RPC auth is enabled:
 
      ```sh
-     rpp-node validator vrf inspect --config config/validator.toml \
+     cargo run -p rpp-chain -- validator vrf inspect --config config/validator.toml \
        --auth-token $RPP_RPC_TOKEN
      ```
 
@@ -48,7 +48,7 @@ The `rpp-node validator` namespace bundles two feature areas:
      auth token flag when RPC authentication is turned on:
 
      ```sh
-     rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --pretty \
+     cargo run -p rpp-chain -- validator telemetry --rpc-url http://127.0.0.1:7070 --pretty \
        --auth-token $RPP_RPC_TOKEN
      ```
 

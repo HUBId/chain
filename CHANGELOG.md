@@ -43,7 +43,7 @@ All notable changes to this project will be documented in this file.
 - Add production callouts that block `backend-plonky3`, reiterate the STWO feature
   requirements, and link the release pipeline checklist so operators understand
   the new compile-, packaging-, and runtime guards.【F:docs/rpp_node_operator_guide.md†L7-L23】【F:docs/poseidon_vrf.md†L9-L25】【F:RELEASE.md†L88-L123】
-- Document the `rpp/chain-cli` and `rpp/node-runtime-api` crates, including how to inspect `cargo run -p rpp-chain -- --help` and `cargo run -p rpp-node -- --help`, so contributors know where the unified CLI lives in the repo and how to exercise it locally.【F:README.md†L116-L146】【F:README.md†L238-L259】【F:docs/development/tooling.md†L56-L70】【F:docs/cli/README.md†L1-L13】
+- Document the `rpp/chain-cli` and `rpp/node-runtime-api` crates, including how to inspect `cargo run -p rpp-chain -- --help` and the release binary (`target/release/rpp-node -- --help`), so contributors know where the unified CLI lives in the repo and how to exercise it locally.【F:README.md†L116-L146】【F:README.md†L238-L259】【F:docs/development/tooling.md†L56-L70】【F:docs/cli/README.md†L1-L13】
 - Summarize the compile-time, runtime, and release guardrails that keep the
   experimental `backend-plonky3` feature out of production builds, and document
   the failure modes operators should expect. The notes call out the

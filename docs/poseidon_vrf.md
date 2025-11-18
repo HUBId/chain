@@ -109,7 +109,8 @@ history or being reused during identity onboarding.
 
 ## CLI & Configuration
 Use the integrated validator CLI to rotate, audit, and export Poseidon VRF
-material. `rpp-node validator vrf rotate` provisions a fresh keypair through the
+material. `cargo run -p rpp-chain -- validator vrf rotate` provisions a fresh
+keypair through the
 secrets backend declared in the validator configuration, reports the resolved
 storage identifier, and overwrites any existing entry in the same location.【F:rpp/node/src/main.rs†L250-L288】
 
@@ -119,13 +120,13 @@ CLI automatically falls back to that path when `--config` is omitted.【F:rpp/no
 
 ```sh
 # Rotate VRF keys in place using the filesystem-backed secrets store
-rpp-node validator vrf rotate --config config/validator.toml
+cargo run -p rpp-chain -- validator vrf rotate --config config/validator.toml
 
 # Inspect the stored keypair after migrating to a Vault backend
-rpp-node validator vrf inspect --config /etc/rpp/validator.toml
+cargo run -p rpp-chain -- validator vrf inspect --config /etc/rpp/validator.toml
 
 # Export the active keypair to a JSON bundle for backup procedures
-rpp-node validator vrf export --config /etc/rpp/validator.toml --output ./backups/validator-vrf.json
+cargo run -p rpp-chain -- validator vrf export --config /etc/rpp/validator.toml --output ./backups/validator-vrf.json
 ```
 
 The CLI resolves the configured secrets backend, ensures the target directory or

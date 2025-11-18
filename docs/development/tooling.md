@@ -54,14 +54,15 @@ cargo check -p rpp-p2p --features "noise tcp yamux quic"
 
 to ensure the additional transport compiles alongside the default TCP stack.
 
-For operational guidance on the runtime CLI—including authentication, rate limits,
-and recovery procedures—consult the [`rpp-node` operator guide](../rpp_node_operator_guide.md).
-During development you can inspect the clap surface directly via
-`cargo run -p rpp-chain -- --help`, which shells out to the lightweight stub
-binary under `rpp/chain/src/bin/chain_cli.rs`, or
-`cargo run -p rpp-node -- --help`, which wires the same CLI crate into the
-runtime executor and validates the shared argument plumbing exported by
-`rpp-node-runtime-api`.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】【F:rpp/chain-cli/src/lib.rs†L61-L118】【F:rpp/node-runtime-api/src/lib.rs†L37-L115】【F:rpp/node/src/main.rs†L1-L6】
+For operational guidance on the runtime CLI—including authentication, rate
+limits, and recovery procedures—consult the [`rpp-node` operator
+guide](../rpp_node_operator_guide.md). During development run
+`cargo run -p rpp-chain -- …` to inspect the clap surface, validate
+configuration with `--dry-run`, and exercise validator tooling without starting
+the runtime. The stub binary under `rpp/chain/src/bin/chain_cli.rs` wires the
+shared CLI crate (`rpp-chain-cli`) into `rpp-node-runtime-api` so the full flag
+set is available while keeping the production `rpp-node` binary reserved for
+supervisors and release artefacts.【F:rpp/chain/src/bin/chain_cli.rs†L1-L12】【F:rpp/chain-cli/src/lib.rs†L61-L118】【F:rpp/node-runtime-api/src/lib.rs†L37-L115】【F:rpp/node/src/main.rs†L1-L6】
 
 ## WORM-Export-Stub
 
@@ -115,22 +116,22 @@ Signaturinformationen korrekt durchgereicht werden.
 
 ## Konfigurations- und Schlüsselgenerierung
 
-Die folgenden Hinweise helfen bei typischen Fehlern rund um `rpp-node <modus> --dry-run` sowie die Validator-Unterbefehle wie `rpp-node validator vrf rotate`.
+Die folgenden Hinweise helfen bei typischen Fehlern rund um `cargo run -p rpp-chain -- <modus> --dry-run` sowie die Validator-Unterbefehle wie `cargo run -p rpp-chain -- validator vrf rotate`.
 
 ### Häufige Stolperfallen
 
-- **Bestehende Dateien werden überschrieben.** `rpp-node <modus> --write-config` serialisiert die aufgelöste Konfiguration erneut auf den ursprünglichen Pfad, sobald der Loader erfolgreich war. Die Validator-Helfer wie `rpp-node validator vrf rotate` speichern Schlüsselpaare direkt über den konfigurierten Secrets-Store, ohne nach einer Bestätigung zu fragen. Erstelle daher vor erneuten Läufen Backups oder arbeite mit Kopien im Arbeitsverzeichnis.【F:rpp/node/src/lib.rs†L688-L707】【F:rpp/node/src/main.rs†L238-L276】【F:rpp/runtime/config.rs†L749-L781】
-- **Ungültige Pflichtfelder führen zu Validierungsfehlern.** Nach dem Laden prüft `NodeConfig::validate`, dass essenzielle Felder wie `block_time_ms`, `max_block_transactions`, `mempool_limit`, `epoch_length`, `target_validator_count` und `max_proof_size_bytes` größer als `0` sind. Außerdem müssen optionale Strings wie `network.rpc.auth_token` und `network.rpc.allowed_origin`, falls gesetzt, nicht leer sein; das Token-Bucket-Limit unter `network.limits.per_ip_token_bucket` erfordert positive Werte. Passe die Werte an und speichere die Datei erneut, bevor du `rpp-node <modus>` (ggf. mit `--dry-run`) ausführst.【F:rpp/runtime/config.rs†L772-L910】【F:rpp/runtime/config.rs†L200-L228】【F:rpp/node/src/lib.rs†L709-L726】
+- **Bestehende Dateien werden überschrieben.** `cargo run -p rpp-chain -- <modus> --write-config` serialisiert die aufgelöste Konfiguration erneut auf den ursprünglichen Pfad, sobald der Loader erfolgreich war. Die Validator-Helfer wie `cargo run -p rpp-chain -- validator vrf rotate` speichern Schlüsselpaare direkt über den konfigurierten Secrets-Store, ohne nach einer Bestätigung zu fragen. Erstelle daher vor erneuten Läufen Backups oder arbeite mit Kopien im Arbeitsverzeichnis.【F:rpp/node/src/lib.rs†L688-L707】【F:rpp/node/src/main.rs†L238-L276】【F:rpp/runtime/config.rs†L749-L781】
+- **Ungültige Pflichtfelder führen zu Validierungsfehlern.** Nach dem Laden prüft `NodeConfig::validate`, dass essenzielle Felder wie `block_time_ms`, `max_block_transactions`, `mempool_limit`, `epoch_length`, `target_validator_count` und `max_proof_size_bytes` größer als `0` sind. Außerdem müssen optionale Strings wie `network.rpc.auth_token` und `network.rpc.allowed_origin`, falls gesetzt, nicht leer sein; das Token-Bucket-Limit unter `network.limits.per_ip_token_bucket` erfordert positive Werte. Passe die Werte an und speichere die Datei erneut, bevor du `cargo run -p rpp-chain -- <modus>` (ggf. mit `--dry-run`) ausführst.【F:rpp/runtime/config.rs†L772-L910】【F:rpp/runtime/config.rs†L200-L228】【F:rpp/node/src/lib.rs†L709-L726】
 - **Blueprint-Defaults liegen in `config/malachite.toml`.** `NodeConfig::load` liest die Nachbar-Datei automatisch ein, prüft die SemVer-Angabe und fällt bei fehlender Datei auf die integrierten Standardwerte zurück, bevor die Validierung startet.【F:config/malachite.toml†L1-L82】【F:rpp/runtime/config.rs†L24-L215】
 - **Wallet-Konfiguration benötigt Gossip-Endpunkte ohne eingebetteten Node.** Das Wallet verlangt laut `WalletConfig::validate`, dass `gossip_endpoints` gesetzt und nicht leer sind, wenn `embedded = false`. Bei einem Fehler lösche leere Einträge oder aktiviere den eingebetteten Node (`embedded = true`).【F:rpp/runtime/config.rs†L405-L425】
 
 ### Wiederherstellungsschritte
 
-1. **Datei auf Werkseinstellungen zurücksetzen.** Lösche die beschädigte Datei und führe `rpp-node <modus> --dry-run --write-config --config config/node.toml` (bzw. den passenden Wallet-Pfad) aus. Der Loader rendert das Standardprofil erneut und persistiert es an der angegebenen Stelle.【F:rpp/node/src/lib.rs†L688-L707】【F:rpp/node/src/lib.rs†L1713-L1740】
+1. **Datei auf Werkseinstellungen zurücksetzen.** Lösche die beschädigte Datei und führe `cargo run -p rpp-chain -- <modus> --dry-run --write-config --config config/node.toml` (bzw. den passenden Wallet-Pfad) aus. Der Loader rendert das Standardprofil erneut und persistiert es an der angegebenen Stelle.【F:rpp/node/src/lib.rs†L688-L707】【F:rpp/node/src/lib.rs†L1713-L1740】
 2. **Verzeichnisse sicherstellen.** Falls der Lauf wegen fehlender Verzeichnisse abbricht, starte den Befehl erneut: `NodeConfig::ensure_directories` legt `data/`, `keys/`, `data/p2p/` usw. automatisch an und berücksichtigt dabei den gewählten Secrets-Backend. Gleiches gilt für `WalletConfig::ensure_directories` bei der Wallet-Konfiguration.【F:rpp/node/src/lib.rs†L850-L889】【F:rpp/runtime/config.rs†L759-L769】【F:rpp/runtime/config.rs†L1139-L1181】
-3. **Schlüssel neu erzeugen.** Bei beschädigten oder inkonsistenten Schlüsseln (`z. B.` VRF-Mismatch) lösche die betroffenen Dateien und rotiere sie mit `rpp-node validator vrf rotate --config config/validator.toml`. Identitäts- und Wallet-Schlüssel regeneriert der Loader automatisch, sobald du `rpp-node wallet --dry-run` (oder den entsprechenden Modus) startest; alternative Keystores nutzt anschließend `NodeConfig::load_or_generate_vrf_keypair`.【F:rpp/node/src/main.rs†L238-L317】【F:rpp/node/src/lib.rs†L850-L904】【F:rpp/crypto/mod.rs†L555-L562】【F:rpp/runtime/config.rs†L567-L574】
+3. **Schlüssel neu erzeugen.** Bei beschädigten oder inkonsistenten Schlüsseln (`z. B.` VRF-Mismatch) lösche die betroffenen Dateien und rotiere sie mit `cargo run -p rpp-chain -- validator vrf rotate --config config/validator.toml`. Identitäts- und Wallet-Schlüssel regeneriert der Loader automatisch, sobald du `cargo run -p rpp-chain -- wallet --dry-run` (oder den entsprechenden Modus) startest; alternative Keystores nutzt anschließend `NodeConfig::load_or_generate_vrf_keypair`.【F:rpp/node/src/main.rs†L238-L317】【F:rpp/node/src/lib.rs†L850-L904】【F:rpp/crypto/mod.rs†L555-L562】【F:rpp/runtime/config.rs†L567-L574】
 
-> 💡 Tipp: Nach manuellen Änderungen kannst du die Validierung ohne Start des Nodes testen, indem du `rpp-node <modus> --dry-run --config <bestehende-datei>` ausführst – der Lauf startet keine Pipelines, liefert aber präzise Fehlermeldungen, falls Werte ungültig sind.【F:rpp/node/src/lib.rs†L709-L726】
+> 💡 Tipp: Nach manuellen Änderungen kannst du die Validierung ohne Start des Nodes testen, indem du `cargo run -p rpp-chain -- <modus> --dry-run --config <bestehende-datei>` ausführst – der Lauf startet keine Pipelines, liefert aber präzise Fehlermeldungen, falls Werte ungültig sind.【F:rpp/node/src/lib.rs†L709-L726】
 
 ### Mempool-Tuning und Live-Anpassungen
 

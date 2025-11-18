@@ -29,7 +29,7 @@ Escalate when Prometheus shows a five-minute rate of rejected gossip decisions a
             }'
 
    # Apply the emergency quarantine snapshot that blocklists the peer set.
-   rpp-node validator admission restore \
+   cargo run -p rpp-chain -- validator admission restore \
      --backup emergency-quarantine \
      --actor ops.oncall \
      --reason "quarantine partitioned peer" \
@@ -41,7 +41,7 @@ Escalate when Prometheus shows a five-minute rate of rejected gossip decisions a
 
 2. **Throttle the mesh.** Reduce the gossip rate limit or tighten per-IP token buckets if the issue is caused by a flood. Adjust the `[network.p2p]` parameters in the active configuration bundle, then restart the node to apply the change.【F:docs/networking.md†L59-L104】【F:rpp/p2p/src/swarm.rs†L830-L847】
 
-3. **Confirm admission controls.** Query `GET /p2p/admission/policies` or run `rpp-node validator admission verify --audit-limit 0` to verify that critical peers remain allowlisted and that only the unhealthy peers are blocked.【F:docs/network/admission.md†L35-L69】【F:rpp/node/src/main.rs†L1306-L1397】
+3. **Confirm admission controls.** Query `GET /p2p/admission/policies` or run `cargo run -p rpp-chain -- validator admission verify --audit-limit 0` to verify that critical peers remain allowlisted and that only the unhealthy peers are blocked.【F:docs/network/admission.md†L35-L69】【F:rpp/node/src/main.rs†L1306-L1397】
 
 4. **Communicate.** Update the incident timeline with the affected peer IDs, metrics snapshots, and any configuration overrides you applied.
 

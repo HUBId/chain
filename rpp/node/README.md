@@ -85,7 +85,7 @@ The binary exposes a number of flags for common overrides:
 | `--log-json` | Emit structured JSON logs.
 | `--write-config` | Persist the effective configuration to `node.toml` in the current directory.
 
-You can inspect the full list at any time with `cargo run -p rpp-node -- --help`.
+You can inspect the full list at any time with `cargo run -p rpp-chain -- --help`.
 
 The TOML configuration exposes additional knobs for fine-tuning the telemetry pipeline:
 

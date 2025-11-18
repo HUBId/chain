@@ -22,15 +22,15 @@ Audit-Log-Abfragen und Alert-Reaktionen in einem Ablaufdiagramm zusammen.【F:do
 
 ## Snapshot-Recovery
 
-1. **Session anlegen oder fortsetzen.** Nutze `rpp-node validator snapshot start --peer <peer>`
-   bzw. `rpp-node validator snapshot resume --session <id> --peer <peer> --plan-id <plan>`, um den
+1. **Session anlegen oder fortsetzen.** Nutze `cargo run -p rpp-chain -- validator snapshot start --peer <peer>`
+   bzw. `cargo run -p rpp-chain -- validator snapshot resume --session <id> --peer <peer> --plan-id <plan>`, um den
    Stream neu zu initialisieren oder fortzusetzen. Die CLI fügt automatisch Token aus der Validator-Konfiguration
    hinzu und liefert strukturierte Statuszeilen für das Incident-Log.【F:rpp/node/src/main.rs†L118-L310】
-2. **Fortschritt prüfen.** `rpp-node validator snapshot status --session <id>` zeigt Chunk-Index, letzte Höhe
+2. **Fortschritt prüfen.** `cargo run -p rpp-chain -- validator snapshot status --session <id>` zeigt Chunk-Index, letzte Höhe
    und Fehlerzustände. Kopiere den Output in das Incident-Log und sichere parallel Screenshots der genannten
    Dashboards, um Phase‑3-Belege abzulegen.【F:rpp/node/src/main.rs†L118-L310】【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】
 3. **Failover und Abbruch.** Folge bei Peer-Wechseln dem Netzwerk-Runbook und stoppe gescheiterte Streams mit
-   `rpp-node validator snapshot cancel --session <id>`. Dokumentiere jeden Abbruch inkl. Zeitstempel.
+   `cargo run -p rpp-chain -- validator snapshot cancel --session <id>`. Dokumentiere jeden Abbruch inkl. Zeitstempel.
 4. **Nachbereitung.** Aktualisiere die [Observability-Checkliste](./observability.md#snapshot-cli-diagnose),
    das [Incident Response Playbook](./incident_response.md#snapshot-checksum-fehler) (Checkboxen abhaken) und
    die Phase‑3-Abnahme, damit Auditor:innen lückenlose Artefakte vorfinden.【F:docs/runbooks/observability.md†L6-L46】【F:docs/runbooks/incident_response.md†L19-L76】【F:docs/runbooks/phase3_acceptance.md†L8-L62】

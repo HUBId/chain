@@ -24,14 +24,14 @@ without branching on backend specifics.【F:rpp/runtime/config.rs†L40-L82】
 
 ## Lifecycle operations
 
-Use the `rpp-node validator vrf` commands to manage keys without editing files
-manually:
+Use `cargo run -p rpp-chain -- validator vrf …` to manage keys without editing
+files manually:
 
-- `rpp-node validator vrf rotate` generates a new keypair, persists it via the
+- `cargo run -p rpp-chain -- validator vrf rotate` generates a new keypair, persists it via the
   configured secrets backend, and prints the public key for audit trails.
-- `rpp-node validator vrf inspect` loads the stored keypair and displays both the
+- `cargo run -p rpp-chain -- validator vrf inspect` loads the stored keypair and displays both the
   public and secret components for verification.
-- `rpp-node validator vrf export --output <path>` writes the keypair as JSON and
+- `cargo run -p rpp-chain -- validator vrf export --output <path>` writes the keypair as JSON and
   can feed external backup workflows.【F:rpp/node/src/main.rs†L54-L199】
 
 All commands accept `--config` to point at non-default validator configuration

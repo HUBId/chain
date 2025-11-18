@@ -4,14 +4,14 @@ Dieses Übungsskript führt Operator:innen Schritt für Schritt durch die Verifi
 
 ## Ziele
 
-- `rpp-node validator snapshot verify` mit einem reproduzierbaren Test-Bundle ausführen und den JSON-Report bewerten.
+- `cargo run -p rpp-chain -- validator snapshot verify` mit einem reproduzierbaren Test-Bundle ausführen und den JSON-Report bewerten.
 - Das WORM-Export-Smoke-Paket erzeugen, Signaturen überprüfen und die Retention-Metadaten nachvollziehen.
 - CI-Artefakte (`snapshot-verifier-smoke`, `worm-export-smoke`) auf Vollständigkeit prüfen und die Ergebnisse im Statusreport protokollieren.
 
 ## Voraussetzungen
 
 - Rust-Werkzeuge (`cargo`, `rustup`) und das Repository ausgecheckt.
-- Der Operator-CLI-Build (`cargo build --release -p rpp-node --no-default-features --features prod,prover-stwo`) steht unter `target/release/rpp-node` bereit.
+- Zugriff auf die Operator-CLI via `cargo run -p rpp-chain -- …` (oder einen bereits gebauten `rpp-node`-Release-Binary, falls vorhanden).
 - Das `gh`-CLI ist konfiguriert (GitHub-Token mit `actions:read`).
 - Lokaler Speicherplatz für Trainingsartefakte (`target/snapshot-verifier-smoke/`, `target/worm-export-smoke/`).
 
@@ -48,7 +48,7 @@ Diese Fixtures entsprechen den CI-Smoke-Artefakten und bilden die Grundlage für
 
 1. **CLI ausführen:**
    ```sh
-   target/release/rpp-node validator snapshot verify \
+   cargo run -p rpp-chain -- validator snapshot verify \
      --manifest target/snapshot-verifier-smoke/manifest/chunks.json \
      --signature target/snapshot-verifier-smoke/manifest/chunks.json.sig \
      --public-key target/snapshot-verifier-smoke/snapshot-key.hex \

@@ -704,7 +704,7 @@ PY
           set -euo pipefail
           cargo xtask test-cli
           cargo run -p rpp-chain -- --help >/dev/null
-          cargo run -p rpp-node -- --help >/dev/null
+          cargo run -p rpp-node --bin rpp-node -- --help >/dev/null
 
   rpc-admission-audit:
     name: RPC admission audit guard
