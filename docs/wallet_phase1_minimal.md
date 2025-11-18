@@ -1,9 +1,18 @@
 # Wallet runtime configuration (phase 1)
 
+> **Phase navigation:** Previous phase: _Foundational runtime bootstrap_ · Next
+> phase: [Wallet Phase 2 – Policies & Prover Guide](wallet_phase2_policies_prover.md) ·
+> [Wallet documentation index](README.md#wallet-documentation-index)
+>
+> **Sections:** [Policies](#policies) · [GUI](#gui) · [Backup](#backup) ·
+> [Security](#security)
+
 This document tracks the initial set of configuration options that the wallet
 runtime exposes for early operators. The defaults in `config/wallet.toml` are
 safe for local development, but production deployments should review the
-following sections:
+following sections.
+
+## Policies
 
 - `wallet.engine`: controls the engine data directory, keystore bundle path,
   and optional birthday height for partial syncs.
@@ -15,10 +24,14 @@ following sections:
   witness sizes, caps concurrency, and controls whether the mock backend is
   allowed when the prover is disabled.
 
-Future phases will expand on these sections with deployment playbooks and
-component-specific tuning guidance.
+Future phases expand on these sections with deployment playbooks and
+component-specific tuning guidance. Phase 2 introduces persistent policy
+snapshots, fee estimator automation, and prover selection—follow the navigation
+links above when you are ready to upgrade.
 
-## GUI telemetry opt-in
+## GUI
+
+### Telemetry opt-in
 
 The iced-based wallet GUI only publishes telemetry when operators explicitly
 enable the opt-in flag. Add the following to the `[wallet.gui]` section of
@@ -57,7 +70,19 @@ for backups, watch-only, hardware, and ZSI operations—only after each RPC or
 proof task resolves, ensuring failures and successes are distinguished without
 logging sensitive identifiers.【F:rpp/wallet/src/cli/telemetry.rs†L23-L148】【F:rpp/wallet/src/cli/wallet.rs†L1180-L1516】【F:rpp/wallet/src/cli/zsi.rs†L199-L244】
 
-## Phase 1 JSON-RPC reference
+## Backup
+
+Phase 1 focuses on stabilising the runtime surface; automated backups land in
+[Phase 4](wallet_phase4_advanced.md#backuprecovery-formats-and-rotation). In the
+interim, operators should take filesystem snapshots (or VM/volume-level backups)
+after initial key import so manual recovery remains possible.
+
+## Security
+
+The Phase 1 runtime emphasises deterministic RPC behaviour and telemetry opt-in
+controls so production deployments can pass early security reviews.
+
+### JSON-RPC reference
 
 ### Transport, authentication, and limits
 
@@ -260,3 +285,9 @@ copying the keystore to new hosts.
 
 - JSON-RPC DTOs: [`rpp/wallet/src/rpc/dto.rs`](../rpp/wallet/src/rpc/dto.rs)
 - Runtime configuration template: [`config/wallet.toml`](../config/wallet.toml)
+
+---
+
+> **Phase navigation:** Previous phase: _Foundational runtime bootstrap_ · Next
+> phase: [Wallet Phase 2 – Policies & Prover Guide](wallet_phase2_policies_prover.md) ·
+> [Wallet documentation index](README.md#wallet-documentation-index)

@@ -1,5 +1,10 @@
 # Wallet Phase 4 – Advanced Operations
 
+> **Phase navigation:** Previous phase: [Wallet Phase 3 – GUI Guide](wallet_phase3_gui.md) · Next phase:
+> [Wallet Operator Runbook](wallet_operator_runbook.md) · [Wallet documentation index](README.md#wallet-documentation-index)
+>
+> **Sections:** [Backup](#backup) · [Policies](#policies) · [GUI](#gui) · [Security](#security)
+
 Phase 4 extends the RPP wallet with enterprise-focused controls: encrypted backup and
 recovery formats, watch-only projections, multisig signing hooks, Zero State Import (ZSI)
 workflows, hardened RPC security (mTLS and RBAC), and hardware signing bridges. This
@@ -8,7 +13,9 @@ Pair it with the [Wallet Operator Runbook](./wallet_operator_runbook.md), which 
 prerequisite validation and acceptance testing sequence that proves each feature works end
 to end before a release is promoted.
 
-## Backup/Recovery Formats and Rotation
+## Backup
+
+### Backup/Recovery Formats and Rotation
 
 Phase 4 introduces deterministic, chunked backup archives for wallet state. Operators can
 export encrypted snapshots via `rpp-wallet backup export` or schedule automatic exports by
@@ -38,7 +45,27 @@ block weak phrases.
   requires at least 12 characters with mixed classes. Update the profile only after
   confirming all operators can satisfy the new complexity.
 
-## Watch-Only Mode
+### ZSI Workflows
+
+Zero State Import provides a fast bootstrap from vetted snapshots.
+
+1. Stage the bundle in `wallet.zsi.bundle_path` and verify signatures with
+   `rpp-wallet zsi verify --bundle <path>`.
+2. Enable the feature by setting `wallet.zsi.enabled = true` and restart the runtime.
+3. Import via `rpp-wallet zsi import --bundle <path>`. The tool confirms checksums when
+   `wallet.zsi.verify_checksums = true`.
+4. Disable `wallet.zsi.enabled` after import to prevent inadvertent replays.
+
+#### ZSI Troubleshooting
+
+* **Checksum mismatch** – Redownload the bundle and confirm the CA certificate chain matches
+  the publisher’s. Partial downloads produce truncated archives.
+* **Schema mismatch** – Upgrade the wallet runtime and database to the required schema via
+  the migration guidance below before retrying.
+
+## Policies
+
+### Watch-Only Mode
 
 Watch-only mode derives addresses from an extended public key while omitting private
 material. Enable it by setting `wallet.watch_only.enabled = true` and pointing
@@ -53,14 +80,14 @@ deposits without risking spend keys.
 * **Security** – Treat xpub files as sensitive. They do not enable spending but can leak
 transaction graph metadata if exposed.
 
-### Troubleshooting Watch-Only
+#### Troubleshooting Watch-Only
 
 * **Missing derivations** – Confirm the birthday height via `wallet.engine.birthday_height`
 and re-run `rpp-wallet rescan --from-height <height>` if early transactions are absent.
 * **RPC not showing accounts** – Ensure RBAC policies grant the `read_state` role to the
 requesting client when role enforcement is active.
 
-## Multisig Hooks
+### Multisig Hooks
 
 The wallet exposes multisignature flows only when the binary is compiled with the
 `wallet_multisig_hooks` feature. Builds without the feature omit the CLI commands and
@@ -79,7 +106,7 @@ scripts under `scripts/multisig/` that broker PSBT signing with their chosen coo
 Ensure those scripts are only enabled when `[wallet.multisig].enabled` is true and the
 binary was produced with `wallet_multisig_hooks`.
 
-### Multisig Troubleshooting
+#### Multisig Troubleshooting
 
 * **Feature disabled errors** – Ensure the runtime was built with `wallet_multisig_hooks`
   and that `[wallet.multisig].enabled = true`. Otherwise the CLI hides multisig commands and
@@ -91,76 +118,7 @@ binary was produced with `wallet_multisig_hooks`.
   the expected schema; malformed responses surface as runtime errors during multisig export
   or signing.
 
-## ZSI Workflows
-
-Zero State Import provides a fast bootstrap from vetted snapshots.
-
-1. Stage the bundle in `wallet.zsi.bundle_path` and verify signatures with
-   `rpp-wallet zsi verify --bundle <path>`.
-2. Enable the feature by setting `wallet.zsi.enabled = true` and restart the runtime.
-3. Import via `rpp-wallet zsi import --bundle <path>`. The tool confirms checksums when
-   `wallet.zsi.verify_checksums = true`.
-4. Disable `wallet.zsi.enabled` after import to prevent inadvertent replays.
-
-### ZSI Troubleshooting
-
-* **Checksum mismatch** – Redownload the bundle and confirm the CA certificate chain matches
-  the publisher’s. Partial downloads produce truncated archives.
-* **Schema mismatch** – Upgrade the wallet runtime and database to the required schema via
-  the migration guidance below before retrying.
-
-## RPC Security (mTLS and RBAC)
-
-Phase 4 hardens the JSON-RPC surface with optional mutual TLS and role-based access
-controls. Configure `[wallet.rpc.security]` and `[wallet.security]` together.
-
-* **mTLS** – Set `wallet.rpc.security.mtls_required = true` and populate
-  `wallet.rpc.security.trusted_ca_dir` with PEM-encoded issuing CAs. Server certificates are
-  loaded from `wallet.rpc.security.certificate` and `wallet.rpc.security.private_key`.
-* **RBAC** – Enable `wallet.rpc.security.role_enforcement = true` and map client identities
-  to roles in the `role_bindings_path` file. Roles include `admin`, `read_state`, and
-  `submit_tx`. Use `rpp-wallet rbac lint` to validate the file.
-* **Legacy compatibility** – Leave both flags false to retain Phase 3 behaviour. Clients must
-  negotiate TLS even when mTLS is disabled because the server certificate is still loaded.
-* **Build flag** – The node binary now ships the TLS stack behind the `rpp-chain` feature
-  `wallet_rpc_mtls`. Enable it (`cargo build -p rpp-chain --features wallet_rpc_mtls`) when you
-  need wallet RPC mTLS.
-
-### Certificate Management
-
-* Maintain an offline CA that issues short-lived certificates (30–90 days).
-* Automate rotation with a cron job that calls `rpp-wallet cert renew` and reloads the
-  runtime.
-* Store private keys with `0600` permissions and rotate immediately after suspected
-  compromise.
-
-### RPC Troubleshooting
-
-* **Handshake failures** – Inspect the wallet log for `tls::Error`. Mismatched CA chains or
-  expired certificates are the most common cause.
-* **Unauthorized responses** – Verify the client certificate fingerprint is bound to the
-  correct roles and that `wallet.auth.enabled` is not conflicting with RBAC policies.
-
-## Hardware Integration
-
-The wallet can delegate signing to hardware devices, such as Ledger or FIDO-based HSMs.
-
-* **Transport** – `wallet.hw.transport` supports `hid`, `usb`, and `tcp`. HID is the safest
-  default because it requires direct device access.
-* **Device selector** – Set `wallet.hw.device_selector` to a vendor/product ID pair (e.g.
-  `"2c97:4018"`) or a device serial. Leave null to prompt during CLI usage.
-* **Fallback** – Keep `wallet.hw.fallback_to_software = true` so unattended jobs can still
-  sign with the software key if the hardware device disconnects. For high-assurance
-  environments, set to false and monitor for `HardwareFallback` events.
-
-### Hardware Troubleshooting
-
-* **Device not detected** – Confirm OS-level permissions allow HID access. On Linux, install
-  the provided udev rules and replug the device.
-* **Stalled signing** – Ensure the hardware firmware version meets the minimum specified in
-  release notes. Ledger devices require blind signing to be enabled for PSBT flows.
-
-## Feature Flags
+### Feature Flags
 
 Phase 4 introduces the following cargo feature flags in addition to the prover and GUI flags
 from earlier phases:
@@ -187,6 +145,75 @@ the "all wallet features" combination, and the wallet feature guard suite. Use t
 xtask locally to reproduce coverage failures and prove the guard still rejects invalid
 configurations.
 
+## GUI
+
+Phase 4 reuses the iced-based GUI described in [Phase 3](wallet_phase3_gui.md) while layering
+on the hardened RPC and policy controls above. When enabling mTLS/RBAC or hardware signing,
+launch the GUI once per host after the runtime restarts so it can prompt for new
+certificates or hardware transports. Keep the `[wallet.gui]` opt-in aligned with the
+security posture recorded in the runbook.
+
+## Security
+
+### RPC Security (mTLS and RBAC)
+
+Phase 4 hardens the JSON-RPC surface with optional mutual TLS and role-based access
+controls. Configure `[wallet.rpc.security]` and `[wallet.security]` together.
+
+* **mTLS** – Set `wallet.rpc.security.mtls_required = true` and populate
+  `wallet.rpc.security.trusted_ca_dir` with PEM-encoded issuing CAs. Server certificates are
+  loaded from `wallet.rpc.security.certificate` and `wallet.rpc.security.private_key`.
+* **RBAC** – Enable `wallet.rpc.security.role_enforcement = true` and map client identities
+  to roles in the `role_bindings_path` file. Roles include `admin`, `read_state`, and
+  `submit_tx`. Use `rpp-wallet rbac lint` to validate the file.
+* **Legacy compatibility** – Leave both flags false to retain Phase 3 behaviour. Clients must
+  negotiate TLS even when mTLS is disabled because the server certificate is still loaded.
+* **Build flag** – The node binary now ships the TLS stack behind the `rpp-chain` feature
+  `wallet_rpc_mtls`. Enable it (`cargo build -p rpp-chain --features wallet_rpc_mtls`) when you
+  need wallet RPC mTLS.
+
+#### Certificate Management
+
+* Maintain an offline CA that issues short-lived certificates (30–90 days).
+* Automate rotation with a cron job that calls `rpp-wallet cert renew` and reloads the
+  runtime.
+* Store private keys with `0600` permissions and rotate immediately after suspected
+  compromise.
+
+#### RPC Troubleshooting
+
+* **Handshake failures** – Inspect the wallet log for `tls::Error`. Mismatched CA chains or
+  expired certificates are the most common cause.
+* **Unauthorized responses** – Verify the client certificate fingerprint is bound to the
+  correct roles and that `wallet.auth.enabled` is not conflicting with RBAC policies.
+
+### Hardware Integration
+
+The wallet can delegate signing to hardware devices, such as Ledger or FIDO-based HSMs.
+
+* **Transport** – `wallet.hw.transport` supports `hid`, `usb`, and `tcp`. HID is the safest
+  default because it requires direct device access.
+* **Device selector** – Set `wallet.hw.device_selector` to a vendor/product ID pair (e.g.
+  `"2c97:4018"`) or a device serial. Leave null to prompt during CLI usage.
+* **Fallback** – Keep `wallet.hw.fallback_to_software = true` so unattended jobs can still
+  sign with the software key if the hardware device disconnects. For high-assurance
+  environments, set to false and monitor for `HardwareFallback` events.
+
+#### Hardware Troubleshooting
+
+* **Device not detected** – Confirm OS-level permissions allow HID access. On Linux, install
+  the provided udev rules and replug the device.
+* **Stalled signing** – Ensure the hardware firmware version meets the minimum specified in
+  release notes. Ledger devices require blind signing to be enabled for PSBT flows.
+
+### Security Considerations
+
+* Enforce strong passphrases and track custody via dual control logs.
+* Rotate certificates and keys on a fixed cadence; never reuse TLS private keys across
+  environments.
+* Harden the host OS with full disk encryption and ensure backups inherit the same controls.
+* Audit RBAC bindings quarterly and expire unused roles.
+
 ## Migration Guidance
 
 1. **Schema readiness** – Ensure `WalletStore::schema_version()` returns at least 4 after
@@ -204,14 +231,6 @@ configurations.
    considerations listed in this guide and follow the [Wallet Operator Runbook](./wallet_operator_runbook.md)
    so each migration captures acceptance evidence alongside the schema/config diffs.
 
-## Security Considerations
-
-* Enforce strong passphrases and track custody via dual control logs.
-* Rotate certificates and keys on a fixed cadence; never reuse TLS private keys across
-  environments.
-* Harden the host OS with full disk encryption and ensure backups inherit the same controls.
-* Audit RBAC bindings quarterly and expire unused roles.
-
 ## Operator Checklist
 
 * [ ] Apply database migrations and verify schema version 4.
@@ -220,3 +239,8 @@ configurations.
 * [ ] Pilot backup exports and test restore drills quarterly.
 * [ ] Decide on watch-only deployments and configure xpub distribution.
 * [ ] Integrate multisig hooks and hardware devices in staging before production rollout.
+
+---
+
+> **Phase navigation:** Previous phase: [Wallet Phase 3 – GUI Guide](wallet_phase3_gui.md) · Next phase:
+> [Wallet Operator Runbook](wallet_operator_runbook.md) · [Wallet documentation index](README.md#wallet-documentation-index)
