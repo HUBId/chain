@@ -20,11 +20,9 @@ use crate::vendor::protocols::request_response::{
     ResponseChannel as RequestResponseChannel,
 };
 #[cfg(feature = "request-response")]
-use crate::vendor::swarm::behaviour::ToSwarm;
+use crate::vendor::swarm::behaviour::{FromSwarm, ToSwarm};
 #[cfg(feature = "request-response")]
-use crate::vendor::swarm::{
-    ConnectionDenied, ConnectionHandler, ConnectionId, FromSwarm, NetworkBehaviour,
-};
+use crate::vendor::swarm::{ConnectionDenied, ConnectionHandler, ConnectionId, NetworkBehaviour};
 
 #[cfg(all(feature = "metrics", feature = "request-response"))]
 use prometheus_client::metrics::counter::Counter;
@@ -1283,7 +1281,7 @@ impl<P: SnapshotProvider> NetworkBehaviour for SnapshotsBehaviour<P> {
         )
     }
 
-    fn on_swarm_event(&mut self, event: FromSwarm<'_, Self::ConnectionHandler>) {
+    fn on_swarm_event(&mut self, event: FromSwarm<'_>) {
         self.inner.on_swarm_event(event);
     }
 

@@ -108,7 +108,7 @@ use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HAND
 use crate::identity::NodeIdentity;
 #[cfg(feature = "metrics")]
 use crate::metrics::AdmissionMetrics;
-use crate::peerstore::{Peerstore, PeerstoreError};
+use crate::peerstore::{AllowlistedPeer, Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
 use crate::pipeline::{
     NetworkLightClientUpdate, NetworkStateSyncPlan, PipelineError, SnapshotChunk,
