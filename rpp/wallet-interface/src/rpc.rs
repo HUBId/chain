@@ -202,10 +202,20 @@ pub struct PendingLockDto {
     #[serde(default)]
     /// Proof generation duration in milliseconds.
     pub prove_duration_ms: u64,
+    #[serde(default)]
+    /// Whether the wallet required a proof when the lock was recorded.
+    pub proof_required: bool,
+    #[serde(default)]
+    /// Whether a proof was present when the lock was recorded.
+    pub proof_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     /// Size of the generated proof, if available.
     pub proof_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    /// Hash of the generated proof, if available.
+    pub proof_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -356,7 +366,7 @@ pub struct MultisigDraftMetadataDto {
     /// Scope defining threshold/participants.
     pub scope: MultisigScopeDto,
     /// Cosigners included in the draft.
-   pub cosigners: Vec<CosignerDto>,
+    pub cosigners: Vec<CosignerDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

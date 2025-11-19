@@ -51,7 +51,7 @@ use crate::backup::{
 };
 #[cfg(feature = "wallet_zsi")]
 use crate::db::StoredZsiArtifact;
-use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
+use crate::db::{PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProveResult;
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError,
@@ -85,7 +85,23 @@ use zeroize::Zeroizing;
 struct DraftState {
     draft: DraftTransaction,
     metadata: BuildMetadata,
-    prover_result: Option<ProveResult>,
+    prover_result: Option<SignedDraft>,
+}
+
+#[derive(Debug)]
+struct SignedDraft {
+    output: ProveResult,
+    metadata: PendingLockMetadata,
+}
+
+impl SignedDraft {
+    fn new(output: ProveResult, metadata: PendingLockMetadata) -> Self {
+        Self { output, metadata }
+    }
+
+    fn proof_present(&self) -> bool {
+        self.metadata.proof_present
+    }
 }
 
 pub trait SyncHandle: Send + Sync {
@@ -1155,7 +1171,7 @@ impl WalletRpcRouter {
         let state = drafts
             .get_mut(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
-        let output = self.wallet.sign_and_prove(&state.draft)?;
+        let (output, meta) = self.wallet.sign_and_prove(&state.draft)?;
         let identity = self.wallet.prover_identity();
         let proof_size = output.proof().map(|proof| proof.as_ref().len());
         let locks = self.pending_lock_dtos()?;
@@ -1168,7 +1184,20 @@ impl WalletRpcRouter {
             duration_ms: output.duration().as_millis() as u64,
             locks,
         };
-        state.prover_result = Some(output);
+        let proof_required = self.wallet.prover_config().require_proof;
+        let proof_present = output.proof().is_some();
+        let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
+        let proof_hash = meta.proof_hash.map(hex_encode);
+        let metadata = PendingLockMetadata::new(
+            meta.backend.to_string(),
+            meta.witness_bytes as u64,
+            meta.duration_ms,
+            proof_required,
+            proof_present,
+            proof_bytes,
+            proof_hash,
+        );
+        state.prover_result = Some(SignedDraft::new(output, metadata));
         drop(drafts);
         to_value(response)
     }
@@ -1181,21 +1210,31 @@ impl WalletRpcRouter {
         let state = drafts
             .get(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
-        if state.prover_result.is_none() {
+        let signed = state
+            .prover_result
+            .as_ref()
+            .ok_or_else(|| RouterError::DraftUnsigned {
+                draft_id: draft_id.clone(),
+                proof_required: self.wallet.prover_config().require_proof,
+            })?;
+        let proof_required = self.wallet.prover_config().require_proof;
+        if proof_required && !signed.proof_present() {
+            self.release_draft_locks(&state.draft)?;
             return Err(RouterError::DraftUnsigned {
                 draft_id,
-                proof_required: self.wallet.prover_config().require_proof,
+                proof_required,
             });
         }
-        if let Some(output) = &state.prover_result {
-            if output.proof().is_none()
-                && !self.wallet.prover_config().allow_broadcast_without_proof
-            {
-                return Err(RouterError::DraftUnsigned {
-                    draft_id,
-                    proof_required: true,
-                });
-            }
+        let locks = self.wallet_call(self.wallet.locks_for_draft(&state.draft))?;
+        let expected_inputs = state.draft.inputs.len();
+        let stale = (expected_inputs > 0 && locks.len() != expected_inputs)
+            || locks.iter().any(|lock| lock.metadata != signed.metadata);
+        if stale {
+            self.release_draft_locks(&state.draft)?;
+            return Err(RouterError::DraftUnsigned {
+                draft_id,
+                proof_required,
+            });
         }
         self.wallet_call(self.wallet.broadcast(&state.draft))?;
         let locks = self.pending_lock_dtos()?;
@@ -1294,6 +1333,13 @@ impl WalletRpcRouter {
     fn pending_lock_dtos(&self) -> Result<Vec<PendingLockDto>, RouterError> {
         let locks = self.wallet.pending_locks()?;
         Ok(locks.into_iter().map(PendingLockDto::from).collect())
+    }
+
+    fn release_draft_locks(&self, draft: &DraftTransaction) -> Result<(), RouterError> {
+        self.wallet
+            .release_locks_for_draft(draft)
+            .map(|_| ())
+            .map_err(RouterError::from)
     }
 }
 
@@ -1970,7 +2016,10 @@ impl From<PendingLock> for PendingLockDto {
             backend: lock.metadata.backend,
             witness_bytes: lock.metadata.witness_bytes,
             prove_duration_ms: lock.metadata.prove_duration_ms,
+            proof_required: lock.metadata.proof_required,
+            proof_present: lock.metadata.proof_present,
             proof_bytes: lock.metadata.proof_bytes,
+            proof_hash: lock.metadata.proof_hash,
         }
     }
 }
@@ -2043,8 +2092,8 @@ mod tests {
     use crate::config::wallet::{
         WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
     };
-    use crate::db::UtxoOutpoint;
     use crate::db::WalletStore;
+    use crate::db::{PendingLock, PendingLockMetadata, UtxoOutpoint, UtxoRecord};
     #[cfg(feature = "wallet_hw")]
     use crate::engine::DerivationPath;
     use crate::engine::{DraftInput, DraftOutput, SpendModel};
@@ -2056,7 +2105,9 @@ mod tests {
         NodeRejectionHint, StubNodeClient,
     };
     use serde_json::json;
+    use std::borrow::Cow;
     use std::sync::Mutex;
+    use std::time::Instant;
     use tempfile::tempdir;
 
     fn router_fixture(
@@ -2089,6 +2140,19 @@ mod tests {
             store,
             dir,
         )
+    }
+
+    fn seed_store_with_utxo(store: &Arc<WalletStore>, value: u128) {
+        let mut batch = store.batch().expect("batch");
+        let utxo = UtxoRecord::new(
+            UtxoOutpoint::new([21u8; 32], 0),
+            "wallet.utxo".into(),
+            value,
+            Cow::Owned(Vec::new()),
+            Some(1),
+        );
+        batch.put_utxo(&utxo).expect("put utxo");
+        batch.commit().expect("commit utxo");
     }
 
     fn build_router(sync: Option<Arc<dyn SyncHandle>>) -> WalletRpcRouter {
@@ -2538,6 +2602,7 @@ mod tests {
     fn broadcast_rejection_exposes_phase2_code() {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        seed_store_with_utxo(&store, 25_000);
         let keystore = dir.path().join("keystore.toml");
         let backup = dir.path().join("backups");
         let wallet = Wallet::new(
@@ -2557,37 +2622,12 @@ mod tests {
         let sync = Arc::new(RecordingSync::default());
         let router =
             WalletRpcRouter::new(Arc::new(wallet), Some(sync.clone()), noop_runtime_metrics());
-
-        let draft = DraftTransaction {
-            inputs: vec![DraftInput {
-                outpoint: UtxoOutpoint::new([1u8; 32], 0),
-                value: 10_000,
-                confirmations: 1,
-            }],
-            outputs: vec![DraftOutput::new("addr", 9_000, false)],
-            fee_rate: 1,
-            fee: 1_000,
-            spend_model: SpendModel::Exact { amount: 9_000 },
-        };
-        let draft_id = "deadbeef".to_string();
-        {
-            let mut drafts = router.drafts.lock().unwrap();
-            drafts.insert(
-                draft_id.clone(),
-                DraftState {
-                    draft: draft.clone(),
-                    metadata: BuildMetadata {
-                        selection: None,
-                        change_outputs: 0,
-                        change_folded_into_fee: false,
-                        estimated_vbytes: 0,
-                        multisig: None,
-                    },
-                    prover_result: Some(ProveResult::new(None, 0, Instant::now(), Instant::now())),
-                },
-            );
-        }
-
+        let bundle = router
+            .wallet
+            .create_draft("addr".into(), 9_000, None)
+            .expect("draft");
+        let draft_id = router.store_draft(bundle).expect("draft id");
+        router.sign_draft(draft_id.clone()).expect("signed");
         let request = JsonRpcRequest {
             jsonrpc: Some(JSONRPC_VERSION.to_string()),
             id: Some(json!(1)),
@@ -2617,6 +2657,69 @@ mod tests {
             vec!["Increase the fee rate to at least 25 sats/vB and retry.".to_string()]
         );
         let _persist = dir.into_path();
+    }
+
+    #[test]
+    fn broadcast_rejects_drafts_missing_required_proofs() {
+        let router = build_router(None);
+        let store = router.wallet.store();
+        seed_store_with_utxo(&store, 30_000);
+
+        let draft = DraftTransaction {
+            inputs: vec![DraftInput {
+                outpoint: UtxoOutpoint::new([4u8; 32], 0),
+                value: 15_000,
+                confirmations: 1,
+            }],
+            outputs: vec![DraftOutput::new("addr", 14_000, false)],
+            fee_rate: 1,
+            fee: 1_000,
+            spend_model: SpendModel::Exact { amount: 14_000 },
+        };
+        let txid = Wallet::draft_lock_id(&draft);
+        let metadata = PendingLockMetadata::new("instant".into(), 0, 0, true, false, None, None);
+        let lock = PendingLock::new(draft.inputs[0].outpoint.clone(), 1, Some(txid))
+            .with_metadata(metadata.clone());
+        let mut batch = store.batch().expect("batch");
+        batch.put_pending_lock(&lock).expect("pending lock");
+        batch.commit().expect("commit lock");
+
+        let draft_id = "proofless".to_string();
+        {
+            let mut drafts = router.drafts.lock().unwrap();
+            drafts.insert(
+                draft_id.clone(),
+                DraftState {
+                    draft: draft.clone(),
+                    metadata: BuildMetadata {
+                        selection: None,
+                        change_outputs: 0,
+                        change_folded_into_fee: false,
+                        estimated_vbytes: 0,
+                        multisig: None,
+                    },
+                    prover_result: Some(SignedDraft::new(
+                        ProveResult::new(None, 0, Instant::now(), Instant::now()),
+                        metadata,
+                    )),
+                },
+            );
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "broadcast".to_string(),
+            params: Some(json!({ "draft_id": draft_id })),
+        };
+        let response = router.handle(request);
+        let error = response.error.expect("error");
+        assert_eq!(error.code, WalletRpcErrorCode::DraftUnsigned.as_i32());
+        assert!(router
+            .wallet
+            .pending_locks()
+            .expect("pending locks")
+            .is_empty());
     }
 
     #[cfg(feature = "wallet_hw")]
