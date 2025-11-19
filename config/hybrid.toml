@@ -101,6 +101,9 @@ listen = "127.0.0.1:9090"
 allowed_origin = null
 requests_per_minute = 600 # hybrid override: align wallet request budget with node RPC
 
+[wallet.hybrid]
+enabled = true
+
 [wallet.auth]
 enabled = false
 token = null

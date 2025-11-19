@@ -95,9 +95,8 @@ impl RuntimeMode {
     /// Default configuration path for the wallet runtime when available.
     pub const fn default_wallet_config_path(self) -> Option<&'static str> {
         match self {
-            RuntimeMode::Wallet | RuntimeMode::Hybrid | RuntimeMode::Validator => {
-                Some("config/wallet.toml")
-            }
+            RuntimeMode::Hybrid => Some("config/hybrid.toml"),
+            RuntimeMode::Wallet | RuntimeMode::Validator => Some("config/wallet.toml"),
             RuntimeMode::Node => None,
         }
     }
@@ -445,6 +444,14 @@ impl Default for WalletRpcConfig {
 
 fn default_wallet_rpc_listen() -> SocketAddr {
     "127.0.0.1:9090".parse().expect("valid socket addr")
+}
+
+/// Hybrid runtime preferences for the wallet runtime.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletHybridConfig {
+    /// Enable the hybrid runtime when launching the wallet.
+    pub enabled: bool,
 }
 
 /// TLS configuration for the wallet RPC server.
@@ -1188,6 +1195,8 @@ impl Default for WalletSecurityConfig {
 pub struct WalletServiceConfig {
     /// RPC server configuration.
     pub rpc: WalletRpcConfig,
+    /// Hybrid runtime preferences.
+    pub hybrid: WalletHybridConfig,
     /// Security configuration for RPC requests.
     pub security: WalletSecurityConfig,
     /// Audit logging controls.
@@ -1218,6 +1227,7 @@ impl Default for WalletServiceConfig {
     fn default() -> Self {
         Self {
             rpc: WalletRpcConfig::default(),
+            hybrid: WalletHybridConfig::default(),
             security: WalletSecurityConfig::default(),
             audit: WalletAuditConfig::default(),
             auth: WalletAuthConfig::default(),
@@ -1285,6 +1295,7 @@ impl WalletConfig {
     }
 
     fn apply_hybrid_defaults(&mut self) {
+        self.wallet.hybrid.enabled = true;
         if self.wallet.rpc.requests_per_minute.is_none() {
             self.wallet.rpc.requests_per_minute = Some(600);
         }

@@ -68,6 +68,11 @@ pub struct RuntimeOptions {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
+    /// Optional path to a combined hybrid configuration file loaded before starting the runtime.
+    /// Falls back to `--config` when unspecified.
+    #[arg(long, value_name = "PATH")]
+    pub hybrid_config: Option<PathBuf>,
+
     /// Optional path to a wallet configuration file loaded before starting the runtime.
     /// The runtime does not watch for changes; restart after editing the file.
     #[arg(long, value_name = "PATH")]
@@ -127,12 +132,17 @@ pub struct RuntimeOptions {
 
     #[command(flatten)]
     pub pruning: PruningCliOverrides,
+
+    /// Launch the wallet alongside an embedded node using the hybrid runtime profile.
+    #[arg(long = "with-node", action = ArgAction::SetTrue)]
+    pub with_node: bool,
 }
 
 impl RuntimeOptions {
     pub fn into_bootstrap_options(self, mode: RuntimeMode) -> BootstrapOptions {
         let RuntimeOptions {
             config,
+            hybrid_config,
             wallet_config,
             data_dir,
             rpc_listen,
@@ -147,10 +157,16 @@ impl RuntimeOptions {
             write_config,
             storage_ring_size,
             pruning,
+            with_node: _,
         } = self;
 
+        let hybrid_config = hybrid_config.or(config.clone());
         let node_config = if mode.includes_node() {
-            config.clone()
+            if mode == RuntimeMode::Hybrid {
+                hybrid_config.clone()
+            } else {
+                config.clone()
+            }
         } else {
             None
         };
@@ -158,6 +174,7 @@ impl RuntimeOptions {
         let wallet_config = if mode.includes_wallet() {
             match mode {
                 RuntimeMode::Wallet => wallet_config.or(config),
+                RuntimeMode::Hybrid => wallet_config.or(hybrid_config),
                 _ => wallet_config,
             }
         } else {
