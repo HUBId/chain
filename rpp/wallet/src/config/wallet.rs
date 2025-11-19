@@ -33,6 +33,7 @@ pub struct WalletConfig {
     pub zsi: WalletZsiConfig,
     pub gui: WalletGuiConfig,
     pub hw: WalletHwConfig,
+    pub telemetry: WalletTelemetryConfig,
 }
 
 impl Default for WalletConfig {
@@ -46,6 +47,7 @@ impl Default for WalletConfig {
             zsi: WalletZsiConfig::default(),
             gui: WalletGuiConfig::default(),
             hw: WalletHwConfig::default(),
+            telemetry: WalletTelemetryConfig::default(),
         }
     }
 }
@@ -350,6 +352,28 @@ impl Default for WalletGuiConfig {
             confirm_clipboard: true,
             telemetry_opt_in: false,
             security_controls_enabled: cfg!(feature = "wallet_rpc_mtls"),
+        }
+    }
+}
+
+/// Configure wallet telemetry (crash reporting, endpoints, salts).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletTelemetryConfig {
+    /// Enable crash reporting and uploader tasks.
+    pub crash_reports: bool,
+    /// HTTPS endpoint that receives crash payloads.
+    pub endpoint: String,
+    /// Salt used when hashing local machine identifiers.
+    pub machine_id_salt: String,
+}
+
+impl Default for WalletTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            crash_reports: false,
+            endpoint: String::new(),
+            machine_id_salt: String::new(),
         }
     }
 }

@@ -1,8 +1,10 @@
 use iced::widget::{button, checkbox, column, container, horizontal_rule, row, text, text_input};
-use iced::{Alignment, Command, Element, Length};
+use iced::{Alignment, Color, Command, Element, Length};
+use std::path::PathBuf;
 use zeroize::Zeroize;
 
 use crate::config::WalletConfig;
+use crate::crash_reporting::{list_reports, CrashReportEnvelope};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
@@ -287,6 +289,7 @@ enum Modal {
     BackupImport(BackupImportForm),
     WatchOnlyEnable(WatchOnlyForm),
     WatchOnlyDisable,
+    CrashReports(Vec<CrashReportEnvelope>),
     #[cfg(feature = "wallet_rpc_mtls")]
     SecurityAssign(RbacAssignmentForm),
     #[cfg(feature = "wallet_rpc_mtls")]
@@ -338,6 +341,7 @@ pub struct State {
     #[cfg(feature = "wallet_rpc_mtls")]
     pending_security_identity: Option<String>,
     modal: Option<Modal>,
+    crash_reports_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +363,8 @@ pub enum Message {
     ShowBackupExportModal,
     ShowBackupValidateModal,
     ShowBackupImportModal,
+    ShowCrashReports,
+    CrashReportsLoaded(Result<Vec<CrashReportEnvelope>, String>),
     DismissModal,
     PassphraseChanged(PassphraseField, String),
     BackupExportMetadataOnlyChanged(bool),
@@ -501,6 +507,13 @@ impl State {
         self.keystore_locked = false;
     }
 
+    fn crash_spool_dir(&self) -> PathBuf {
+        self.config
+            .as_ref()
+            .map(|config| config.engine.data_dir.join("crash_reports"))
+            .unwrap_or_else(|| PathBuf::from("./data/wallet/crash_reports"))
+    }
+
     pub fn activate(&mut self, client: WalletRpcClient) -> Command<Message> {
         let mut commands: Vec<Command<Message>> = Vec::new();
         if self.policy.should_refresh() {
@@ -621,6 +634,22 @@ impl State {
             Message::ShowBackupImportModal => {
                 if !self.keystore_locked {
                     self.modal = Some(Modal::BackupImport(BackupImportForm::default()));
+                }
+                Command::none()
+            }
+            Message::ShowCrashReports => {
+                let spool_dir = self.crash_spool_dir();
+                Command::perform(load_crash_reports(spool_dir), Message::CrashReportsLoaded)
+            }
+            Message::CrashReportsLoaded(result) => {
+                match result {
+                    Ok(reports) => {
+                        self.modal = Some(Modal::CrashReports(reports));
+                        self.crash_reports_error = None;
+                    }
+                    Err(err) => {
+                        self.crash_reports_error = Some(err);
+                    }
                 }
                 Command::none()
             }
@@ -907,6 +936,7 @@ impl State {
                 Modal::BackupImport(form) => import_modal(form),
                 Modal::WatchOnlyEnable(form) => watch_only_enable_modal(form),
                 Modal::WatchOnlyDisable => watch_only_disable_modal(),
+                Modal::CrashReports(reports) => crash_reports_modal(reports),
                 #[cfg(feature = "wallet_rpc_mtls")]
                 Modal::SecurityAssign(form) => security_assign_modal(form),
                 #[cfg(feature = "wallet_rpc_mtls")]
@@ -1814,7 +1844,14 @@ impl State {
                     Message::ToggleTelemetry(enabled)
                 }
             });
-        column = column.push(telemetry_toggle);
+        let crash_reports_button = button("View crash reports").on_press(Message::ShowCrashReports);
+        column = column.push(row![telemetry_toggle, crash_reports_button].spacing(12));
+
+        if let Some(error) = &self.crash_reports_error {
+            column = column.push(
+                text(error).style(iced::theme::Text::Color(Color::from_rgb8(0xD9, 0x53, 0x4F))),
+            );
+        }
 
         if let Some(error) = &self.telemetry_error {
             column = column.push(text(format!("Telemetry update failed: {error}")));
@@ -2170,6 +2207,35 @@ fn theme_radio<'a>(
         .into()
 }
 
+fn crash_reports_modal(reports: &[CrashReportEnvelope]) -> iced::widget::Column<'_, Message> {
+    let mut column = column![text("Crash reports").size(24)].spacing(12);
+    if reports.is_empty() {
+        column = column.push(text("No crash reports recorded."));
+    } else {
+        for report in reports {
+            let entry = column![
+                text(format!("ID: {}", report.id)),
+                text(format!("Created: {}", report.created_at)),
+                text(format!(
+                    "Kind: {:?} signal={:?}",
+                    report.kind, report.signal
+                )),
+                text(format!(
+                    "Acknowledged: {}",
+                    format_bool(report.acknowledged)
+                )),
+            ]
+            .spacing(4);
+            column = column.push(
+                container(entry)
+                    .padding(8)
+                    .style(iced::theme::Container::Box),
+            );
+        }
+    }
+    column.push(row![button(text("Close")).on_press(Message::DismissModal)].spacing(12))
+}
+
 fn passphrase_modal<'a>(form: &'a PassphraseForm) -> iced::widget::Column<'a, Message> {
     let mut content = column![text("Update keystore passphrase").size(20)]
         .spacing(12)
@@ -2485,6 +2551,19 @@ fn format_rpc_error(error: &RpcCallError) -> String {
             format!("Request timed out after {} seconds.", duration.as_secs())
         }
         RpcCallError::Client(inner) => inner.to_string(),
+    }
+}
+
+fn load_crash_reports(
+    path: PathBuf,
+) -> impl std::future::Future<Output = Result<Vec<CrashReportEnvelope>, String>> {
+    async move {
+        list_reports(&path).map_err(|err| {
+            format!(
+                "failed to read crash reports from {}: {err}",
+                path.display()
+            )
+        })
     }
 }
 

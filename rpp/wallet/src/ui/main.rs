@@ -8,13 +8,18 @@ fn main() {
 
 #[cfg(feature = "wallet_gui")]
 fn main() -> iced::Result {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use clap::Parser;
 
+    use rpp_wallet::crash_reporting::{
+        self, CrashReporterConfig, CrashReporterHandle, DEFAULT_SPOOL_BYTES,
+    };
     use rpp_wallet::rpc::client::WalletRpcClient;
+    use rpp_wallet::runtime::config::WalletConfigExt;
     use rpp_wallet::ui::{self, WalletGuiFlags};
+    use rpp_wallet_interface::runtime_config::{RuntimeMode, WalletConfig as RuntimeWalletConfig};
 
     const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:9090";
 
@@ -39,6 +44,7 @@ fn main() -> iced::Result {
     }
 
     let options = Options::parse();
+    let _crash_handle = configure_crash_reporting(options.config.as_deref());
     let client = match WalletRpcClient::from_endpoint(
         &options.endpoint,
         options.auth_token.clone(),
@@ -59,4 +65,24 @@ fn main() -> iced::Result {
     };
 
     ui::launch(flags)
+}
+
+#[cfg(feature = "wallet_gui")]
+fn configure_crash_reporting(config_path: Option<&Path>) -> Option<CrashReporterHandle> {
+    let path = config_path.map(PathBuf::from).or_else(|| {
+        RuntimeMode::Wallet
+            .default_wallet_config_path()
+            .map(PathBuf::from)
+    })?;
+    let runtime_config = RuntimeWalletConfig::load(&path).unwrap_or_default();
+    let telemetry = runtime_config.wallet.telemetry;
+    let spool_dir = runtime_config.wallet.engine.data_dir.join("crash_reports");
+    let reporter_config = CrashReporterConfig {
+        enabled: telemetry.crash_reports,
+        endpoint: telemetry.endpoint().map(|value| value.to_string()),
+        machine_id_salt: telemetry.machine_id_salt.clone(),
+        spool_dir,
+        spool_max_bytes: DEFAULT_SPOOL_BYTES,
+    };
+    crash_reporting::install_global(reporter_config).ok()
 }

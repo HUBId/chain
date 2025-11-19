@@ -85,6 +85,11 @@ theme = "dark"
 auto_lock_secs = 300
 clipboard_auto_clear = true
 
+[wallet.telemetry]
+crash_reports = false
+endpoint = ""
+machine_id_salt = ""
+
 # Encrypted backup and recovery controls. Automatic exports stay disabled by default
 # and exports land in an operator-managed directory. Rotate passphrases as described in
 # docs/wallet_phase4_advanced.md#backuprecovery-formats-and-rotation.

@@ -252,4 +252,5 @@ base64ct = { version = "1.6.0", path = "vendor/base64ct/1.6.0" }
 hex-literal = { version = "1.0.0", path = "vendor/hex-literal/1.0.0" }
 fastrace = { version = "0.7.14", path = "vendor/fastrace/0.7.14" }
 fastrace-macro = { version = "0.7.14", path = "vendor/fastrace-macro/0.7.14" }
+home = { version = "0.5.5", path = "vendor/home/0.5.5" }
 
