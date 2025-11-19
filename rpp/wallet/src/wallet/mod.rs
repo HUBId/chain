@@ -1283,6 +1283,38 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct DisabledProofProver;
+
+    impl WalletProver for DisabledProofProver {
+        fn identity(&self) -> ProverIdentity {
+            ProverIdentity::new("disabled", true)
+        }
+
+        fn prepare_witness(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+        ) -> Result<WitnessPlan, ProverError> {
+            Err(ProverError::Unsupported(BACKEND_DISABLED_REASON))
+        }
+
+        fn prove(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            _plan: WitnessPlan,
+        ) -> Result<ProveResult, ProverError> {
+            Err(ProverError::Unsupported(BACKEND_DISABLED_REASON))
+        }
+
+        fn attest_metadata(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            _result: &ProveResult,
+        ) -> Result<ProverMeta, ProverError> {
+            Err(ProverError::Unsupported(BACKEND_DISABLED_REASON))
+        }
+    }
+
     fn seed_store_with_utxo(store: &Arc<WalletStore>, value: u128) {
         let mut batch = store.batch().expect("wallet batch");
         let utxo = UtxoRecord::new(
@@ -1509,6 +1541,38 @@ mod tests {
                 && lock.metadata.proof_bytes == proof_bytes
                 && lock.metadata.proof_hash == proof_hash
         }));
+        drop(tempdir);
+    }
+
+    #[test]
+    fn disabled_backend_with_required_proof_releases_locks() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 48_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let prover: Arc<dyn WalletProver> = Arc::new(DisabledProofProver::default());
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            prover,
+            Arc::clone(&node_client),
+        );
+        wallet.prover_config.require_proof = true;
+
+        let draft = make_draft(&wallet, 12_000);
+        assert!(!wallet.pending_locks().expect("locks before").is_empty());
+        let err = wallet
+            .sign_and_prove(&draft)
+            .expect_err("disabled backend rejects");
+        assert!(matches!(err, WalletError::ProverBackendDisabled));
+        assert!(wallet.pending_locks().expect("locks released").is_empty());
+
         drop(tempdir);
     }
 
