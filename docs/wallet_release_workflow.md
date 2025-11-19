@@ -2,6 +2,8 @@
 
 This workflow stitches together the wallet bundle and installer builders so
 operators can produce reproducible artifacts across Linux, Windows, and macOS.
+Pair it with the [wallet release checklist](release_checklist.md) to ensure the
+manual smoke tests and governance gates are captured alongside the artifacts.
 
 ## Prerequisites
 
@@ -25,6 +27,22 @@ operators can produce reproducible artifacts across Linux, Windows, and macOS.
    pattern and contains the README, LICENSE, and INSTALL docs plus the
    platform-specific hooks.
 4. Checksums are generated next to every artifact (`.sha256` files).
+
+## SBOM, checksums, and provenance
+
+The GitHub release workflow extends these builders by generating and publishing
+additional wallet-specific metadata:
+
+1. `cargo cyclonedx` runs for the CLI (`rpp-wallet`) and GUI (`rpp-wallet-gui`)
+   crates and writes SBOMs under `dist/artifacts/wallet/sbom-*.json`.
+2. `scripts/checksums.sh` produces `dist/artifacts/wallet/SHA256SUMS.txt` covering
+   the bundle, installers, manifests, and SBOMs. The workflow signs the manifest
+   with cosign (`SHA256SUMS.txt.sig`/`.pem`) before uploading artifacts.
+3. Each artifact is paired with provenance metadata produced by
+   `scripts/provenance_attest.sh`, resulting in `.intoto.jsonl`, `.sig`, and `.pem`
+   files that capture the builder ID and hash. These statements are attached to
+   every release alongside the artifacts so auditors can verify the supply-chain
+   evidence.【F:.github/workflows/release.yml†L200-L350】【F:.github/workflows/release.yml†L350-L470】
 
 The installers depend on the common wallet bundle code path so the binaries,
 configs, and manifest stay consistent regardless of the OS/arch matrix.

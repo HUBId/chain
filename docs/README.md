@@ -29,6 +29,7 @@ frequently consulted references.
 - [Operator checklist](checklists/operator.md)
 - [Checklist: Phase-1 Guard Verification](runbooks/startup.md#phase-1-guard-verification)
 - [Deployment staged rollout playbook](deployment/staged_rollout.md)
+- [Wallet release checklist](release_checklist.md)
 
 ## Runbooks
 
@@ -60,6 +61,7 @@ frequently consulted references.
 - [Key management](KEY_MANAGEMENT.md)
 - [API security](API_SECURITY.md)
 - [Governance](GOVERNANCE.md)
+- [Wallet advisory template](security/wallet_advisory_template.md)
 
 ## Wallet documentation index
 

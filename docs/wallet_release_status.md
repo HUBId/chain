@@ -14,6 +14,17 @@ below.
 | Phase 2 – Policies & prover | ✅ Complete. Policy tunables, fee estimator behaviour, rescans, and prover configuration are locked down for spend readiness. | [Wallet Phase 2 guide](wallet_phase2_policies_prover.md) enumerates the policy scopes, prover modes, and troubleshooting workflows.【F:docs/wallet_phase2_policies_prover.md†L1-L120】 |
 | Phase 3 – GUI | ✅ Complete. iced-based MVU GUI, tab flows, telemetry, and GUI-specific build/test steps ship alongside the runtime. | [Wallet Phase 3 guide](wallet_phase3_gui.md) documents the UI architecture, feature toggles, and test flows layered on the Phase 2 runtime.【F:docs/wallet_phase3_gui.md†L1-L120】 |
 | Phase 4 – Advanced operations | ✅ Complete. Backup rotation, watch-only projections, multisig hooks, ZSI workflows, mTLS/RBAC security, and hardware bridges are available. | [Wallet Phase 4 guide](wallet_phase4_advanced.md) details the configuration, migrations, and troubleshooting steps for each advanced feature.【F:docs/wallet_phase4_advanced.md†L1-L208】 |
+| Phase 5 – Long-term service | 🚧 In progress. Release governance, SBOM/provenance requirements, SemVer tiering, and GHSA coordination now ship as part of every wallet cut. | [Wallet release checklist](release_checklist.md) and the [wallet support policy](wallet_support_policy.md) define the deliverables and timelines for the post-Phase 4 program.【F:docs/release_checklist.md†L1-L62】【F:docs/wallet_support_policy.md†L1-L120】 |
+
+## Phase 5 – Long-term service scope
+
+Phase 5 formalises the ongoing maintenance expectations for the wallet. The
+release workflow emits SBOMs, checksums, signatures, and provenance metadata for
+every artifact, while the [release checklist](release_checklist.md) and [wallet
+support policy](wallet_support_policy.md) enforce SemVer tiering and EOL
+tracking before a tag is promoted. Operators should reference the new
+[wallet advisory template](security/wallet_advisory_template.md) when GHSA
+coordination is required.【F:docs/release_checklist.md†L1-L62】【F:docs/wallet_support_policy.md†L1-L120】【F:docs/security/wallet_advisory_template.md†L1-L80】
 
 ## Delivered capabilities
 
@@ -99,8 +110,31 @@ links/timestamps to the change record:
    followed by the `wallet-bundle`/`wallet-installer` xtasks to produce the
    installers for every supported triple. Follow the
    [wallet release workflow](wallet_release_workflow.md) so the canonical naming
-   scheme, embedded docs, and per-artifact checksums are preserved when uploading
-   the release payloads.【F:scripts/build_release.sh†L12-L161】【F:docs/wallet_release_workflow.md†L1-L33】
+   scheme, embedded docs, per-artifact checksums, SBOMs, and provenance statements
+   are preserved when uploading the release payloads. Capture the signed
+   `SHA256SUMS.txt` plus `*.intoto.jsonl` evidence referenced in the [release
+   checklist](release_checklist.md).【F:scripts/build_release.sh†L12-L320】【F:docs/wallet_release_workflow.md†L1-L48】【F:docs/release_checklist.md†L34-L62】
+
+6. **Documentation & support sign-off** – Confirm the release notes, install
+   guides, and [wallet release status](wallet_release_status.md) capture the final
+   SemVer tier and support window. Point reviewers to the [wallet support
+   policy](wallet_support_policy.md) and file GHSA drafts via the new security
+   template when needed.【F:docs/wallet_support_policy.md†L1-L120】【F:docs/security/wallet_advisory_template.md†L1-L80】
+
+## SemVer and support expectations
+
+Wallet releases follow the SemVer and lifecycle rules documented in the [wallet
+support policy](wallet_support_policy.md). Use the matrix below to record the
+current end-of-life targets and documentation hooks for every tier:
+
+| Tier | SemVer marker | Support/EOL window | Notes |
+| --- | --- | --- | --- |
+| **Long-Term Support** | `vMAJOR.MINOR.PATCH` + `lts/MAJOR.MINOR` tag | 12 months after the LTS announcement. | Requires the signed SBOM/checksum/provenance bundle exported by `.github/workflows/release.yml` and the completed [release checklist](release_checklist.md). |
+| **Maintenance** | `vMAJOR.MINOR.PATCH` | 6 months or until the next Maintenance release supersedes it. | Document the promotion timeline in this file plus the release notes so auditors know when support transitions occur. |
+| **Experimental** | `exp/MAJOR.MINOR.PATCH` tag (in addition to the canonical tag) | Best-effort support only; no security SLA. | Use the [wallet advisory template](security/wallet_advisory_template.md) to communicate when experimental builds receive fixes outside of the standard windows. |
+
+Release managers must keep this matrix aligned with the [`wallet_support_policy.md`](wallet_support_policy.md)
+source of truth and link back to the policy in every release announcement.
 
 ## References
 

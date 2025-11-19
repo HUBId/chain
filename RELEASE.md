@@ -61,9 +61,12 @@ attestations are published alongside the release assets.
 
 A dedicated `wallet-bundle` job also builds the reproducible
 `wallet-bundle-<tag>-x86_64-unknown-linux-gnu.tar.gz` artifact by invoking
-`cargo xtask wallet-bundle` with the pinned feature set. The job uploads the
-tarball and the JSON manifest so the publish step can sign them before the
-release is created.【F:.github/workflows/release.yml†L214-L265】【F:.github/workflows/release.yml†L309-L350】
+`cargo xtask wallet-bundle` with the pinned feature set. The job now emits
+CycloneDX SBOMs for the CLI/lib/interface crates, writes
+`dist/artifacts/wallet/SHA256SUMS.txt` (plus cosign signature), and attaches
+per-artifact provenance statements before uploading the bundle, manifests, and
+metadata so the publish step can reference the signed evidence in release
+notes.【F:.github/workflows/release.yml†L214-L350】【F:.github/workflows/release.yml†L350-L420】
 
 ### Helper scripts
 

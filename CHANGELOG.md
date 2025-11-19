@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Teach `git-cliff` to enrich commits with wallet PR labels via
+  `scripts/git_cliff_wallet_labels.py` so the changelog now renders dedicated
+  wallet readiness sections keyed by label scopes.【F:cliff.toml†L1-L160】【F:scripts/git_cliff_wallet_labels.py†L1-L86】
+- Extend the wallet release pipeline with CycloneDX SBOM generation, signed
+  checksum manifests, and per-artifact provenance while adding wallet-specific
+  `cargo audit`/`cargo deny` jobs backed by a dedicated deny configuration for
+  CI supply-chain coverage.【F:.github/workflows/release.yml†L214-L360】【F:.github/workflows/ci.yml†L250-L340】【F:config/security/cargo-deny-wallet.toml†L1-L28】
 - Rebuild the Plonky3 verification path on top of `p3_uni_stark::verify`,
   reconstructing Stark configs from the verifying key, replaying challenger
   transcripts, and mapping upstream errors into backend variants with
@@ -18,6 +25,10 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Publish a wallet-specific release checklist, GHSA advisory template, Phase 5
+  readiness notes, SemVer/EOL matrix, and release workflow updates so operators
+  can tie manual smoke tests, SBOM/signature verification, and documentation
+  sign-offs to the governance process.【F:docs/release_checklist.md†L1-L62】【F:docs/security/wallet_advisory_template.md†L1-L80】【F:docs/wallet_release_status.md†L1-L210】【F:docs/wallet_release_workflow.md†L1-L48】【F:docs/README.md†L1-L60】【F:RELEASE.md†L1-L120】
 - Flag the expanded branch-protection gates in the contributor guide, testing
   strategy, and governance review checklist so everyone sees the new
   `snapshot-cli`, `observability-snapshot`, `simnet-admission`, and

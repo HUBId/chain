@@ -269,11 +269,72 @@ EOF
             libxcb1-dev \
             libegl1-mesa-dev \
             libxi-dev
+      - name: Install wallet packaging tooling
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-cyclonedx
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wallet-bundle
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.0'
       - name: Build wallet bundle
         run: cargo xtask wallet-bundle --target x86_64-unknown-linux-gnu --profile release --version "${{ env.RELEASE_TAG }}" --output dist/artifacts
+      - name: Generate wallet SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/artifacts/wallet
+          cargo cyclonedx --package rpp-wallet \
+            --no-default-features \
+            --features "runtime,prover-stwo" \
+            --format json \
+            --output dist/artifacts/wallet/sbom-rpp-wallet-cli.json
+          cargo cyclonedx --package rpp-wallet-lib \
+            --no-default-features \
+            --features "runtime,prover-stwo,backup,wallet_multisig_hooks,wallet_rpc_mtls,wallet_hw,wallet_zsi" \
+            --format json \
+            --output dist/artifacts/wallet/sbom-rpp-wallet-lib.json
+          cargo cyclonedx --package rpp-wallet-interface \
+            --format json \
+            --output dist/artifacts/wallet/sbom-rpp-wallet-interface.json
+      - name: Generate wallet checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist/artifacts/wallet -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.msi' -o -name '*.pkg' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.json' \) -print | sort)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "error: no wallet artifacts found for checksum generation" >&2
+            exit 1
+          fi
+          ./scripts/checksums.sh --output dist/artifacts/wallet/SHA256SUMS.txt "${files[@]}"
+      - name: Sign wallet checksum manifest
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature dist/artifacts/wallet/SHA256SUMS.txt.sig \
+            --output-certificate dist/artifacts/wallet/SHA256SUMS.txt.pem \
+            dist/artifacts/wallet/SHA256SUMS.txt
+      - name: Publish wallet provenance statements
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist/artifacts/wallet -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.msi' -o -name '*.pkg' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.json' \) -print | sort)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "error: no wallet artifacts found for provenance attestation" >&2
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            target="wallet"
+            subject="$(basename "$file")"
+            ./scripts/provenance_attest.sh --artifact "$file" --target "$target" --subject "$subject"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-wallet

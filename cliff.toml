@@ -12,6 +12,23 @@ All notable changes to this project will be documented in this file.\n
 # A Tera template to be rendered for each release in the changelog.
 # See https://keats.github.io/tera/docs/#introduction
 body = """
+{% macro wallet_commit_line(commit) -%}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}\
+{%- endmacro %}
+
+{% macro wallet_section(slug, title, commits) -%}
+{% set rendered = false -%}
+{% for commit in commits -%}
+    {% if commit.body and (commit.body is containing(slug)) -%}
+        {% if not rendered -%}
+    #### {{ title }}
+        {% set rendered = true -%}
+        {% endif -%}
+{{ wallet_commit_line(commit) }}
+    {% endif -%}
+{% endfor -%}
+{%- endmacro %}
+
 {% if version %}\
     ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
 {% else %}\
@@ -20,11 +37,41 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits %}
-        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
-            {% if commit.breaking %}[**breaking**] {% endif %}\
-            {{ commit.message | upper_first }}\
+{{ wallet_commit_line(commit) }}
     {% endfor %}
-{% endfor %}\n
+{% endfor %}\
+{% set wallet_has = false -%}
+{% for commit in commits -%}
+    {% if commit.body and (commit.body is containing("Wallet-Labels:")) -%}
+        {% set wallet_has = true -%}
+    {% endif -%}
+{% endfor -%}
+{% if wallet_has -%}
+
+    ### 👛 Wallet readiness
+    {% set wallet_sections = [
+        {"slug": "wallet::engine", "title": "Engine & policy updates"},
+        {"slug": "wallet::gui", "title": "GUI & UX"},
+        {"slug": "wallet::security", "title": "Security, supply chain, and RPC"},
+        {"slug": "wallet::release", "title": "Release governance & docs"}
+    ] -%}
+    {% for section in wallet_sections -%}
+{{ wallet_section(section.slug, section.title, commits) }}
+    {% endfor -%}
+    {% set other_rendered = false -%}
+    {% for commit in commits -%}
+        {% if commit.body and (commit.body is containing("Wallet-Labels:")) -%}
+            {% if commit.body is containing("wallet::engine") or commit.body is containing("wallet::gui") or commit.body is containing("wallet::security") or commit.body is containing("wallet::release") -%}
+            {% else -%}
+                {% if not other_rendered -%}
+    #### Other wallet improvements
+                {% set other_rendered = true -%}
+                {% endif -%}
+{{ wallet_commit_line(commit) }}
+            {% endif -%}
+        {% endif -%}
+    {% endfor -%}
+{% endif -%}\n
 """
 # A Tera template to be rendered as the changelog's footer.
 # See https://keats.github.io/tera/docs/#introduction
@@ -58,6 +105,7 @@ require_conventional = false
 split_commits = false
 # An array of regex based parsers to modify commit messages prior to further processing.
 commit_preprocessors = [
+    { pattern = ".*", replace_command = "python3 scripts/git_cliff_wallet_labels.py" },
     # Replace issue numbers with link templates to be updated in `changelog.postprocessors`.
     #{ pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](<REPO>/issues/${2}))"},
     # Check spelling of the commit message using https://github.com/crate-ci/typos.
