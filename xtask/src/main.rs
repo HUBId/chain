@@ -364,6 +364,46 @@ fn run_wallet_feature_guard_suite(
     run_command(command, &context)
 }
 
+fn run_wallet_ui_contract_tests() -> Result<()> {
+    let root = workspace_root();
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("wallet_ui_contract");
+    apply_feature_flags(&mut command);
+    run_command(command, "wallet UI contract tests")
+}
+
+fn run_wallet_e2e_suite(args: &[String]) -> Result<()> {
+    let root = workspace_root();
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("wallet-integration-tests")
+        .arg("--locked");
+    apply_feature_flags(&mut command);
+
+    let mut passthrough: Vec<String> = Vec::new();
+    for arg in args {
+        if arg == "--" && passthrough.is_empty() {
+            continue;
+        }
+        passthrough.push(arg.clone());
+    }
+    if !passthrough.is_empty() {
+        command.arg("--").args(passthrough);
+    }
+
+    run_command(command, "wallet e2e suite")
+}
+
 fn scenario_feature_list(
     no_default_features: bool,
     base_features: &[&str],
@@ -5249,6 +5289,8 @@ fn main() -> Result<()> {
         "collect-phase3-evidence" => collect_phase3_evidence(&argv),
         "verify-report" => verify_snapshot_verifier_report(&argv),
         "fuzz-debug" => fuzz_debug::run(&argv),
+        "wallet-ui-contract" => run_wallet_ui_contract_tests(),
+        "wallet-e2e" => run_wallet_e2e_suite(&argv),
         "wallet-bundle" => wallet_bundle::build_wallet_bundle(&argv),
         "help" => {
             usage();

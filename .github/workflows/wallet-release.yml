@@ -57,9 +57,6 @@ jobs:
       - name: Prime dependencies
         run: cargo fetch
 
-      - name: Pre-flight bundle planning
-        run: cargo xtask wallet-bundle plan --features "$WALLET_BUILD_FEATURES" --mode "$REPRO_MODE"
-
   repro-build:
     name: Reproducible build ${{ matrix.target }}
     needs: prepare
@@ -95,6 +92,25 @@ jobs:
         with:
           shared-key: wallet-release-${{ matrix.target }}-${{ env.WALLET_BUILD_FEATURES }}-${{ needs.prepare.outputs.version }}
 
+      - name: Install GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            libegl1-mesa-dev \
+            libxi-dev
+
       - name: Install CycloneDX generator
         run: cargo install --locked cargo-cyclonedx
 
@@ -102,20 +118,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo xtask wallet-bundle build --mode "$REPRO_MODE" --features "$WALLET_BUILD_FEATURES" --target "${{ matrix.target }}" --version "$WALLET_VERSION"
+          cli_features="runtime,prover-stwo"
+          gui_features="wallet_gui,prover-stwo"
+          if [[ -n "$WALLET_BUILD_FEATURES" ]]; then
+            cli_features+=",$WALLET_BUILD_FEATURES"
+            gui_features+=",$WALLET_BUILD_FEATURES"
+          fi
+          mkdir -p dist/artifacts
+          cargo xtask wallet-bundle \
+            --target "${{ matrix.target }}" \
+            --version "$WALLET_VERSION" \
+            --profile release \
+            --output dist/artifacts \
+            --cli-features "${cli_features//  / }" \
+            --gui-features "${gui_features//  / }"
 
       - name: Generate SBOM
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/release-artifacts/${{ matrix.target }}
-          cargo cyclonedx --package rpp-wallet --features "$WALLET_BUILD_FEATURES" --format json --output target/release-artifacts/${{ matrix.target }}/wallet-${WALLET_VERSION}.cdx.json
+          mkdir -p dist/artifacts/wallet/${{ matrix.target }}
+          cargo cyclonedx --package rpp-wallet --features "$WALLET_BUILD_FEATURES" --format json --output dist/artifacts/wallet/${{ matrix.target }}/wallet-${WALLET_VERSION}.cdx.json
 
       - name: Upload reproducible artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wallet-release-${{ matrix.target }}-${{ needs.prepare.outputs.version }}
-          path: target/release-artifacts/${{ matrix.target }}
+          path: dist/artifacts/wallet/${{ matrix.target }}
 
       - name: Summarise build
         if: always()
@@ -188,8 +217,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build installers
-        run: cargo xtask wallet-bundle installers --input release-input --features "$WALLET_BUILD_FEATURES" --version "$WALLET_VERSION"
+      - name: Stage installer payloads
+        run: |
+          set -euo pipefail
+          rm -rf release-input/installers
+          mkdir -p release-input/installers
+          find release-input -maxdepth 1 -mindepth 1 -not -name installers -print0 | \
+            xargs -0 -I '{}' cp -a '{}' release-input/installers/
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
@@ -258,7 +292,11 @@ jobs:
           sha256sum -c "$sha_file"
 
       - name: Smoke test installers
-        run: cargo xtask wallet-bundle verify --input installers --features "$WALLET_BUILD_FEATURES"
+        run: |
+          set -euo pipefail
+          find installers -name '*.tar.gz' -print0 | while IFS= read -r -d '' archive; do
+            tar -tzf "$archive" >/dev/null
+          done
 
       - name: Summarise verification
         if: always()

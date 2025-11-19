@@ -12,6 +12,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
+  XTASK_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
   REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
 
 jobs:

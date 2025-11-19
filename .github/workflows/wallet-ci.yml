@@ -30,6 +30,7 @@ env:
   CARGO_TERM_COLOR: always
   WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
   REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
+  XTASK_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
 
 jobs:
   lint:
@@ -153,16 +154,16 @@ jobs:
           set -euo pipefail
           case "$TEST_SUITE" in
             unit)
-              cargo test -p rpp-wallet --lib --features "$WALLET_BUILD_FEATURES" -- --nocapture
+              cargo test -p rpp-wallet-lib --lib --features "$WALLET_BUILD_FEATURES" -- --nocapture
               ;;
             integration)
-              cargo test -p rpp-wallet --tests --features "$WALLET_BUILD_FEATURES" -- --ignored --nocapture
+              cargo test -p rpp-wallet-lib --tests --features "$WALLET_BUILD_FEATURES" -- --nocapture
               ;;
             ui-contract)
-              cargo xtask wallet-ui-contract --features "$WALLET_BUILD_FEATURES"
+              XTASK_FEATURES="$WALLET_BUILD_FEATURES" cargo xtask wallet-ui-contract
               ;;
             e2e)
-              cargo xtask wallet-e2e -- --include-scenarios full
+              XTASK_FEATURES="$WALLET_BUILD_FEATURES" cargo xtask wallet-e2e -- --include-scenarios full
               ;;
           esac
 
