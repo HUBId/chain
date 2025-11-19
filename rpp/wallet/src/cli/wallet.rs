@@ -28,6 +28,7 @@ use rpp_wallet_interface::runtime_wallet::{
     WalletRbacStore, WalletRole, WalletRoleSet, WalletSecurityBinding, WalletSecurityPaths,
 };
 
+use crate::crash_reporting::{acknowledge_report, list_reports};
 use crate::messages::{cli_messages, MessageCatalog};
 use crate::runtime::config::WalletConfigExt;
 
@@ -1677,6 +1678,209 @@ impl RescanCommand {
     }
 }
 
+#[derive(Debug, Args)]
+pub struct TelemetryCommand {
+    #[command(subcommand)]
+    pub command: TelemetrySubcommand,
+}
+
+impl TelemetryCommand {
+    pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        match &self.command {
+            TelemetrySubcommand::CrashReports(command) => command.execute(context),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TelemetrySubcommand {
+    /// Manage crash reporting preferences and local reports.
+    CrashReports(CrashReportsCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsCommand {
+    #[command(subcommand)]
+    pub command: CrashReportsSubcommand,
+}
+
+impl CrashReportsCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        match &self.command {
+            CrashReportsSubcommand::Status(command) => command.execute(context),
+            CrashReportsSubcommand::Enable(command) => command.execute(context),
+            CrashReportsSubcommand::Disable(command) => command.execute(context),
+            CrashReportsSubcommand::List(command) => command.execute(context),
+            CrashReportsSubcommand::Ack(command) => command.execute(context),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CrashReportsSubcommand {
+    /// Display crash reporting status derived from the wallet config.
+    Status(CrashReportsStatusCommand),
+    /// Enable crash reporting uploads in the wallet config.
+    Enable(CrashReportsEnableCommand),
+    /// Disable crash reporting uploads in the wallet config.
+    Disable(CrashReportsDisableCommand),
+    /// List crash reports stored in the local spool directory.
+    List(CrashReportsListCommand),
+    /// Acknowledge crash reports so they may be uploaded.
+    Ack(CrashReportsAcknowledgeCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsStatusCommand {}
+
+impl CrashReportsStatusCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (config, _) = load_runtime_wallet_config_with_path(context)?;
+        println!(
+            "Crash reports : {}",
+            format_bool(config.wallet.telemetry.crash_reports)
+        );
+        println!(
+            "Endpoint       : {}",
+            config
+                .wallet
+                .telemetry
+                .endpoint()
+                .unwrap_or("(not configured)")
+        );
+        println!(
+            "Machine ID salt: {}",
+            if config.wallet.telemetry.machine_id_salt.trim().is_empty() {
+                "(not configured)"
+            } else {
+                "(set)"
+            }
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsEnableCommand {
+    /// HTTPS endpoint that accepts crash reports.
+    #[arg(long, value_name = "URL")]
+    pub endpoint: String,
+    /// Salt used when hashing the local machine identifier.
+    #[arg(long = "machine-id-salt", value_name = "SALT")]
+    pub machine_id_salt: String,
+}
+
+impl CrashReportsEnableCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        if !self.endpoint.starts_with("https://") {
+            return Err(WalletCliError::Other(anyhow!(
+                "crash report endpoint must use https://"
+            )));
+        }
+        let (mut config, path) = load_runtime_wallet_config_with_path(context)?;
+        config.wallet.telemetry.crash_reports = true;
+        config.wallet.telemetry.endpoint = self.endpoint.clone();
+        config.wallet.telemetry.machine_id_salt = self.machine_id_salt.clone();
+        persist_runtime_wallet_config(&path, &config)?;
+        println!("Crash reporting enabled. Pending reports remain local until acknowledged.");
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsDisableCommand {}
+
+impl CrashReportsDisableCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (mut config, path) = load_runtime_wallet_config_with_path(context)?;
+        config.wallet.telemetry.crash_reports = false;
+        persist_runtime_wallet_config(&path, &config)?;
+        println!("Crash reporting disabled. Existing reports remain on disk.");
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsListCommand {
+    /// Maximum number of entries to print (newest first).
+    #[arg(long, value_name = "COUNT", default_value_t = 10)]
+    pub limit: usize,
+}
+
+impl CrashReportsListCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (config, _) = load_runtime_wallet_config_with_path(context)?;
+        let spool_dir = crash_spool_dir(&config);
+        let reports = list_reports(&spool_dir)
+            .map_err(|err| WalletCliError::Other(anyhow!(err.to_string())))?;
+        if reports.is_empty() {
+            println!("No crash reports recorded in {}", spool_dir.display());
+            return Ok(());
+        }
+        println!("Recent crash reports ({}):", spool_dir.display());
+        for report in reports.into_iter().take(self.limit) {
+            println!(
+                "  {} [{:?}] {} acked={} signal={}",
+                report.id,
+                report.kind,
+                report.created_at,
+                format_bool(report.acknowledged),
+                report
+                    .signal
+                    .map(|sig| sig.to_string())
+                    .unwrap_or_else(|| "-".into())
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct CrashReportsAcknowledgeCommand {
+    /// Crash report identifier to acknowledge.
+    #[arg(long, value_name = "ID")]
+    pub id: Option<String>,
+    /// Acknowledge every stored report.
+    #[arg(long)]
+    pub all: bool,
+}
+
+impl CrashReportsAcknowledgeCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        if !self.all && self.id.is_none() {
+            return Err(WalletCliError::Other(anyhow!(
+                "ack requires --id <REPORT_ID> or --all"
+            )));
+        }
+        let (config, _) = load_runtime_wallet_config_with_path(context)?;
+        let spool_dir = crash_spool_dir(&config);
+        let reports = list_reports(&spool_dir)
+            .map_err(|err| WalletCliError::Other(anyhow!(err.to_string())))?;
+        if reports.is_empty() {
+            println!("No crash reports pending acknowledgement.");
+            return Ok(());
+        }
+        let mut acknowledged = 0usize;
+        for report in reports {
+            if self.all || self.id.as_ref().is_some_and(|id| id == &report.id) {
+                if let Some(path) = report.path.as_deref() {
+                    acknowledge_report(path)
+                        .map_err(|err| WalletCliError::Other(anyhow!(err.to_string())))?;
+                    acknowledged += 1;
+                }
+            }
+        }
+        if acknowledged == 0 {
+            println!("No matching crash reports were acknowledged.");
+        } else {
+            println!(
+                "Acknowledged {acknowledged} crash report(s); uploader will retry automatically."
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct SecurityIdentityOptions {
     /// Bearer token presented by the identity.
@@ -2037,6 +2241,8 @@ pub enum WalletCommand {
     Security(SecurityCommand),
     /// Trigger a historical rescan.
     Rescan(RescanCommand),
+    /// Manage telemetry (crash reporting) configuration.
+    Telemetry(TelemetryCommand),
 }
 
 impl WalletCommand {
@@ -2082,6 +2288,7 @@ impl WalletCommand {
             },
             WalletCommand::Rescan(cmd) => cmd.execute().await,
             WalletCommand::Security(cmd) => cmd.execute(init_context).await,
+            WalletCommand::Telemetry(cmd) => cmd.execute(init_context).await,
         }
     }
 }
@@ -2099,6 +2306,19 @@ fn load_runtime_wallet_config_with_path(
         config.data_dir = dir.clone();
     }
     Ok((config, path))
+}
+
+fn persist_runtime_wallet_config(
+    path: &Path,
+    config: &RuntimeWalletConfig,
+) -> Result<(), WalletCliError> {
+    let serialized = toml::to_string_pretty(config)
+        .map_err(|err| WalletCliError::Other(anyhow!(err.to_string())))?;
+    fs::write(path, serialized).map_err(|err| WalletCliError::Other(anyhow!(err.to_string())))
+}
+
+fn crash_spool_dir(config: &RuntimeWalletConfig) -> PathBuf {
+    config.wallet.engine.data_dir.join("crash_reports")
 }
 
 fn load_runtime_wallet_config(

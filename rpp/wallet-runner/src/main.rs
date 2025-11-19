@@ -3,6 +3,11 @@ use std::process::ExitCode;
 use clap::Parser;
 use rpp_node::{RuntimeMode, RuntimeOptions};
 use rpp_wallet::cli::wallet::{InitContext, WalletCliError, WalletCommand};
+use rpp_wallet::crash_reporting::{
+    self, CrashReporterConfig, CrashReporterHandle, DEFAULT_SPOOL_BYTES,
+};
+use rpp_wallet::runtime::config::WalletConfigExt;
+use rpp_wallet_interface::runtime_config::WalletConfig as RuntimeWalletConfig;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -17,6 +22,7 @@ struct WalletCli {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = WalletCli::parse();
+    let _crash_handle = configure_crash_reporting(&cli.options);
     if let Some(command) = cli.command {
         let context = InitContext::new(
             resolve_wallet_config_path(&cli.options),
@@ -38,6 +44,21 @@ async fn main() -> ExitCode {
             }
         }
     }
+}
+
+fn configure_crash_reporting(options: &RuntimeOptions) -> Option<CrashReporterHandle> {
+    let config_path = resolve_wallet_config_path(options)?;
+    let runtime_config = RuntimeWalletConfig::load(&config_path).unwrap_or_default();
+    let telemetry = runtime_config.wallet.telemetry;
+    let spool_dir = runtime_config.wallet.engine.data_dir.join("crash_reports");
+    let reporter_config = CrashReporterConfig {
+        enabled: telemetry.crash_reports,
+        endpoint: telemetry.endpoint().map(|value| value.to_string()),
+        machine_id_salt: telemetry.machine_id_salt.clone(),
+        spool_dir,
+        spool_max_bytes: DEFAULT_SPOOL_BYTES,
+    };
+    crash_reporting::install_global(reporter_config).ok()
 }
 
 fn resolve_wallet_config_path(options: &RuntimeOptions) -> Option<PathBuf> {

@@ -40,6 +40,9 @@ pub mod db;
 /// Wallet telemetry helpers.
 pub mod telemetry;
 
+/// Crash reporting hooks and spool helpers.
+pub mod crash_reporting;
+
 /// User-facing message catalog loader.
 pub mod messages;
 

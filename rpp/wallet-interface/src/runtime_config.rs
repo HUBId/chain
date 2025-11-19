@@ -969,6 +969,39 @@ impl Default for WalletHwSettings {
     }
 }
 
+/// Configure wallet telemetry (crash reporting uploads).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WalletTelemetrySettings {
+    /// Enable crash reporting uploads.
+    pub crash_reports: bool,
+    /// HTTPS endpoint receiving crash payloads.
+    pub endpoint: String,
+    /// Salt applied when hashing machine identifiers.
+    pub machine_id_salt: String,
+}
+
+impl WalletTelemetrySettings {
+    /// Returns the configured endpoint when present.
+    pub fn endpoint(&self) -> Option<&str> {
+        if self.endpoint.trim().is_empty() {
+            None
+        } else {
+            Some(self.endpoint.as_str())
+        }
+    }
+}
+
+impl Default for WalletTelemetrySettings {
+    fn default() -> Self {
+        Self {
+            crash_reports: false,
+            endpoint: String::new(),
+            machine_id_salt: String::new(),
+        }
+    }
+}
+
 /// Supported hardware wallet transports.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -1142,6 +1175,8 @@ pub struct WalletServiceConfig {
     pub prover: WalletProverSettings,
     /// Hardware wallet integration configuration.
     pub hw: WalletHwSettings,
+    /// Telemetry preferences (crash reporting, salts).
+    pub telemetry: WalletTelemetrySettings,
 }
 
 impl Default for WalletServiceConfig {
@@ -1159,6 +1194,7 @@ impl Default for WalletServiceConfig {
             fees: WalletFeeSettings::default(),
             prover: WalletProverSettings::default(),
             hw: WalletHwSettings::default(),
+            telemetry: WalletTelemetrySettings::default(),
         }
     }
 }
@@ -1266,6 +1302,7 @@ impl WalletConfig {
         validate_wallet_fees(&self.wallet.fees)?;
         validate_wallet_prover(&self.wallet.prover)?;
         self.wallet.hw.ensure_supported()?;
+        validate_wallet_telemetry(&self.wallet.telemetry)?;
         self.wallet.auth.validate(false)?;
         if !self.node.embedded && self.node.gossip_endpoints.is_empty() {
             return Err(RuntimeConfigError::InvalidConfig(
@@ -1396,6 +1433,23 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
         return Err(RuntimeConfigError::InvalidConfig(
             "wallet configuration wallet.prover.max_concurrency must be greater than 0".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_wallet_telemetry(config: &WalletTelemetrySettings) -> RuntimeConfigResult<()> {
+    if config.crash_reports {
+        let endpoint = config.endpoint().ok_or_else(|| {
+            RuntimeConfigError::InvalidConfig(
+                "wallet.telemetry.endpoint must be configured when crash reporting is enabled"
+                    .into(),
+            )
+        })?;
+        if !endpoint.starts_with("https://") {
+            return Err(RuntimeConfigError::InvalidConfig(
+                "wallet.telemetry.endpoint must use the https:// scheme".into(),
+            ));
+        }
     }
     Ok(())
 }
