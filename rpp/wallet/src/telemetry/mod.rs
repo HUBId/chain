@@ -1,9 +1,15 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub use crate::interface_telemetry::{
     TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletTelemetryAction,
 };
+
+mod exporter;
+
+use exporter::{events_per_batch, TelemetryEvent, TelemetryEventKind, TelemetryExporter};
 
 impl WalletTelemetryAction {
     pub fn label(&self) -> &'static str {
@@ -49,10 +55,18 @@ impl TelemetryOutcome {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WalletActionTelemetry {
     enabled: bool,
     counters: Mutex<HashMap<String, u64>>,
+    events: Mutex<Vec<TelemetryEvent>>,
+    exporter: Option<TelemetryExporter>,
+}
+
+impl Default for WalletActionTelemetry {
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 impl WalletActionTelemetry {
@@ -60,7 +74,33 @@ impl WalletActionTelemetry {
         Self {
             enabled,
             counters: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+            exporter: None,
         }
+    }
+
+    /// Constructs a telemetry handle backed by the runtime exporter.
+    pub fn with_exporter(
+        enabled: bool,
+        endpoint: Option<String>,
+        spool_dir: Option<PathBuf>,
+        machine_id: Option<String>,
+    ) -> std::io::Result<Self> {
+        let exporter = if enabled {
+            if let (Some(endpoint), Some(spool)) = (endpoint, spool_dir) {
+                Some(TelemetryExporter::new(endpoint, spool, machine_id)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(Self {
+            enabled,
+            counters: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+            exporter,
+        })
     }
 
     pub fn enabled(&self) -> bool {
@@ -99,6 +139,105 @@ impl WalletActionTelemetry {
         TelemetryCounters {
             enabled: true,
             counters,
+        }
+    }
+
+    /// Emits a session lifecycle event tagged with the startup phase.
+    pub fn record_session(&self, phase: &'static str) {
+        if !self.enabled {
+            return;
+        }
+        self.record_event(TelemetryEventKind::Session { phase });
+    }
+
+    /// Emits a RPC latency sample tagged by method name and outcome.
+    pub fn record_rpc_event(
+        &self,
+        method: &str,
+        duration: Duration,
+        outcome: TelemetryOutcome,
+        code: Option<&str>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let latency_ms = duration.as_millis() as u64;
+        self.record_event(TelemetryEventKind::Rpc {
+            method: method.to_string(),
+            latency_ms,
+            outcome: outcome.label(),
+            code: code.map(|value| value.to_string()),
+        });
+    }
+
+    /// Emits a send workflow step event.
+    pub fn record_send_stage(&self, stage: &'static str, outcome: TelemetryOutcome) {
+        if !self.enabled {
+            return;
+        }
+        self.record_event(TelemetryEventKind::SendStage {
+            stage,
+            outcome: outcome.label(),
+        });
+    }
+
+    /// Emits a rescan workflow step event, optionally tagging the latency.
+    pub fn record_rescan_stage(
+        &self,
+        stage: &'static str,
+        duration: Option<Duration>,
+        outcome: TelemetryOutcome,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        self.record_event(TelemetryEventKind::Rescan {
+            stage,
+            latency_ms: duration.map(|value| value.as_millis() as u64),
+            outcome: outcome.label(),
+        });
+    }
+
+    /// Emits a telemetry error code sample.
+    pub fn record_error_code(&self, code: &str, context: Option<&str>) {
+        if !self.enabled {
+            return;
+        }
+        self.record_event(TelemetryEventKind::Error {
+            code: code.to_string(),
+            context: context.map(|value| value.to_string()),
+        });
+    }
+
+    /// Flushes pending events to the exporter (if configured).
+    pub fn flush(&self) {
+        if let Some(exporter) = &self.exporter {
+            let drained = {
+                let mut guard = match self.events.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                guard.drain(..).collect::<Vec<_>>()
+            };
+            if !drained.is_empty() {
+                exporter.publish(drained);
+            } else {
+                exporter.flush_spool();
+            }
+        }
+    }
+
+    fn record_event(&self, kind: TelemetryEventKind) {
+        if let Some(exporter) = &self.exporter {
+            let mut guard = match self.events.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.push(TelemetryEvent::now(kind));
+            if guard.len() >= events_per_batch(Some(exporter)) {
+                let batch = guard.drain(..).collect();
+                exporter.publish(batch);
+            }
         }
     }
 }

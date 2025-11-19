@@ -1688,6 +1688,7 @@ impl TelemetryCommand {
     pub async fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
         match &self.command {
             TelemetrySubcommand::CrashReports(command) => command.execute(context),
+            TelemetrySubcommand::Metrics(command) => command.execute(context),
         }
     }
 }
@@ -1696,6 +1697,104 @@ impl TelemetryCommand {
 pub enum TelemetrySubcommand {
     /// Manage crash reporting preferences and local reports.
     CrashReports(CrashReportsCommand),
+    /// Manage anonymized runtime metrics uploads.
+    Metrics(MetricsCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsCommand {
+    #[command(subcommand)]
+    pub command: MetricsSubcommand,
+}
+
+impl MetricsCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        match &self.command {
+            MetricsSubcommand::Status(command) => command.execute(context),
+            MetricsSubcommand::Enable(command) => command.execute(context),
+            MetricsSubcommand::Disable(command) => command.execute(context),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MetricsSubcommand {
+    /// Display metrics telemetry status derived from the wallet config.
+    Status(MetricsStatusCommand),
+    /// Enable anonymized runtime metrics uploads.
+    Enable(MetricsEnableCommand),
+    /// Disable runtime metrics uploads.
+    Disable(MetricsDisableCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsStatusCommand {}
+
+impl MetricsStatusCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (config, _) = load_runtime_wallet_config_with_path(context)?;
+        println!(
+            "Metrics       : {}",
+            format_bool(config.wallet.telemetry.metrics)
+        );
+        println!(
+            "Endpoint      : {}",
+            config
+                .wallet
+                .telemetry
+                .endpoint()
+                .unwrap_or("(not configured)")
+        );
+        println!(
+            "Machine salt  : {}",
+            if config.wallet.telemetry.machine_id_salt.trim().is_empty() {
+                "(not configured)"
+            } else {
+                "(set)"
+            }
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsEnableCommand {
+    /// HTTPS endpoint that accepts telemetry batches.
+    #[arg(long, value_name = "URL")]
+    pub endpoint: String,
+    /// Salt used when hashing the local machine identifier.
+    #[arg(long = "machine-id-salt", value_name = "SALT")]
+    pub machine_id_salt: String,
+}
+
+impl MetricsEnableCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        if !self.endpoint.starts_with("https://") {
+            return Err(WalletCliError::Other(anyhow!(
+                "telemetry endpoint must use https://"
+            )));
+        }
+        let (mut config, path) = load_runtime_wallet_config_with_path(context)?;
+        config.wallet.telemetry.metrics = true;
+        config.wallet.telemetry.endpoint = self.endpoint.clone();
+        config.wallet.telemetry.machine_id_salt = self.machine_id_salt.clone();
+        persist_runtime_wallet_config(&path, &config)?;
+        println!("Runtime metrics enabled. Events remain local until the wallet is restarted.");
+        Ok(())
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsDisableCommand {}
+
+impl MetricsDisableCommand {
+    pub fn execute(&self, context: &InitContext) -> Result<(), WalletCliError> {
+        let (mut config, path) = load_runtime_wallet_config_with_path(context)?;
+        config.wallet.telemetry.metrics = false;
+        persist_runtime_wallet_config(&path, &config)?;
+        println!("Runtime metrics disabled. Pending batches remain on disk.");
+        Ok(())
+    }
 }
 
 #[derive(Debug, Args)]

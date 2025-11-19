@@ -973,6 +973,8 @@ impl Default for WalletHwSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletTelemetrySettings {
+    /// Enable anonymized runtime metrics uploads.
+    pub metrics: bool,
     /// Enable crash reporting uploads.
     pub crash_reports: bool,
     /// HTTPS endpoint receiving crash payloads.
@@ -995,6 +997,7 @@ impl WalletTelemetrySettings {
 impl Default for WalletTelemetrySettings {
     fn default() -> Self {
         Self {
+            metrics: false,
             crash_reports: false,
             endpoint: String::new(),
             machine_id_salt: String::new(),
@@ -1438,10 +1441,10 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
 }
 
 fn validate_wallet_telemetry(config: &WalletTelemetrySettings) -> RuntimeConfigResult<()> {
-    if config.crash_reports {
+    if config.crash_reports || config.metrics {
         let endpoint = config.endpoint().ok_or_else(|| {
             RuntimeConfigError::InvalidConfig(
-                "wallet.telemetry.endpoint must be configured when crash reporting is enabled"
+                "wallet.telemetry.endpoint must be configured when telemetry uploads are enabled"
                     .into(),
             )
         })?;
