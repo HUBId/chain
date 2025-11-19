@@ -1,0 +1,269 @@
+name: Wallet Release
+
+on:
+  push:
+    tags:
+      - 'wallet-v*'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel override
+        required: false
+        default: stable
+      dry_run:
+        description: Skip publication and signing
+        required: false
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
+  REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: meta
+        name: Capture version metadata
+        run: |
+          ref_name="${GITHUB_REF_NAME}"
+          if [[ -z "$ref_name" ]]; then
+            ref_name="wallet-dev"
+          fi
+          channel='${{ inputs.channel }}'
+          if [[ -z "$channel" ]]; then
+            channel="stable"
+          fi
+          printf 'version=%s\n' "$ref_name" >> "$GITHUB_OUTPUT"
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Release preparation'
+            printf '* Tag: `%s`\n' "$ref_name"
+            printf '* Channel: `%s`\n' "$channel"
+            printf '* Features: `%s`\n' "$WALLET_BUILD_FEATURES"
+            printf '* Repro mode: `%s`\n' "$REPRO_MODE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prime dependencies
+        run: cargo fetch
+
+      - name: Pre-flight bundle planning
+        run: cargo xtask wallet-bundle plan --features "$WALLET_BUILD_FEATURES" --mode "$REPRO_MODE"
+
+  repro-build:
+    name: Reproducible build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+    env:
+      WALLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-release-${{ matrix.target }}-${{ env.WALLET_BUILD_FEATURES }}-${{ needs.prepare.outputs.version }}
+
+      - name: Install CycloneDX generator
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Build reproducible bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo xtask wallet-bundle build --mode "$REPRO_MODE" --features "$WALLET_BUILD_FEATURES" --target "${{ matrix.target }}" --version "$WALLET_VERSION"
+
+      - name: Generate SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/release-artifacts/${{ matrix.target }}
+          cargo cyclonedx --package rpp-wallet --features "$WALLET_BUILD_FEATURES" --format json --output target/release-artifacts/${{ matrix.target }}/wallet-${WALLET_VERSION}.cdx.json
+
+      - name: Upload reproducible artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-release-${{ matrix.target }}-${{ needs.prepare.outputs.version }}
+          path: target/release-artifacts/${{ matrix.target }}
+
+      - name: Summarise build
+        if: always()
+        run: |
+          {
+            printf '### Repro build %s\n' '${{ matrix.target }}'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sign:
+    name: Sign artifacts
+    needs:
+      - prepare
+      - repro-build
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    env:
+      WALLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: signed-artifacts
+          merge-multiple: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Import signing key
+        if: ${{ secrets.WALLET_RELEASE_SIGNING_KEY != '' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.WALLET_RELEASE_SIGNING_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.WALLET_RELEASE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$COSIGN_PRIVATE_KEY" > cosign.key
+          chmod 600 cosign.key
+
+      - name: Sign bundles
+        if: ${{ secrets.WALLET_RELEASE_SIGNING_KEY != '' }}
+        run: |
+          set -euo pipefail
+          find signed-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -print0 | while IFS= read -r -d '' artifact; do
+            cosign sign --key cosign.key "$artifact"
+          done
+
+      - name: Generate checksum manifest
+        run: |
+          set -euo pipefail
+          find signed-artifacts -type f -print0 | sort -z | xargs -0 sha256sum > signed-artifacts/wallet-${WALLET_VERSION}-SHA256SUMS.txt
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-release-signed-${{ needs.prepare.outputs.version }}
+          path: signed-artifacts
+
+  package:
+    name: Package installers
+    needs:
+      - prepare
+      - sign
+    runs-on: ubuntu-latest
+    if: ${{ always() && !inputs.dry_run }}
+    env:
+      WALLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wallet-release-signed-${{ needs.prepare.outputs.version }}
+          path: release-input
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build installers
+        run: cargo xtask wallet-bundle installers --input release-input --features "$WALLET_BUILD_FEATURES" --version "$WALLET_VERSION"
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-installers-${{ needs.prepare.outputs.version }}
+          path: release-input/installers
+
+  publish:
+    name: Publish release
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    if: ${{ always() && !inputs.dry_run }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WALLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: publish
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        run: |
+          gh release view "$WALLET_VERSION" >/dev/null 2>&1 && exit 0
+          gh release create "$WALLET_VERSION" --title "$WALLET_VERSION" --notes-file RELEASE_NOTES.md
+
+      - name: Upload release assets
+        run: |
+          set -euo pipefail
+          find publish -type f -print0 | while IFS= read -r -d '' artifact; do
+            gh release upload "$WALLET_VERSION" "$artifact" --clobber
+          done
+
+      - name: Attest provenance
+        if: ${{ secrets.WALLET_PROVENANCE_TOKEN != '' }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: publish/**
+          github-token: ${{ secrets.WALLET_PROVENANCE_TOKEN }}
+
+  verify:
+    name: Release verification
+    needs:
+      - prepare
+      - publish
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    env:
+      WALLET_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wallet-installers-${{ needs.prepare.outputs.version }}
+          path: installers
+
+      - name: Verify checksum manifest
+        run: |
+          set -euo pipefail
+          sha_file=$(find installers -name 'wallet-*-SHA256SUMS.txt' | head -n1)
+          if [[ -z "$sha_file" ]]; then
+            echo '::warning::Checksum manifest missing'
+            exit 0
+          fi
+          sha256sum -c "$sha_file"
+
+      - name: Smoke test installers
+        run: cargo xtask wallet-bundle verify --input installers --features "$WALLET_BUILD_FEATURES"
+
+      - name: Summarise verification
+        if: always()
+        run: |
+          {
+            echo '### Release verification'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,160 @@
+name: Wallet Nightly
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: wallet-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
+  REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
+
+jobs:
+  cache-warmup:
+    name: Warm Cargo caches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-nightly-cache-${{ env.WALLET_BUILD_FEATURES }}
+      - name: Fetch dependencies
+        run: cargo fetch
+      - name: Pre-build critical crates
+        run: cargo build -p rpp-wallet --features "$WALLET_BUILD_FEATURES" --locked
+      - name: Summarise cache status
+        run: |
+          {
+            echo '### Cache warmup'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  long-e2e:
+    name: Extended wallet e2e
+    needs: cache-warmup
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-nightly-e2e-${{ env.WALLET_BUILD_FEATURES }}
+      - id: quarantine
+        name: Apply quarantine list
+        run: |
+          set -euo pipefail
+          if [[ -f nightly_status.md ]]; then
+            mapfile -t quarantined < <(grep '^wallet-e2e:' nightly_status.md | cut -d':' -f3-)
+          fi
+          skip_pattern=$(IFS=','; echo "${quarantined[*]}" | sed 's/ /,/g')
+          printf 'skip=%s\n' "$skip_pattern" >> "$GITHUB_OUTPUT"
+      - name: Run long form scenarios
+        env:
+          WALLET_E2E_SKIP: ${{ steps.quarantine.outputs.skip }}
+        run: |
+          set -euo pipefail
+          cargo xtask wallet-e2e -- --include-scenarios soak --allow-long --skip "$WALLET_E2E_SKIP"
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-e2e-long-logs
+          path: target/debug/wallet-*.log
+          retention-days: 7
+      - name: Summarise e2e
+        if: always()
+        run: |
+          {
+            echo '### Nightly e2e'
+            echo "* Skipped: ${{ steps.quarantine.outputs.skip || 'none' }}"
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fuzz-minute:
+    name: Minute fuzzers
+    needs: cache-warmup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-nightly-fuzz-${{ env.WALLET_BUILD_FEATURES }}
+      - run: cargo install cargo-fuzz --version ^0.12 --locked
+      - name: Execute fuzz-minute
+        run: |
+          set -euo pipefail
+          cargo fuzz run wallet_api --features "$WALLET_BUILD_FEATURES" -- -max_total_time=60
+      - name: Summarise fuzz-minute
+        if: always()
+        run: |
+          {
+            echo '### Fuzz minute'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  perf:
+    name: Wallet performance benchmarks
+    needs: cache-warmup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-nightly-perf-${{ env.WALLET_BUILD_FEATURES }}
+      - name: Run performance benchmarks
+        run: |
+          set -euo pipefail
+          cargo bench -p rpp-wallet --features "$WALLET_BUILD_FEATURES" | tee perf.log
+      - name: Upload performance metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-perf-${{ github.run_id }}
+          path: perf.log
+      - name: Summarise perf
+        if: always()
+        run: |
+          {
+            echo '### Wallet performance'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  flake-report:
+    name: Quarantine rollup
+    needs:
+      - long-e2e
+      - fuzz-minute
+      - perf
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate flake report
+        run: |
+          set -euo pipefail
+          mkdir -p nightly
+          {
+            echo '# Wallet Nightly Report'
+            echo "- e2e: ${{ needs.long-e2e.result }}"
+            echo "- fuzz-minute: ${{ needs.fuzz-minute.result }}"
+            echo "- perf: ${{ needs.perf.result }}"
+          } > nightly/wallet-nightly-report.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-nightly-report
+          path: nightly/wallet-nightly-report.md
+      - name: Append summary
+        if: always()
+        run: |
+          {
+            echo '### Nightly report'
+            echo "* Report artifact uploaded"
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

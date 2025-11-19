@@ -1,0 +1,237 @@
+name: Wallet CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rpp/**'
+      - 'tests/**'
+      - 'xtask/**'
+      - 'validator-ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wallet-*.yml'
+  pull_request:
+    paths:
+      - 'rpp/**'
+      - 'tests/**'
+      - 'xtask/**'
+      - 'validator-ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wallet-*.yml'
+
+concurrency:
+  group: wallet-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
+  REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
+
+jobs:
+  lint:
+    name: Lint wallet crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-lint-${{ runner.os }}-${{ env.WALLET_BUILD_FEATURES }}
+
+      - run: cargo fmt --all --check
+        name: Cargo fmt
+
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --features "$WALLET_BUILD_FEATURES" --locked -- -D warnings
+
+      - name: Cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check
+
+      - name: Summarise lint status
+        if: always()
+        run: |
+          {
+            echo '### Lint summary'
+            printf '* Features: `%s`\n' "$WALLET_BUILD_FEATURES"
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-build-${{ matrix.target }}-${{ env.WALLET_BUILD_FEATURES }}
+
+      - name: Build wallet binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --package rpp-wallet --no-default-features --features "$WALLET_BUILD_FEATURES" --target "${{ matrix.target }}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            target/${{ matrix.target }}/debug/wallet*
+            target/${{ matrix.target }}/debug/rpp-wallet*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish build metrics
+        if: always()
+        shell: bash
+        run: |
+          size_info=$(du -sh target/${{ matrix.target }}/debug || true)
+          {
+            echo '### Build metrics'
+            printf '* Target: `%s`\n' '${{ matrix.target }}'
+            echo "* Artifacts: ${size_info}"
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests:
+    name: ${{ matrix.suite }} tests
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - unit
+          - integration
+          - ui-contract
+          - e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-tests-${{ matrix.suite }}-${{ env.WALLET_BUILD_FEATURES }}
+
+      - name: Run wallet tests
+        env:
+          TEST_SUITE: ${{ matrix.suite }}
+        run: |
+          set -euo pipefail
+          case "$TEST_SUITE" in
+            unit)
+              cargo test -p rpp-wallet --lib --features "$WALLET_BUILD_FEATURES" -- --nocapture
+              ;;
+            integration)
+              cargo test -p rpp-wallet --tests --features "$WALLET_BUILD_FEATURES" -- --ignored --nocapture
+              ;;
+            ui-contract)
+              cargo xtask wallet-ui-contract --features "$WALLET_BUILD_FEATURES"
+              ;;
+            e2e)
+              cargo xtask wallet-e2e -- --include-scenarios full
+              ;;
+          esac
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-${{ matrix.suite }}-logs
+          path: target/debug/wallet-*.log
+          retention-days: 5
+
+      - name: Summarise suite
+        if: always()
+        run: |
+          {
+            printf '### %s suite\n' '${{ matrix.suite }}'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fuzz-smoke:
+    name: Fuzz smoke tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-fuzz-${{ env.WALLET_BUILD_FEATURES }}
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version ^0.12 --locked
+      - name: Run fuzz smoke suite
+        run: |
+          set -euo pipefail
+          cargo fuzz run wallet_api --features "$WALLET_BUILD_FEATURES" -- -runs=1000
+      - name: Summarise fuzzing
+        if: always()
+        run: |
+          {
+            echo '### Fuzz smoke'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sbom:
+    name: Wallet SBOM
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-sbom-${{ env.WALLET_BUILD_FEATURES }}
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+      - name: Generate SBOM
+        run: |
+          set -euo pipefail
+          mkdir -p target/sbom
+          cargo cyclonedx --all --features "$WALLET_BUILD_FEATURES" --format json --output target/sbom/wallet.cdx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-sbom
+          path: target/sbom
+      - name: Summarise SBOM
+        if: always()
+        run: |
+          {
+            echo '### SBOM generation'
+            echo "* Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
