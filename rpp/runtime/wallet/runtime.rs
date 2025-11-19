@@ -20,6 +20,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::runtime::config::WalletRpcSecurityCaFingerprint;
 use crate::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 #[cfg(feature = "wallet-integration")]
+use rpp_wallet::runtime::lifecycle::{EmbeddedNodeLifecycle, EmbeddedNodeStatus};
+#[cfg(feature = "wallet-integration")]
 use rpp_wallet::wallet::Wallet;
 pub use rpp_wallet_interface::WalletService;
 use rpp_wallet_interface::{NodeClient, WalletService, WalletServiceError};
@@ -127,6 +129,8 @@ pub struct WalletRuntimeConfig {
     rpc_security: WalletRpcSecurityRuntimeConfig,
     audit: WalletAuditRuntimeConfig,
     zsi_enabled: bool,
+    #[cfg(feature = "wallet-integration")]
+    embedded_node: Option<EmbeddedNodeLifecycle>,
 }
 
 impl WalletRuntimeConfig {
@@ -140,6 +144,8 @@ impl WalletRuntimeConfig {
             rpc_security: WalletRpcSecurityRuntimeConfig::default(),
             audit: WalletAuditRuntimeConfig::default(),
             zsi_enabled: false,
+            #[cfg(feature = "wallet-integration")]
+            embedded_node: None,
         }
     }
 
@@ -178,6 +184,21 @@ impl WalletRuntimeConfig {
 
     pub fn set_zsi_enabled(&mut self, enabled: bool) {
         self.zsi_enabled = enabled;
+    }
+
+    #[cfg(feature = "wallet-integration")]
+    pub fn set_embedded_node(&mut self, lifecycle: EmbeddedNodeLifecycle) {
+        self.embedded_node = Some(lifecycle);
+    }
+
+    #[cfg(feature = "wallet-integration")]
+    pub fn embedded_node(&self) -> Option<&EmbeddedNodeLifecycle> {
+        self.embedded_node.as_ref()
+    }
+
+    #[cfg(feature = "wallet-integration")]
+    fn take_embedded_node(&mut self) -> Option<EmbeddedNodeLifecycle> {
+        self.embedded_node.take()
     }
 
     pub fn zsi_enabled(&self) -> bool {
@@ -361,6 +382,8 @@ pub struct GenericWalletRuntimeHandle<W: WalletService + 'static> {
     address: String,
     config: WalletRuntimeConfig,
     state: Arc<WalletRuntimeState>,
+    #[cfg(feature = "wallet-integration")]
+    embedded_node: Option<EmbeddedNodeLifecycle>,
 }
 
 #[cfg(feature = "wallet-integration")]
@@ -404,7 +427,19 @@ impl<W: WalletService + 'static> GenericWalletRuntimeHandle<W> {
     }
 
     pub async fn shutdown(&self) -> ChainResult<()> {
-        self.state.shutdown().await
+        self.state.shutdown().await?;
+        #[cfg(feature = "wallet-integration")]
+        if let Some(node) = self.embedded_node.as_ref() {
+            node.stop().map_err(|err| {
+                ChainError::Config(format!("embedded node shutdown failed: {err}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "wallet-integration")]
+    pub fn embedded_node_status(&self) -> Option<EmbeddedNodeStatus> {
+        self.embedded_node.as_ref().map(|node| node.status())
     }
 }
 
@@ -455,6 +490,15 @@ impl WalletRuntime {
         W: WalletService + 'static,
     {
         config.ensure_security_context()?;
+        #[cfg(feature = "wallet-integration")]
+        let mut embedded_node = config.take_embedded_node();
+
+        #[cfg(feature = "wallet-integration")]
+        if let Some(lifecycle) = embedded_node.as_ref() {
+            lifecycle.start().map_err(|err| {
+                ChainError::Config(format!("failed to start embedded node: {err}"))
+            })?;
+        }
         let address = wallet.address();
         let checkpoint = sync_provider.latest_checkpoint();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -658,6 +702,8 @@ impl WalletRuntime {
             address,
             config,
             state: Arc::new(state),
+            #[cfg(feature = "wallet-integration")]
+            embedded_node,
         })
     }
 }

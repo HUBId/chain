@@ -10,6 +10,9 @@ use rpp_chain::runtime::wallet::runtime::{
     WalletRuntimeConfig, WalletService,
 };
 use rpp_chain::runtime::wallet::sync::DeterministicSync;
+use rpp_wallet::runtime::lifecycle::{
+    EmbeddedNodeCommand, EmbeddedNodeLifecycle, EmbeddedNodeStatus,
+};
 use rpp_wallet::node_client::{NodeClient, StubNodeClient};
 use rpp_wallet_interface::WalletServiceResult;
 use tokio::sync::watch;
@@ -92,7 +95,19 @@ async fn hybrid_mode_attaches_connector() {
         started: Arc::clone(&sync_started),
         shutdown_observed: Arc::clone(&sync_shutdown),
     };
-    let config = WalletRuntimeConfig::new("127.0.0.1:0".parse().unwrap());
+    let mut config = WalletRuntimeConfig::new("127.0.0.1:0".parse().unwrap());
+    let mut node_command = EmbeddedNodeCommand::new("sh");
+    node_command.args = vec!["-c".into(), "sleep 5".into()];
+    let lifecycle = EmbeddedNodeLifecycle::new(
+        rpp_wallet_interface::runtime_config::WalletNodeRuntimeConfig {
+            embedded: true,
+            gossip_endpoints: Vec::new(),
+        },
+        node_command,
+        Vec::new(),
+        Vec::new(),
+    );
+    config.set_embedded_node(lifecycle.clone());
 
     let handle: GenericWalletRuntimeHandle<TestWallet> = WalletRuntime::start(
         Arc::clone(&wallet),
@@ -109,8 +124,16 @@ async fn hybrid_mode_attaches_connector() {
     assert!(attached.load(Ordering::SeqCst));
     assert!(node_client_attached.load(Ordering::SeqCst));
     assert!(sync_started.load(Ordering::SeqCst));
+    assert!(matches!(
+        handle.embedded_node_status(),
+        Some(EmbeddedNodeStatus::Running { .. })
+    ));
 
     handle.shutdown().await.expect("shutdown");
 
     assert!(sync_shutdown.load(Ordering::SeqCst));
+    assert!(matches!(
+        handle.embedded_node_status(),
+        Some(EmbeddedNodeStatus::Stopped)
+    ));
 }
