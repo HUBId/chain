@@ -282,6 +282,53 @@ PY
           set -euo pipefail
           cargo audit --deny warnings
 
+  wallet-supply-chain:
+    name: Wallet supply-chain audit (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rpp-wallet-lib
+            manifest: rpp/wallet/Cargo.toml
+          - name: rpp-wallet
+            manifest: rpp/wallet-runner/Cargo.toml
+          - name: rpp-wallet-interface
+            manifest: rpp/wallet-interface/Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-supply-chain-${{ matrix.name }}
+      - name: Restore advisory database cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/advisory-db
+          key: ${{ runner.os }}-wallet-advisory-db-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wallet-advisory-db-${{ matrix.name }}-
+      - name: Install supply-chain tooling
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-audit
+          cargo install --locked cargo-deny
+      - name: Update advisory database
+        run: |
+          set -euo pipefail
+          cargo audit fetch
+      - name: Run cargo audit (wallet)
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings --manifest-path "${{ matrix.manifest }}"
+      - name: Run cargo deny (wallet)
+        run: |
+          set -euo pipefail
+          cargo deny --manifest-path "${{ matrix.manifest }}" --config config/security/cargo-deny-wallet.toml check advisories bans licenses sources
+
   alerts-lint:
     name: Alert manifest lint
     runs-on: ubuntu-latest
