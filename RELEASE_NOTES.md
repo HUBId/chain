@@ -36,6 +36,12 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   installation, configuration with `config/node.toml`, rollout feature gates,
   telemetry options, and recovery procedures for VRF mismatches and missing
   snapshots.
+- Published the [Wallet Support Policy](docs/wallet_support_policy.md), which
+  enumerates long-term wallet configurations, minimum system requirements,
+  support tiers (LTS, maintenance, experimental), and explicit deprecation
+  timelines for CLI-only, mock-prover, bearer-token-only RPC, and other legacy
+  modes. Release announcements must link this policy so stakeholders can track
+  commitments over time.
 - Updated the Poseidon VRF notes to highlight the `/status/node` telemetry
   payload and the `target_validator_count` / `rollout.telemetry.*` knobs in
   `config/node.toml`, giving operators concrete endpoints and toggles for the
@@ -92,3 +98,7 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
 - [ ] Review benchmarking dashboards for regressions versus the previous release.
 - [ ] Ensure new backend feature flags are documented and gated appropriately.
 - [ ] Validate release artefacts (binaries, Docker images, manifests) were built with the pinned toolchain.
+- [ ] Annotate each SemVer tag with its support tier (`lts/MAJOR.MINOR` or
+      `exp/MAJOR.MINOR.PATCH`) so `.github/workflows/release.yml` and the release
+      body can surface the guarantees captured in
+      [`docs/wallet_support_policy.md`](docs/wallet_support_policy.md).
