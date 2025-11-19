@@ -25,6 +25,7 @@ prover-stwo = [
     "prover-backend-interface/prover-stwo",
     "dep:prover-stwo-circuits",
 ]
+prover_stwo_backend = ["prover-stwo"]
 prover-stwo-simd = [
     "prover-stwo",
     "nightly-prover",
