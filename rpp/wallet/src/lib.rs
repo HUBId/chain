@@ -20,7 +20,25 @@
 pub use prover_backend_interface as proof_backend;
 
 #[cfg(feature = "prover-stwo")]
-pub use prover_stwo_backend as stwo;
+pub mod stwo {
+    pub use prover_stwo_backend::backend;
+    pub use prover_stwo_backend::official;
+    pub use prover_stwo_backend::reputation;
+    pub use prover_stwo_backend::types;
+    pub use prover_stwo_backend::{self as prelude, proof_backend};
+
+    pub mod circuit {
+        pub use prover_stwo_backend::official::circuit::*;
+    }
+
+    pub mod proof {
+        pub use prover_stwo_backend::official::proof::*;
+    }
+
+    pub mod prover {
+        pub use prover_stwo_backend::official::prover::*;
+    }
+}
 
 #[cfg(not(feature = "prover-stwo"))]
 #[path = "stwo_stub.rs"]

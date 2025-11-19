@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 use super::DraftTransaction;
 
 pub mod prover;
+#[cfg(feature = "prover-stwo")]
+pub mod stwo;
 
 pub use prover::build_wallet_prover;
 
