@@ -76,6 +76,9 @@ new capabilities.
 | [Wallet Phase 3 – GUI guide](wallet_phase3_gui.md) | MVU architecture overview, tab flows, telemetry, UX security affordances, and GUI-specific build/test steps layered atop the Phase 2 runtime. |
 | [Wallet Phase 4 – advanced operations](wallet_phase4_advanced.md) | Backup rotation, watch-only projections, multisig hooks, ZSI workflows, mTLS/RBAC security, hardware integrations, and migration guidance for enterprise rollouts. |
 | [Wallet operator runbook](wallet_operator_runbook.md) | Step-by-step acceptance checklist that validates prerequisites, feature flags, backup/restores, security envelopes, and regression automation for wallet releases. |
+| [Wallet installation guides (Linux / macOS / Windows)](install) | Platform-specific instructions covering signature verification, installer hooks, RPC/GUI configuration, screenshots, and uninstall flows. |
+| [Wallet operations guide](operations/wallet.md) | RPC hosting models, mTLS/RBAC hardening, logging, backup rotation, telemetry, crash reporting, and drill expectations for on-call teams. |
+| [Wallet troubleshooting catalog](troubleshooting/wallet.md) | Error-code lookup tables, health checks, and self-diagnostic workflows that responders can run before escalating incidents. |
 | [Wallet release status](wallet_release_status.md) | Executive summary of Phase 1–4 completion, delivered capabilities, deferred items, dependencies, and verification checklist links for release readiness. |
 | [Wallet policies](wallet/policies.md) & [operations](wallet/operations.md) | Tiered UTXO policy reference plus operational guidance for monitoring policy enforcement and coordinating validator-grade sweeps. |
 | [Wallet documentation in `MIGRATION.md`](../MIGRATION.md#wallet-database-schema-v3-upgrade) | Database schema v3 upgrade path, including backup prerequisites, migration commands, and rollback steps tied to the Phase 4 rollout. |

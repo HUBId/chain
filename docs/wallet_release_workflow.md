@@ -24,8 +24,8 @@ manual smoke tests and governance gates are captured alongside the artifacts.
    `cargo xtask wallet-installer` for the target, storing the outputs under
    `dist/wallet/<target>/`.
 3. Each artifact follows the `rpp-wallet-<version>-<os>-<arch>-<features>` naming
-   pattern and contains the README, LICENSE, and INSTALL docs plus the
-   platform-specific hooks.
+   pattern and contains the LICENSE, INSTALL docs, the repository README, and the
+   OS-specific `README-<os>.md` alongside the platform hooks and configs.
 4. Checksums are generated next to every artifact (`.sha256` files).
 
 ## SBOM, checksums, and provenance

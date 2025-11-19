@@ -247,7 +247,7 @@ fn stage_common_payload(
         copy_file(path, &root.join("config").join(file_name), Some(0o640))?;
     }
 
-    let docs = [
+    let mut docs = vec![
         (
             ctx.workspace.join("LICENSE.md"),
             root.join("docs/LICENSE.md"),
@@ -264,6 +264,18 @@ fn stage_common_payload(
             Some(0o644),
         ),
     ];
+    let os_slug = match platform {
+        InstallerPlatform::Linux => Some("linux"),
+        InstallerPlatform::Windows => Some("windows"),
+        InstallerPlatform::MacOs => Some("macos"),
+    };
+    if let Some(slug) = os_slug {
+        docs.push((
+            ctx.workspace.join(format!("README-{}.md", slug)),
+            root.join(format!("docs/README-{}.md", slug)),
+            Some(0o644),
+        ));
+    }
     for (source, dest, mode) in docs {
         copy_file(&source, &dest, mode)?;
     }
@@ -511,6 +523,10 @@ fn embed_docs_into_app(ctx: &WalletBuildContext, app_bundle: &Path) -> Result<()
         (
             ctx.workspace.join("INSTALL.wallet.md"),
             resources.join("INSTALL.md"),
+        ),
+        (
+            ctx.workspace.join("README-macos.md"),
+            resources.join("README-macos.md"),
         ),
     ];
     for (source, dest) in docs {

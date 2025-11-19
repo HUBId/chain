@@ -33,6 +33,10 @@ validates every combination.【F:docs/wallet_phase4_advanced.md†L160-L184】
    which dashboards (sync, fee estimator, prover, RBAC) and alert thresholds to
    watch during rollout. Capture which Grafana folders host the Wallet Intake/
    Proof Validation exports listed in the guide.【F:docs/wallet_monitoring.md†L1-L70】
+7. **Platform references** – Attach the relevant OS install guide under
+   `docs/install/`, the [wallet operations guide](operations/wallet.md), and the
+   [troubleshooting catalog](troubleshooting/wallet.md) to every rollout ticket
+   so responders have the RPC/mTLS, log, and error-code references at hand.
 
 ## 2. Configuration validation checklist
 
@@ -134,11 +138,16 @@ it to the change record.【F:Makefile†L1-L40】
 | TLS handshake failures in logs | CA chain, certificate paths, or RBAC bindings mismatched | Inspect the wallet log (`RPP_WALLET_LOG_LEVEL=debug`) and re-stage certificates per the Phase 4 RPC security section.【F:docs/wallet_phase4_advanced.md†L109-L140】【F:scripts/run_wallet_mode.sh†L12-L47】 |
 | Sync stalls / `RouterError::Sync` codes | Node gossip endpoints unreachable or birthday height mis-set | Verify `[node].gossip_endpoints` connectivity and adjust `wallet.engine.birthday_height` before rescanning.【F:config/wallet.toml†L107-L143】【F:docs/wallet_phase4_advanced.md†L55-L57】 |
 
+Reference the [wallet troubleshooting catalog](troubleshooting/wallet.md) for a
+longer list of RPC/CLI error codes, health checks, and diagnostic commands.
+
 **Log locations** – When running via `scripts/run_wallet_mode.sh`, STDOUT/ERR is
 the primary log stream. Override `RPP_WALLET_LOG_LEVEL` or pass
 `--log-level debug` to surface TLS, RBAC, and sync traces. Redirect the process
 output to `/var/log/rpp-wallet/*.log` (or your platform convention) during
 long-lived deployments and include timestamps in collection pipelines.【F:scripts/run_wallet_mode.sh†L12-L57】
+See the [wallet operations guide](operations/wallet.md#log-collection-and-retention)
+for platform-specific log shipping and retention recommendations.
 
 ## 6. Audit log review & telemetry verification
 
