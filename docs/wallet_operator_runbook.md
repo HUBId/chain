@@ -25,9 +25,14 @@ for the deployment (`wallet_multisig_hooks`, `wallet_zsi`, `wallet_rpc_mtls`,
 feature flags, how they pair with configuration scopes, and the CI xtask that
 validates every combination.【F:docs/wallet_phase4_advanced.md†L160-L184】
 5. **Telemetry opt-in** – Decide whether to publish metrics through Electrs or
-external scrapes. Enable `[electrs.cache.telemetry]` or
-`[electrs.tracker.telemetry_endpoint]` only when the observability stack is
-reachable, and plan Prometheus/OTLP endpoints per the telemetry overview.【F:config/wallet.toml†L144-L168】【F:docs/telemetry.md†L1-L68】
+   external scrapes. Enable `[electrs.cache.telemetry]` or
+   `[electrs.tracker.telemetry_endpoint]` only when the observability stack is
+   reachable, and plan Prometheus/OTLP endpoints per the telemetry overview.【F:config/wallet.toml†L144-L168】【F:docs/telemetry.md†L1-L68】
+6. **Monitoring hand-off** – Link the deployment ticket to the
+   [`wallet_monitoring.md`](wallet_monitoring.md) guide so on-call responders know
+   which dashboards (sync, fee estimator, prover, RBAC) and alert thresholds to
+   watch during rollout. Capture which Grafana folders host the Wallet Intake/
+   Proof Validation exports listed in the guide.【F:docs/wallet_monitoring.md†L1-L70】
 
 ## 2. Configuration validation checklist
 
@@ -61,9 +66,14 @@ flags. The helper script passes the log level to `rpp-node wallet` when no
 `--log-level` flag is set and monitors the `/health/live` and `/health/ready`
 endpoints for readiness.【F:scripts/run_wallet_mode.sh†L9-L57】
 3. **CLI surface** – Invoke `rpp-wallet --help` plus flag-specific subcommands
-(e.g., `multisig`, `zsi`, `hw`) to confirm the CLI exposes the flows enabled in
-configuration. Missing commands indicate a feature mismatch (for example,
-`WalletError::MultisigDisabled` when `wallet_multisig_hooks` was not compiled).【F:rpp/wallet/src/wallet/mod.rs†L50-L95】【F:docs/wallet_phase4_advanced.md†L60-L89】
+   (e.g., `multisig`, `zsi`, `hw`) to confirm the CLI exposes the flows enabled in
+   configuration. Missing commands indicate a feature mismatch (for example,
+   `WalletError::MultisigDisabled` when `wallet_multisig_hooks` was not compiled).【F:rpp/wallet/src/wallet/mod.rs†L50-L95】【F:docs/wallet_phase4_advanced.md†L60-L89】
+
+4. **Dashboard alignment** – While the runtime is running, open the sync/prover
+   panels referenced in `wallet_monitoring.md` and confirm the metrics (`rpp.runtime.wallet.*`)
+   reflect the current deployment. Save screenshots with the acceptance evidence
+   so responders know which Prometheus labels map to the node you’re rolling out.【F:docs/wallet_monitoring.md†L1-L70】
 
 ## 4. Feature-flag and configuration acceptance test
 

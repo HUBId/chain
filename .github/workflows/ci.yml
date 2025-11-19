@@ -187,6 +187,30 @@ PY
           exit 1
         fi
 
+  wallet-windows-build:
+    name: Wallet Windows build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Build wallet CLI and GUI bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked \
+            -p rpp-wallet \
+            --no-default-features \
+            --features "runtime,prover-stwo,backup,wallet_multisig_hooks,wallet_rpc_mtls,wallet_hw"
+          cargo build --locked \
+            -p rpp-wallet-lib \
+            --bin rpp-wallet-gui \
+            --no-default-features \
+            --features "wallet_gui,prover-stwo,backup"
+
   proof-version-policy:
     name: Proof version policy
     runs-on: ubuntu-latest

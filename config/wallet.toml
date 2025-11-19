@@ -2,6 +2,7 @@
 # Phase 2 policy/fee/prover settings are documented in docs/wallet_phase2_policies_prover.md.
 # Phase 3 GUI settings are documented in docs/wallet_phase3_gui.md.
 # Phase 4 advanced wallet flows are documented in docs/wallet_phase4_advanced.md.
+# Platform defaults/live directories are documented in docs/wallet_platform_support.md.
 #
 # Wallet feature matrix (authoritative copy lives in README.md → "Wallet feature flags and `[wallet.*]` scopes"):
 # | Cargo feature | Default | `[wallet.*]` scopes | Runtime guard when misconfigured |
@@ -122,8 +123,11 @@ lookback_blocks = 2880
 chunk_size = 64
 
 [wallet.engine]
+# Override these paths per OS as described in docs/wallet_platform_support.md when
+# storing data under platform-specific application directories.
 data_dir = "./data/wallet"
 keystore_path = "./data/wallet/keystore.toml"
+backup_path = "./data/wallet/backups"
 birthday_height = null
 
 # Spend policy knobs (gap limits, confirmation depth, dust/change budgets, lock timeout).

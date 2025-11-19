@@ -1,4 +1,4 @@
-rpp-wallet v0.1.0 (/workspace/chain/rpp/wallet)
+rpp-wallet v0.1.1 (/workspace/chain/rpp/wallet)
 ├── anyhow v1.0.100
 ├── argon2 v0.5.3
 │   ├── base64ct v1.6.0 (/workspace/chain/vendor/base64ct/1.6.0)
@@ -334,7 +334,7 @@ rpp-wallet v0.1.0 (/workspace/chain/rpp/wallet)
 │   ├── libc v0.2.177
 │   └── rtoolbox v0.0.3
 │       └── libc v0.2.177
-├── rpp-wallet-interface v0.0.12 (/workspace/chain/rpp/wallet-interface)
+├── rpp-wallet-interface v0.0.13 (/workspace/chain/rpp/wallet-interface)
 │   ├── anyhow v1.0.100
 │   ├── hex v0.4.3
 │   ├── serde v1.0.225 (*)
@@ -364,7 +364,7 @@ rpp-wallet v0.1.0 (/workspace/chain/rpp/wallet)
 │   │       ├── cfg-if v1.0.4
 │   │       ├── libc v0.2.177
 │   │       └── smallvec v1.15.1
-│   ├── rpp-pruning v0.0.12 (/workspace/chain/rpp/pruning)
+│   ├── rpp-pruning v0.0.13 (/workspace/chain/rpp/pruning)
 │   │   ├── bincode v1.3.3 (*)
 │   │   └── serde v1.0.225 (*)
 │   ├── serde v1.0.225 (*)

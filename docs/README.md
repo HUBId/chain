@@ -77,6 +77,9 @@ new capabilities.
 | [Wallet release status](wallet_release_status.md) | Executive summary of Phase 1–4 completion, delivered capabilities, deferred items, dependencies, and verification checklist links for release readiness. |
 | [Wallet policies](wallet/policies.md) & [operations](wallet/operations.md) | Tiered UTXO policy reference plus operational guidance for monitoring policy enforcement and coordinating validator-grade sweeps. |
 | [Wallet documentation in `MIGRATION.md`](../MIGRATION.md#wallet-database-schema-v3-upgrade) | Database schema v3 upgrade path, including backup prerequisites, migration commands, and rollback steps tied to the Phase 4 rollout. |
+| [Wallet monitoring guide](wallet_monitoring.md) | Maps runtime metrics (`rpp.runtime.wallet.*`), Grafana dashboards, and sample alert rules so operators can tie incidents back to the correct Prometheus/OTLP signals. |
+| [Wallet platform support matrix](wallet_platform_support.md) | Documents Linux/macOS/Windows build steps, cross-compilation commands, smoke tests, and per-OS quirks for the CLI and GUI bundles. |
+| [Wallet roadmap beyond Phase 4](wallet_future_roadmap.md) | Highlights short-, mid-, and long-term initiatives (hardware vendors, HSMs, mobile UI, multisig automation) and links each one to the relevant issue tracker labels. |
 
 For additional topics, explore the documentation tree (e.g. `docs/telemetry.md` and
 `docs/validator_quickstart.md`).

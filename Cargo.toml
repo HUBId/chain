@@ -92,7 +92,7 @@ backend-plonky3-gpu = [
 ]
 
 [workspace.package]
-version = "0.0.12"
+version = "0.0.13"
 edition = "2021"
 license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
@@ -137,13 +137,13 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.0.12" }
-firewood-macros = { path = "firewood-macros", version = "0.0.12" }
-firewood-storage = { path = "storage", version = "0.0.12" }
-firewood-ffi = { path = "ffi", version = "0.0.12" }
-firewood-triehash = { path = "triehash", version = "0.0.12" }
-rpp-chain-cli = { path = "rpp/chain-cli", version = "0.0.12" }
-rpp-node-runtime-api = { path = "rpp/node-runtime-api", version = "0.0.12" }
+firewood = { path = "firewood", version = "0.0.13" }
+firewood-macros = { path = "firewood-macros", version = "0.0.13" }
+firewood-storage = { path = "storage", version = "0.0.13" }
+firewood-ffi = { path = "ffi", version = "0.0.13" }
+firewood-triehash = { path = "triehash", version = "0.0.13" }
+rpp-chain-cli = { path = "rpp/chain-cli", version = "0.0.13" }
+rpp-node-runtime-api = { path = "rpp/node-runtime-api", version = "0.0.13" }
 prover_stwo_backend = { path = "prover/prover_stwo_backend", version = "1.0.0", default-features = false }
 
 # common dependencies
