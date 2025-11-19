@@ -86,6 +86,7 @@ auto_lock_secs = 300
 clipboard_auto_clear = true
 
 [wallet.telemetry]
+metrics = false
 crash_reports = false
 endpoint = ""
 machine_id_salt = ""

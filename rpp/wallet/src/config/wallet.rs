@@ -360,6 +360,8 @@ impl Default for WalletGuiConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletTelemetryConfig {
+    /// Enable anonymized runtime metrics uploads.
+    pub metrics: bool,
     /// Enable crash reporting and uploader tasks.
     pub crash_reports: bool,
     /// HTTPS endpoint that receives crash payloads.
@@ -371,6 +373,7 @@ pub struct WalletTelemetryConfig {
 impl Default for WalletTelemetryConfig {
     fn default() -> Self {
         Self {
+            metrics: false,
             crash_reports: false,
             endpoint: String::new(),
             machine_id_salt: String::new(),

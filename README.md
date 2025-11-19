@@ -307,6 +307,12 @@ scripts/run_wallet_mode.sh --config my-wallet.toml
 Once running, the wallet streams orchestrator dashboards, witness gossip, and
 tracker status into the UI.【F:rpp/wallet/ui/wallet.rs†L945-L1197】
 
+Runtime telemetry remains disabled until explicitly enabled. Follow
+[`docs/telemetry_privacy.md`](docs/telemetry_privacy.md) for the exact event
+schema, retention windows, and privacy guarantees. Operators can opt in via the
+`wallet telemetry metrics …` CLI commands or by editing the
+`[wallet.telemetry]` section in `config/wallet.toml`.
+
 ## Documentation and support
 
 Comprehensive operator runbooks, telemetry guides, architecture diagrams, and

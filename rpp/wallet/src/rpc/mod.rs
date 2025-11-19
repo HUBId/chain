@@ -9,6 +9,7 @@ pub mod zsi;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use dto::{
     BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
@@ -131,6 +132,13 @@ pub struct WalletRpcRouter {
     metrics: RuntimeMetricsHandle,
 }
 
+impl Drop for WalletRpcRouter {
+    fn drop(&mut self) {
+        self.telemetry.record_session("stop");
+        self.telemetry.flush();
+    }
+}
+
 const DEFAULT_RECENT_BLOCK_LIMIT: usize = 8;
 #[cfg(feature = "wallet_hw")]
 const HARDWARE_DISABLED_ERROR: &str = "wallet hardware support disabled by configuration";
@@ -141,8 +149,10 @@ impl WalletRpcRouter {
         sync: Option<Arc<dyn SyncHandle>>,
         metrics: RuntimeMetricsHandle,
     ) -> Self {
+        let telemetry = wallet.telemetry_handle();
+        telemetry.record_session("start");
         Self {
-            telemetry: wallet.telemetry_handle(),
+            telemetry,
             wallet,
             drafts: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -238,9 +248,51 @@ impl WalletRpcRouter {
             );
         }
 
+        let started = Instant::now();
+        let method_label = method.clone();
         match self.dispatch(&method, params) {
-            Ok(result) => JsonRpcResponse::success(id.clone(), result),
-            Err(error) => JsonRpcResponse::error(id.clone(), error.into_json_error()),
+            Ok(result) => {
+                self.telemetry.record_rpc_event(
+                    &method_label,
+                    started.elapsed(),
+                    TelemetryOutcome::Success,
+                    None,
+                );
+                if let Some(stage) = send_stage_for_method(&method_label) {
+                    self.telemetry
+                        .record_send_stage(stage, TelemetryOutcome::Success);
+                }
+                if let Some(stage) = rescan_stage_for_method(&method_label) {
+                    self.telemetry.record_rescan_stage(
+                        stage,
+                        Some(started.elapsed()),
+                        TelemetryOutcome::Success,
+                    );
+                }
+                JsonRpcResponse::success(id.clone(), result)
+            }
+            Err(error) => {
+                let code_value = error.telemetry_code();
+                let code = code_value.map(|value| value.as_str().into_owned());
+                self.telemetry.record_rpc_event(
+                    &method_label,
+                    started.elapsed(),
+                    TelemetryOutcome::Error,
+                    code.as_deref(),
+                );
+                if let Some(stage) = send_stage_for_method(&method_label) {
+                    self.telemetry
+                        .record_send_stage(stage, TelemetryOutcome::Error);
+                }
+                if let Some(stage) = rescan_stage_for_method(&method_label) {
+                    self.telemetry.record_rescan_stage(
+                        stage,
+                        Some(started.elapsed()),
+                        TelemetryOutcome::Error,
+                    );
+                }
+                JsonRpcResponse::error(id.clone(), error.into_json_error())
+            }
         }
     }
 
@@ -1257,6 +1309,28 @@ enum RouterError {
 }
 
 impl RouterError {
+    fn telemetry_code(&self) -> Option<WalletRpcErrorCode> {
+        match self {
+            RouterError::InvalidRequest(_) => Some(WalletRpcErrorCode::InvalidRequest),
+            RouterError::MethodNotFound(_) => Some(WalletRpcErrorCode::MethodNotFound),
+            RouterError::InvalidParams(_) => Some(WalletRpcErrorCode::InvalidParams),
+            RouterError::Wallet(error) => Some(wallet_error_code(error)),
+            RouterError::WatchOnly(error) => Some(watch_only_error_code(error)),
+            RouterError::Sync(_) => Some(WalletRpcErrorCode::SyncError),
+            RouterError::Node(error) => Some(node_error_code(error)),
+            RouterError::Backup(_) => Some(WalletRpcErrorCode::InternalError),
+            RouterError::MissingDraft(_) => Some(WalletRpcErrorCode::DraftNotFound),
+            RouterError::DraftUnsigned(_) => Some(WalletRpcErrorCode::DraftUnsigned),
+            RouterError::SyncUnavailable => Some(WalletRpcErrorCode::SyncUnavailable),
+            RouterError::RescanOutOfRange { .. } => Some(WalletRpcErrorCode::RescanOutOfRange),
+            RouterError::RescanInProgress { .. } => Some(WalletRpcErrorCode::RescanInProgress),
+            RouterError::StatePoisoned => Some(WalletRpcErrorCode::StatePoisoned),
+            RouterError::Serialization(_) => Some(WalletRpcErrorCode::SerializationFailure),
+        }
+    }
+}
+
+impl RouterError {
     fn into_json_error(self) -> JsonRpcError {
         match self {
             RouterError::InvalidRequest(message) => {
@@ -1319,6 +1393,64 @@ fn json_error(
 ) -> JsonRpcError {
     let payload = code.data_payload(details);
     JsonRpcError::new(code.as_i32(), message.into(), Some(payload))
+}
+
+fn send_stage_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        "create_tx" => Some("draft"),
+        "sign_tx" => Some("sign"),
+        "broadcast" | "broadcast_raw" => Some("broadcast"),
+        _ => None,
+    }
+}
+
+fn rescan_stage_for_method(method: &str) -> Option<&'static str> {
+    if method == "rescan" {
+        Some("reschedule")
+    } else {
+        None
+    }
+}
+
+fn wallet_error_code(error: &WalletError) -> WalletRpcErrorCode {
+    match error {
+        WalletError::Engine(_) => WalletRpcErrorCode::EngineFailure,
+        WalletError::Prover(_) => WalletRpcErrorCode::ProverFailed,
+        WalletError::Node(node) => node_error_code(node),
+        WalletError::Sync(_) => WalletRpcErrorCode::SyncError,
+        WalletError::WatchOnly(watch_only) => watch_only_error_code(watch_only),
+        #[cfg(feature = "wallet_multisig_hooks")]
+        WalletError::Multisig(_) => WalletRpcErrorCode::InvalidParams,
+        WalletError::MultisigDisabled => WalletRpcErrorCode::InvalidRequest,
+        WalletError::Zsi(_) => WalletRpcErrorCode::InvalidRequest,
+        WalletError::HardwareFeatureDisabled => WalletRpcErrorCode::InvalidRequest,
+        #[cfg(feature = "wallet_hw")]
+        WalletError::Hardware(_) => WalletRpcErrorCode::EngineFailure,
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareUnavailable => WalletRpcErrorCode::InvalidRequest,
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareStatePoisoned => WalletRpcErrorCode::StatePoisoned,
+        #[cfg(feature = "wallet_hw")]
+        WalletError::HardwareDisabled => WalletRpcErrorCode::InvalidRequest,
+    }
+}
+
+fn watch_only_error_code(error: &WatchOnlyError) -> WalletRpcErrorCode {
+    match error {
+        WatchOnlyError::StatePoisoned => WalletRpcErrorCode::StatePoisoned,
+        WatchOnlyError::SigningDisabled | WatchOnlyError::BroadcastDisabled => {
+            WalletRpcErrorCode::WatchOnlyNotEnabled
+        }
+    }
+}
+
+fn node_error_code(error: &NodeClientError) -> WalletRpcErrorCode {
+    match error {
+        NodeClientError::Network { .. } => WalletRpcErrorCode::NodeUnavailable,
+        NodeClientError::Rejected { .. } => WalletRpcErrorCode::NodeRejected,
+        NodeClientError::Policy { .. } => WalletRpcErrorCode::NodePolicy,
+        NodeClientError::StatsUnavailable { .. } => WalletRpcErrorCode::NodeStatsUnavailable,
+    }
 }
 
 fn watch_only_status_to_dto(status: WatchOnlyStatus) -> WatchOnlyStatusResponse {
