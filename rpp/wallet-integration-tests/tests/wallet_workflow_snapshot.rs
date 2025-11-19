@@ -810,6 +810,7 @@ impl WorkflowFixture {
             self.wallet(),
             Some(sync_handle),
             Arc::clone(&metrics),
+            None,
         ));
         let rpc_router = json_rpc_router(Arc::clone(&router), Arc::clone(&metrics), &mut config)
             .context("construct wallet RPC router")?;

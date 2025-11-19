@@ -980,6 +980,12 @@ pub enum WalletRpcMethod {
     JsonWatchOnlyEnable,
     /// JSON-RPC: `watch_only.disable`.
     JsonWatchOnlyDisable,
+    /// JSON-RPC: `lifecycle.status`.
+    JsonLifecycleStatus,
+    /// JSON-RPC: `lifecycle.start`.
+    JsonLifecycleStart,
+    /// JSON-RPC: `lifecycle.stop`.
+    JsonLifecycleStop,
     /// JSON-RPC: `multisig.get_scope`.
     #[cfg(feature = "wallet_multisig_hooks")]
     JsonMultisigGetScope,
@@ -1108,6 +1114,9 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonWatchOnlyStatus => "json_watch_only_status",
             Self::JsonWatchOnlyEnable => "json_watch_only_enable",
             Self::JsonWatchOnlyDisable => "json_watch_only_disable",
+            Self::JsonLifecycleStatus => "json_lifecycle_status",
+            Self::JsonLifecycleStart => "json_lifecycle_start",
+            Self::JsonLifecycleStop => "json_lifecycle_stop",
             #[cfg(feature = "wallet_multisig_hooks")]
             Self::JsonMultisigGetScope => "json_multisig_get_scope",
             #[cfg(feature = "wallet_multisig_hooks")]
