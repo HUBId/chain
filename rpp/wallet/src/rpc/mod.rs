@@ -52,7 +52,7 @@ use crate::backup::{
 #[cfg(feature = "wallet_zsi")]
 use crate::db::StoredZsiArtifact;
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
-use crate::engine::signing::ProverOutput;
+use crate::engine::signing::ProveResult;
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
     SelectionError, SpendModel, WalletBalance,
@@ -85,7 +85,7 @@ use zeroize::Zeroizing;
 struct DraftState {
     draft: DraftTransaction,
     metadata: BuildMetadata,
-    prover_output: Option<ProverOutput>,
+    prover_result: Option<ProveResult>,
 }
 
 pub trait SyncHandle: Send + Sync {
@@ -1156,18 +1156,19 @@ impl WalletRpcRouter {
             .get_mut(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
         let output = self.wallet.sign_and_prove(&state.draft)?;
-        let proof_size = output.proof.as_ref().map(|proof| proof.as_ref().len());
+        let identity = self.wallet.prover_identity();
+        let proof_size = output.proof().map(|proof| proof.as_ref().len());
         let locks = self.pending_lock_dtos()?;
         let response = SignTxResponse {
             draft_id: draft_id.clone(),
-            backend: output.backend.clone(),
-            witness_bytes: output.witness_bytes,
-            proof_generated: output.proof.is_some(),
+            backend: identity.backend.to_string(),
+            witness_bytes: output.witness_bytes(),
+            proof_generated: output.proof().is_some(),
             proof_size,
-            duration_ms: output.duration_ms,
+            duration_ms: output.duration().as_millis() as u64,
             locks,
         };
-        state.prover_output = Some(output);
+        state.prover_result = Some(output);
         drop(drafts);
         to_value(response)
     }
@@ -1180,14 +1181,16 @@ impl WalletRpcRouter {
         let state = drafts
             .get(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
-        if state.prover_output.is_none() {
+        if state.prover_result.is_none() {
             return Err(RouterError::DraftUnsigned {
                 draft_id,
                 proof_required: self.wallet.prover_config().require_proof,
             });
         }
-        if let Some(output) = &state.prover_output {
-            if output.proof.is_none() && !self.wallet.prover_config().allow_broadcast_without_proof {
+        if let Some(output) = &state.prover_result {
+            if output.proof().is_none()
+                && !self.wallet.prover_config().allow_broadcast_without_proof
+            {
                 return Err(RouterError::DraftUnsigned {
                     draft_id,
                     proof_required: true,
@@ -1278,7 +1281,7 @@ impl WalletRpcRouter {
             DraftState {
                 draft: bundle.draft,
                 metadata: bundle.metadata,
-                prover_output: None,
+                prover_result: None,
             },
         );
         Ok(identifier)
@@ -1305,7 +1308,10 @@ enum RouterError {
     Node(NodeClientError),
     Backup(BackupError),
     MissingDraft(String),
-    DraftUnsigned { draft_id: String, proof_required: bool },
+    DraftUnsigned {
+        draft_id: String,
+        proof_required: bool,
+    },
     SyncUnavailable,
     RescanOutOfRange {
         requested: u64,
@@ -1721,7 +1727,6 @@ fn engine_error_to_json(error: &EngineError) -> JsonRpcError {
             error.to_string(),
             Some(json!({ "kind": "address", "message": address.to_string() })),
         ),
-        #[cfg(feature = "wallet_multisig_hooks")]
         EngineError::Multisig(multisig) => json_error(
             WalletRpcErrorCode::InvalidParams,
             multisig.to_string(),
@@ -1842,6 +1847,11 @@ fn prover_error_to_json(error: &ProverError) -> JsonRpcError {
             WalletRpcErrorCode::ProverFailed,
             error.to_string(),
             Some(json!({ "kind": "runtime", "message": message })),
+        ),
+        ProverError::Busy => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "busy" })),
         ),
     }
 }
@@ -2204,7 +2214,7 @@ mod tests {
                         estimated_vbytes: 0,
                         multisig: None,
                     },
-                    prover_output: None,
+                    prover_result: None,
                 },
             );
             drafts.insert(
@@ -2218,7 +2228,7 @@ mod tests {
                         estimated_vbytes: 0,
                         multisig: None,
                     },
-                    prover_output: None,
+                    prover_result: None,
                 },
             );
         }
@@ -2578,12 +2588,7 @@ mod tests {
                         estimated_vbytes: 0,
                         multisig: None,
                     },
-                    prover_output: Some(ProverOutput {
-                        backend: "test".to_string(),
-                        proof: None,
-                        witness_bytes: 0,
-                        duration_ms: 0,
-                    }),
+                    prover_result: Some(ProveResult::new(None, 0, Instant::now(), Instant::now())),
                 },
             );
         }

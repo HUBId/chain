@@ -47,7 +47,7 @@ fn address_manager_tracks_and_releases_locks() {
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].outpoint, outpoint);
 
-    let metadata = PendingLockMetadata::new("mock".into(), 16, 8, Some(256));
+    let metadata = PendingLockMetadata::new("mock".into(), 16, 8, Some(256), None);
     manager
         .attach_lock_txid([&outpoint], [9u8; 32], Some(metadata.clone()))
         .expect("attach txid");

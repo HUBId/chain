@@ -29,7 +29,10 @@ pub use addresses::{AddressError, AddressManager, DerivedAddress};
 pub use builder::{BuildMetadata, BuildPlan, BuilderError, BuiltTransaction, TransactionBuilder};
 pub use fees::{FeeCongestionLevel, FeeError, FeeEstimateSource, FeeEstimator, FeeQuote};
 pub use policies::{PolicyEngine, PolicyViolation};
-pub use signing::{ProverError, ProverOutput, WalletProver};
+pub use signing::{
+    DraftProverContext, ProveResult, ProverError, ProverIdentity, ProverMeta, WalletProver,
+    WitnessPlan,
+};
 pub use utxo_sel::{
     CandidateUtxo, SelectionError, SelectionMetadata, SelectionRequest, SelectionResult,
     SelectionStrategy,
