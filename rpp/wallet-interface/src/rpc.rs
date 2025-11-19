@@ -219,6 +219,41 @@ pub struct PendingLockDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Metadata captured from the prover backend during signing.
+pub struct ProverMetadataDto {
+    /// Backend that produced the witness and proof.
+    pub backend: String,
+    /// Total witness bytes processed during signing.
+    pub witness_bytes: u64,
+    /// Duration of the proving job in milliseconds.
+    pub prove_duration_ms: u64,
+    #[serde(default)]
+    /// Whether the wallet required a proof for the draft.
+    pub proof_required: bool,
+    #[serde(default)]
+    /// Whether the prover produced a proof for the draft.
+    pub proof_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Size of the generated proof in bytes, when available.
+    pub proof_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Hex-encoded hash of the generated proof, when available.
+    pub proof_hash: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Signed transaction payload paired with the prover metadata.
+pub struct SignedTxProverBundleDto {
+    /// Hex-encoded transaction submission bytes.
+    pub tx_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional hex-encoded proof bytes.
+    pub proof_hex: Option<String>,
+    /// Metadata reported by the prover backend.
+    pub metadata: ProverMetadataDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicySnapshotDto {
     pub revision: u64,
     pub updated_at: u64,
@@ -324,16 +359,8 @@ pub struct SignTxParams {
 pub struct SignTxResponse {
     /// Identifier of the signed draft.
     pub draft_id: String,
-    /// Signing backend that processed the request.
-    pub backend: String,
-    /// Total witness bytes produced during signing.
-    pub witness_bytes: usize,
-    /// Whether a zero-knowledge proof was generated.
-    pub proof_generated: bool,
-    /// Optional size in bytes of the generated proof.
-    pub proof_size: Option<usize>,
-    /// Time spent signing, in milliseconds.
-    pub duration_ms: u64,
+    /// Signed transaction bundle returned by the prover.
+    pub signed: SignedTxProverBundleDto,
     /// Locks acquired while signing.
     pub locks: Vec<PendingLockDto>,
 }
@@ -383,6 +410,12 @@ pub struct BroadcastResponse {
     pub draft_id: String,
     /// Whether the transaction was accepted by the node.
     pub accepted: bool,
+    #[serde(default)]
+    /// Whether the wallet required a proof before broadcasting.
+    pub proof_required: bool,
+    #[serde(default)]
+    /// Whether a proof was present when broadcasting.
+    pub proof_present: bool,
     /// Locks held while broadcasting.
     pub locks: Vec<PendingLockDto>,
 }

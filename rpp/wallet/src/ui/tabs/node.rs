@@ -1570,15 +1570,31 @@ fn lock_row(lock: &PendingLockDto) -> Element<Message> {
         .as_ref()
         .map(|txid| format!("spending {txid}"))
         .unwrap_or_else(|| "available".into());
+    let proof_summary = format!(
+        "req {} / has {}",
+        bool_label(lock.proof_required),
+        bool_label(lock.proof_present)
+    );
+    let proof_hash = lock.proof_hash.as_deref().unwrap_or("-").to_string();
     row![
         text(format!("{}:{}", lock.utxo_txid, lock.utxo_index)).width(Length::FillPortion(3)),
         text(lock.locked_at_ms.to_string()).width(Length::FillPortion(2)),
         text(&lock.backend).width(Length::FillPortion(2)),
         text(status).width(Length::FillPortion(3)),
+        text(proof_summary).width(Length::FillPortion(2)),
+        text(proof_hash).width(Length::FillPortion(3)),
     ]
     .spacing(12)
     .align_items(Alignment::Center)
     .into()
+}
+
+fn bool_label(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn summary_card(title: &str, body: Column<'_, Message>) -> Element<Message> {

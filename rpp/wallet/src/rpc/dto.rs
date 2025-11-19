@@ -330,6 +330,8 @@ mod tests {
         let response = BroadcastResponse {
             draft_id: "draft1".to_string(),
             accepted: true,
+            proof_required: true,
+            proof_present: true,
             locks: vec![],
         };
         roundtrip(&response);

@@ -1156,14 +1156,29 @@ impl SendSignCommand {
         let client = self.rpc.client()?;
         let result = client.sign_tx(&self.draft_id).await?;
         println!("Draft signed successfully\n");
-        println!("  Draft ID      : {}", result.draft_id);
-        println!("  Backend       : {}", result.backend);
-        println!("  Witness bytes : {}", result.witness_bytes);
-        println!("  Proof generated: {}", format_bool(result.proof_generated));
-        if let Some(size) = result.proof_size {
-            println!("  Proof size    : {} bytes", size);
+        let metadata = &result.signed.metadata;
+        println!("  Draft ID       : {}", result.draft_id);
+        println!("  Backend        : {}", metadata.backend);
+        println!("  Witness bytes  : {}", metadata.witness_bytes);
+        println!(
+            "  Proof required : {}",
+            format_bool(metadata.proof_required)
+        );
+        println!("  Proof present  : {}", format_bool(metadata.proof_present));
+        if let Some(size) = metadata.proof_bytes {
+            println!("  Proof size     : {} bytes", size);
+        } else {
+            println!("  Proof size     : (not available)");
         }
-        println!("  Duration      : {} ms", result.duration_ms);
+        if let Some(hash) = &metadata.proof_hash {
+            println!("  Proof hash     : {hash}");
+        }
+        println!("  Duration       : {} ms", metadata.prove_duration_ms);
+        println!("  Signed tx bytes: {}", result.signed.tx_hex.len() / 2);
+        println!("  Signed tx hex  : {}", result.signed.tx_hex);
+        if let Some(proof_hex) = &result.signed.proof_hex {
+            println!("  Proof hex      : {proof_hex}");
+        }
         render_locks(&result.locks);
         Ok(())
     }
@@ -1185,6 +1200,11 @@ impl SendBroadcastCommand {
         println!("Broadcast result\n");
         println!("  Draft ID : {}", response.draft_id);
         println!("  Accepted : {}", format_bool(response.accepted));
+        println!(
+            "  Proof required : {}",
+            format_bool(response.proof_required)
+        );
+        println!("  Proof present  : {}", format_bool(response.proof_present));
         render_locks(&response.locks);
         Ok(())
     }
@@ -2690,13 +2710,16 @@ fn render_locks(locks: &[PendingLockDto]) {
     }
     println!("\n  Locks:");
     println!(
-        "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>64}",
+        "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>11} {:>11} {:<66} {:>64}",
         "Outpoint",
         "Locked at (ms)",
         "Backend",
         "Witness (B)",
         "Proof (B)",
         "Duration (ms)",
+        "Proof req",
+        "Proof ok",
+        "Proof hash",
         "Spending txid"
     );
     for PendingLockDto {
@@ -2708,6 +2731,9 @@ fn render_locks(locks: &[PendingLockDto]) {
         witness_bytes,
         proof_bytes,
         prove_duration_ms,
+        proof_required,
+        proof_present,
+        proof_hash,
     } in locks
     {
         let outpoint = format!("{}:{}", utxo_txid, utxo_index);
@@ -2720,9 +2746,19 @@ fn render_locks(locks: &[PendingLockDto]) {
         let proof = proof_bytes
             .map(|bytes| bytes.to_string())
             .unwrap_or_else(|| "-".to_string());
+        let proof_hash = proof_hash.clone().unwrap_or_else(|| "-".to_string());
         println!(
-            "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>64}",
-            outpoint, locked_at_ms, backend, witness_bytes, proof, prove_duration_ms, spending
+            "    {:<68} {:>16} {:<12} {:>14} {:>14} {:>14} {:>11} {:>11} {:<66} {:>64}",
+            outpoint,
+            locked_at_ms,
+            backend,
+            witness_bytes,
+            proof,
+            prove_duration_ms,
+            format_bool(*proof_required),
+            format_bool(*proof_present),
+            proof_hash,
+            spending
         );
     }
 }
