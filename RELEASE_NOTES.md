@@ -52,6 +52,18 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   Die zugehörigen Dashboards (`docs/observability/pipeline.md`) und das
   Lifecycle-Dossier (`docs/lifecycle/pipeline.md`) sind als Referenz verlinkt
   und verweisen auf die Blueprint-Abdeckung.【F:docs/lifecycle/pipeline.md†L1-L86】【F:tests/pipeline/end_to_end.rs†L1-L122】【F:docs/observability/pipeline.md†L1-L74】【F:docs/blueprint_coverage.md†L73-L121】
+- Published the [wallet monitoring guide](docs/wallet_monitoring.md), mapping
+  the runtime metrics (`rpp.runtime.wallet.*`) to the Grafana exports listed in
+  `docs/performance_dashboards.json` plus sample PromQL alerts. Release tickets
+  now link this guide so operators keep sync/prover/RBAC alerts in view during
+  rollout.【F:docs/wallet_monitoring.md†L1-L70】
+- Added the [wallet platform support matrix](docs/wallet_platform_support.md)
+  so Linux, macOS, and Windows builds share reproducible instructions, smoke
+  tests, and cross-compilation notes for both CLI and GUI bundles.【F:docs/wallet_platform_support.md†L1-L120】
+- Captured the post-Phase 4 backlog in the
+  [wallet future roadmap](docs/wallet_future_roadmap.md), linking each initiative
+  to tracking labels/RFCs so contributors can pick up work beyond the current
+  release scope.【F:docs/wallet_future_roadmap.md†L1-L60】
 
 ## Wallet Phase 4
 

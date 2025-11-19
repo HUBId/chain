@@ -49,7 +49,10 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   `rpp-wallet-interface` helper, see
   [docs/wallet_integration.md](docs/wallet_integration.md). For an at-a-glance
   readiness summary covering phases, capabilities, deferred items, and
-  verification steps, consult [docs/wallet_release_status.md](docs/wallet_release_status.md).
+  verification steps, consult [docs/wallet_release_status.md](docs/wallet_release_status.md). For upcoming priorities beyond
+  Phase 4 (hardware packaging, mobile UI, multisig automation, etc.) see the
+  [wallet roadmap](docs/wallet_future_roadmap.md) so contributions line up with
+  the published backlog.【F:docs/wallet_future_roadmap.md†L1-L60】
 
 ### Wallet feature flags and `[wallet.*]` scopes
 

@@ -218,6 +218,27 @@ Tags must continue to follow the `vMAJOR.MINOR.PATCH` pattern so the release
 workflow accepts them. The tag name should match the versions written to the
 crates below.
 
+### Wallet tagging & signed bundles
+
+Wallet releases now piggyback on the main workspace process but still publish a
+wallet-specific tag for downstream automation:
+
+1. Run `scripts/build_release.sh` with the production feature list to produce the
+   Linux/macOS/Windows artifacts (as described above) and follow with
+   `cargo xtask wallet-bundle --target <triple> --profile release --version <tag>`
+   for each supported target so the CLI + GUI tarballs exist before tagging.【F:scripts/build_release.sh†L77-L200】【F:xtask/src/wallet_bundle.rs†L40-L220】
+2. Verify the embedded `SHA256SUMS.txt` and manifest signatures for every bundle,
+   then sign the Git tag locally via `git tag -s wallet-vX.Y.Z` pointing at the
+   same commit as the canonical `vX.Y.Z` tag. Push both tags so GitHub releases
+   can attach the wallet bundle manifests alongside the runtime artifacts.
+3. Update the release notes with links to `docs/wallet_monitoring.md` and
+   `docs/wallet_platform_support.md` so operators know where to find the runtime
+   dashboards and cross-platform smoke tests referenced in their runbooks.
+
+Following this checklist keeps the packaging scripts (Task 56) and tagging flow
+aligned—the same artifacts you validated locally are the ones auditors download
+from the published tag.
+
 ## Version management
 
 All workspace crates shipped in the RPP release must agree on the new version.

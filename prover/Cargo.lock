@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "rpp-crypto-vrf"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "hex",
  "malachite",
@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "rpp-identity-tree"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "hex",
  "prover-backend-interface",
