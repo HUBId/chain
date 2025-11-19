@@ -84,6 +84,16 @@ metrics:
     labels:
       - action
       - outcome
+  - name: rpp.runtime.wallet.prover.witness.bytes
+    labels:
+      - backend
+  - name: rpp.runtime.wallet.prover.jobs
+    labels:
+      - backend
+      - result
+  - name: rpp.runtime.wallet.prover.failures
+    labels:
+      - code
   - name: rpp_stark_params_bytes
     labels:
       - proof_backend

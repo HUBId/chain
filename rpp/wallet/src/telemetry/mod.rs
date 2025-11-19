@@ -198,6 +198,27 @@ impl WalletActionTelemetry {
         });
     }
 
+    /// Emits a prover job event for the send flow.
+    pub fn record_prover_job(
+        &self,
+        backend: &str,
+        duration: Duration,
+        outcome: TelemetryOutcome,
+        code: Option<&str>,
+        witness_bytes: Option<u64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        self.record_event(TelemetryEventKind::Prover {
+            backend: backend.to_string(),
+            latency_ms: duration.as_millis() as u64,
+            outcome: outcome.label(),
+            code: code.map(|value| value.to_string()),
+            witness_bytes,
+        });
+    }
+
     /// Emits a telemetry error code sample.
     pub fn record_error_code(&self, code: &str, context: Option<&str>) {
         if !self.enabled {
@@ -303,5 +324,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn telemetry_records_prover_jobs() {
+        let telemetry = WalletActionTelemetry::new(true);
+        telemetry.record_prover_job(
+            "mock",
+            Duration::from_millis(12),
+            TelemetryOutcome::Success,
+            None,
+            Some(2048),
+        );
+
+        let events = telemetry.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            TelemetryEventKind::Prover {
+                backend,
+                latency_ms,
+                outcome,
+                code,
+                witness_bytes,
+            } => {
+                assert_eq!(backend, "mock");
+                assert_eq!(*latency_ms, 12);
+                assert_eq!(*outcome, TelemetryOutcome::Success.label());
+                assert!(code.is_none());
+                assert_eq!(*witness_bytes, Some(2048));
+            }
+            other => panic!("unexpected telemetry event: {other:?}"),
+        }
     }
 }

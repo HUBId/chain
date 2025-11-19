@@ -32,6 +32,15 @@ pub enum TelemetryEventKind {
         latency_ms: Option<u64>,
         outcome: &'static str,
     },
+    Prover {
+        backend: String,
+        latency_ms: u64,
+        outcome: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        witness_bytes: Option<u64>,
+    },
     Error {
         code: String,
         #[serde(skip_serializing_if = "Option::is_none")]

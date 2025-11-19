@@ -47,6 +47,10 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
         RpcResult::ClientError,
         Duration::from_millis(11),
     );
+    metrics.record_wallet_prover_job_duration("mock", true, Duration::from_millis(33));
+    metrics.record_wallet_prover_witness_bytes("mock", 2048);
+    metrics.record_wallet_prover_backend("mock", true);
+    metrics.record_wallet_prover_failure("PROVER_INTERNAL");
     metrics.record_wal_flush_duration(WalFlushOutcome::Retried, Duration::from_millis(13));
     metrics.record_wal_flush_bytes(WalFlushOutcome::Retried, 8192);
     metrics.increment_wal_flushes(WalFlushOutcome::Retried);
