@@ -270,6 +270,7 @@ mod tests {
                 value: 100,
                 change: false,
             }],
+            locks: Vec::new(),
         };
         roundtrip(&response);
     }
@@ -286,11 +287,19 @@ mod tests {
     fn sign_tx_response_roundtrip() {
         let response = SignTxResponse {
             draft_id: "draft1".to_string(),
-            backend: "mock".to_string(),
-            witness_bytes: 512,
-            proof_generated: true,
-            proof_size: Some(256),
-            duration_ms: 42,
+            signed: SignedTxProverBundleDto {
+                tx_hex: "deadbeef".into(),
+                proof_hex: Some("bead".into()),
+                metadata: ProverMetadataDto {
+                    backend: "mock".into(),
+                    witness_bytes: 512,
+                    prove_duration_ms: 42,
+                    proof_required: true,
+                    proof_present: true,
+                    proof_bytes: Some(256),
+                    proof_hash: Some("c0ffee".into()),
+                },
+            },
             locks: vec![PendingLockDto {
                 utxo_txid: "aa".into(),
                 utxo_index: 0,
@@ -299,7 +308,10 @@ mod tests {
                 backend: "mock".into(),
                 witness_bytes: 1,
                 prove_duration_ms: 2,
+                proof_required: true,
+                proof_present: true,
                 proof_bytes: None,
+                proof_hash: Some("beef".into()),
             }],
         };
         roundtrip(&response);
@@ -429,7 +441,10 @@ mod tests {
                 backend: "mock".into(),
                 witness_bytes: 42,
                 prove_duration_ms: 7,
+                proof_required: false,
+                proof_present: false,
                 proof_bytes: Some(128),
+                proof_hash: None,
             }],
         };
         roundtrip(&list);

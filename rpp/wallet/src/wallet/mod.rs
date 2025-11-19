@@ -554,8 +554,16 @@ impl Wallet {
         Ok(snapshot)
     }
 
-    pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProveResult, WalletError> {
+    pub fn sign_and_prove(
+        &self,
+        draft: &DraftTransaction,
+    ) -> Result<(ProveResult, ProverMeta), WalletError> {
         self.ensure_signing_allowed()?;
+        let inputs: Vec<_> = draft
+            .inputs
+            .iter()
+            .map(|input| input.outpoint.clone())
+            .collect();
         let ctx = DraftProverContext::new(draft);
         let result = (|| {
             let plan = self.prover.prepare_witness(&ctx)?;
@@ -566,7 +574,9 @@ impl Wallet {
 
         match result {
             Ok((output, meta)) => {
-                if self.prover_config.require_proof && output.proof().is_none() {
+                let proof_generated = output.proof().is_some();
+                if self.prover_config.require_proof && !proof_generated {
+                    self.engine.release_locks_for_inputs(inputs.iter())?;
                     return Err(WalletError::ProofMissing);
                 }
                 let txid = lock_fingerprint(draft);
@@ -576,19 +586,17 @@ impl Wallet {
                     meta.backend.to_string(),
                     meta.witness_bytes as u64,
                     meta.duration_ms,
+                    self.prover_config.require_proof,
+                    proof_generated,
                     proof_bytes,
                     proof_hash,
                 );
-                self.engine.attach_locks_to_txid(
-                    draft.inputs.iter().map(|input| &input.outpoint),
-                    txid,
-                    Some(metadata),
-                )?;
-                Ok(output)
+                self.engine
+                    .attach_locks_to_txid(inputs.iter(), txid, Some(metadata))?;
+                Ok((output, meta))
             }
             Err(err) => {
-                self.engine
-                    .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?;
+                self.engine.release_locks_for_inputs(inputs.iter())?;
                 Err(err.into())
             }
         }
@@ -1443,20 +1451,25 @@ mod tests {
         let locks_before = wallet.pending_locks().expect("locks");
         assert!(!locks_before.is_empty());
 
-        let output = wallet.sign_and_prove(&draft).expect("mock prove");
+        let (prove_result, meta) = wallet.sign_and_prove(&draft).expect("mock prove");
         assert_eq!(wallet.prover_identity().backend, "mock");
-        assert!(output.proof().is_some());
+        assert!(prove_result.proof().is_some());
 
         let locks = wallet.pending_locks().expect("locks after prove");
         assert_eq!(locks.len(), locks_before.len());
-        let proof_bytes = output.proof().map(|bytes| bytes.as_ref().len() as u64);
+        let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
+        let proof_hash = meta.proof_hash.as_ref().map(hex::encode);
+        let proof_required = wallet.prover_config().require_proof;
+        let proof_present = prove_result.proof().is_some();
         assert!(locks.iter().all(|lock| {
             lock.spending_txid.is_some()
-                && lock.metadata.backend == "mock"
-                && lock.metadata.witness_bytes == output.witness_bytes() as u64
-                && lock.metadata.prove_duration_ms == output.duration().as_millis() as u64
+                && lock.metadata.backend == meta.backend
+                && lock.metadata.witness_bytes == meta.witness_bytes as u64
+                && lock.metadata.prove_duration_ms == meta.duration_ms
+                && lock.metadata.proof_required == proof_required
+                && lock.metadata.proof_present == proof_present
                 && lock.metadata.proof_bytes == proof_bytes
-                && lock.metadata.proof_hash.is_some()
+                && lock.metadata.proof_hash == proof_hash
         }));
         drop(tempdir);
     }
@@ -1500,20 +1513,25 @@ mod tests {
         let locks_before = wallet.pending_locks().expect("locks");
         assert!(!locks_before.is_empty());
 
-        let output = wallet.sign_and_prove(&draft).expect("stwo prove");
+        let (prove_result, meta) = wallet.sign_and_prove(&draft).expect("stwo prove");
         assert_eq!(wallet.prover_identity().backend, "stwo");
-        assert!(output.proof().is_some());
+        assert!(prove_result.proof().is_some());
 
         let locks = wallet.pending_locks().expect("locks after prove");
         assert_eq!(locks.len(), locks_before.len());
-        let proof_bytes = output.proof().map(|bytes| bytes.as_ref().len() as u64);
+        let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
+        let proof_hash = meta.proof_hash.as_ref().map(hex::encode);
+        let proof_required = wallet.prover_config().require_proof;
+        let proof_present = prove_result.proof().is_some();
         assert!(locks.iter().all(|lock| {
             lock.spending_txid.is_some()
-                && lock.metadata.backend == "stwo"
-                && lock.metadata.witness_bytes == output.witness_bytes() as u64
-                && lock.metadata.prove_duration_ms == output.duration().as_millis() as u64
+                && lock.metadata.backend == meta.backend
+                && lock.metadata.witness_bytes == meta.witness_bytes as u64
+                && lock.metadata.prove_duration_ms == meta.duration_ms
+                && lock.metadata.proof_required == proof_required
+                && lock.metadata.proof_present == proof_present
                 && lock.metadata.proof_bytes == proof_bytes
-                && lock.metadata.proof_hash.is_some()
+                && lock.metadata.proof_hash == proof_hash
         }));
         drop(tempdir);
     }

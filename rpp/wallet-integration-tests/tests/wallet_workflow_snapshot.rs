@@ -168,6 +168,9 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     assert_eq!(draft.locks[0].witness_bytes, 0);
     assert_eq!(draft.locks[0].prove_duration_ms, 0);
     assert!(draft.locks[0].proof_bytes.is_none());
+    assert!(!draft.locks[0].proof_required);
+    assert!(!draft.locks[0].proof_present);
+    assert!(draft.locks[0].proof_hash.is_none());
 
     let listed_locks: ListPendingLocksResponse =
         rpc_call(&client, &endpoint, "list_pending_locks", None)
@@ -178,6 +181,9 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
     assert_eq!(listed_locks.locks[0].witness_bytes, 0);
     assert_eq!(listed_locks.locks[0].prove_duration_ms, 0);
     assert!(listed_locks.locks[0].proof_bytes.is_none());
+    assert!(!listed_locks.locks[0].proof_required);
+    assert!(!listed_locks.locks[0].proof_present);
+    assert!(listed_locks.locks[0].proof_hash.is_none());
 
     let sign_params = SignTxParams {
         draft_id: draft.draft_id.clone(),
@@ -186,15 +192,25 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         .await
         .context("sign draft transaction")?;
     assert_eq!(signed.draft_id, draft.draft_id);
+    let metadata = &signed.signed.metadata;
     assert!(
-        signed.proof_generated,
+        metadata.proof_present,
         "mock prover should emit proof bytes"
     );
     assert!(
-        signed.proof_size.unwrap_or_default() > 0,
+        metadata.proof_bytes.unwrap_or_default() > 0,
         "proof size should be reported"
     );
-    assert!(signed.witness_bytes > 0, "witness payload expected");
+    assert!(metadata.witness_bytes > 0, "witness payload expected");
+    assert!(
+        signed
+            .signed
+            .proof_hex
+            .as_ref()
+            .map(|hex| !hex.is_empty())
+            .unwrap_or(false),
+        "proof hex should be populated"
+    );
     assert_eq!(
         signed.locks.len(),
         1,
@@ -204,13 +220,16 @@ async fn wallet_runtime_rpc_happy_path() -> Result<()> {
         signed.locks[0].spending_txid.is_some(),
         "signing should assign a spending txid to the lock",
     );
-    assert_eq!(signed.locks[0].backend, signed.backend);
-    assert_eq!(signed.locks[0].witness_bytes, signed.witness_bytes as u64);
-    assert_eq!(signed.locks[0].prove_duration_ms, signed.duration_ms);
+    assert_eq!(signed.locks[0].backend, metadata.backend);
+    assert_eq!(signed.locks[0].witness_bytes, metadata.witness_bytes);
     assert_eq!(
-        signed.locks[0].proof_bytes,
-        signed.proof_size.map(|size| size as u64)
+        signed.locks[0].prove_duration_ms,
+        metadata.prove_duration_ms
     );
+    assert_eq!(signed.locks[0].proof_required, metadata.proof_required);
+    assert_eq!(signed.locks[0].proof_present, metadata.proof_present);
+    assert_eq!(signed.locks[0].proof_bytes, metadata.proof_bytes);
+    assert_eq!(signed.locks[0].proof_hash, metadata.proof_hash);
 
     let broadcast_params = BroadcastParams {
         draft_id: draft.draft_id.clone(),

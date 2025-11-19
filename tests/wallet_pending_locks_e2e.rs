@@ -90,27 +90,27 @@ async fn wallet_releases_locks_via_all_paths() -> Result<()> {
     let manual = wallet
         .create_draft(recipient.clone(), amount, None)
         .context("create draft for manual release")?;
-    let manual_proof = wallet
+    let (_, manual_meta) = wallet
         .sign_and_prove(&manual)
         .context("sign draft before manual release")?;
     let locks = wallet
         .release_pending_locks()
         .context("manual lock release")?;
     assert_eq!(locks.len(), 1);
-    assert_eq!(locks[0].metadata.backend, manual_proof.backend);
+    assert_eq!(locks[0].metadata.backend, manual_meta.backend);
     assert!(wallet.pending_locks()?.is_empty());
 
     let abort = wallet
         .create_draft(recipient, amount, None)
         .context("create draft for abort flow")?;
-    let abort_proof = wallet
+    let (_, abort_meta) = wallet
         .sign_and_prove(&abort)
         .context("sign draft before abort")?;
     let aborted = wallet
         .abort_draft(&abort)
         .context("abort draft to release locks")?;
     assert_eq!(aborted.len(), 1);
-    assert_eq!(aborted[0].metadata.backend, abort_proof.backend);
+    assert_eq!(aborted[0].metadata.backend, abort_meta.backend);
     assert!(wallet.pending_locks()?.is_empty());
 
     sync.shutdown()

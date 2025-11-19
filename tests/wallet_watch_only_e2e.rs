@@ -76,10 +76,10 @@ async fn wallet_watch_only_mode_blocks_signing_paths() -> Result<()> {
         .disable_watch_only()
         .context("disable watch-only mode")?;
 
-    let proof = wallet
+    let (_, proof_meta) = wallet
         .sign_and_prove(&draft)
         .context("sign draft after disabling watch-only")?;
-    assert_eq!(proof.backend, "instant");
+    assert_eq!(proof_meta.backend, "instant");
 
     wallet
         .broadcast(&draft)
