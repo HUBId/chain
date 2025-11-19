@@ -1,0 +1,394 @@
+name: wallet-nightly
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+env:
+  WALLET_FEATURE_TOOLCHAIN: stable
+  WALLET_FAIL_ARTIFACT_PREFIX: wallet-suite
+  WALLET_QUARANTINE: |
+    wallet_zsi_flow_e2e
+    wallet_pending_locks_e2e
+    wallet_workflow_snapshot
+
+jobs:
+  wallet-e2e:
+    name: Wallet end-to-end suites
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            id: linux-full
+            feature_set: 'wallet-integration policies prover'
+            suites: |
+              wallet_backup_recovery_e2e
+              wallet_policies_fee_e2e
+              wallet_rbac_mtls_e2e
+            display: Linux backup/policies/RBAC
+          - os: ubuntu-latest
+            id: linux-watch
+            feature_set: 'wallet-integration watch-only'
+            suites: |
+              wallet_watch_only_e2e
+              wallet_pending_locks_e2e
+            display: Linux watch-only/pending locks
+          - os: macos-latest
+            id: macos
+            feature_set: 'wallet-integration'
+            suites: |
+              wallet_rescan_resume_e2e
+              wallet_backup_recovery_e2e
+            display: macOS backup/rescan
+          - os: windows-latest
+            id: windows
+            feature_set: 'wallet-integration'
+            suites: |
+              wallet_watch_only_e2e
+              wallet_workflow_snapshot
+            display: Windows watch-only/workflow
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.WALLET_FEATURE_TOOLCHAIN }}
+
+      - name: Run wallet suites
+        id: run-e2e
+        env:
+          WALLET_SUITES: ${{ matrix.suites }}
+          WALLET_FEATURES: ${{ matrix.feature_set }}
+          WALLET_JOB_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/wallet-ci
+          failures="target/wallet-ci/${WALLET_JOB_ID}_failures.json"
+          echo '[]' >"$failures"
+          status=0
+          while read -r suite || [[ -n "$suite" ]]; do
+            [[ -z "$suite" ]] && continue
+            log="target/wallet-ci/${WALLET_JOB_ID}_${suite}.log"
+            echo "::group::Running ${suite}"
+            feature_args=()
+            if [[ -n "$WALLET_FEATURES" ]]; then
+              feature_args=(--features "$WALLET_FEATURES")
+            fi
+            if ! cargo test --locked "${feature_args[@]}" --test "$suite" -- --nocapture 2>&1 | tee "$log"; then
+              status=1
+              python - <<'PY' "$log" "$failures" "$suite"
+import json, pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_text()
+out = pathlib.Path(sys.argv[2])
+suite = sys.argv[3]
+current = json.loads(out.read_text())
+failed = re.findall(r'test ([^\s]+) .*FAILED', log)
+if not failed:
+    failed = [suite]
+current.append({"suite": suite, "tests": failed})
+out.write_text(json.dumps(current, indent=2))
+PY
+            fi
+            echo "::endgroup::"
+          done <<<"$WALLET_SUITES"
+          exit "$status"
+
+      - name: Upload suite logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WALLET_FAIL_ARTIFACT_PREFIX }}-${{ matrix.id }}
+          path: target/wallet-ci
+
+  wallet-ui-contract:
+    name: Wallet UI contract checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.WALLET_FEATURE_TOOLCHAIN }}
+
+      - name: Exercise UI contract tests
+        env:
+          LOG_PREFIX: wallet-ui-contract
+        run: |
+          set -euo pipefail
+          mkdir -p target/wallet-ci
+          log="target/wallet-ci/${LOG_PREFIX}.log"
+          failures="target/wallet-ci/${LOG_PREFIX}_failures.json"
+          echo '[]' >"$failures"
+          if ! cargo test -p rpp-rpc --test wallet_ui_contract -- --nocapture 2>&1 | tee "$log"; then
+            python - <<'PY' "$log" "$failures"
+import json, pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_text()
+out = pathlib.Path(sys.argv[2])
+failed = re.findall(r'test ([^\s]+) .*FAILED', log)
+if not failed:
+    failed = ["wallet_ui_contract"]
+out.write_text(json.dumps([{"suite": "wallet_ui_contract", "tests": failed}], indent=2))
+PY
+            exit 1
+          fi
+        shell: bash
+
+      - name: Upload UI contract artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-ui-contract
+          path: target/wallet-ci
+
+  wallet-fuzz:
+    name: Wallet property + fuzz tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain for fuzzing
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run DB Ser/De and builder invariants
+        run: |
+          set -euo pipefail
+          mkdir -p target/wallet-ci
+          failures="target/wallet-ci/property_failures.json"
+          echo '[]' >"$failures"
+          patterns=("db::codec::tests" "engine::tests")
+          status=0
+          for pattern in "${patterns[@]}"; do
+            log="target/wallet-ci/${pattern//::/_}.log"
+            if ! cargo test -p rpp-wallet "$pattern" -- --nocapture 2>&1 | tee "$log"; then
+              status=1
+              python - <<'PY' "$log" "$failures" "$pattern"
+import json, pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_text()
+out = pathlib.Path(sys.argv[2])
+pattern = sys.argv[3]
+current = json.loads(out.read_text())
+failed = re.findall(r'test ([^\s]+) .*FAILED', log)
+if not failed:
+    failed = [pattern]
+current.append({"suite": pattern, "tests": failed})
+out.write_text(json.dumps(current, indent=2))
+PY
+            fi
+          done
+          exit "$status"
+
+      - name: Run wallet RPC payload fuzzers
+        env:
+          FUZZ_LOG: target/wallet-ci/rpc_fuzz.log
+          FUZZ_FAIL: target/wallet-ci/rpc_fuzz_failures.json
+        run: |
+          set -euo pipefail
+          echo '[]' >"$FUZZ_FAIL"
+          if ! (cd rpp/wallet && cargo fuzz run wallet_rpc -- -max_total_time=120) 2>&1 | tee "$FUZZ_LOG"; then
+            python - <<'PY' "$FUZZ_LOG" "$FUZZ_FAIL"
+import json, pathlib, sys
+log = pathlib.Path(sys.argv[1]).read_text()
+out = pathlib.Path(sys.argv[2])
+out.write_text(json.dumps([{"suite": "wallet_rpc_fuzz", "tests": ["wallet_rpc"]}], indent=2))
+PY
+            exit 1
+          fi
+
+      - name: Upload fuzz artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-fuzz
+          path: target/wallet-ci
+
+  wallet-performance:
+    name: Wallet performance probes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.WALLET_FEATURE_TOOLCHAIN }}
+
+      - name: Run wallet benchmarks
+        run: |
+          set -euo pipefail
+          mkdir -p target/wallet-ci
+          cargo bench -p firewood-benchmark --bench wallet_perf -- --measurement-time 10 --sample-size 30
+          python - <<'PY'
+import json
+from pathlib import Path
+metrics = {}
+criterion = Path('target/criterion')
+for estimate in criterion.rglob('estimates.json'):
+    if 'wallet_perf' not in estimate.as_posix():
+        continue
+    bench = estimate.parent.parent.name
+    data = json.loads(estimate.read_text())
+    metrics[bench] = {
+        'mean_ns': data['mean']['point_estimate'],
+        'std_dev_ns': data['std_dev']['point_estimate'],
+        'median_ns': data['median']['point_estimate'],
+    }
+out = Path('target/wallet-ci') / 'wallet_perf_metrics.json'
+out.write_text(json.dumps(metrics, indent=2))
+print(out.read_text())
+PY
+
+      - name: Publish performance metrics
+        run: |
+          echo '### Wallet performance metrics' >> "$GITHUB_STEP_SUMMARY"
+          echo '\n```json' >> "$GITHUB_STEP_SUMMARY"
+          cat target/wallet-ci/wallet_perf_metrics.json >> "$GITHUB_STEP_SUMMARY"
+          echo '\n```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-performance
+          path: target/wallet-ci
+
+  wallet-quarantine:
+    name: Wallet quarantine suites
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      QUARANTINE_LIST: ${{ env.WALLET_QUARANTINE }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.WALLET_FEATURE_TOOLCHAIN }}
+
+      - name: Run quarantined suites
+        run: |
+          set -euo pipefail
+          mkdir -p target/wallet-ci
+          failures="target/wallet-ci/quarantine_failures.json"
+          echo '[]' >"$failures"
+          status=0
+          while read -r suite || [[ -n "$suite" ]]; do
+            [[ -z "$suite" ]] && continue
+            log="target/wallet-ci/quarantine_${suite}.log"
+            if ! cargo test --locked --test "$suite" -- --nocapture 2>&1 | tee "$log"; then
+              status=1
+              python - <<'PY' "$log" "$failures" "$suite"
+import json, pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_text()
+out = pathlib.Path(sys.argv[2])
+suite = sys.argv[3]
+current = json.loads(out.read_text())
+failed = re.findall(r'test ([^\s]+) .*FAILED', log)
+if not failed:
+    failed = [suite]
+current.append({"suite": suite, "tests": failed})
+out.write_text(json.dumps(current, indent=2))
+PY
+            fi
+          done <<<"$QUARANTINE_LIST"
+          exit "$status"
+
+      - name: Upload quarantine artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-quarantine
+          path: target/wallet-ci
+
+  flake-tracker:
+    name: Wallet flake tracker
+    runs-on: ubuntu-latest
+    needs:
+      - wallet-e2e
+      - wallet-ui-contract
+      - wallet-fuzz
+      - wallet-performance
+      - wallet-quarantine
+    if: always()
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WORKFLOW_FILE: wallet-nightly.yml
+      QUARANTINE_LIST: ${{ env.WALLET_QUARANTINE }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download failure manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wallet-*
+          merge-multiple: true
+          path: wallet-artifacts
+
+      - name: Summarize flakes and apply labels
+        id: summarize
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import json, os, pathlib
+from collections import Counter
+artifacts = pathlib.Path('wallet-artifacts')
+quarantined = set(filter(None, os.environ.get('QUARANTINE_LIST', '').split()))
+summary = {}
+flakes = []
+for path in artifacts.glob('*_failures.json'):
+    data = json.loads(path.read_text()) if path.exists() else []
+    for entry in data:
+        for test in entry.get('tests', []):
+            label = 'quarantined' if test in quarantined or entry['suite'] in quarantined else 'new'
+            flakes.append({'suite': entry['suite'], 'test': test, 'label': label})
+counts = Counter((f['suite'], f['test']) for f in flakes)
+rows = []
+for item in flakes:
+    key = (item['suite'], item['test'])
+    rows.append({**item, 'occurrences': counts[key]})
+summary['flakes'] = rows
+print(json.dumps(summary, indent=2))
+pathlib.Path('wallet-artifacts/flake-summary.json').write_text(json.dumps(summary, indent=2))
+if rows:
+    with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as handle:
+        handle.write('### Wallet flakes\n\n')
+        handle.write('| Suite | Test | Label | Occurrences |\n')
+        handle.write('| --- | --- | --- | --- |\n')
+        for row in rows:
+            handle.write(f"| {row['suite']} | {row['test']} | {row['label']} | {row['occurrences']} |\n")
+else:
+    with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as handle:
+        handle.write('### Wallet flakes\n\nNone detected.\n')
+PY
+
+      - name: Upload flake summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-flakes
+          path: wallet-artifacts/flake-summary.json
+
+      - name: Stability trend
+        run: |
+          set -euo pipefail
+          runs=$(gh run list --workflow "$WORKFLOW_FILE" --limit 10 --json conclusion,status,createdAt | jq -r '.[] | {createdAt, status, conclusion}')
+          echo '### Wallet nightly stability' >> "$GITHUB_STEP_SUMMARY"
+          echo '\n```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$runs" >> "$GITHUB_STEP_SUMMARY"
+          echo '\n```' >> "$GITHUB_STEP_SUMMARY"
