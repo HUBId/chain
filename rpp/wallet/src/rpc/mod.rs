@@ -1473,13 +1473,13 @@ fn rescan_stage_for_method(method: &str) -> Option<&'static str> {
 fn wallet_error_code(error: &WalletError) -> WalletRpcErrorCode {
     match error {
         WalletError::Engine(_) => WalletRpcErrorCode::EngineFailure,
-        WalletError::ProverBackendDisabled => WalletRpcErrorCode::InvalidRequest,
+        WalletError::ProverBackendDisabled => WalletRpcErrorCode::ProverBackendDisabled,
         WalletError::ProverTimeout { .. } => WalletRpcErrorCode::ProverTimeout,
         WalletError::ProverCancelled => WalletRpcErrorCode::ProverCancelled,
-        WalletError::ProverBusy => WalletRpcErrorCode::ProverFailed,
+        WalletError::ProverBusy => WalletRpcErrorCode::ProverBusy,
         WalletError::ProverWitnessTooLarge { .. } => WalletRpcErrorCode::WitnessTooLarge,
-        WalletError::ProverInternal { .. } => WalletRpcErrorCode::ProverFailed,
-        WalletError::ProofMissing => WalletRpcErrorCode::ProverFailed,
+        WalletError::ProverInternal { .. } => WalletRpcErrorCode::ProverInternal,
+        WalletError::ProofMissing => WalletRpcErrorCode::ProverProofMissing,
         WalletError::Node(node) => node_error_code(node),
         WalletError::Sync(_) => WalletRpcErrorCode::SyncError,
         WalletError::WatchOnly(watch_only) => watch_only_error_code(watch_only),
@@ -1607,7 +1607,7 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
     match error {
         WalletError::Engine(engine) => engine_error_to_json(engine),
         WalletError::ProverBackendDisabled => json_error(
-            WalletRpcErrorCode::InvalidRequest,
+            WalletRpcErrorCode::ProverBackendDisabled,
             error.to_string(),
             Some(json!({ "kind": "prover_backend_disabled" })),
         ),
@@ -1620,7 +1620,7 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             json_error(WalletRpcErrorCode::ProverCancelled, error.to_string(), None)
         }
         WalletError::ProverBusy => json_error(
-            WalletRpcErrorCode::ProverFailed,
+            WalletRpcErrorCode::ProverBusy,
             error.to_string(),
             Some(json!({ "kind": "busy" })),
         ),
@@ -1630,12 +1630,12 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             Some(json!({ "size_bytes": size, "limit_bytes": limit })),
         ),
         WalletError::ProverInternal { reason } => json_error(
-            WalletRpcErrorCode::ProverFailed,
+            WalletRpcErrorCode::ProverInternal,
             error.to_string(),
             Some(json!({ "kind": "internal", "reason": reason })),
         ),
         WalletError::ProofMissing => json_error(
-            WalletRpcErrorCode::ProverFailed,
+            WalletRpcErrorCode::ProverProofMissing,
             error.to_string(),
             Some(json!({ "kind": "proof_missing" })),
         ),
