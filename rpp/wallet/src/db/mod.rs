@@ -5,8 +5,8 @@ pub mod store;
 
 pub use codec::StoredZsiArtifact;
 pub use codec::{
-    Address, PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoOutpoint,
-    UtxoRecord, WatchOnlyRecord,
+    Address, PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta, TxCacheEntry,
+    UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
 };
 pub use store::{AddressKind, WalletStore, WalletStoreBatch, WalletStoreError};
 
@@ -20,15 +20,15 @@ mod tests {
     use super::{
         codec, schema,
         store::{AddressKind, WalletStore},
-        PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoOutpoint, UtxoRecord,
-        WatchOnlyRecord,
+        PendingLock, PolicySnapshot, ProverMeta, StoredZsiArtifact, TxCacheEntry, UtxoOutpoint,
+        UtxoRecord, WatchOnlyRecord,
     };
 
     #[test]
     fn store_initialises_schema_marker() {
         let dir = tempdir().expect("tempdir");
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V3);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V4);
 
         let base = dir.path();
         for bucket in [
@@ -41,6 +41,17 @@ mod tests {
             schema::BUCKET_HW_REGISTRY,
         ] {
             assert!(base.join(bucket).is_dir(), "missing bucket {bucket}");
+        }
+
+        for extension in [
+            schema::EXTENSION_PENDING_LOCKS,
+            schema::EXTENSION_PROVER_META,
+            schema::EXTENSION_CHECKPOINTS,
+        ] {
+            assert!(
+                base.join(extension).is_dir(),
+                "missing extension {extension}"
+            );
         }
 
         let schema_bytes = store
@@ -74,7 +85,7 @@ mod tests {
             kv.commit().expect("commit");
         }
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V3);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V4);
 
         let base = dir.path();
         for bucket in [
@@ -87,6 +98,17 @@ mod tests {
             schema::BUCKET_HW_REGISTRY,
         ] {
             assert!(base.join(bucket).is_dir(), "missing bucket {bucket}");
+        }
+
+        for extension in [
+            schema::EXTENSION_PENDING_LOCKS,
+            schema::EXTENSION_PROVER_META,
+            schema::EXTENSION_CHECKPOINTS,
+        ] {
+            assert!(
+                base.join(extension).is_dir(),
+                "missing extension {extension}"
+            );
         }
 
         let schema_bytes = store
@@ -114,7 +136,7 @@ mod tests {
         let fixture = seed_v2_fixture(dir.path());
 
         let store = WalletStore::open(dir.path()).expect("open store");
-        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V3);
+        assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION_V4);
         assert_eq!(
             store.get_meta("network").unwrap(),
             Some(b"mainnet".to_vec())
@@ -202,6 +224,21 @@ mod tests {
         batch.put_zsi_artifact(&artifact).expect("put zsi artifact");
         batch.commit().expect("commit");
 
+        let prover_meta = ProverMeta::new(
+            [7u8; 32],
+            "mock-backend".into(),
+            500,
+            256,
+            Some(128),
+            Some("face".into()),
+            1_700_000_000_500,
+            Some(1_700_000_000_750),
+            "ok".into(),
+        );
+        store
+            .put_prover_meta(&prover_meta)
+            .expect("put prover meta");
+
         assert_eq!(
             store.get_meta("network").unwrap(),
             Some(b"testnet".to_vec())
@@ -254,6 +291,10 @@ mod tests {
         assert_eq!(
             store.iter_zsi_artifacts().unwrap(),
             vec![artifact.clone().into_owned()]
+        );
+        assert_eq!(
+            store.get_prover_meta(&[7u8; 32]).unwrap(),
+            Some(prover_meta)
         );
 
         let mut cleanup = store.batch().expect("cleanup batch");

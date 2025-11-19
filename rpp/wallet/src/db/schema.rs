@@ -47,6 +47,8 @@ pub const SECURITY_MTLS_NAMESPACE: &[u8] = b"wallet/security/mtls/";
 pub const ZSI_NAMESPACE: &[u8] = b"wallet/zsi/";
 /// Namespace storing hardware signer registry snapshots.
 pub const HW_REGISTRY_NAMESPACE: &[u8] = b"wallet/hw_registry/";
+/// Namespace storing prover metadata entries in the extension column family.
+pub const PROVER_META_NAMESPACE: &str = "wallet/prover_meta/";
 
 /// File-system extension for pending lock snapshots.
 pub const EXTENSION_PENDING_LOCKS: &str = "wallet/pending_locks";
@@ -77,4 +79,5 @@ pub const WATCH_ONLY_STATE_KEY: &str = "state";
 pub const SCHEMA_VERSION_V1: u32 = 1;
 pub const SCHEMA_VERSION_V2: u32 = 2;
 pub const SCHEMA_VERSION_V3: u32 = 3;
-pub const SCHEMA_VERSION_LATEST: u32 = SCHEMA_VERSION_V3;
+pub const SCHEMA_VERSION_V4: u32 = 4;
+pub const SCHEMA_VERSION_LATEST: u32 = SCHEMA_VERSION_V4;

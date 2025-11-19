@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use thiserror::Error;
 
-use crate::db::schema;
 pub use crate::modes::watch_only::WatchOnlyRecord;
 
 /// Canonical wallet address representation.
@@ -146,6 +145,54 @@ impl<'a> StoredZsiArtifact<'a> {
     }
 }
 
+/// Database-friendly prover metadata entry tracked per transaction.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProverMeta {
+    pub txid: [u8; 32],
+    pub backend: String,
+    pub prove_duration_ms: u64,
+    pub witness_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub proof_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub proof_hash: Option<String>,
+    pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
+    /// Backend supplied result description (e.g. success, error message).
+    pub result: String,
+}
+
+impl ProverMeta {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        txid: [u8; 32],
+        backend: String,
+        prove_duration_ms: u64,
+        witness_bytes: u64,
+        proof_bytes: Option<u64>,
+        proof_hash: Option<String>,
+        started_at_ms: u64,
+        finished_at_ms: Option<u64>,
+        result: String,
+    ) -> Self {
+        Self {
+            txid,
+            backend,
+            prove_duration_ms,
+            witness_bytes,
+            proof_bytes,
+            proof_hash,
+            started_at_ms,
+            finished_at_ms,
+            result,
+        }
+    }
+}
+
 /// Auxiliary metadata captured for a pending lock.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingLockMetadata {
@@ -266,6 +313,14 @@ pub fn decode_zsi_artifact<'a>(bytes: &'a [u8]) -> Result<StoredZsiArtifact<'a>,
     Ok(options().deserialize(bytes)?)
 }
 
+pub fn encode_prover_meta(meta: &ProverMeta) -> Result<Vec<u8>, CodecError> {
+    Ok(options().serialize(meta)?)
+}
+
+pub fn decode_prover_meta(bytes: &[u8]) -> Result<ProverMeta, CodecError> {
+    Ok(options().deserialize(bytes)?)
+}
+
 pub fn encode_watch_only(record: &WatchOnlyRecord) -> Result<Vec<u8>, CodecError> {
     Ok(options().serialize(record)?)
 }
@@ -318,6 +373,7 @@ pub fn decode_pending_lock(bytes: &[u8]) -> Result<PendingLock, CodecError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::schema;
 
     #[test]
     fn address_roundtrip() {
@@ -376,6 +432,24 @@ mod tests {
         let encoded = encode_zsi_artifact(&artifact).expect("encode artifact");
         let decoded = decode_zsi_artifact(&encoded).expect("decode artifact");
         assert_eq!(decoded.into_owned(), artifact.into_owned());
+    }
+
+    #[test]
+    fn prover_meta_roundtrip() {
+        let meta = ProverMeta::new(
+            [9u8; 32],
+            "mock-backend".into(),
+            1_000,
+            2048,
+            Some(512),
+            Some("beef".into()),
+            1_700_000_000_000,
+            Some(1_700_000_001_000),
+            "success".into(),
+        );
+        let encoded = encode_prover_meta(&meta).expect("encode meta");
+        let decoded = decode_prover_meta(&encoded).expect("decode meta");
+        assert_eq!(decoded, meta);
     }
 
     #[test]
