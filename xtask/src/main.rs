@@ -379,6 +379,31 @@ fn run_wallet_ui_contract_tests() -> Result<()> {
     run_command(command, "wallet UI contract tests")
 }
 
+const WALLET_E2E_FEATURE_ALLOWLIST: &[&str] = &[
+    "vendor_electrs",
+    "vendor_electrs_test_support",
+    "backend-rpp-stark",
+];
+
+fn wallet_e2e_feature_list() -> Option<String> {
+    let raw = env::var("XTASK_FEATURES").unwrap_or_default();
+    let mut allowed: BTreeSet<&str> = BTreeSet::new();
+    for segment in raw.split(|ch: char| ch == ',' || ch.is_whitespace()) {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if WALLET_E2E_FEATURE_ALLOWLIST.contains(&trimmed) {
+            allowed.insert(trimmed);
+        }
+    }
+    if allowed.is_empty() {
+        None
+    } else {
+        Some(allowed.into_iter().collect::<Vec<_>>().join(","))
+    }
+}
+
 fn run_wallet_e2e_suite(args: &[String]) -> Result<()> {
     let root = workspace_root();
     let mut command = Command::new("cargo");
@@ -388,7 +413,10 @@ fn run_wallet_e2e_suite(args: &[String]) -> Result<()> {
         .arg("-p")
         .arg("wallet-integration-tests")
         .arg("--locked");
-    apply_feature_flags(&mut command);
+
+    if let Some(features) = wallet_e2e_feature_list() {
+        command.arg("--features").arg(features);
+    }
 
     let mut passthrough: Vec<String> = Vec::new();
     for arg in args {
