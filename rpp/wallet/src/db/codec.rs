@@ -212,6 +212,12 @@ pub struct PendingLockMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub proof_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub prover_meta_txid: Option<[u8; 32]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub proof_verified: Option<bool>,
 }
 
 impl PendingLockMetadata {
@@ -223,6 +229,8 @@ impl PendingLockMetadata {
         proof_present: bool,
         proof_bytes: Option<u64>,
         proof_hash: Option<String>,
+        prover_meta_txid: Option<[u8; 32]>,
+        proof_verified: Option<bool>,
     ) -> Self {
         Self {
             backend,
@@ -232,6 +240,8 @@ impl PendingLockMetadata {
             proof_present,
             proof_bytes,
             proof_hash,
+            prover_meta_txid,
+            proof_verified,
         }
     }
 }
@@ -407,8 +417,17 @@ mod tests {
 
     #[test]
     fn pending_lock_roundtrip() {
-        let metadata =
-            PendingLockMetadata::new("mock".into(), 42, 1_000, true, true, Some(512), None);
+        let metadata = PendingLockMetadata::new(
+            "mock".into(),
+            42,
+            1_000,
+            true,
+            true,
+            Some(512),
+            None,
+            None,
+            None,
+        );
         let lock = PendingLock::new(
             UtxoOutpoint::new([2u8; 32], 11),
             1_650_000_000_000,

@@ -168,6 +168,7 @@ impl AddressManager {
         if released.is_empty() {
             return Ok(released);
         }
+        self.delete_prover_meta(&released)?;
         let mut batch = self.store.batch()?;
         for lock in &released {
             batch.delete_pending_lock(&lock.outpoint);
@@ -188,6 +189,7 @@ impl AddressManager {
         if released.is_empty() {
             return Ok(released);
         }
+        self.delete_prover_meta(&released)?;
         let mut batch = self.store.batch()?;
         for lock in &released {
             batch.delete_pending_lock(&lock.outpoint);
@@ -213,12 +215,23 @@ impl AddressManager {
         if expired.is_empty() {
             return Ok(expired);
         }
+        self.delete_prover_meta(&expired)?;
         let mut batch = self.store.batch()?;
         for lock in &expired {
             batch.delete_pending_lock(&lock.outpoint);
         }
         batch.commit()?;
         Ok(expired)
+    }
+
+    fn delete_prover_meta(&self, locks: &[PendingLock]) -> Result<(), AddressError> {
+        let mut txids: Vec<[u8; 32]> = locks.iter().filter_map(|lock| lock.spending_txid).collect();
+        txids.sort_unstable();
+        txids.dedup();
+        for txid in txids {
+            self.store.delete_prover_meta(&txid)?;
+        }
+        Ok(())
     }
 
     fn next_address(&self, kind: AddressKind) -> Result<DerivedAddress, AddressError> {

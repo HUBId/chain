@@ -8,12 +8,12 @@ use crate::config::wallet::{
     WalletProverConfig, WalletZsiConfig,
 };
 use crate::db::{
-    PendingLock, PendingLockMetadata, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoRecord,
-    WalletStore, WalletStoreError,
+    PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta as StoredProverMeta,
+    StoredZsiArtifact, TxCacheEntry, UtxoRecord, WalletStore, WalletStoreError,
 };
 use crate::engine::signing::{
     build_wallet_prover, DraftProverContext, ProveResult, ProverError as EngineProverError,
-    ProverIdentity, ProverMeta, WalletProver, WitnessPlan,
+    ProverIdentity, ProverMeta as EngineProverMeta, WalletProver, WitnessPlan,
 };
 use crate::engine::{
     DerivationPath, DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel,
@@ -524,7 +524,9 @@ impl Wallet {
         draft: &DraftTransaction,
     ) -> Result<Vec<PendingLock>, WalletError> {
         let txid = lock_fingerprint(draft);
-        Ok(self.engine.release_locks_by_txid(&txid)?)
+        let locks = self.engine.release_locks_by_txid(&txid)?;
+        self.store.delete_prover_meta(&txid).map_err(store_error)?;
+        Ok(locks)
     }
 
     pub fn locks_for_draft(
@@ -581,7 +583,7 @@ impl Wallet {
     pub fn sign_and_prove(
         &self,
         draft: &DraftTransaction,
-    ) -> Result<(ProveResult, ProverMeta), WalletError> {
+    ) -> Result<(ProveResult, EngineProverMeta), WalletError> {
         self.ensure_signing_allowed()?;
         let inputs: Vec<_> = draft
             .inputs
@@ -600,16 +602,17 @@ impl Wallet {
             Ok((output, meta)) => {
                 let proof_generated = output.proof().is_some();
                 let txid = lock_fingerprint(draft);
-                let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
-                let proof_hash = meta.proof_hash.map(hex::encode);
+                let stored_meta = self.persist_prover_meta(txid, &meta, proof_generated)?;
                 let metadata = PendingLockMetadata::new(
-                    meta.backend.to_string(),
-                    meta.witness_bytes as u64,
-                    meta.duration_ms,
+                    stored_meta.backend.clone(),
+                    stored_meta.witness_bytes,
+                    stored_meta.prove_duration_ms,
                     self.prover_config.require_proof,
                     proof_generated,
-                    proof_bytes,
-                    proof_hash,
+                    stored_meta.proof_bytes,
+                    stored_meta.proof_hash.clone(),
+                    Some(txid),
+                    Some(proof_generated),
                 );
                 self.engine
                     .attach_locks_to_txid(inputs.iter(), txid, Some(metadata))?;
@@ -617,6 +620,8 @@ impl Wallet {
             }
             Err(err) => {
                 self.engine.release_locks_for_inputs(inputs.iter())?;
+                let txid = lock_fingerprint(draft);
+                let _ = self.store.delete_prover_meta(&txid);
                 Err(err.into())
             }
         }
@@ -629,12 +634,14 @@ impl Wallet {
         let locks = self.locks_for_txid(&txid)?;
         if expected_inputs > 0 && locks.len() != expected_inputs {
             self.engine.release_locks_by_txid(&txid)?;
+            self.store.delete_prover_meta(&txid).map_err(store_error)?;
             return Err(WalletError::ProofMissing);
         }
         if self.prover_config.require_proof {
             let missing_proof = locks.iter().any(|lock| !lock.metadata.proof_present);
             if missing_proof {
                 self.engine.release_locks_by_txid(&txid)?;
+                self.store.delete_prover_meta(&txid).map_err(store_error)?;
                 return Err(WalletError::ProofMissing);
             }
         }
@@ -642,14 +649,49 @@ impl Wallet {
         match self.node_client.submit_tx(&submission) {
             Ok(()) => {
                 self.engine.release_locks_by_txid(&txid)?;
+                self.store.delete_prover_meta(&txid).map_err(store_error)?;
                 Ok(())
             }
             Err(err) => {
                 self.engine
                     .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?;
+                self.store.delete_prover_meta(&txid).map_err(store_error)?;
                 Err(err.into())
             }
         }
+    }
+
+    fn persist_prover_meta(
+        &self,
+        txid: [u8; 32],
+        meta: &EngineProverMeta,
+        proof_verified: bool,
+    ) -> Result<StoredProverMeta, WalletError> {
+        let finished_at_ms = current_timestamp_ms();
+        let started_at_ms = finished_at_ms.saturating_sub(meta.duration_ms);
+        let result = if proof_verified {
+            "verified"
+        } else {
+            "unverified"
+        };
+        let stored_meta = StoredProverMeta::new(
+            txid,
+            meta.backend.to_string(),
+            meta.duration_ms,
+            meta.witness_bytes as u64,
+            meta.proof_bytes.map(|bytes| bytes as u64),
+            meta.proof_hash.map(hex::encode),
+            started_at_ms,
+            Some(finished_at_ms),
+            result.to_string(),
+        );
+        self.store
+            .put_prover_meta(&stored_meta)
+            .map_err(store_error)?;
+        self.store
+            .get_prover_meta(&txid)
+            .map_err(store_error)?
+            .ok_or_else(|| prover_internal("persisted prover metadata missing"))
     }
 
     pub fn broadcast_raw(&self, tx_bytes: &[u8]) -> Result<(), WalletError> {
@@ -996,7 +1038,7 @@ impl WalletProver for DisabledWatchOnlyProver {
         &self,
         _ctx: &DraftProverContext<'_>,
         _result: &ProveResult,
-    ) -> Result<ProverMeta, EngineProverError> {
+    ) -> Result<EngineProverMeta, EngineProverError> {
         Err(EngineProverError::Unsupported(
             "watch-only mode does not support proving",
         ))
@@ -1193,8 +1235,8 @@ mod tests {
             &self,
             _ctx: &DraftProverContext<'_>,
             result: &ProveResult,
-        ) -> Result<ProverMeta, ProverError> {
-            Ok(ProverMeta {
+        ) -> Result<EngineProverMeta, ProverError> {
+            Ok(EngineProverMeta {
                 backend: self.identity().backend,
                 witness_bytes: result.witness_bytes(),
                 proof_bytes: None,
@@ -1272,8 +1314,8 @@ mod tests {
             &self,
             _ctx: &DraftProverContext<'_>,
             result: &ProveResult,
-        ) -> Result<ProverMeta, ProverError> {
-            Ok(ProverMeta {
+        ) -> Result<EngineProverMeta, ProverError> {
+            Ok(EngineProverMeta {
                 backend: self.identity().backend,
                 witness_bytes: result.witness_bytes(),
                 proof_bytes: None,
@@ -1310,7 +1352,7 @@ mod tests {
             &self,
             _ctx: &DraftProverContext<'_>,
             _result: &ProveResult,
-        ) -> Result<ProverMeta, ProverError> {
+        ) -> Result<EngineProverMeta, ProverError> {
             Err(ProverError::Unsupported(BACKEND_DISABLED_REASON))
         }
     }
@@ -1527,6 +1569,12 @@ mod tests {
 
         let locks = wallet.pending_locks().expect("locks after prove");
         assert_eq!(locks.len(), locks_before.len());
+        let txid = Wallet::draft_lock_id(&draft);
+        let stored_meta = wallet
+            .store
+            .get_prover_meta(&txid)
+            .expect("prover meta lookup")
+            .expect("stored meta");
         let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
         let proof_hash = meta.proof_hash.as_ref().map(hex::encode);
         let proof_required = wallet.prover_config().require_proof;
@@ -1540,7 +1588,12 @@ mod tests {
                 && lock.metadata.proof_present == proof_present
                 && lock.metadata.proof_bytes == proof_bytes
                 && lock.metadata.proof_hash == proof_hash
+                && lock.metadata.prover_meta_txid == Some(txid)
+                && lock.metadata.proof_verified == Some(proof_present)
         }));
+        assert_eq!(stored_meta.txid, txid);
+        assert_eq!(stored_meta.backend, meta.backend);
+        assert_eq!(stored_meta.witness_bytes, meta.witness_bytes as u64);
         drop(tempdir);
     }
 
