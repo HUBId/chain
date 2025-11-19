@@ -20,10 +20,10 @@ following sections.
   before funds are considered spendable.
 - `wallet.fees`: sets minimum/maximum fee rate bounds together with the
   default value used by RPC helpers.
-- `wallet.prover`: selects the prover backend (`mock`, `stwo`, or `disabled`),
-  sets per-job timeouts, bounds witness sizes, caps concurrency, and controls
-  whether proofs are required before broadcasts (fail-open vs. fail-closed
-  modes).
+- `wallet.prover`: toggles prover enablement, selects the backend (`mock` or
+  `stwo`), sets per-job timeouts, bounds witness sizes, caps concurrency, and
+  controls whether proofs are required before broadcasts (fail-open vs.
+  fail-closed modes).
 
 Future phases expand on these sections with deployment playbooks and
 component-specific tuning guidance. Phase 2 introduces persistent policy

@@ -906,6 +906,8 @@ impl Default for WalletFeeSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletProverSettings {
+    /// Enable prover integrations; when false proofs are skipped regardless of backend selection.
+    pub enabled: bool,
     /// Requested prover backend.
     pub backend: WalletProverBackend,
     /// Require proofs to be produced before drafts can be broadcast.
@@ -923,6 +925,7 @@ pub struct WalletProverSettings {
 impl Default for WalletProverSettings {
     fn default() -> Self {
         Self {
+            enabled: true,
             backend: WalletProverBackend::default(),
             require_proof: false,
             allow_broadcast_without_proof: false,
@@ -933,12 +936,10 @@ impl Default for WalletProverSettings {
     }
 }
 
-/// Supported prover backend selectors for the wallet runtime config.
+/// Supported prover backend selectors for the wallet runtime config when enabled.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WalletProverBackend {
-    /// Disable the prover and surface drafts without witnesses.
-    Disabled,
     /// Select the lightweight mock prover backend.
     Mock,
     /// Select the STWO prover backend exposed by the runtime.
@@ -949,7 +950,6 @@ impl WalletProverBackend {
     /// Returns the canonical string identifier for this backend.
     pub fn as_str(&self) -> &'static str {
         match self {
-            WalletProverBackend::Disabled => "disabled",
             WalletProverBackend::Mock => "mock",
             WalletProverBackend::Stwo => "stwo",
         }
@@ -1474,13 +1474,16 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
             "wallet configuration wallet.prover.allow_broadcast_without_proof must be false when proofs are required".into(),
         ));
     }
-    if config.require_proof && config.backend == WalletProverBackend::Disabled {
-        return Err(RuntimeConfigError::InvalidConfig(
-            "wallet configuration wallet.prover.require_proof cannot be true when backend=\"disabled\"".into(),
-        ));
+    if !config.enabled {
+        if config.require_proof {
+            return Err(RuntimeConfigError::InvalidConfig(
+                "wallet configuration wallet.prover.require_proof cannot be true when wallet.prover.enabled = false"
+                    .into(),
+            ));
+        }
+        return Ok(());
     }
     match config.backend {
-        WalletProverBackend::Disabled => {}
         WalletProverBackend::Mock => {
             if !cfg!(feature = "prover-mock") {
                 return Err(RuntimeConfigError::InvalidConfig(

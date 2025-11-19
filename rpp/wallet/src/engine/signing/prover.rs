@@ -48,10 +48,12 @@ const STWO_WITNESS_CIRCUIT: &str = "tx";
 pub fn build_wallet_prover(
     config: &WalletProverConfig,
 ) -> Result<Arc<dyn WalletProver>, ProverError> {
-    match config.backend {
-        WalletProverBackend::Disabled => Ok(Arc::new(DisabledWalletProver::new(
+    if !config.enabled {
+        return Ok(Arc::new(DisabledWalletProver::new(
             "wallet prover backend disabled",
-        ))),
+        )));
+    }
+    match config.backend {
         WalletProverBackend::Mock => {
             #[cfg(feature = "prover-mock")]
             {

@@ -63,12 +63,10 @@ impl WalletConfig {
     }
 }
 
-/// Supported prover backend selectors for the wallet runtime.
+/// Supported prover backend selectors for the wallet runtime when enabled.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WalletProverBackend {
-    /// Disable the prover and surface drafts without witnesses.
-    Disabled,
     /// Use the mock backend that ships with the wallet crate.
     Mock,
     /// Use the STWO backend compiled from the vendor workspace.
@@ -78,7 +76,6 @@ pub enum WalletProverBackend {
 impl WalletProverBackend {
     pub fn as_str(&self) -> &'static str {
         match self {
-            WalletProverBackend::Disabled => "disabled",
             WalletProverBackend::Mock => "mock",
             WalletProverBackend::Stwo => "stwo",
         }
@@ -263,6 +260,8 @@ impl Default for WalletFeeConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletProverConfig {
+    /// Enable the prover backend; when false, proofs are skipped regardless of backend selection.
+    pub enabled: bool,
     /// Requested prover backend.
     pub backend: WalletProverBackend,
     /// Require proofs to be produced before drafts can be broadcast.
@@ -280,6 +279,7 @@ pub struct WalletProverConfig {
 impl Default for WalletProverConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             backend: WalletProverBackend::default(),
             require_proof: false,
             allow_broadcast_without_proof: false,
@@ -292,33 +292,26 @@ impl Default for WalletProverConfig {
 
 impl WalletProverConfig {
     pub fn ensure_supported(&self) -> Result<(), &'static str> {
-        match self.backend {
-            WalletProverBackend::Disabled => {
-                if self.require_proof {
-                    return Err(
-                        "wallet prover requires proofs but backend is configured as disabled",
-                    );
-                }
+        if self.require_proof && self.allow_broadcast_without_proof {
+            return Err("wallet prover.require_proof conflicts with allow_broadcast_without_proof");
+        }
+        if !self.enabled {
+            if self.require_proof {
+                return Err("wallet prover requires proofs but configuration is disabled");
             }
+            return Ok(());
+        }
+        match self.backend {
             WalletProverBackend::Mock => {
                 if !cfg!(feature = "prover-mock") {
-                    return Err(
-                        "mock prover requested but the `prover-mock` feature is disabled",
-                    );
+                    return Err("mock prover requested but the `prover-mock` feature is disabled");
                 }
             }
             WalletProverBackend::Stwo => {
                 if !cfg!(feature = "prover-stwo") {
-                    return Err(
-                        "STWO prover requested but the `prover-stwo` feature is disabled",
-                    );
+                    return Err("STWO prover requested but the `prover-stwo` feature is disabled");
                 }
             }
-        }
-        if self.require_proof && self.allow_broadcast_without_proof {
-            return Err(
-                "wallet prover.require_proof conflicts with allow_broadcast_without_proof",
-            );
         }
         Ok(())
     }
@@ -503,6 +496,7 @@ mod tests {
             DEFAULT_HEURISTIC_MAX_FEE_RATE
         );
         assert_eq!(config.fees.cache_ttl_secs, DEFAULT_FEE_CACHE_TTL_SECS);
+        assert!(config.prover.enabled);
         assert_eq!(config.prover.backend, WalletProverBackend::Mock);
         assert!(!config.prover.require_proof);
         assert!(!config.prover.allow_broadcast_without_proof);
@@ -560,6 +554,7 @@ mod tests {
                 cache_ttl_secs: 90,
             },
             prover: WalletProverConfig {
+                enabled: true,
                 backend: WalletProverBackend::Stwo,
                 require_proof: true,
                 allow_broadcast_without_proof: false,
@@ -607,6 +602,7 @@ mod tests {
         assert_eq!(restored.fees.heuristic_min_sats_per_vbyte, 3);
         assert_eq!(restored.fees.heuristic_max_sats_per_vbyte, 300);
         assert_eq!(restored.fees.cache_ttl_secs, 90);
+        assert!(restored.prover.enabled);
         assert_eq!(restored.prover.backend, WalletProverBackend::Stwo);
         assert!(restored.prover.require_proof);
         assert!(!restored.prover.allow_broadcast_without_proof);
