@@ -23,27 +23,15 @@ use tracing::{info, warn};
 use zeroize::Zeroize;
 
 #[cfg(feature = "prover-stwo")]
-use crate::engine::SpendModel;
-#[cfg(feature = "prover-stwo")]
-use ed25519_dalek::SigningKey;
-#[cfg(feature = "prover-stwo")]
-use prover_backend_interface::Blake2sHasher;
+use super::stwo::StwoWitnessAdapter;
 #[cfg(feature = "prover-stwo")]
 use prover_backend_interface::{ProvingKey, TxCircuitDef};
 #[cfg(feature = "prover-stwo")]
 use prover_stwo_backend::backend::StwoBackend;
-#[cfg(feature = "prover-stwo")]
-use prover_stwo_backend::official::circuit::transaction::TransactionWitness;
-#[cfg(feature = "prover-stwo")]
-use prover_stwo_backend::reputation::{ReputationProfile, ReputationWeights, Tier};
-#[cfg(feature = "prover-stwo")]
-use prover_stwo_backend::types::{Account, SignedTransaction, Stake, Transaction};
 
 const MOCK_CIRCUIT_ID: &str = "wallet.tx";
 #[cfg(feature = "prover-stwo")]
 const STWO_CIRCUIT_ID: &str = "transaction";
-#[cfg(feature = "prover-stwo")]
-const STWO_WITNESS_CIRCUIT: &str = "tx";
 
 pub fn build_wallet_prover(
     config: &WalletProverConfig,
@@ -111,7 +99,8 @@ impl WalletProver for MockWalletProver {
             payload.zeroize();
             debug_assert_zeroized(&payload);
             let witness_bytes = witness.as_slice().len();
-            self.jobs.ensure_witness_capacity(backend, witness_bytes)?;
+            self.jobs
+                .ensure_witness_capacity(backend, witness_bytes, None)?;
             Ok((witness, witness_bytes))
         })();
 
@@ -166,6 +155,7 @@ impl WalletProver for MockWalletProver {
 struct StwoWalletProver {
     backend: Arc<StwoBackend>,
     proving_key: Arc<ProvingKey>,
+    adapter: StwoWitnessAdapter,
     jobs: ProverJobManager,
 }
 
@@ -178,6 +168,7 @@ impl StwoWalletProver {
         Ok(Self {
             backend: Arc::new(backend),
             proving_key: Arc::new(proving_key),
+            adapter: StwoWitnessAdapter::new(config.max_stwo_witness_bytes()),
             jobs: ProverJobManager::new(config),
         })
     }
@@ -191,14 +182,10 @@ impl WalletProver for StwoWalletProver {
 
     fn prepare_witness(&self, ctx: &DraftProverContext<'_>) -> Result<WitnessPlan, ProverError> {
         let backend = self.identity().backend;
-        let result = build_stwo_witness(ctx.draft()).and_then(|(witness, witness_bytes)| {
-            self.jobs.ensure_witness_capacity(backend, witness_bytes)?;
-            Ok((witness, witness_bytes))
-        });
+        let result = self.adapter.prepare_witness(&self.jobs, ctx.draft());
 
         result
-            .map(|(witness, _)| {
-                let plan = WitnessPlan::with_parts(witness, Instant::now());
+            .map(|plan| {
                 record_prepare_success(backend, plan.witness_bytes());
                 plan
             })
@@ -310,17 +297,17 @@ impl ProverJobManager {
         &self,
         backend: &'static str,
         witness_bytes: usize,
+        override_cap: Option<u64>,
     ) -> Result<(), ProverError> {
-        if self.witness_limit > 0 && (witness_bytes as u64) > self.witness_limit {
+        let limit = override_cap.unwrap_or(self.witness_limit);
+        if limit > 0 && (witness_bytes as u64) > limit {
             warn!(
                 backend,
-                witness_bytes,
-                limit = self.witness_limit,
-                "wallet prover witness exceeds configured limit"
+                witness_bytes, limit, "wallet prover witness exceeds configured limit"
             );
             return Err(ProverError::WitnessTooLarge {
                 size: witness_bytes,
-                limit: self.witness_limit,
+                limit,
             });
         }
         Ok(())
@@ -380,127 +367,6 @@ impl ProverJobPermit {
             future.await
         }
     }
-}
-
-#[cfg(feature = "prover-stwo")]
-fn build_stwo_witness(draft: &DraftTransaction) -> Result<(WitnessBytes, usize), ProverError> {
-    use std::convert::TryInto;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let mut encoded =
-        bincode::serialize(draft).map_err(|err| ProverError::Serialization(err.to_string()))?;
-    let mut entropy: [u8; 32] = Blake2sHasher::hash(&encoded).into();
-    encoded.zeroize();
-    debug_assert_zeroized(&encoded);
-    let signing_key = SigningKey::from_bytes(&entropy);
-    let verifying_key = signing_key.verifying_key();
-    let sender_address = wallet_address_from_public_key(&verifying_key);
-
-    let mut nonce = u64::from_le_bytes(entropy[0..8].try_into().expect("slice length 8"));
-    if nonce == 0 {
-        nonce = 1;
-    }
-    let timestamp_seed = u64::from_le_bytes(entropy[8..16].try_into().expect("slice length 8"));
-    let timestamp = if timestamp_seed == 0 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    } else {
-        1_700_000_000u64.saturating_add(timestamp_seed % 1_000_000)
-    };
-
-    let (recipient_address, amount) = select_recipient(draft);
-    let fee = u64::try_from(draft.fee)
-        .map_err(|_| ProverError::Serialization("draft fee exceeds u64".into()))?;
-    let total = amount
-        .checked_add(u128::from(fee))
-        .ok_or_else(|| ProverError::Serialization("draft amount overflow".into()))?;
-    let mut sender_balance = draft.total_input_value();
-    if sender_balance < total {
-        sender_balance = total;
-    }
-
-    let receiver_balance = if matches!(draft.spend_model, SpendModel::Account { .. }) {
-        amount.saturating_mul(2)
-    } else {
-        amount
-    };
-
-    let payload = Transaction {
-        from: sender_address.clone(),
-        to: recipient_address.clone(),
-        amount,
-        fee,
-        nonce,
-        memo: None,
-        timestamp,
-    };
-    let signature = signing_key.sign(&payload.canonical_bytes());
-    let signed_tx = SignedTransaction::new(payload, signature, &verifying_key);
-
-    let mut sender_account = Account::new(sender_address.clone(), sender_balance, Stake::default());
-    sender_account.nonce = nonce.saturating_sub(1);
-    sender_account.reputation = ReputationProfile::new(&signed_tx.public_key);
-    sender_account.reputation.zsi.validated = true;
-    sender_account.reputation.timetokes.balance = 24;
-    sender_account
-        .reputation
-        .recompute_score(&ReputationWeights::default(), timestamp);
-    sender_account.reputation.update_decay_reference(timestamp);
-
-    let mut receiver_account = Account::new(
-        recipient_address.clone(),
-        receiver_balance,
-        Stake::default(),
-    );
-    receiver_account.reputation = ReputationProfile::new(&signed_tx.public_key);
-    receiver_account.reputation.wallet_commitment = Some(recipient_address.clone());
-    receiver_account.reputation.zsi.validated = true;
-    receiver_account
-        .reputation
-        .recompute_score(&ReputationWeights::default(), timestamp);
-    receiver_account
-        .reputation
-        .update_decay_reference(timestamp);
-
-    let witness = TransactionWitness {
-        signed_tx,
-        sender_account,
-        receiver_account: Some(receiver_account),
-        required_tier: Tier::Tl1,
-        reputation_weights: ReputationWeights::default(),
-    };
-    let header = WitnessHeader::new(ProofSystemKind::Stwo, STWO_WITNESS_CIRCUIT);
-    let witness_bytes = WitnessBytes::encode(&header, &witness)?;
-    let len = witness_bytes.as_slice().len();
-    entropy.zeroize();
-    debug_assert_zeroized(&entropy);
-    Ok((witness_bytes, len))
-}
-
-#[cfg(feature = "prover-stwo")]
-fn select_recipient(draft: &DraftTransaction) -> (String, u128) {
-    let mut recipients = draft
-        .outputs
-        .iter()
-        .filter(|output| !output.change)
-        .collect::<Vec<_>>();
-    if recipients.is_empty() {
-        recipients = draft.outputs.iter().collect();
-    }
-    let address = recipients
-        .first()
-        .map(|output| output.address.clone())
-        .unwrap_or_else(|| "wallet.recipient".to_string());
-    let amount = recipients.iter().map(|output| output.value).sum::<u128>();
-    (address, amount)
-}
-
-#[cfg(feature = "prover-stwo")]
-fn wallet_address_from_public_key(key: &ed25519_dalek::VerifyingKey) -> String {
-    let hash: [u8; 32] = Blake2sHasher::hash(key.as_bytes()).into();
-    hex::encode(hash)
 }
 
 fn debug_assert_zeroized(buf: &[u8]) {
@@ -858,6 +724,26 @@ mod tests {
                 limit
             } if limit == 1
         ));
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn stwo_adapter_builds_witness_from_draft() {
+        use prover_stwo_backend::backend::io::decode_tx_witness;
+
+        let mut config = WalletProverConfig::default();
+        config.backend = WalletProverBackend::Stwo;
+        let prover = StwoWalletProver::new(&config).expect("stwo prover");
+        let draft = sample_draft();
+
+        let ctx = DraftProverContext::new(&draft);
+        let mut plan = prover.prepare_witness(&ctx).expect("witness plan");
+        let witness = plan.take_witness().expect("encoded witness");
+        let (_header, witness) = decode_tx_witness(&witness).expect("decode witness");
+
+        assert_eq!(witness.signed_tx.payload.amount, 10_000);
+        assert_eq!(witness.signed_tx.payload.to, "receiver");
+        assert!(witness.sender_account.balance >= draft.total_output_value());
     }
 }
 

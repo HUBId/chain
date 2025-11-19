@@ -272,6 +272,9 @@ pub struct WalletProverConfig {
     pub timeout_secs: u64,
     /// Maximum witness size (in bytes) accepted from prover backends.
     pub max_witness_bytes: u64,
+    /// Maximum witness size (in bytes) accepted from the STWO backend when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stwo_max_witness_bytes: Option<u64>,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
 }
@@ -285,6 +288,7 @@ impl Default for WalletProverConfig {
             allow_broadcast_without_proof: false,
             timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
+            stwo_max_witness_bytes: None,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
         }
     }
@@ -314,6 +318,11 @@ impl WalletProverConfig {
             }
         }
         Ok(())
+    }
+
+    pub fn max_stwo_witness_bytes(&self) -> u64 {
+        self.stwo_max_witness_bytes
+            .unwrap_or(self.max_witness_bytes)
     }
 }
 
