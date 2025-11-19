@@ -13,6 +13,10 @@ Options:
   --out-dir <path>         Directory to place the packaged artifacts (default: dist/artifacts)
   --tool <cargo|cross>     Build tool to invoke (default: cargo)
   --skip-sbom              Do not generate a CycloneDX SBOM
+  --wallet-version <semver>
+                           When set, run the wallet bundle/installer builders with
+                           the provided version string after packaging the node
+                           artifacts.
   --help                   Show this help message and exit
 
 Environment variables:
@@ -27,6 +31,7 @@ PROFILE="release"
 OUT_DIR="dist/artifacts"
 BUILD_TOOL="cargo"
 GENERATE_SBOM=1
+WALLET_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -65,6 +70,11 @@ while [[ $# -gt 0 ]]; do
     --help)
       usage
       exit 0
+      ;;
+    --wallet-version)
+      [[ $# -lt 2 ]] && { echo "error: --wallet-version requires a value" >&2; exit 1; }
+      WALLET_VERSION="$2"
+      shift 2
       ;;
     *)
       echo "error: unknown argument '$1'" >&2
@@ -237,6 +247,22 @@ for binary in "${BINARIES[@]}"; do
   stage_package "$binary" "$tar_path" "$stage_dir"
   echo "Packaged $tar_path"
 done
+
+if [[ -n "$WALLET_VERSION" ]]; then
+  echo "Building wallet bundle and installers for target $TARGET"
+  cargo xtask wallet-bundle \
+    --target "$TARGET" \
+    --version "$WALLET_VERSION" \
+    --profile "$PROFILE" \
+    --tool "$BUILD_TOOL" \
+    --output "$OUT_DIR"
+  cargo xtask wallet-installer \
+    --target "$TARGET" \
+    --version "$WALLET_VERSION" \
+    --profile "$PROFILE" \
+    --tool "$BUILD_TOOL" \
+    --output "$OUT_DIR"
+fi
 
 HASH_OUTPUT="$OUT_DIR/$TARGET/plonky3-setup-hashes.json"
 echo "Verifying Plonky3 setup artifacts and emitting hash manifest at $HASH_OUTPUT"

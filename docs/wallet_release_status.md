@@ -95,6 +95,12 @@ links/timestamps to the change record:
 4. **Runbook-linked documents** – Cross-reference the relevant guides (Phase 1–4,
    runbook, policies/operations) in the release notes so operators know which
    documents describe the current behaviour and regression evidence.
+5. **Packaging workflow** – Use `scripts/build_release.sh --wallet-version <tag>`
+   followed by the `wallet-bundle`/`wallet-installer` xtasks to produce the
+   installers for every supported triple. Follow the
+   [wallet release workflow](wallet_release_workflow.md) so the canonical naming
+   scheme, embedded docs, and per-artifact checksums are preserved when uploading
+   the release payloads.【F:scripts/build_release.sh†L12-L161】【F:docs/wallet_release_workflow.md†L1-L33】
 
 ## References
 
