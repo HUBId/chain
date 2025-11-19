@@ -248,11 +248,13 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         .context("write bundle VERSION file")?;
     add_entry(&bundle_root, "VERSION", None, &mut checksums)?;
 
+    let os_slug = target_os_slug(&context.target);
     copy_shared_docs(
         &context.workspace,
         &bundle_root,
         &mut manifest_files,
         &mut checksums,
+        os_slug,
     )?;
     copy_platform_hooks(
         &context.workspace,
@@ -657,29 +659,51 @@ fn add_entry(
     Ok(())
 }
 
+fn target_os_slug(target: &str) -> Option<&'static str> {
+    if target.contains("windows") {
+        Some("windows")
+    } else if target.contains("apple-darwin") || target.contains("macos") {
+        Some("macos")
+    } else if target.contains("linux") {
+        Some("linux")
+    } else {
+        None
+    }
+}
+
 fn copy_shared_docs(
     workspace: &Path,
     bundle_root: &Path,
     manifest_files: &mut Vec<WalletBundleFile>,
     checksums: &mut Vec<ChecksumEntry>,
+    os_slug: Option<&str>,
 ) -> Result<()> {
-    let docs = [
-        ("LICENSE.md", "docs/LICENSE.md"),
-        ("README.md", "docs/README.md"),
-        ("INSTALL.wallet.md", "docs/INSTALL.md"),
+    let mut docs = vec![
+        ("LICENSE.md".to_string(), "docs/LICENSE.md".to_string()),
+        ("README.md".to_string(), "docs/README.md".to_string()),
+        (
+            "INSTALL.wallet.md".to_string(),
+            "docs/INSTALL.md".to_string(),
+        ),
     ];
+    if let Some(slug) = os_slug {
+        docs.push((
+            format!("README-{}.md", slug),
+            format!("docs/README-{}.md", slug),
+        ));
+    }
     for (source, dest) in docs {
-        let source_path = workspace.join(source);
+        let source_path = workspace.join(&source);
         if !source_path.exists() {
             bail!("wallet doc {} missing", source_path.display());
         }
-        let dest_path = bundle_root.join(dest);
+        let dest_path = bundle_root.join(&dest);
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&source_path, &dest_path)
             .with_context(|| format!("copy wallet doc {}", source_path.display()))?;
-        add_entry(bundle_root, dest, Some(manifest_files), checksums)?;
+        add_entry(bundle_root, &dest, Some(manifest_files), checksums)?;
     }
     Ok(())
 }

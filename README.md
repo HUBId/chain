@@ -34,7 +34,12 @@ slashing as described in the Malachite architecture plan.【F:rpp/consensus/src/
   specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
   Wallet operators should start with the [wallet documentation index](docs/README.md#wallet-documentation-index),
   which links the four phase guides, security references, runbook, release
-  status, and migration checklist. New team members can onboard quickly via the
+  status, and migration checklist. Platform-specific install guides live under
+  [`docs/install/`](docs/install) (Linux/macOS/Windows) and are paired with the
+  [wallet operations](docs/operations/wallet.md) and
+  [wallet troubleshooting](docs/troubleshooting/wallet.md) manuals referenced
+  later in the runbooks so deployments cover end-to-end ownership. New team
+  members can onboard quickly via the
   [Wallet Operator Training Guide](docs/training/wallet_operator_training.md),
   which pairs the architecture overview, GUI walkthrough, and troubleshooting
   drills with the screenshots referenced below. Enterprise deployments still need the
