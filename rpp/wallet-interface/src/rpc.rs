@@ -19,7 +19,7 @@ pub struct JsonRpcRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonRpcResponse {
-    pub jsonrpc: &'static str,
+    pub jsonrpc: String,
     #[serde(default)]
     pub id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1035,7 +1035,11 @@ pub enum WalletRpcErrorCode {
     FeeTooLow,
     FeeTooHigh,
     PendingLockConflict,
+    ProverBackendDisabled,
     ProverTimeout,
+    ProverBusy,
+    ProverInternal,
+    ProverProofMissing,
     ProverFailed,
     ProverCancelled,
     WitnessTooLarge,
@@ -1073,7 +1077,15 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::PendingLockConflict => {
                 std::borrow::Cow::Borrowed("PENDING_LOCK_CONFLICT")
             }
+            WalletRpcErrorCode::ProverBackendDisabled => {
+                std::borrow::Cow::Borrowed("PROVER_BACKEND_DISABLED")
+            }
             WalletRpcErrorCode::ProverTimeout => std::borrow::Cow::Borrowed("PROVER_TIMEOUT"),
+            WalletRpcErrorCode::ProverBusy => std::borrow::Cow::Borrowed("PROVER_BUSY"),
+            WalletRpcErrorCode::ProverInternal => std::borrow::Cow::Borrowed("PROVER_INTERNAL"),
+            WalletRpcErrorCode::ProverProofMissing => {
+                std::borrow::Cow::Borrowed("PROVER_PROOF_MISSING")
+            }
             WalletRpcErrorCode::ProverFailed => std::borrow::Cow::Borrowed("PROVER_FAILED"),
             WalletRpcErrorCode::ProverCancelled => std::borrow::Cow::Borrowed("PROVER_CANCELLED"),
             WalletRpcErrorCode::WitnessTooLarge => std::borrow::Cow::Borrowed("WITNESS_TOO_LARGE"),
@@ -1137,7 +1149,11 @@ impl<'de> Deserialize<'de> for WalletRpcErrorCode {
             "FEE_TOO_LOW" => WalletRpcErrorCode::FeeTooLow,
             "FEE_TOO_HIGH" => WalletRpcErrorCode::FeeTooHigh,
             "PENDING_LOCK_CONFLICT" => WalletRpcErrorCode::PendingLockConflict,
+            "PROVER_BACKEND_DISABLED" => WalletRpcErrorCode::ProverBackendDisabled,
             "PROVER_TIMEOUT" => WalletRpcErrorCode::ProverTimeout,
+            "PROVER_BUSY" => WalletRpcErrorCode::ProverBusy,
+            "PROVER_INTERNAL" => WalletRpcErrorCode::ProverInternal,
+            "PROVER_PROOF_MISSING" => WalletRpcErrorCode::ProverProofMissing,
             "PROVER_FAILED" => WalletRpcErrorCode::ProverFailed,
             "PROVER_CANCELLED" => WalletRpcErrorCode::ProverCancelled,
             "WITNESS_TOO_LARGE" => WalletRpcErrorCode::WitnessTooLarge,
@@ -1344,7 +1360,7 @@ mod tests {
         roundtrip(&request);
 
         let response = JsonRpcResponse {
-            jsonrpc: JSONRPC_VERSION,
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id: Some(Value::from(1)),
             result: Some(Value::from(serde_json::json!({"ok": true}))),
             error: None,
@@ -1472,7 +1488,7 @@ mod tests {
     #[test]
     fn jsonrpc_error_payload_shape() {
         let response = JsonRpcResponse {
-            jsonrpc: JSONRPC_VERSION,
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id: Some(Value::from("req-7")),
             result: None,
             error: Some(JsonRpcError {

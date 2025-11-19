@@ -1831,7 +1831,7 @@ mod tests {
         let error = RpcCallError::Client(WalletRpcClientError::Rpc {
             code: WalletRpcErrorCode::ProverTimeout,
             message: "timeout".into(),
-            json_code: -32014,
+            json_code: -32015,
             details: None,
         });
         let _ = state.update(dummy_client(), Message::ZsiBindCompleted(Err(error)));

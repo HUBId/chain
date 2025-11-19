@@ -36,7 +36,17 @@ pub fn describe_rpc_error(code: &WalletRpcErrorCode, details: Option<&Value>) ->
         WalletRpcErrorCode::FeeTooLow => "Fee rate is too low for network acceptance.",
         WalletRpcErrorCode::FeeTooHigh => "Fee rate exceeds the configured safety threshold.",
         WalletRpcErrorCode::PendingLockConflict => "An existing pending lock prevents this action.",
+        WalletRpcErrorCode::ProverBackendDisabled => {
+            "Proof generation is disabled for this wallet."
+        }
         WalletRpcErrorCode::ProverTimeout => "The prover timed out while building the proof.",
+        WalletRpcErrorCode::ProverBusy => "The prover is at capacity and cannot accept more jobs.",
+        WalletRpcErrorCode::ProverInternal => {
+            "The prover hit an internal error while building the proof."
+        }
+        WalletRpcErrorCode::ProverProofMissing => {
+            "The prover did not return a proof for this request."
+        }
         WalletRpcErrorCode::ProverFailed => {
             "The prover failed to construct a proof for this request."
         }

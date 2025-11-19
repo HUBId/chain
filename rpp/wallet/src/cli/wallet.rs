@@ -158,6 +158,9 @@ fn friendly_message(
             }
             catalog.text("cli.rpc.pending_lock_conflict_generic")
         }
+        WalletRpcErrorCode::ProverBackendDisabled => {
+            "Proof generation is disabled for this wallet instance.".to_string()
+        }
         WalletRpcErrorCode::ProverTimeout => {
             if let Some(timeout) = details.and_then(|value| value.get("timeout_secs")) {
                 return catalog.render(
@@ -166,6 +169,21 @@ fn friendly_message(
                 );
             }
             rpc_message.to_string()
+        }
+        WalletRpcErrorCode::ProverBusy => {
+            "The prover is already processing the maximum number of jobs; wait and retry.".into()
+        }
+        WalletRpcErrorCode::ProverInternal => {
+            if let Some(reason) = details
+                .and_then(|value| value.get("reason"))
+                .map(value_to_string)
+            {
+                return format!("The prover reported an internal error: {reason}.");
+            }
+            rpc_message.to_string()
+        }
+        WalletRpcErrorCode::ProverProofMissing => {
+            "The wallet requires a proof for this draft, but the prover returned none.".into()
         }
         WalletRpcErrorCode::RescanInProgress => {
             if let Some(details) = details.and_then(|value| value.as_object()) {

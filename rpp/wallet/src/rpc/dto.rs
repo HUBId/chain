@@ -8,7 +8,7 @@ pub use crate::interface_rpc::*;
 impl JsonRpcResponse {
     pub fn success(id: Option<Value>, result: Value) -> Self {
         Self {
-            jsonrpc: JSONRPC_VERSION,
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id,
             result: Some(result),
             error: None,
@@ -17,7 +17,7 @@ impl JsonRpcResponse {
 
     pub fn error(id: Option<Value>, error: JsonRpcError) -> Self {
         Self {
-            jsonrpc: JSONRPC_VERSION,
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id,
             result: None,
             error: Some(error),

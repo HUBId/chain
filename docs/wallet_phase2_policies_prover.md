@@ -89,8 +89,11 @@ values below while still surfacing the human-readable `message` field. Core code
 | `PENDING_LOCK_CONFLICT` | Not enough unlocked UTXOs to satisfy the draft because other drafts hold locks. | `required`, `total_available` (or `available`). |
 | `FEE_TOO_LOW` | Fee rate below wallet minimum or rejected by the node; hints advise the minimum bump. | `minimum`/`required`, optional node `hint`, `hints[]`, `phase2_code`. |
 | `FEE_TOO_HIGH` | Requested fee rate exceeds the configured ceiling. | `requested`, `maximum`. |
+| `PROVER_BACKEND_DISABLED` | Prover backend disabled or unavailable for the current wallet. | `kind`. |
 | `PROVER_TIMEOUT` | Wallet prover exceeded `timeout_secs` and abandoned the proof. | `timeout_secs`. |
-| `PROVER_FAILED` | Prover backend/serialization/runtime error (mock or STWO). | `kind`, `message`. |
+| `PROVER_BUSY` | Prover concurrency cap reached; new jobs are rejected until slots free up. | `kind`. |
+| `PROVER_INTERNAL` | Prover backend/serialization/runtime error (mock or STWO). | `kind`, `reason`. |
+| `PROVER_PROOF_MISSING` | Proof required by policy but backend returned none. | `kind`. |
 | `WITNESS_TOO_LARGE` | Witness size breached the configured limit. | `size_bytes`, `limit_bytes`. |
 | `RESCAN_IN_PROGRESS` | A targeted rescan is already queued; new requests report the pending start height. | `requested`, `pending_from`. |
 | `RESCAN_OUT_OF_RANGE` | Requested rescan starts above the latest indexed height. | `requested`, `latest`. |
