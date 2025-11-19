@@ -34,7 +34,8 @@ use crate::multisig::{
 use crate::node_client::MempoolStatus;
 use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::{
-    Blake2sHasher, IdentityPublicInputs, ProofBackend, ProofBytes, WitnessBytes,
+    BackendError as WalletProverBackendError, Blake2sHasher, IdentityPublicInputs, ProofBackend,
+    ProofBytes, WitnessBytes,
 };
 use crate::telemetry::{TelemetryCounters, WalletActionTelemetry};
 #[cfg(feature = "wallet_zsi")]
@@ -52,8 +53,20 @@ pub use self::runtime::{WalletSyncCoordinator, WalletSyncError};
 pub enum WalletError {
     #[error("engine error: {0}")]
     Engine(#[from] EngineError),
-    #[error("prover error: {0}")]
-    Prover(#[from] EngineProverError),
+    #[error("wallet prover backend disabled")]
+    ProverBackendDisabled,
+    #[error("wallet prover job timed out after {timeout_secs} seconds")]
+    ProverTimeout { timeout_secs: u64 },
+    #[error("wallet prover job was cancelled")]
+    ProverCancelled,
+    #[error("wallet prover is busy")]
+    ProverBusy,
+    #[error("wallet prover witness too large ({size} bytes > limit {limit})")]
+    ProverWitnessTooLarge { size: usize, limit: u64 },
+    #[error("wallet prover internal error: {reason}")]
+    ProverInternal { reason: String },
+    #[error("wallet prover requires proofs but backend returned none")]
+    ProofMissing,
     #[error("node error: {0}")]
     Node(#[from] NodeClientError),
     #[error("sync error: {0}")]
@@ -81,6 +94,55 @@ pub enum WalletError {
     #[cfg(feature = "wallet_hw")]
     #[error("wallet hardware support disabled by configuration")]
     HardwareDisabled,
+}
+
+impl From<EngineProverError> for WalletError {
+    fn from(error: EngineProverError) -> Self {
+        match error {
+            EngineProverError::Backend(inner) => map_prover_backend_error(inner),
+            EngineProverError::Serialization(message) => {
+                prover_internal(format!("serialization error: {message}"))
+            }
+            EngineProverError::Unsupported(context) => map_unsupported_backend(context),
+            EngineProverError::Runtime(message) => {
+                prover_internal(format!("runtime error: {message}"))
+            }
+            EngineProverError::Timeout(timeout_secs) => WalletError::ProverTimeout { timeout_secs },
+            EngineProverError::Cancelled => WalletError::ProverCancelled,
+            EngineProverError::Busy => WalletError::ProverBusy,
+            EngineProverError::WitnessTooLarge { size, limit } => {
+                WalletError::ProverWitnessTooLarge { size, limit }
+            }
+        }
+    }
+}
+
+fn prover_internal(reason: impl Into<String>) -> WalletError {
+    WalletError::ProverInternal {
+        reason: reason.into(),
+    }
+}
+
+const BACKEND_DISABLED_REASON: &str = "wallet prover backend disabled";
+
+fn map_unsupported_backend(context: &'static str) -> WalletError {
+    if context == BACKEND_DISABLED_REASON {
+        WalletError::ProverBackendDisabled
+    } else {
+        prover_internal(format!("unsupported prover backend: {context}"))
+    }
+}
+
+fn map_prover_backend_error(error: WalletProverBackendError) -> WalletError {
+    match error {
+        WalletProverBackendError::Unsupported(context) => map_unsupported_backend(context),
+        WalletProverBackendError::Failure(reason) => {
+            prover_internal(format!("backend failure: {reason}"))
+        }
+        WalletProverBackendError::Serialization(err) => {
+            prover_internal(format!("backend serialization error: {err}"))
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -505,9 +567,7 @@ impl Wallet {
         match result {
             Ok((output, meta)) => {
                 if self.prover_config.require_proof && output.proof().is_none() {
-                    return Err(WalletError::Prover(EngineProverError::Unsupported(
-                        "wallet prover requires proofs but backend returned none",
-                    )));
+                    return Err(WalletError::ProofMissing);
                 }
                 let txid = lock_fingerprint(draft);
                 let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
@@ -1005,6 +1065,7 @@ mod tests {
         MultisigScope,
     };
     use crate::node_client::{NodeClient, StubNodeClient};
+    use crate::proof_backend::BackendError as TestBackendError;
     use crate::telemetry::WalletActionTelemetry;
     use crate::wallet::WatchOnlyError;
     use tokio::runtime::Handle;
@@ -1096,6 +1157,46 @@ mod tests {
                 duration_ms: result.duration().as_millis() as u64,
             })
         }
+    }
+
+    #[test]
+    fn prover_timeout_maps_to_wallet_error() {
+        let err: WalletError = ProverError::Timeout(2).into();
+        assert!(matches!(
+            err,
+            WalletError::ProverTimeout { timeout_secs } if timeout_secs == 2
+        ));
+    }
+
+    #[test]
+    fn prover_backend_disabled_maps_to_specific_variant() {
+        let err: WalletError = ProverError::Backend(TestBackendError::Unsupported(
+            "wallet prover backend disabled",
+        ))
+        .into();
+        assert!(matches!(err, WalletError::ProverBackendDisabled));
+    }
+
+    #[test]
+    fn prover_backend_failure_is_reported_as_internal() {
+        let err: WalletError =
+            ProverError::Backend(TestBackendError::Failure("boom".into())).into();
+        match err {
+            WalletError::ProverInternal { reason } => {
+                assert!(reason.contains("boom"));
+            }
+            other => panic!("expected ProverInternal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prover_witness_limit_maps_to_wallet_error() {
+        let err: WalletError = ProverError::WitnessTooLarge { size: 5, limit: 3 }.into();
+        assert!(matches!(
+            err,
+            WalletError::ProverWitnessTooLarge { size, limit }
+                if size == 5 && limit == 3
+        ));
     }
 
     #[derive(Default)]
@@ -1444,7 +1545,7 @@ mod tests {
         let err = wallet.sign_and_prove(&draft).expect_err("timeout error");
         assert!(matches!(
             err,
-            WalletError::Prover(ProverError::Timeout(secs)) if secs == 1
+            WalletError::ProverTimeout { timeout_secs } if timeout_secs == 1
         ));
 
         assert!(wallet.pending_locks().expect("locks after").is_empty());
@@ -1492,7 +1593,7 @@ mod tests {
             .expect_err("witness too large");
         assert!(matches!(
             err,
-            WalletError::Prover(ProverError::WitnessTooLarge { limit, .. }) if limit == 1
+            WalletError::ProverWitnessTooLarge { limit, .. } if limit == 1
         ));
         assert!(wallet.pending_locks().expect("locks after").is_empty());
         drop(tempdir);
@@ -1731,7 +1832,7 @@ mod tests {
             .expect_err("witness too large");
         assert!(matches!(
             err,
-            WalletError::Prover(ProverError::WitnessTooLarge { limit, .. }) if limit == 1
+            WalletError::ProverWitnessTooLarge { limit, .. } if limit == 1
         ));
         assert!(wallet.pending_locks().expect("locks after").is_empty());
         drop(tempdir);
