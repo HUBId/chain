@@ -947,8 +947,14 @@ impl State {
     fn prover_summary_card(&self) -> Element<Message> {
         if let Some(config) = &self.config {
             let prover = &config.prover;
+            let backend = if prover.enabled {
+                prover.backend.as_str().to_string()
+            } else {
+                "disabled".into()
+            };
             let lines = vec![
-                format!("Backend: {}", prover.backend.as_str()),
+                format!("Enabled: {}", format_bool(prover.enabled)),
+                format!("Backend: {}", backend),
                 format!("Require proof: {}", format_bool(prover.require_proof)),
                 format!(
                     "Allow broadcast without proof: {}",
@@ -1279,8 +1285,14 @@ impl State {
         };
 
         let prover = &config.prover;
+        let backend = if prover.enabled {
+            prover.backend.as_str().to_string()
+        } else {
+            "disabled".into()
+        };
         let lines = [
-            format!("Backend: {}", prover.backend.as_str()),
+            format!("Enabled: {}", format_bool(prover.enabled)),
+            format!("Backend: {}", backend),
             format!("Require proof: {}", format_bool(prover.require_proof)),
             format!(
                 "Allow broadcast without proof: {}",
