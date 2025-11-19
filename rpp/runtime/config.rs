@@ -3069,7 +3069,8 @@ pub use rpp_wallet_interface::runtime_config::{
     MempoolStatus, PolicyTierHooks, QueueWeightsConfig, WalletAuditConfig, WalletAuthConfig,
     WalletAuthTlsConfig, WalletBudgetsConfig, WalletConfig, WalletEngineSettings,
     WalletFeeSettings, WalletGuiConfig, WalletGuiTheme, WalletHwSettings, WalletHwTransport,
-    WalletKeysConfig, WalletNodeRuntimeConfig, WalletPolicySettings, WalletProverSettings,
+    WalletKeysConfig, WalletNodeRuntimeConfig, WalletPolicySettings, WalletProverBackend,
+    WalletProverSettings,
     WalletRescanConfig, WalletRpcConfig, WalletRpcSecurityBinding, WalletRpcSecurityCaFingerprint,
     WalletRpcSecurityConfig, WalletSecurityConfig, WalletServiceConfig,
 };

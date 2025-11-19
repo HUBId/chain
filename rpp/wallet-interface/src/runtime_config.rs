@@ -26,7 +26,7 @@ const DEFAULT_FEE_TARGET_CONFIRMATIONS: u16 = 3;
 const DEFAULT_HEURISTIC_MIN_FEE_RATE: u64 = 2;
 const DEFAULT_HEURISTIC_MAX_FEE_RATE: u64 = 100;
 const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
-const DEFAULT_PROVER_JOB_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_PROVER_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_PROVER_MAX_WITNESS_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_PROVER_MAX_CONCURRENCY: u32 = 1;
 
@@ -906,12 +906,14 @@ impl Default for WalletFeeSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletProverSettings {
-    /// Enable prover-backed flows for transaction authoring.
-    pub enabled: bool,
-    /// Allow falling back to the mock prover backend when available.
-    pub mock_fallback: bool,
+    /// Requested prover backend.
+    pub backend: WalletProverBackend,
+    /// Require proofs to be produced before drafts can be broadcast.
+    pub require_proof: bool,
+    /// Allow broadcasting drafts even when proofs are unavailable.
+    pub allow_broadcast_without_proof: bool,
     /// Timeout (in seconds) applied to prover jobs before they are aborted.
-    pub job_timeout_secs: u64,
+    pub timeout_secs: u64,
     /// Maximum witness size (in bytes) accepted from prover backends.
     pub max_witness_bytes: u64,
     /// Upper bound on concurrent prover jobs executed by the runtime.
@@ -921,12 +923,42 @@ pub struct WalletProverSettings {
 impl Default for WalletProverSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            mock_fallback: true,
-            job_timeout_secs: DEFAULT_PROVER_JOB_TIMEOUT_SECS,
+            backend: WalletProverBackend::default(),
+            require_proof: false,
+            allow_broadcast_without_proof: false,
+            timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
         }
+    }
+}
+
+/// Supported prover backend selectors for the wallet runtime config.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletProverBackend {
+    /// Disable the prover and surface drafts without witnesses.
+    Disabled,
+    /// Select the lightweight mock prover backend.
+    Mock,
+    /// Select the STWO prover backend exposed by the runtime.
+    Stwo,
+}
+
+impl WalletProverBackend {
+    /// Returns the canonical string identifier for this backend.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WalletProverBackend::Disabled => "disabled",
+            WalletProverBackend::Mock => "mock",
+            WalletProverBackend::Stwo => "stwo",
+        }
+    }
+}
+
+impl Default for WalletProverBackend {
+    fn default() -> Self {
+        WalletProverBackend::Mock
     }
 }
 
@@ -1416,9 +1448,9 @@ fn validate_wallet_fees(config: &WalletFeeSettings) -> RuntimeConfigResult<()> {
 }
 
 fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<()> {
-    if config.job_timeout_secs == 0 {
+    if config.timeout_secs == 0 {
         return Err(RuntimeConfigError::InvalidConfig(
-            "wallet configuration wallet.prover.job_timeout_secs must be greater than 0".into(),
+            "wallet configuration wallet.prover.timeout_secs must be greater than 0".into(),
         ));
     }
     if config.max_witness_bytes == 0 {
@@ -1436,6 +1468,35 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
         return Err(RuntimeConfigError::InvalidConfig(
             "wallet configuration wallet.prover.max_concurrency must be greater than 0".into(),
         ));
+    }
+    if config.require_proof && config.allow_broadcast_without_proof {
+        return Err(RuntimeConfigError::InvalidConfig(
+            "wallet configuration wallet.prover.allow_broadcast_without_proof must be false when proofs are required".into(),
+        ));
+    }
+    if config.require_proof && config.backend == WalletProverBackend::Disabled {
+        return Err(RuntimeConfigError::InvalidConfig(
+            "wallet configuration wallet.prover.require_proof cannot be true when backend=\"disabled\"".into(),
+        ));
+    }
+    match config.backend {
+        WalletProverBackend::Disabled => {}
+        WalletProverBackend::Mock => {
+            if !cfg!(feature = "prover-mock") {
+                return Err(RuntimeConfigError::InvalidConfig(
+                    "wallet configuration wallet.prover.backend=\"mock\" requires compiling with the `prover-mock` feature"
+                        .into(),
+                ));
+            }
+        }
+        WalletProverBackend::Stwo => {
+            if !cfg!(feature = "prover-stwo") {
+                return Err(RuntimeConfigError::InvalidConfig(
+                    "wallet configuration wallet.prover.backend=\"stwo\" requires compiling with the `prover-stwo` feature"
+                        .into(),
+                ));
+            }
+        }
     }
     Ok(())
 }

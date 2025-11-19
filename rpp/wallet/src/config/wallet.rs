@@ -13,7 +13,7 @@ const DEFAULT_FEE_TARGET_CONFIRMATIONS: u16 = 3;
 const DEFAULT_HEURISTIC_MIN_FEE_RATE: u64 = 2;
 const DEFAULT_HEURISTIC_MAX_FEE_RATE: u64 = 100;
 const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
-const DEFAULT_PROVER_JOB_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_PROVER_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_PROVER_MAX_WITNESS_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_PROVER_MAX_CONCURRENCY: u32 = 1;
 const DEFAULT_GUI_POLL_INTERVAL_MS: u64 = 5_000;
@@ -55,10 +55,39 @@ impl Default for WalletConfig {
 impl WalletConfig {
     /// Validates that feature-gated sections align with the compiled binary.
     pub fn ensure_supported(&self) -> Result<(), &'static str> {
+        self.prover.ensure_supported()?;
         self.multisig.ensure_supported()?;
         self.gui
             .ensure_security_supported()
             .and_then(|_| self.hw.ensure_supported())
+    }
+}
+
+/// Supported prover backend selectors for the wallet runtime.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletProverBackend {
+    /// Disable the prover and surface drafts without witnesses.
+    Disabled,
+    /// Use the mock backend that ships with the wallet crate.
+    Mock,
+    /// Use the STWO backend compiled from the vendor workspace.
+    Stwo,
+}
+
+impl WalletProverBackend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WalletProverBackend::Disabled => "disabled",
+            WalletProverBackend::Mock => "mock",
+            WalletProverBackend::Stwo => "stwo",
+        }
+    }
+}
+
+impl Default for WalletProverBackend {
+    fn default() -> Self {
+        WalletProverBackend::Mock
     }
 }
 
@@ -234,12 +263,14 @@ impl Default for WalletFeeConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WalletProverConfig {
-    /// Enable prover-backed flows for transaction authoring.
-    pub enabled: bool,
-    /// Allow falling back to the mock prover backend when available.
-    pub mock_fallback: bool,
+    /// Requested prover backend.
+    pub backend: WalletProverBackend,
+    /// Require proofs to be produced before drafts can be broadcast.
+    pub require_proof: bool,
+    /// Allow broadcasting drafts even when the prover backend skips proofs.
+    pub allow_broadcast_without_proof: bool,
     /// Timeout (in seconds) applied to prover jobs before they are aborted.
-    pub job_timeout_secs: u64,
+    pub timeout_secs: u64,
     /// Maximum witness size (in bytes) accepted from prover backends.
     pub max_witness_bytes: u64,
     /// Upper bound on concurrent prover jobs executed by the runtime.
@@ -249,12 +280,47 @@ pub struct WalletProverConfig {
 impl Default for WalletProverConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            mock_fallback: true,
-            job_timeout_secs: DEFAULT_PROVER_JOB_TIMEOUT_SECS,
+            backend: WalletProverBackend::default(),
+            require_proof: false,
+            allow_broadcast_without_proof: false,
+            timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
         }
+    }
+}
+
+impl WalletProverConfig {
+    pub fn ensure_supported(&self) -> Result<(), &'static str> {
+        match self.backend {
+            WalletProverBackend::Disabled => {
+                if self.require_proof {
+                    return Err(
+                        "wallet prover requires proofs but backend is configured as disabled",
+                    );
+                }
+            }
+            WalletProverBackend::Mock => {
+                if !cfg!(feature = "prover-mock") {
+                    return Err(
+                        "mock prover requested but the `prover-mock` feature is disabled",
+                    );
+                }
+            }
+            WalletProverBackend::Stwo => {
+                if !cfg!(feature = "prover-stwo") {
+                    return Err(
+                        "STWO prover requested but the `prover-stwo` feature is disabled",
+                    );
+                }
+            }
+        }
+        if self.require_proof && self.allow_broadcast_without_proof {
+            return Err(
+                "wallet prover.require_proof conflicts with allow_broadcast_without_proof",
+            );
+        }
+        Ok(())
     }
 }
 
@@ -437,12 +503,10 @@ mod tests {
             DEFAULT_HEURISTIC_MAX_FEE_RATE
         );
         assert_eq!(config.fees.cache_ttl_secs, DEFAULT_FEE_CACHE_TTL_SECS);
-        assert!(!config.prover.enabled);
-        assert!(config.prover.mock_fallback);
-        assert_eq!(
-            config.prover.job_timeout_secs,
-            DEFAULT_PROVER_JOB_TIMEOUT_SECS
-        );
+        assert_eq!(config.prover.backend, WalletProverBackend::Mock);
+        assert!(!config.prover.require_proof);
+        assert!(!config.prover.allow_broadcast_without_proof);
+        assert_eq!(config.prover.timeout_secs, DEFAULT_PROVER_TIMEOUT_SECS);
         assert_eq!(
             config.prover.max_witness_bytes,
             DEFAULT_PROVER_MAX_WITNESS_BYTES
@@ -496,9 +560,10 @@ mod tests {
                 cache_ttl_secs: 90,
             },
             prover: WalletProverConfig {
-                enabled: true,
-                mock_fallback: false,
-                job_timeout_secs: 420,
+                backend: WalletProverBackend::Stwo,
+                require_proof: true,
+                allow_broadcast_without_proof: false,
+                timeout_secs: 420,
                 max_witness_bytes: 8 * 1024 * 1024,
                 max_concurrency: 4,
             },
@@ -542,9 +607,10 @@ mod tests {
         assert_eq!(restored.fees.heuristic_min_sats_per_vbyte, 3);
         assert_eq!(restored.fees.heuristic_max_sats_per_vbyte, 300);
         assert_eq!(restored.fees.cache_ttl_secs, 90);
-        assert!(restored.prover.enabled);
-        assert!(!restored.prover.mock_fallback);
-        assert_eq!(restored.prover.job_timeout_secs, 420);
+        assert_eq!(restored.prover.backend, WalletProverBackend::Stwo);
+        assert!(restored.prover.require_proof);
+        assert!(!restored.prover.allow_broadcast_without_proof);
+        assert_eq!(restored.prover.timeout_secs, 420);
         assert_eq!(restored.prover.max_witness_bytes, 8 * 1024 * 1024);
         assert_eq!(restored.prover.max_concurrency, 4);
         assert!(restored.zsi.enabled);
@@ -611,6 +677,46 @@ mod tests {
     fn hardware_config_allowed_with_feature() {
         let mut config = WalletConfig::default();
         config.hw.enabled = true;
+        assert!(config.ensure_supported().is_ok());
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    #[test]
+    fn stwo_prover_rejected_without_feature() {
+        let mut config = WalletConfig::default();
+        config.prover.backend = WalletProverBackend::Stwo;
+        config.prover.require_proof = true;
+        assert_eq!(
+            config.ensure_supported(),
+            Err("STWO prover requested but the `prover-stwo` feature is disabled")
+        );
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn stwo_prover_allowed_with_feature() {
+        let mut config = WalletConfig::default();
+        config.prover.backend = WalletProverBackend::Stwo;
+        config.prover.require_proof = true;
+        assert!(config.ensure_supported().is_ok());
+    }
+
+    #[cfg(not(feature = "prover-mock"))]
+    #[test]
+    fn mock_prover_rejected_without_feature() {
+        let mut config = WalletConfig::default();
+        config.prover.backend = WalletProverBackend::Mock;
+        assert_eq!(
+            config.ensure_supported(),
+            Err("mock prover requested but the `prover-mock` feature is disabled")
+        );
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn mock_prover_allowed_with_feature() {
+        let mut config = WalletConfig::default();
+        config.prover.backend = WalletProverBackend::Mock;
         assert!(config.ensure_supported().is_ok());
     }
 

@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config::wallet::WalletProverConfig;
+use crate::config::wallet::{WalletProverBackend, WalletProverConfig};
 
 use super::{ProverError, ProverOutput, WalletProver};
 use crate::engine::DraftTransaction;
@@ -41,27 +41,35 @@ const STWO_WITNESS_CIRCUIT: &str = "tx";
 pub fn build_wallet_prover(
     config: &WalletProverConfig,
 ) -> Result<Arc<dyn WalletProver>, ProverError> {
-    if config.enabled {
-        #[cfg(feature = "prover-stwo")]
-        {
-            return Ok(Arc::new(StwoWalletProver::new(config)?));
+    match config.backend {
+        WalletProverBackend::Disabled => Ok(Arc::new(DisabledWalletProver::new(
+            "wallet prover backend disabled",
+        ))),
+        WalletProverBackend::Mock => {
+            #[cfg(feature = "prover-mock")]
+            {
+                Ok(Arc::new(MockWalletProver::new(config)))
+            }
+            #[cfg(not(feature = "prover-mock"))]
+            {
+                Err(ProverError::Unsupported(
+                    "mock prover requested but feature disabled",
+                ))
+            }
         }
-        #[cfg(not(feature = "prover-stwo"))]
-        {
-            if !config.mock_fallback {
-                return Ok(Arc::new(DisabledWalletProver::new(
+        WalletProverBackend::Stwo => {
+            #[cfg(feature = "prover-stwo")]
+            {
+                Ok(Arc::new(StwoWalletProver::new(config)?))
+            }
+            #[cfg(not(feature = "prover-stwo"))]
+            {
+                Err(ProverError::Unsupported(
                     "STWO prover requested but feature disabled",
-                )));
+                ))
             }
         }
     }
-    #[cfg(feature = "prover-mock")]
-    {
-        return Ok(Arc::new(MockWalletProver::new(config)));
-    }
-    Ok(Arc::new(DisabledWalletProver::new(
-        "wallet prover backend disabled",
-    )))
 }
 
 #[cfg(feature = "prover-mock")]
@@ -232,10 +240,10 @@ impl ProverJobManager {
             let permits = usize::try_from(config.max_concurrency).unwrap_or(usize::MAX);
             Some(Arc::new(Semaphore::new(permits)))
         };
-        let timeout = if config.job_timeout_secs == 0 {
+        let timeout = if config.timeout_secs == 0 {
             None
         } else {
-            Some(Duration::from_secs(config.job_timeout_secs))
+            Some(Duration::from_secs(config.timeout_secs))
         };
         Self {
             semaphore,
@@ -458,7 +466,7 @@ mod tests {
         let _guard = runtime.enter();
 
         let mut config = WalletProverConfig::default();
-        config.job_timeout_secs = 1;
+        config.timeout_secs = 1;
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
 
@@ -498,8 +506,8 @@ mod tests {
     fn stwo_prover_rejects_witnesses_over_configured_cap() {
         let mut config = WalletProverConfig::default();
         config.max_witness_bytes = 1;
-        config.enabled = true;
-        config.mock_fallback = false;
+        config.backend = WalletProverBackend::Stwo;
+        config.require_proof = true;
         let prover = StwoWalletProver::new(&config).expect("stwo prover");
         let draft = sample_draft();
 

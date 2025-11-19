@@ -67,6 +67,7 @@ prover-stwo = [
     "rpp-wallet-lib/prover-stwo",
     "rpp-node/prover-stwo",
     "prover_stwo_backend/prover-stwo",
+    "rpp-wallet-interface/prover-stwo",
 ]
 prover-stwo-simd = [
     "nightly-prover",
@@ -76,6 +77,7 @@ prover-stwo-simd = [
     "rpp-wallet-lib/prover-stwo-simd",
     "rpp-node/prover-stwo-simd",
     "prover_stwo_backend/prover-stwo-simd",
+    "rpp-wallet-interface/prover-stwo",
 ]
 wallet_gui = ["rpp-wallet-lib/wallet_gui"]
 backend-plonky3 = [

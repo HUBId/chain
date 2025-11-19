@@ -948,9 +948,13 @@ impl State {
         if let Some(config) = &self.config {
             let prover = &config.prover;
             let lines = vec![
-                format!("Enabled: {}", format_bool(prover.enabled)),
-                format!("Mock fallback: {}", format_bool(prover.mock_fallback)),
-                format!("Timeout: {}s", prover.job_timeout_secs),
+                format!("Backend: {}", prover.backend.as_str()),
+                format!("Require proof: {}", format_bool(prover.require_proof)),
+                format!(
+                    "Allow broadcast without proof: {}",
+                    format_bool(prover.allow_broadcast_without_proof)
+                ),
+                format!("Timeout: {}s", prover.timeout_secs),
             ];
             summary_card("Prover", column_from(lines))
         } else {
@@ -1276,9 +1280,13 @@ impl State {
 
         let prover = &config.prover;
         let lines = [
-            format!("Backend enabled: {}", format_bool(prover.enabled)),
-            format!("Mock fallback: {}", format_bool(prover.mock_fallback)),
-            format!("Job timeout: {}s", prover.job_timeout_secs),
+            format!("Backend: {}", prover.backend.as_str()),
+            format!("Require proof: {}", format_bool(prover.require_proof)),
+            format!(
+                "Allow broadcast without proof: {}",
+                format_bool(prover.allow_broadcast_without_proof)
+            ),
+            format!("Timeout: {}s", prover.timeout_secs),
             format!("Max witness bytes: {}", prover.max_witness_bytes),
             format!("Max concurrency: {}", prover.max_concurrency),
         ];

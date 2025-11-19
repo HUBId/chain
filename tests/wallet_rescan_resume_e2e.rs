@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use common::wallet::{wait_for, wait_for_status, WalletTestBuilder};
-use rpp_wallet::config::wallet::WalletProverConfig;
+use rpp_wallet::config::wallet::{WalletProverBackend, WalletProverConfig};
 use rpp_wallet::indexer::scanner::SyncMode;
 use rpp_wallet::node_client::{NodeClientError, NodeRejectionHint};
 
@@ -21,8 +21,8 @@ use rpp_wallet::node_client::{NodeClientError, NodeRejectionHint};
 async fn wallet_records_rescan_and_resume_checkpoints() -> Result<()> {
     let mut prover_config = WalletProverConfig::default();
     if cfg!(feature = "prover-stwo") {
-        prover_config.enabled = true;
-        prover_config.mock_fallback = true;
+        prover_config.backend = WalletProverBackend::Stwo;
+        prover_config.require_proof = true;
     }
 
     let fixture = WalletTestBuilder::default()

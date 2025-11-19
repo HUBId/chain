@@ -22,8 +22,8 @@ use rpp_wallet::wallet::WalletError;
 async fn wallet_respects_fee_hints_and_policy_limits() -> Result<()> {
     let mut prover_config = rpp_wallet::config::wallet::WalletProverConfig::default();
     if cfg!(feature = "prover-stwo") {
-        prover_config.enabled = true;
-        prover_config.mock_fallback = true;
+        prover_config.backend = rpp_wallet::config::wallet::WalletProverBackend::Stwo;
+        prover_config.require_proof = true;
     }
 
     let fixture = WalletTestBuilder::default()

@@ -1181,7 +1181,18 @@ impl WalletRpcRouter {
             .get(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
         if state.prover_output.is_none() {
-            return Err(RouterError::DraftUnsigned(draft_id));
+            return Err(RouterError::DraftUnsigned {
+                draft_id,
+                proof_required: self.wallet.prover_config().require_proof,
+            });
+        }
+        if let Some(output) = &state.prover_output {
+            if output.proof.is_none() && !self.wallet.prover_config().allow_broadcast_without_proof {
+                return Err(RouterError::DraftUnsigned {
+                    draft_id,
+                    proof_required: true,
+                });
+            }
         }
         self.wallet_call(self.wallet.broadcast(&state.draft))?;
         let locks = self.pending_lock_dtos()?;
@@ -1294,7 +1305,7 @@ enum RouterError {
     Node(NodeClientError),
     Backup(BackupError),
     MissingDraft(String),
-    DraftUnsigned(String),
+    DraftUnsigned { draft_id: String, proof_required: bool },
     SyncUnavailable,
     RescanOutOfRange {
         requested: u64,
@@ -1320,7 +1331,7 @@ impl RouterError {
             RouterError::Node(error) => Some(node_error_code(error)),
             RouterError::Backup(_) => Some(WalletRpcErrorCode::InternalError),
             RouterError::MissingDraft(_) => Some(WalletRpcErrorCode::DraftNotFound),
-            RouterError::DraftUnsigned(_) => Some(WalletRpcErrorCode::DraftUnsigned),
+            RouterError::DraftUnsigned { .. } => Some(WalletRpcErrorCode::DraftUnsigned),
             RouterError::SyncUnavailable => Some(WalletRpcErrorCode::SyncUnavailable),
             RouterError::RescanOutOfRange { .. } => Some(WalletRpcErrorCode::RescanOutOfRange),
             RouterError::RescanInProgress { .. } => Some(WalletRpcErrorCode::RescanInProgress),
@@ -1354,10 +1365,17 @@ impl RouterError {
                 "draft not found",
                 Some(json!({ "draft_id": draft_id })),
             ),
-            RouterError::DraftUnsigned(draft_id) => json_error(
+            RouterError::DraftUnsigned {
+                draft_id,
+                proof_required,
+            } => json_error(
                 WalletRpcErrorCode::DraftUnsigned,
-                "draft must be signed before broadcasting",
-                Some(json!({ "draft_id": draft_id })),
+                if *proof_required {
+                    "draft must include a proof before broadcasting"
+                } else {
+                    "draft must be signed before broadcasting"
+                },
+                Some(json!({ "draft_id": draft_id, "proof_required": proof_required })),
             ),
             RouterError::SyncUnavailable => json_error(
                 WalletRpcErrorCode::SyncUnavailable,
