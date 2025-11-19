@@ -54,7 +54,7 @@ use crate::db::StoredZsiArtifact;
 use crate::db::{PendingLock, PolicySnapshot, TxCacheEntry, UtxoRecord};
 use crate::engine::signing::ProveResult;
 use crate::engine::{
-    BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError, ProverError,
+    BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError,
     SelectionError, SpendModel, WalletBalance,
 };
 #[cfg(feature = "wallet_hw")]
@@ -1439,7 +1439,13 @@ fn rescan_stage_for_method(method: &str) -> Option<&'static str> {
 fn wallet_error_code(error: &WalletError) -> WalletRpcErrorCode {
     match error {
         WalletError::Engine(_) => WalletRpcErrorCode::EngineFailure,
-        WalletError::Prover(_) => WalletRpcErrorCode::ProverFailed,
+        WalletError::ProverBackendDisabled => WalletRpcErrorCode::InvalidRequest,
+        WalletError::ProverTimeout { .. } => WalletRpcErrorCode::ProverTimeout,
+        WalletError::ProverCancelled => WalletRpcErrorCode::ProverCancelled,
+        WalletError::ProverBusy => WalletRpcErrorCode::ProverFailed,
+        WalletError::ProverWitnessTooLarge { .. } => WalletRpcErrorCode::WitnessTooLarge,
+        WalletError::ProverInternal { .. } => WalletRpcErrorCode::ProverFailed,
+        WalletError::ProofMissing => WalletRpcErrorCode::ProverFailed,
         WalletError::Node(node) => node_error_code(node),
         WalletError::Sync(_) => WalletRpcErrorCode::SyncError,
         WalletError::WatchOnly(watch_only) => watch_only_error_code(watch_only),
@@ -1566,7 +1572,39 @@ fn watch_only_record_from_params(params: WatchOnlyEnableParams) -> WatchOnlyReco
 fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
     match error {
         WalletError::Engine(engine) => engine_error_to_json(engine),
-        WalletError::Prover(prover) => prover_error_to_json(prover),
+        WalletError::ProverBackendDisabled => json_error(
+            WalletRpcErrorCode::InvalidRequest,
+            error.to_string(),
+            Some(json!({ "kind": "prover_backend_disabled" })),
+        ),
+        WalletError::ProverTimeout { timeout_secs } => json_error(
+            WalletRpcErrorCode::ProverTimeout,
+            error.to_string(),
+            Some(json!({ "timeout_secs": timeout_secs })),
+        ),
+        WalletError::ProverCancelled => {
+            json_error(WalletRpcErrorCode::ProverCancelled, error.to_string(), None)
+        }
+        WalletError::ProverBusy => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "busy" })),
+        ),
+        WalletError::ProverWitnessTooLarge { size, limit } => json_error(
+            WalletRpcErrorCode::WitnessTooLarge,
+            error.to_string(),
+            Some(json!({ "size_bytes": size, "limit_bytes": limit })),
+        ),
+        WalletError::ProverInternal { reason } => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "internal", "reason": reason })),
+        ),
+        WalletError::ProofMissing => json_error(
+            WalletRpcErrorCode::ProverFailed,
+            error.to_string(),
+            Some(json!({ "kind": "proof_missing" })),
+        ),
         WalletError::Node(node) => node_error_to_json(node),
         WalletError::Sync(sync) => wallet_sync_error_to_json(sync),
         WalletError::WatchOnly(watch_only) => watch_only_error_to_json(watch_only),
@@ -1810,49 +1848,6 @@ fn fee_error_to_json(error: &FeeError) -> JsonRpcError {
             Some(json!({ "requested": requested, "maximum": maximum })),
         ),
         FeeError::Node(node) => node_error_to_json(node),
-    }
-}
-
-fn prover_error_to_json(error: &ProverError) -> JsonRpcError {
-    match error {
-        ProverError::Timeout(timeout) => json_error(
-            WalletRpcErrorCode::ProverTimeout,
-            error.to_string(),
-            Some(json!({ "timeout_secs": timeout })),
-        ),
-        ProverError::Cancelled => {
-            json_error(WalletRpcErrorCode::ProverCancelled, error.to_string(), None)
-        }
-        ProverError::WitnessTooLarge { size, limit } => json_error(
-            WalletRpcErrorCode::WitnessTooLarge,
-            error.to_string(),
-            Some(json!({ "size_bytes": size, "limit_bytes": limit })),
-        ),
-        ProverError::Backend(inner) => json_error(
-            WalletRpcErrorCode::ProverFailed,
-            error.to_string(),
-            Some(json!({ "kind": "backend", "message": inner.to_string() })),
-        ),
-        ProverError::Serialization(message) => json_error(
-            WalletRpcErrorCode::ProverFailed,
-            error.to_string(),
-            Some(json!({ "kind": "serialization", "message": message })),
-        ),
-        ProverError::Unsupported(backend) => json_error(
-            WalletRpcErrorCode::ProverFailed,
-            error.to_string(),
-            Some(json!({ "kind": "unsupported", "backend": backend })),
-        ),
-        ProverError::Runtime(message) => json_error(
-            WalletRpcErrorCode::ProverFailed,
-            error.to_string(),
-            Some(json!({ "kind": "runtime", "message": message })),
-        ),
-        ProverError::Busy => json_error(
-            WalletRpcErrorCode::ProverFailed,
-            error.to_string(),
-            Some(json!({ "kind": "busy" })),
-        ),
     }
 }
 
