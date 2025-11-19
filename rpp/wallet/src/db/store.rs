@@ -8,8 +8,8 @@ use storage_firewood::{
 
 use crate::db::{
     codec::{
-        self, Address, CodecError, PendingLock, PolicySnapshot, StoredZsiArtifact, TxCacheEntry,
-        UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
+        self, Address, CodecError, PendingLock, PolicySnapshot, ProverMeta, StoredZsiArtifact,
+        TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
     },
     migrations, schema,
 };
@@ -41,7 +41,10 @@ impl WalletStore {
     /// Start a new batched write session.
     pub fn batch(&self) -> Result<WalletStoreBatch<'_>, WalletStoreError> {
         let guard = self.lock()?;
-        Ok(WalletStoreBatch { guard })
+        Ok(WalletStoreBatch {
+            guard,
+            prover_meta_cf: self.prover_meta_cf.clone(),
+        })
     }
 
     /// Return the currently stored schema version.
@@ -293,6 +296,24 @@ impl WalletStore {
         Ok(artifacts)
     }
 
+    /// Persist prover metadata associated with a transaction.
+    pub fn put_prover_meta(&self, meta: &ProverMeta) -> Result<(), WalletStoreError> {
+        let key = prover_meta_key(&meta.txid);
+        let encoded = codec::encode_prover_meta(meta)?;
+        self.prover_meta_cf
+            .put_bytes(&key, &encoded, false)
+            .map_err(map_cf_error)
+    }
+
+    /// Fetch prover metadata captured for a given transaction.
+    pub fn get_prover_meta(&self, txid: &[u8; 32]) -> Result<Option<ProverMeta>, WalletStoreError> {
+        let key = prover_meta_key(txid);
+        let Some(bytes) = self.prover_meta_cf.get_bytes(&key).map_err(map_cf_error)? else {
+            return Ok(None);
+        };
+        Ok(Some(codec::decode_prover_meta(&bytes)?))
+    }
+
     /// Fetch a cached transaction entry by txid.
     pub fn get_tx_cache_entry(
         &self,
@@ -442,6 +463,7 @@ impl AddressKind {
 /// Wrapper around a Firewood write batch.
 pub struct WalletStoreBatch<'a> {
     guard: MutexGuard<'a, FirewoodKv>,
+    prover_meta_cf: ColumnFamily,
 }
 
 impl<'a> WalletStoreBatch<'a> {
@@ -605,6 +627,22 @@ impl<'a> WalletStoreBatch<'a> {
         Ok(())
     }
 
+    pub fn put_prover_meta(&mut self, meta: &ProverMeta) -> Result<(), WalletStoreError> {
+        let key = prover_meta_key(&meta.txid);
+        let encoded = codec::encode_prover_meta(meta)?;
+        self.prover_meta_cf
+            .put_bytes(&key, &encoded, false)
+            .map_err(map_cf_error)
+    }
+
+    pub fn get_prover_meta(&self, txid: &[u8; 32]) -> Result<Option<ProverMeta>, WalletStoreError> {
+        let key = prover_meta_key(txid);
+        let Some(bytes) = self.prover_meta_cf.get_bytes(&key).map_err(map_cf_error)? else {
+            return Ok(None);
+        };
+        Ok(Some(codec::decode_prover_meta(&bytes)?))
+    }
+
     pub fn delete_zsi_artifact(&mut self, identity: &str, commitment_digest: &str) {
         self.guard.delete(&zsi_key(identity, commitment_digest));
     }
@@ -680,6 +718,11 @@ fn initialise_schema(kv: &mut FirewoodKv) -> Result<(), WalletStoreError> {
     if version < schema::SCHEMA_VERSION_V3 {
         mutated |= migrations::v3::apply(kv)?;
         version = schema::SCHEMA_VERSION_V3;
+    }
+
+    if version < schema::SCHEMA_VERSION_V4 {
+        mutated |= migrations::v4::apply(kv)?;
+        version = schema::SCHEMA_VERSION_V4;
     }
 
     if stored.is_none() || version != supported {
@@ -767,6 +810,10 @@ fn hw_registry_key(label: &str) -> Vec<u8> {
     namespaced(schema::HW_REGISTRY_NAMESPACE, label.as_bytes())
 }
 
+fn prover_meta_key(txid: &[u8; 32]) -> String {
+    format!("{}{}", schema::PROVER_META_NAMESPACE, hex::encode(txid))
+}
+
 fn namespaced(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
     let mut key = prefix.to_vec();
     key.extend_from_slice(suffix);
@@ -806,4 +853,8 @@ fn parse_txid(bytes: &[u8]) -> Result<[u8; 32], WalletStoreError> {
     let mut txid = [0u8; 32];
     txid.copy_from_slice(bytes);
     Ok(txid)
+}
+
+fn map_cf_error(err: std::io::Error) -> WalletStoreError {
+    WalletStoreError::Storage(KvError::Io(err))
 }
