@@ -43,6 +43,22 @@ well as the dedicated runtime entry points (`node`, `wallet`, `hybrid`, and
 `validator`). SBOMs, SHA256 manifests, cosign signatures, and provenance
 attestations are published alongside the release assets.
 
+### Support tier annotations
+
+- Always create the canonical `vMAJOR.MINOR.PATCH` tag first so the workflow can
+  build the release artifacts.
+- Immediately follow with either an `lts/MAJOR.MINOR` tag (for builds covered by
+  the 12-month support window) or an `exp/MAJOR.MINOR.PATCH` tag (for preview
+  builds). Annotate the tag message with the rationale and a link to
+  [`docs/wallet_support_policy.md`](docs/wallet_support_policy.md).
+- If a Maintenance release is later promoted to LTS, reuse the same commit and
+  add the `lts/MAJOR.MINOR` tag instead of rebuilding artifacts. Update the
+  release body so auditors know when the promotion occurred.
+- When generating artifacts outside of GitHub (for example during dry runs), set
+  `SUPPORT_TIER` in the environment before invoking
+  `scripts/build_release.sh`. The release manifest includes the tier value so the
+  GitHub release job can mirror it in the published notes.
+
 A dedicated `wallet-bundle` job also builds the reproducible
 `wallet-bundle-<tag>-x86_64-unknown-linux-gnu.tar.gz` artifact by invoking
 `cargo xtask wallet-bundle` with the pinned feature set. The job uploads the
