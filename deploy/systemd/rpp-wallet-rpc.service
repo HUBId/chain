@@ -1,0 +1,22 @@
+[Unit]
+Description=RPP Wallet RPC service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rpp-wallet
+Group=rpp-wallet
+Environment=RPP_WALLET_CONFIG=/etc/rpp-wallet/wallet.toml
+Environment=RPP_WALLET_DATA=/var/lib/rpp-wallet
+ExecStart=/usr/local/bin/rpp-wallet rpc --config /etc/rpp-wallet/wallet.toml
+Restart=on-failure
+RestartSec=5s
+RuntimeDirectory=rpp-wallet
+RuntimeDirectoryMode=0750
+WorkingDirectory=/var/lib/rpp-wallet
+LogsDirectory=rpp-wallet
+LogsDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

@@ -41,6 +41,7 @@ mod fuzz_debug;
 mod release;
 mod telemetry;
 mod wallet_bundle;
+mod wallet_installers;
 use telemetry::MetricsReporter;
 
 pub(crate) fn workspace_root() -> PathBuf {
@@ -5250,6 +5251,7 @@ fn main() -> Result<()> {
         "verify-report" => verify_snapshot_verifier_report(&argv),
         "fuzz-debug" => fuzz_debug::run(&argv),
         "wallet-bundle" => wallet_bundle::build_wallet_bundle(&argv),
+        "wallet-installer" => wallet_installers::build_wallet_installers(&argv),
         "help" => {
             usage();
             Ok(())

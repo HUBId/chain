@@ -25,3 +25,4 @@ tar = "=0.4.42"
 walkdir = "=2.5.0"
 jsonschema = "=0.17.1"
 prometheus-client = { workspace = true }
+zip = { version = "=0.6.6", default-features = false, features = ["deflate"] }
