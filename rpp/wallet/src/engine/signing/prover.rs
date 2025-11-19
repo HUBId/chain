@@ -1,17 +1,24 @@
 use std::convert::TryFrom;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config::wallet::{WalletProverBackend, WalletProverConfig};
 
-use super::{ProverError, ProverOutput, WalletProver};
+use super::{
+    DraftProverContext, ProveResult, ProverError, ProverIdentity, ProverMeta, WalletProver,
+    WitnessPlan,
+};
 use crate::engine::DraftTransaction;
+use metrics::{counter, histogram};
 use prover_backend_interface::{
-    ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader,
+    Blake2sHasher, ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader,
 };
 use tokio::runtime::Handle;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
+use tokio::time::{timeout_at, Instant as TokioInstant};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use zeroize::Zeroize;
 
@@ -88,53 +95,68 @@ impl MockWalletProver {
 
 #[cfg(feature = "prover-mock")]
 impl WalletProver for MockWalletProver {
-    fn backend(&self) -> &'static str {
-        "mock"
+    fn identity(&self) -> ProverIdentity {
+        ProverIdentity::new("mock", false)
     }
 
-    fn prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
-        let draft = draft.clone();
-        let limit = self.jobs.witness_limit();
-        self.jobs.run_job(move || {
-            let start = Instant::now();
+    fn prepare_witness(&self, ctx: &DraftProverContext<'_>) -> Result<WitnessPlan, ProverError> {
+        let backend = self.identity().backend;
+        let result = (|| {
             let witness_header = WitnessHeader::new(ProofSystemKind::Mock, MOCK_CIRCUIT_ID);
-            let mut payload = bincode::serialize(&draft)
+            let mut payload = bincode::serialize(ctx.draft())
                 .map_err(|err| ProverError::Serialization(err.to_string()))?;
             let witness = WitnessBytes::encode(&witness_header, &payload)?;
             payload.zeroize();
             debug_assert_zeroized(&payload);
             let witness_bytes = witness.as_slice().len();
-            if limit > 0 && (witness_bytes as u64) > limit {
-                warn!(
-                    backend = "mock",
-                    witness_bytes, limit, "wallet prover witness exceeds configured limit"
-                );
-                return Err(ProverError::WitnessTooLarge {
-                    size: witness_bytes,
-                    limit,
-                });
-            }
+            self.jobs.ensure_witness_capacity(backend, witness_bytes)?;
+            Ok((witness, witness_bytes))
+        })();
+
+        result
+            .map(|(witness, _)| {
+                let plan = WitnessPlan::with_parts(witness, Instant::now());
+                record_prepare_success(backend, plan.witness_bytes());
+                plan
+            })
+            .map_err(|err| {
+                record_prepare_error(backend, &err);
+                err
+            })
+    }
+
+    fn prove(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        plan: WitnessPlan,
+    ) -> Result<ProveResult, ProverError> {
+        let backend = self.identity().backend;
+        let result = prove_with_plan(backend, &self.jobs, plan, move |mut witness| {
             let proof_header = ProofHeader::new(ProofSystemKind::Mock, MOCK_CIRCUIT_ID);
             let proof = ProofBytes::encode(&proof_header, witness.as_slice())?;
             let mut witness_buffer = witness.into_inner();
             witness_buffer.zeroize();
             debug_assert_zeroized(&witness_buffer);
-            let proof_len = proof.as_ref().len();
-            let duration_ms = start.elapsed().as_millis() as u64;
-            info!(
-                backend = "mock",
-                witness_bytes,
-                proof_bytes = proof_len,
-                duration_ms,
-                "wallet prover job completed"
-            );
-            Ok(ProverOutput {
-                backend: "mock".to_string(),
-                proof: Some(proof),
-                witness_bytes,
-                duration_ms,
+            Ok(proof)
+        });
+
+        result
+            .map(|result| {
+                record_prove_success(backend, &result);
+                result
             })
-        })
+            .map_err(|err| {
+                record_prove_error(backend, &err);
+                err
+            })
+    }
+
+    fn attest_metadata(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        result: &ProveResult,
+    ) -> Result<ProverMeta, ProverError> {
+        Ok(attest_default(self.identity().backend, result))
     }
 }
 
@@ -161,48 +183,62 @@ impl StwoWalletProver {
 
 #[cfg(feature = "prover-stwo")]
 impl WalletProver for StwoWalletProver {
-    fn backend(&self) -> &'static str {
-        "stwo"
+    fn identity(&self) -> ProverIdentity {
+        ProverIdentity::new("stwo", false)
     }
 
-    fn prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
-        let draft = draft.clone();
+    fn prepare_witness(&self, ctx: &DraftProverContext<'_>) -> Result<WitnessPlan, ProverError> {
+        let backend = self.identity().backend;
+        let result = build_stwo_witness(ctx.draft()).and_then(|(witness, witness_bytes)| {
+            self.jobs.ensure_witness_capacity(backend, witness_bytes)?;
+            Ok((witness, witness_bytes))
+        });
+
+        result
+            .map(|(witness, _)| {
+                let plan = WitnessPlan::with_parts(witness, Instant::now());
+                record_prepare_success(backend, plan.witness_bytes());
+                plan
+            })
+            .map_err(|err| {
+                record_prepare_error(backend, &err);
+                err
+            })
+    }
+
+    fn prove(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        plan: WitnessPlan,
+    ) -> Result<ProveResult, ProverError> {
+        let backend_label = self.identity().backend;
         let backend = Arc::clone(&self.backend);
         let proving_key = Arc::clone(&self.proving_key);
-        let limit = self.jobs.witness_limit();
-        self.jobs.run_job(move || {
-            let start = Instant::now();
-            let (witness, witness_bytes) = build_stwo_witness(&draft)?;
-            if limit > 0 && (witness_bytes as u64) > limit {
-                warn!(
-                    backend = "stwo",
-                    witness_bytes, limit, "wallet prover witness exceeds configured limit"
-                );
-                return Err(ProverError::WitnessTooLarge {
-                    size: witness_bytes,
-                    limit,
-                });
-            }
+        let result = prove_with_plan(backend_label, &self.jobs, plan, move |mut witness| {
             let proof = backend.prove_tx(&proving_key, &witness)?;
             let mut witness_buffer = witness.into_inner();
             witness_buffer.zeroize();
             debug_assert_zeroized(&witness_buffer);
-            let proof_len = proof.as_ref().len();
-            let duration_ms = start.elapsed().as_millis() as u64;
-            info!(
-                backend = "stwo",
-                witness_bytes,
-                proof_bytes = proof_len,
-                duration_ms,
-                "wallet prover job completed"
-            );
-            Ok(ProverOutput {
-                backend: "stwo".to_string(),
-                proof: Some(proof),
-                witness_bytes,
-                duration_ms,
+            Ok(proof)
+        });
+
+        result
+            .map(|result| {
+                record_prove_success(backend_label, &result);
+                result
             })
-        })
+            .map_err(|err| {
+                record_prove_error(backend_label, &err);
+                err
+            })
+    }
+
+    fn attest_metadata(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        result: &ProveResult,
+    ) -> Result<ProverMeta, ProverError> {
+        Ok(attest_default(self.identity().backend, result))
     }
 }
 
@@ -217,23 +253,39 @@ impl DisabledWalletProver {
 }
 
 impl WalletProver for DisabledWalletProver {
-    fn backend(&self) -> &'static str {
-        "disabled"
+    fn identity(&self) -> ProverIdentity {
+        ProverIdentity::new("disabled", true)
     }
 
-    fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
+    fn prepare_witness(&self, _ctx: &DraftProverContext<'_>) -> Result<WitnessPlan, ProverError> {
+        Err(ProverError::Unsupported(self.reason))
+    }
+
+    fn prove(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        _plan: WitnessPlan,
+    ) -> Result<ProveResult, ProverError> {
+        Err(ProverError::Unsupported(self.reason))
+    }
+
+    fn attest_metadata(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        _result: &ProveResult,
+    ) -> Result<ProverMeta, ProverError> {
         Err(ProverError::Unsupported(self.reason))
     }
 }
 
-struct ProverJobManager {
+pub(crate) struct ProverJobManager {
     semaphore: Option<Arc<Semaphore>>,
     timeout: Option<Duration>,
     witness_limit: u64,
 }
 
 impl ProverJobManager {
-    fn new(config: &WalletProverConfig) -> Self {
+    pub(crate) fn new(config: &WalletProverConfig) -> Self {
         let semaphore = if config.max_concurrency == 0 {
             None
         } else {
@@ -252,59 +304,79 @@ impl ProverJobManager {
         }
     }
 
-    fn witness_limit(&self) -> u64 {
-        self.witness_limit
+    fn ensure_witness_capacity(
+        &self,
+        backend: &'static str,
+        witness_bytes: usize,
+    ) -> Result<(), ProverError> {
+        if self.witness_limit > 0 && (witness_bytes as u64) > self.witness_limit {
+            warn!(
+                backend,
+                witness_bytes,
+                limit = self.witness_limit,
+                "wallet prover witness exceeds configured limit"
+            );
+            return Err(ProverError::WitnessTooLarge {
+                size: witness_bytes,
+                limit: self.witness_limit,
+            });
+        }
+        Ok(())
     }
 
-    fn run_job<F>(&self, job: F) -> Result<ProverOutput, ProverError>
-    where
-        F: FnOnce() -> Result<ProverOutput, ProverError> + Send + 'static,
-    {
-        let handle = Handle::try_current().map_err(|err| {
-            ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
-        })?;
-        let semaphore = self.semaphore.clone();
-        let timeout = self.timeout;
-        handle.block_on(async move {
-            let _permit = if let Some(semaphore) = semaphore {
-                Some(
-                    semaphore
-                        .acquire_owned()
-                        .await
-                        .map_err(|_| ProverError::Cancelled)?,
-                )
-            } else {
-                None
-            };
-
-            let job_future = async {
-                task::spawn_blocking(job).await.map_err(|err| {
-                    if err.is_cancelled() {
-                        ProverError::Cancelled
-                    } else if err.is_panic() {
-                        warn!("wallet prover job panicked");
-                        ProverError::Runtime("prover task panicked".into())
-                    } else {
-                        ProverError::Runtime(format!("prover task failed: {err}"))
-                    }
-                })?
-            };
-
-            if let Some(timeout) = timeout {
-                match tokio::time::timeout(timeout, job_future).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        warn!(
-                            timeout_secs = timeout.as_secs(),
-                            "wallet prover job exceeded timeout"
-                        );
-                        Err(ProverError::Timeout(timeout.as_secs()))
-                    }
-                }
-            } else {
-                job_future.await
-            }
+    fn acquire(&self) -> Result<ProverJobPermit, ProverError> {
+        let permit = if let Some(semaphore) = &self.semaphore {
+            Some(
+                semaphore
+                    .try_acquire_owned()
+                    .map_err(|_| ProverError::Busy)?,
+            )
+        } else {
+            None
+        };
+        let deadline = self.timeout.map(|timeout| Instant::now() + timeout);
+        Ok(ProverJobPermit {
+            _permit: permit,
+            deadline,
+            timeout: self.timeout,
+            token: CancellationToken::new(),
         })
+    }
+}
+
+struct ProverJobPermit {
+    _permit: Option<OwnedSemaphorePermit>,
+    deadline: Option<Instant>,
+    timeout: Option<Duration>,
+    token: CancellationToken,
+}
+
+impl ProverJobPermit {
+    fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+
+    async fn wait<F, T>(self, future: F) -> Result<T, ProverError>
+    where
+        F: Future<Output = Result<T, ProverError>>,
+    {
+        if let Some(deadline) = self.deadline {
+            let deadline = TokioInstant::from_std(deadline);
+            match timeout_at(deadline, future).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.token.cancel();
+                    let secs = self
+                        .timeout
+                        .map(|value| value.as_secs())
+                        .unwrap_or_default();
+                    warn!(timeout_secs = secs, "wallet prover job exceeded timeout");
+                    Err(ProverError::Timeout(secs))
+                }
+            }
+        } else {
+            future.await
+        }
     }
 }
 
@@ -436,6 +508,143 @@ fn debug_assert_zeroized(buf: &[u8]) {
     );
 }
 
+fn prove_with_plan<F>(
+    backend: &'static str,
+    jobs: &ProverJobManager,
+    plan: WitnessPlan,
+    prove_fn: F,
+) -> Result<ProveResult, ProverError>
+where
+    F: FnOnce(WitnessBytes) -> Result<ProofBytes, ProverError> + Send + 'static,
+{
+    let witness_bytes = plan.witness_bytes();
+    let witness = plan.into_witness().ok_or_else(|| {
+        ProverError::Runtime(format!("{backend} witness unavailable during proving"))
+    })?;
+    let permit = jobs.acquire()?;
+    let handle = Handle::try_current().map_err(|err| {
+        ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
+    })?;
+    handle.block_on(async move {
+        let token = permit.cancellation_token();
+        let started_at = Instant::now();
+        let job = task::spawn_blocking(move || {
+            if token.is_cancelled() {
+                return Err(ProverError::Cancelled);
+            }
+            prove_fn(witness)
+        });
+        let proof = permit
+            .wait(async move { job.await.map_err(map_blocking_error)? })
+            .await?;
+        let finished_at = Instant::now();
+        let duration_ms = finished_at
+            .checked_duration_since(started_at)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        info!(
+            backend,
+            witness_bytes,
+            proof_bytes = proof.as_ref().len(),
+            duration_ms,
+            "wallet prover job completed"
+        );
+        Ok(ProveResult::new(
+            Some(proof),
+            witness_bytes,
+            started_at,
+            finished_at,
+        ))
+    })
+}
+
+fn attest_default(backend: &'static str, result: &ProveResult) -> ProverMeta {
+    let proof_bytes = result.proof().map(|proof| proof.as_ref().len());
+    let proof_hash = result.proof().map(|proof| {
+        let digest: [u8; 32] = Blake2sHasher::hash(proof.as_ref()).into();
+        digest
+    });
+    ProverMeta {
+        backend,
+        witness_bytes: result.witness_bytes(),
+        proof_bytes,
+        proof_hash,
+        duration_ms: result.duration().as_millis() as u64,
+    }
+}
+
+fn record_prepare_success(backend: &'static str, witness_bytes: usize) {
+    counter!(
+        "wallet.prover.jobs",
+        "backend" => backend,
+        "stage" => "prepare",
+        "result" => "ok"
+    )
+    .increment(1);
+    histogram!("wallet.prover.witness_bytes", "backend" => backend).record(witness_bytes as f64);
+}
+
+fn record_prepare_error(backend: &'static str, error: &ProverError) {
+    counter!(
+        "wallet.prover.jobs",
+        "backend" => backend,
+        "stage" => "prepare",
+        "result" => "err",
+        "error" => error_label(error)
+    )
+    .increment(1);
+}
+
+fn record_prove_success(backend: &'static str, result: &ProveResult) {
+    counter!(
+        "wallet.prover.jobs",
+        "backend" => backend,
+        "stage" => "prove",
+        "result" => "ok"
+    )
+    .increment(1);
+    histogram!("wallet.prover.duration_ms", "backend" => backend)
+        .record(result.duration().as_millis() as f64);
+    if let Some(bytes) = result.proof().map(|proof| proof.as_ref().len()) {
+        histogram!("wallet.prover.proof_bytes", "backend" => backend).record(bytes as f64);
+    }
+}
+
+fn record_prove_error(backend: &'static str, error: &ProverError) {
+    counter!(
+        "wallet.prover.jobs",
+        "backend" => backend,
+        "stage" => "prove",
+        "result" => "err",
+        "error" => error_label(error)
+    )
+    .increment(1);
+}
+
+fn error_label(error: &ProverError) -> &'static str {
+    match error {
+        ProverError::Backend(_) => "backend",
+        ProverError::Serialization(_) => "serialization",
+        ProverError::Unsupported(_) => "unsupported",
+        ProverError::Runtime(_) => "runtime",
+        ProverError::Timeout(_) => "timeout",
+        ProverError::Cancelled => "cancelled",
+        ProverError::Busy => "busy",
+        ProverError::WitnessTooLarge { .. } => "witness_too_large",
+    }
+}
+
+fn map_blocking_error(err: task::JoinError) -> ProverError {
+    if err.is_cancelled() {
+        ProverError::Cancelled
+    } else if err.is_panic() {
+        warn!("wallet prover job panicked");
+        ProverError::Runtime("prover task panicked".into())
+    } else {
+        ProverError::Runtime(format!("prover task failed: {err}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn run_job_aborts_when_timeout_is_exceeded() {
+    fn job_permit_aborts_when_timeout_is_exceeded() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -469,15 +678,19 @@ mod tests {
         config.timeout_secs = 1;
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
+        let permit = manager.acquire().expect("permit");
 
-        let result = manager.run_job(|| {
-            std::thread::sleep(Duration::from_millis(1_500));
-            Ok(ProverOutput {
-                backend: "timeout".into(),
-                proof: None,
-                witness_bytes: 0,
-                duration_ms: 0,
-            })
+        let result = runtime.block_on(async move {
+            permit
+                .wait(async {
+                    task::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_millis(1_500));
+                        Ok::<(), ProverError>(())
+                    })
+                    .await
+                    .map_err(map_blocking_error)
+                })
+                .await
         });
 
         assert!(matches!(result, Err(ProverError::Timeout(1))));
@@ -491,7 +704,8 @@ mod tests {
         let prover = MockWalletProver::new(&config);
         let draft = sample_draft();
 
-        let err = prover.prove(&draft).expect_err("witness too large");
+        let ctx = DraftProverContext::new(&draft);
+        let err = prover.prepare_witness(&ctx).expect_err("witness too large");
         assert!(matches!(
             err,
             ProverError::WitnessTooLarge {
@@ -511,7 +725,8 @@ mod tests {
         let prover = StwoWalletProver::new(&config).expect("stwo prover");
         let draft = sample_draft();
 
-        let err = prover.prove(&draft).expect_err("witness too large");
+        let ctx = DraftProverContext::new(&draft);
+        let err = prover.prepare_witness(&ctx).expect_err("witness too large");
         assert!(matches!(
             err,
             ProverError::WitnessTooLarge {

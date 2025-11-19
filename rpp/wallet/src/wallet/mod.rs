@@ -12,7 +12,8 @@ use crate::db::{
     WalletStore, WalletStoreError,
 };
 use crate::engine::signing::{
-    build_wallet_prover, ProverError as EngineProverError, ProverOutput, WalletProver,
+    build_wallet_prover, DraftProverContext, ProveResult, ProverError as EngineProverError,
+    ProverIdentity, ProverMeta, WalletProver, WitnessPlan,
 };
 use crate::engine::{
     DerivationPath, DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel,
@@ -491,25 +492,32 @@ impl Wallet {
         Ok(snapshot)
     }
 
-    pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProverOutput, WalletError> {
+    pub fn sign_and_prove(&self, draft: &DraftTransaction) -> Result<ProveResult, WalletError> {
         self.ensure_signing_allowed()?;
-        match self.prover.prove(draft) {
-            Ok(output) => {
-                if self.prover_config.require_proof && output.proof.is_none() {
+        let ctx = DraftProverContext::new(draft);
+        let result = (|| {
+            let plan = self.prover.prepare_witness(&ctx)?;
+            let prove_result = self.prover.prove(&ctx, plan)?;
+            let meta = self.prover.attest_metadata(&ctx, &prove_result)?;
+            Ok((prove_result, meta))
+        })();
+
+        match result {
+            Ok((output, meta)) => {
+                if self.prover_config.require_proof && output.proof().is_none() {
                     return Err(WalletError::Prover(EngineProverError::Unsupported(
                         "wallet prover requires proofs but backend returned none",
                     )));
                 }
                 let txid = lock_fingerprint(draft);
-                let proof_bytes = output
-                    .proof
-                    .as_ref()
-                    .map(|bytes| bytes.as_slice().len() as u64);
+                let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
+                let proof_hash = meta.proof_hash.map(hex::encode);
                 let metadata = PendingLockMetadata::new(
-                    output.backend.clone(),
-                    output.witness_bytes as u64,
-                    output.duration_ms,
+                    meta.backend.to_string(),
+                    meta.witness_bytes as u64,
+                    meta.duration_ms,
                     proof_bytes,
+                    proof_hash,
                 );
                 self.engine.attach_locks_to_txid(
                     draft.inputs.iter().map(|input| &input.outpoint),
@@ -577,6 +585,10 @@ impl Wallet {
 
     pub fn prover_config(&self) -> &WalletProverConfig {
         &self.prover_config
+    }
+
+    pub fn prover_identity(&self) -> ProverIdentity {
+        self.prover.identity()
     }
 
     pub fn store(&self) -> Arc<WalletStore> {
@@ -852,11 +864,34 @@ impl WalletZsiState {
 struct DisabledWatchOnlyProver;
 
 impl WalletProver for DisabledWatchOnlyProver {
-    fn backend(&self) -> &'static str {
-        "watch-only"
+    fn identity(&self) -> ProverIdentity {
+        ProverIdentity::new("watch-only", true)
     }
 
-    fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, EngineProverError> {
+    fn prepare_witness(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+    ) -> Result<WitnessPlan, EngineProverError> {
+        Err(EngineProverError::Unsupported(
+            "watch-only mode does not support proving",
+        ))
+    }
+
+    fn prove(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        _plan: WitnessPlan,
+    ) -> Result<ProveResult, EngineProverError> {
+        Err(EngineProverError::Unsupported(
+            "watch-only mode does not support proving",
+        ))
+    }
+
+    fn attest_metadata(
+        &self,
+        _ctx: &DraftProverContext<'_>,
+        _result: &ProveResult,
+    ) -> Result<ProverMeta, EngineProverError> {
         Err(EngineProverError::Unsupported(
             "watch-only mode does not support proving",
         ))
@@ -951,7 +986,7 @@ mod tests {
     use super::*;
     use std::borrow::Cow;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
 
@@ -972,6 +1007,8 @@ mod tests {
     use crate::node_client::{NodeClient, StubNodeClient};
     use crate::telemetry::WalletActionTelemetry;
     use crate::wallet::WatchOnlyError;
+    use tokio::runtime::Handle;
+    use tokio::task;
 
     struct SleepyWalletProver {
         jobs: ProverJobManager,
@@ -991,20 +1028,72 @@ mod tests {
     }
 
     impl WalletProver for SleepyWalletProver {
-        fn backend(&self) -> &'static str {
-            "sleepy"
+        fn identity(&self) -> ProverIdentity {
+            ProverIdentity::new("sleepy", true)
         }
 
-        fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
+        fn prepare_witness(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+        ) -> Result<WitnessPlan, ProverError> {
+            Ok(WitnessPlan::empty())
+        }
+
+        fn prove(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            plan: WitnessPlan,
+        ) -> Result<ProveResult, ProverError> {
+            let permit = self.jobs.acquire()?;
+            let handle = Handle::try_current().map_err(|err| {
+                ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
+            })?;
             let sleep = self.sleep;
-            self.jobs.run_job(move || {
-                std::thread::sleep(sleep);
-                Ok(ProverOutput {
-                    backend: "sleepy".into(),
-                    proof: None,
-                    witness_bytes: 0,
-                    duration_ms: sleep.as_millis() as u64,
-                })
+            let witness_bytes = plan.witness_bytes();
+            handle.block_on(async move {
+                let token = permit.cancellation_token();
+                let job = task::spawn_blocking(move || {
+                    if token.is_cancelled() {
+                        return Err(ProverError::Cancelled);
+                    }
+                    std::thread::sleep(sleep);
+                    Ok(())
+                });
+                let started_at = Instant::now();
+                permit
+                    .wait(async move {
+                        job.await.map_err(|err| {
+                            if err.is_cancelled() {
+                                ProverError::Cancelled
+                            } else if err.is_panic() {
+                                ProverError::Runtime("prover task panicked".into())
+                            } else {
+                                ProverError::Runtime(format!("prover task failed: {err}"))
+                            }
+                        })?
+                    })
+                    .await?;
+                let finished_at = Instant::now();
+                Ok(ProveResult::new(
+                    None,
+                    witness_bytes,
+                    started_at,
+                    finished_at,
+                ))
+            })
+        }
+
+        fn attest_metadata(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            result: &ProveResult,
+        ) -> Result<ProverMeta, ProverError> {
+            Ok(ProverMeta {
+                backend: self.identity().backend,
+                witness_bytes: result.witness_bytes(),
+                proof_bytes: None,
+                proof_hash: None,
+                duration_ms: result.duration().as_millis() as u64,
             })
         }
     }
@@ -1013,16 +1102,37 @@ mod tests {
     struct InstantWalletProver;
 
     impl WalletProver for InstantWalletProver {
-        fn backend(&self) -> &'static str {
-            "instant"
+        fn identity(&self) -> ProverIdentity {
+            ProverIdentity::new("instant", true)
         }
 
-        fn prove(&self, _draft: &DraftTransaction) -> Result<ProverOutput, ProverError> {
-            Ok(ProverOutput {
-                backend: "instant".into(),
-                proof: None,
-                witness_bytes: 0,
-                duration_ms: 0,
+        fn prepare_witness(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+        ) -> Result<WitnessPlan, ProverError> {
+            Ok(WitnessPlan::empty())
+        }
+
+        fn prove(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            plan: WitnessPlan,
+        ) -> Result<ProveResult, ProverError> {
+            let now = Instant::now();
+            Ok(ProveResult::new(None, plan.witness_bytes(), now, now))
+        }
+
+        fn attest_metadata(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            result: &ProveResult,
+        ) -> Result<ProverMeta, ProverError> {
+            Ok(ProverMeta {
+                backend: self.identity().backend,
+                witness_bytes: result.witness_bytes(),
+                proof_bytes: None,
+                proof_hash: None,
+                duration_ms: result.duration().as_millis() as u64,
             })
         }
     }
@@ -1233,21 +1343,19 @@ mod tests {
         assert!(!locks_before.is_empty());
 
         let output = wallet.sign_and_prove(&draft).expect("mock prove");
-        assert_eq!(output.backend, "mock");
-        assert!(output.proof.is_some());
+        assert_eq!(wallet.prover_identity().backend, "mock");
+        assert!(output.proof().is_some());
 
         let locks = wallet.pending_locks().expect("locks after prove");
         assert_eq!(locks.len(), locks_before.len());
-        let proof_bytes = output
-            .proof
-            .as_ref()
-            .map(|bytes| bytes.as_ref().len() as u64);
+        let proof_bytes = output.proof().map(|bytes| bytes.as_ref().len() as u64);
         assert!(locks.iter().all(|lock| {
             lock.spending_txid.is_some()
                 && lock.metadata.backend == "mock"
-                && lock.metadata.witness_bytes == output.witness_bytes as u64
-                && lock.metadata.prove_duration_ms == output.duration_ms
+                && lock.metadata.witness_bytes == output.witness_bytes() as u64
+                && lock.metadata.prove_duration_ms == output.duration().as_millis() as u64
                 && lock.metadata.proof_bytes == proof_bytes
+                && lock.metadata.proof_hash.is_some()
         }));
         drop(tempdir);
     }
@@ -1292,21 +1400,19 @@ mod tests {
         assert!(!locks_before.is_empty());
 
         let output = wallet.sign_and_prove(&draft).expect("stwo prove");
-        assert_eq!(output.backend, "stwo");
-        assert!(output.proof.is_some());
+        assert_eq!(wallet.prover_identity().backend, "stwo");
+        assert!(output.proof().is_some());
 
         let locks = wallet.pending_locks().expect("locks after prove");
         assert_eq!(locks.len(), locks_before.len());
-        let proof_bytes = output
-            .proof
-            .as_ref()
-            .map(|bytes| bytes.as_ref().len() as u64);
+        let proof_bytes = output.proof().map(|bytes| bytes.as_ref().len() as u64);
         assert!(locks.iter().all(|lock| {
             lock.spending_txid.is_some()
                 && lock.metadata.backend == "stwo"
-                && lock.metadata.witness_bytes == output.witness_bytes as u64
-                && lock.metadata.prove_duration_ms == output.duration_ms
+                && lock.metadata.witness_bytes == output.witness_bytes() as u64
+                && lock.metadata.prove_duration_ms == output.duration().as_millis() as u64
                 && lock.metadata.proof_bytes == proof_bytes
+                && lock.metadata.proof_hash.is_some()
         }));
         drop(tempdir);
     }
