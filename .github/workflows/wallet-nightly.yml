@@ -11,6 +11,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTUP_INIT_SKIP_PATH_CHECK: yes
+  toolchain: stable
   WALLET_BUILD_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
   XTASK_FEATURES: ${{ vars.WALLET_BUILD_FEATURES || secrets.WALLET_BUILD_FEATURES || 'wallet-integration' }}
   REPRO_MODE: ${{ vars.REPRO_MODE || 'deterministic' }}
