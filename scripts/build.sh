@@ -1,6 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+wallet_toolchain_channel() {
+  local file="${REPO_ROOT}/rust-toolchain.wallet.toml"
+  if [[ ! -f "${file}" ]]; then
+    return 1
+  fi
+  python3 - <<'PY' "${file}"
+import sys
+import tomllib
+
+path = sys.argv[1]
+data = tomllib.loads(open(path, "rb").read())
+toolchain = data.get("toolchain", {})
+channel = toolchain.get("channel")
+if not channel:
+    raise SystemExit(1)
+print(channel)
+PY
+}
+
+append_rustflag() {
+  local flag="$1"
+  if [[ -z "${RUSTFLAGS:-}" ]]; then
+    export RUSTFLAGS="${flag}"
+    return
+  fi
+  if [[ " ${RUSTFLAGS} " != *" ${flag} "* ]]; then
+    export RUSTFLAGS="${RUSTFLAGS} ${flag}"
+  fi
+}
+
+ensure_source_date_epoch() {
+  if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+    return
+  fi
+  SOURCE_DATE_EPOCH="$(git -C "${REPO_ROOT}" log -1 --format=%ct)"
+  export SOURCE_DATE_EPOCH
+}
+
 if [[ -z "${RUSTFLAGS:-}" ]]; then
   export RUSTFLAGS="-D warnings"
 elif [[ " ${RUSTFLAGS} " != *" -D warnings "* ]]; then
@@ -79,6 +120,8 @@ PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
 BACKEND="default"
 TOOLCHAIN_ARGS=()
+SELECTED_PACKAGES=()
+SELECTED_BINS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -169,6 +212,11 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       PASSTHROUGH_ARGS+=("$1" "$2")
+      if [[ "$1" == "--package" ]]; then
+        SELECTED_PACKAGES+=("$2")
+      elif [[ "$1" == "--bin" ]]; then
+        SELECTED_BINS+=("$2")
+      fi
       shift 2
       ;;
     --help|-h)
@@ -209,5 +257,41 @@ case "$BACKEND" in
     exit 1
     ;;
 esac
+
+WALLET_TARGETED=0
+if [[ ${#SELECTED_PACKAGES[@]} -gt 0 || ${#SELECTED_BINS[@]} -gt 0 ]]; then
+  for pkg in "${SELECTED_PACKAGES[@]}"; do
+    case "${pkg}" in
+      rpp-wallet|rpp-wallet-lib|rpp-wallet-interface|wallet-integration-tests)
+        WALLET_TARGETED=1
+        break
+        ;;
+    esac
+  done
+  if [[ ${WALLET_TARGETED} -eq 0 ]]; then
+    for bin in "${SELECTED_BINS[@]}"; do
+      case "${bin}" in
+        rpp-wallet|rpp-wallet-gui)
+          WALLET_TARGETED=1
+          break
+          ;;
+      esac
+    done
+  fi
+fi
+
+if [[ ${WALLET_TARGETED} -eq 1 && ${#TOOLCHAIN_ARGS[@]} -eq 0 ]]; then
+  if channel="$(wallet_toolchain_channel 2>/dev/null)"; then
+    TOOLCHAIN_ARGS=("+${channel}")
+  fi
+fi
+
+if [[ "${REPRO_MODE:-0}" == "1" ]]; then
+  ensure_source_date_epoch
+  append_rustflag "--remap-path-prefix=${REPO_ROOT}=/repro/workspace"
+  if [[ ${#PROFILE_ARGS[@]} -eq 0 ]]; then
+    PROFILE_ARGS=("--profile" "repro")
+  fi
+fi
 
 cargo "${TOOLCHAIN_ARGS[@]}" build "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"

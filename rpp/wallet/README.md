@@ -35,7 +35,10 @@ Phase 2 introduces policy, fee, locking, and prover upgrades that require opera
 The crate ships with feature-gated prover integrations. Enable them via `cargo`:
 
 * `prover-mock` (default) – Lightweight mock backend for development and CI.
-* `prover-stwo` – STWO backend; requires `wallet.prover.enabled = true` in config to activate at runtime.
+* `prover-stwo` / `prover_stwo_backend` – STWO backend; requires
+  `wallet.prover.enabled = true` in config to activate at runtime. Use the
+  underscore alias when invoking cargo so stable builds can keep `--features
+  prover_stwo_backend` separate from the rest of the feature set.
 * `prover-stwo-simd` – STWO backend with SIMD acceleration; implies `prover-stwo`.
 
 Refer to `Cargo.toml` for the complete flag graph and dependency list.【F:rpp/wallet/Cargo.toml†L7-L23】

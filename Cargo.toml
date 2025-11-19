@@ -110,6 +110,12 @@ lto = "fat"
 debug = false
 inherits = "release"
 
+[profile.repro]
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+strip = false
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

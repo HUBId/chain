@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,10 +10,11 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tar::Builder as TarBuilder;
+use tar::{Builder as TarBuilder, HeaderMode};
 use tempfile::TempDir;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use toml::Value as TomlValue;
 
 use crate::{run_command, workspace_root};
 
@@ -35,6 +37,7 @@ impl FeatureConfig {
 struct WalletBundleConfig {
     target: Option<String>,
     profile: String,
+    profile_overridden: bool,
     version: Option<String>,
     tool: String,
     output: PathBuf,
@@ -49,16 +52,26 @@ impl Default for WalletBundleConfig {
         Self {
             target: None,
             profile: "release".to_string(),
+            profile_overridden: false,
             version: None,
             tool: "cargo".to_string(),
             output: PathBuf::from("dist/artifacts"),
             cli_features: FeatureConfig::new(
                 true,
-                vec!["runtime".to_string(), "prover-stwo".to_string()],
+                vec![
+                    "runtime".to_string(),
+                    "prover-mock".to_string(),
+                    "backup".to_string(),
+                ],
             ),
             gui_features: FeatureConfig::new(
                 true,
-                vec!["wallet_gui".to_string(), "prover-stwo".to_string()],
+                vec![
+                    "runtime".to_string(),
+                    "wallet_gui".to_string(),
+                    "prover-mock".to_string(),
+                    "backup".to_string(),
+                ],
             ),
             configs: Vec::new(),
             help: false,
@@ -97,6 +110,12 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    let workspace = workspace_root();
+    let repro = ReproSettings::detect(&workspace)?;
+    if repro.enabled && !config.profile_overridden {
+        config.profile = "repro".to_string();
+    }
+
     let target = config
         .target
         .as_ref()
@@ -106,12 +125,13 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow!("--version is required"))?;
 
-    let workspace = workspace_root();
     let output_root = if config.output.is_absolute() {
         config.output.clone()
     } else {
         workspace.join(&config.output)
     };
+
+    let wallet_toolchain = wallet_toolchain_channel(&workspace)?;
 
     let cli_features = normalize_features(&config.cli_features.features);
     let gui_features = normalize_features(&config.gui_features.features);
@@ -128,6 +148,8 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         &config.profile,
         config.cli_features.disable_defaults,
         &cli_features,
+        wallet_toolchain.as_deref(),
+        &repro,
     )?;
 
     let gui_binary = build_binary(
@@ -139,6 +161,8 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         &config.profile,
         config.gui_features.disable_defaults,
         &gui_features,
+        wallet_toolchain.as_deref(),
+        &repro,
     )?;
 
     let bundle_name = format!("wallet-bundle-{version}-{target}");
@@ -190,7 +214,7 @@ pub(crate) fn build_wallet_bundle(args: &[String]) -> Result<()> {
         version: version.clone(),
         target: target.clone(),
         profile: config.profile.clone(),
-        generated_at: OffsetDateTime::now_utc().format(&Rfc3339)?,
+        generated_at: reproducible_timestamp()?,
         cli_features: cli_features.clone(),
         gui_features: gui_features.clone(),
         files: manifest_files,
@@ -242,6 +266,7 @@ fn parse_wallet_bundle_args(args: &[String], config: &mut WalletBundleConfig) ->
                     .next()
                     .ok_or_else(|| anyhow!("--profile requires a value"))?;
                 config.profile = value.to_string();
+                config.profile_overridden = true;
             }
             "--version" => {
                 let value = iter
@@ -356,10 +381,15 @@ fn build_binary(
     profile: &str,
     disable_defaults: bool,
     features: &[String],
+    toolchain: Option<&str>,
+    repro: &ReproSettings,
 ) -> Result<PathBuf> {
     let mut command = Command::new(tool);
+    command.current_dir(workspace);
+    if let Some(channel) = toolchain {
+        command.arg(format!("+{channel}"));
+    }
     command
-        .current_dir(workspace)
         .arg("build")
         .arg("--locked")
         .arg("--package")
@@ -376,6 +406,7 @@ fn build_binary(
     if !features.is_empty() {
         command.arg("--features").arg(features.join(","));
     }
+    repro.apply(&mut command);
     let context = format!("build {package}/{binary} for {target} ({profile})");
     run_command(command, &context)?;
 
@@ -397,6 +428,127 @@ fn binary_name(binary: &str, target: &str) -> String {
     } else {
         binary.to_string()
     }
+}
+
+#[derive(Debug, Clone)]
+struct ReproSettings {
+    enabled: bool,
+    remap_flag: Option<String>,
+    source_date_epoch: Option<String>,
+}
+
+impl ReproSettings {
+    fn detect(workspace: &Path) -> Result<Self> {
+        let enabled = repro_mode_enabled();
+        let source_date_epoch = if enabled {
+            Some(ensure_source_date_epoch_value(workspace)?)
+        } else {
+            env::var("SOURCE_DATE_EPOCH")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        };
+        let remap_flag = if enabled {
+            Some(format!(
+                "--remap-path-prefix={}=/repro/workspace",
+                workspace.display()
+            ))
+        } else {
+            None
+        };
+        Ok(Self {
+            enabled,
+            remap_flag,
+            source_date_epoch,
+        })
+    }
+
+    fn apply(&self, command: &mut Command) {
+        if self.enabled {
+            command.env("REPRO_MODE", "1");
+        }
+        if let Some(epoch) = &self.source_date_epoch {
+            command.env("SOURCE_DATE_EPOCH", epoch);
+        }
+        if let Some(flag) = &self.remap_flag {
+            command.env("RUSTFLAGS", merge_rustflags(flag));
+        }
+    }
+}
+
+fn repro_mode_enabled() -> bool {
+    matches!(
+        env::var("REPRO_MODE")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(mode) if !mode.is_empty() && mode != "0"
+    )
+}
+
+fn ensure_source_date_epoch_value(workspace: &Path) -> Result<String> {
+    if let Ok(value) = env::var("SOURCE_DATE_EPOCH") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    let output = Command::new("git")
+        .current_dir(workspace)
+        .arg("log")
+        .arg("-1")
+        .arg("--format=%ct")
+        .output()
+        .context("capture SOURCE_DATE_EPOCH from git")?;
+    if !output.status.success() {
+        bail!("git log exited with status {}", output.status);
+    }
+    let epoch = String::from_utf8(output.stdout)?.trim().to_string();
+    env::set_var("SOURCE_DATE_EPOCH", &epoch);
+    Ok(epoch)
+}
+
+fn merge_rustflags(flag: &str) -> String {
+    let current = env::var("RUSTFLAGS").unwrap_or_default();
+    if current.split_whitespace().any(|existing| existing == flag) {
+        return current;
+    }
+    if current.trim().is_empty() {
+        flag.to_string()
+    } else {
+        format!("{current} {flag}")
+    }
+}
+
+fn wallet_toolchain_channel(workspace: &Path) -> Result<Option<String>> {
+    if let Ok(value) = env::var("CHAIN_WALLET_TOOLCHAIN") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    let file = workspace.join("rust-toolchain.wallet.toml");
+    if !file.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&file).context("read rust-toolchain.wallet.toml")?;
+    let parsed: TomlValue = toml::from_str(&raw).context("parse rust-toolchain.wallet.toml")?;
+    let channel = parsed
+        .get("toolchain")
+        .and_then(|toolchain| toolchain.get("channel"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string());
+    Ok(channel)
+}
+
+fn reproducible_timestamp() -> Result<String> {
+    if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH") {
+        let trimmed = epoch.trim();
+        if !trimmed.is_empty() {
+            let seconds: i64 = trimmed.parse()?;
+            let time = OffsetDateTime::from_unix_timestamp(seconds)?;
+            return Ok(time.format(&Rfc3339)?);
+        }
+    }
+    Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
 }
 
 fn copy_binary(source: &Path, dest: &Path) -> Result<()> {
@@ -475,6 +627,7 @@ fn create_tarball(source_dir: &Path, output: &Path, bundle_name: &str) -> Result
     let file = File::create(output)?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = TarBuilder::new(encoder);
+    builder.mode(HeaderMode::Deterministic);
     builder.append_dir_all(bundle_name, source_dir)?;
     builder.into_inner()?.finish()?;
     Ok(())

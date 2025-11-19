@@ -64,7 +64,7 @@ Configuration toggles under `wallet.rescan.*` control automatic safety sweeps. S
 
 `wallet.prover.*` toggles determine whether drafts are proven and which backend to use.【F:rpp/wallet/src/config/wallet.rs†L154-L180】 By default the mock prover runs in-process (`--features prover-mock`), enforces `max_witness_bytes`, applies `job_timeout_secs`, and gates concurrency via a semaphore sized by `max_concurrency`.【F:rpp/wallet/src/engine/signing/prover.rs†L57-L125】【F:rpp/wallet/src/engine/signing/prover.rs†L212-L291】
 
-To enable the STWO backend, build the crate with `--features prover-stwo` (which pulls in `nightly-prover`) and set `wallet.prover.enabled = true`. When compiled, `build_wallet_prover` instantiates the STWO backend; otherwise the runtime requires `mock_fallback = true` or it refuses to start with a "STWO prover requested but feature disabled" error.【F:rpp/wallet/src/engine/signing/prover.rs†L40-L64】 STWO proofs record the same metadata as the mock backend and honour the shared timeouts and witness limits.【F:rpp/wallet/src/engine/signing/prover.rs†L127-L190】
+To enable the STWO backend, build the crate with `--features prover_stwo_backend` (an alias for `prover-stwo`) and set `wallet.prover.enabled = true`. When compiled, `build_wallet_prover` instantiates the STWO backend; otherwise the runtime requires `mock_fallback = true` or it refuses to start with a "STWO prover requested but feature disabled" error.【F:rpp/wallet/src/engine/signing/prover.rs†L40-L64】 STWO proofs record the same metadata as the mock backend and honour the shared timeouts and witness limits.【F:rpp/wallet/src/engine/signing/prover.rs†L127-L190】
 
 Feature flags:
 
