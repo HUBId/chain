@@ -363,7 +363,7 @@ pub struct BlockFeeSummary {
 }
 
 /// Transaction submission payload shared with node clients.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionSubmission {
     /// Inputs included in the transaction.
     pub inputs: Vec<SubmissionInput>,
@@ -390,7 +390,7 @@ impl TransactionSubmission {
 }
 
 /// Draft input referencing a wallet-controlled outpoint.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmissionInput {
     /// Hash of the previous transaction.
     pub txid: [u8; 32],
@@ -403,7 +403,7 @@ pub struct SubmissionInput {
 }
 
 /// Draft output emitted by the transaction builder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmissionOutput {
     /// Address that will receive the value.
     pub address: String,
@@ -425,7 +425,7 @@ impl SubmissionOutput {
 }
 
 /// Model describing how much value should be spent in a draft transaction.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubmissionSpendModel {
     /// Spend an exact amount.
     Exact {

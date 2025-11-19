@@ -366,9 +366,21 @@ impl State {
                 } else {
                     "Broadcast rejected"
                 };
-                text(format!("{accepted} — draft ID: {}", response.draft_id))
-                    .size(16)
-                    .into()
+                column![
+                    text(format!("{accepted} — draft ID: {}", response.draft_id)).size(16),
+                    text(format!(
+                        "Proof required: {}",
+                        if response.proof_required { "Yes" } else { "No" }
+                    ))
+                    .size(16),
+                    text(format!(
+                        "Proof present: {}",
+                        if response.proof_present { "Yes" } else { "No" }
+                    ))
+                    .size(16),
+                ]
+                .spacing(4)
+                .into()
             }
             RequestState::Failure(failure) => text(&failure.summary).size(16).into(),
         };
@@ -472,6 +484,11 @@ impl State {
                     .proof_bytes
                     .map(|size| format!("{} bytes", size))
                     .unwrap_or_else(|| "N/A".into())
+            ))
+            .size(16),
+            text(format!(
+                "Proof hash: {}",
+                metadata.proof_hash.clone().unwrap_or_else(|| "N/A".into())
             ))
             .size(16),
             text(format!(

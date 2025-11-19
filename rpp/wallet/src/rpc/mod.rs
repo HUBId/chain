@@ -22,11 +22,11 @@ use dto::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
     PolicyPreviewResponse, PolicySnapshotDto, PolicyTierHooks as PolicyTierHooksDto,
-    RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    ProverMetadataDto, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
     ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
-    SignTxParams, SignTxResponse, SyncCheckpointDto, SyncModeDto, SyncStatusParams,
-    SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto,
-    UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto,
+    SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
+    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -52,7 +52,7 @@ use crate::backup::{
 #[cfg(feature = "wallet_zsi")]
 use crate::db::StoredZsiArtifact;
 use crate::db::{PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoRecord};
-use crate::engine::signing::ProveResult;
+use crate::engine::signing::{ProveResult, ProverMeta};
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError,
     SelectionError, SpendModel, WalletBalance,
@@ -64,7 +64,8 @@ use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 #[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
 use crate::node_client::{
-    BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint, NodeRejectionHint,
+    submission_from_draft, BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint,
+    NodeRejectionHint,
 };
 use crate::telemetry::{
     TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletActionTelemetry,
@@ -1172,31 +1173,16 @@ impl WalletRpcRouter {
             .get_mut(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
         let (output, meta) = self.wallet.sign_and_prove(&state.draft)?;
-        let identity = self.wallet.prover_identity();
-        let proof_size = output.proof().map(|proof| proof.as_ref().len());
+        let proof_required = self.wallet.prover_config().require_proof;
+        let proof_present = output.proof().is_some();
+        let signed = signed_bundle_from(&state.draft, &output, &meta, proof_required)?;
         let locks = self.pending_lock_dtos()?;
         let response = SignTxResponse {
             draft_id: draft_id.clone(),
-            backend: identity.backend.to_string(),
-            witness_bytes: output.witness_bytes(),
-            proof_generated: output.proof().is_some(),
-            proof_size,
-            duration_ms: output.duration().as_millis() as u64,
+            signed,
             locks,
         };
-        let proof_required = self.wallet.prover_config().require_proof;
-        let proof_present = output.proof().is_some();
-        let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
-        let proof_hash = meta.proof_hash.map(hex_encode);
-        let metadata = PendingLockMetadata::new(
-            meta.backend.to_string(),
-            meta.witness_bytes as u64,
-            meta.duration_ms,
-            proof_required,
-            proof_present,
-            proof_bytes,
-            proof_hash,
-        );
+        let metadata = pending_lock_metadata_from(&meta, proof_required, proof_present);
         state.prover_result = Some(SignedDraft::new(output, metadata));
         drop(drafts);
         to_value(response)
@@ -1241,6 +1227,8 @@ impl WalletRpcRouter {
         to_value(BroadcastResponse {
             draft_id,
             accepted: true,
+            proof_required,
+            proof_present: signed.proof_present(),
             locks,
         })
     }
@@ -2022,6 +2010,58 @@ impl From<PendingLock> for PendingLockDto {
             proof_hash: lock.metadata.proof_hash,
         }
     }
+}
+
+fn signed_bundle_from(
+    draft: &DraftTransaction,
+    output: &ProveResult,
+    meta: &ProverMeta,
+    proof_required: bool,
+) -> Result<SignedTxProverBundleDto, RouterError> {
+    let submission = submission_from_draft(draft);
+    let submission_bytes = serde_json::to_vec(&submission)
+        .map_err(|err| RouterError::Serialization(err.to_string()))?;
+    let tx_hex = hex_encode(submission_bytes);
+    let proof_present = output.proof().is_some();
+    let proof_hex = output.proof().map(|proof| hex_encode(proof.as_ref()));
+    let metadata = prover_metadata_to_dto(meta, proof_required, proof_present);
+    Ok(SignedTxProverBundleDto {
+        tx_hex,
+        proof_hex,
+        metadata,
+    })
+}
+
+fn prover_metadata_to_dto(
+    meta: &ProverMeta,
+    proof_required: bool,
+    proof_present: bool,
+) -> ProverMetadataDto {
+    ProverMetadataDto {
+        backend: meta.backend.to_string(),
+        witness_bytes: meta.witness_bytes as u64,
+        prove_duration_ms: meta.duration_ms,
+        proof_required,
+        proof_present,
+        proof_bytes: meta.proof_bytes.map(|bytes| bytes as u64),
+        proof_hash: meta.proof_hash.map(hex_encode),
+    }
+}
+
+fn pending_lock_metadata_from(
+    meta: &ProverMeta,
+    proof_required: bool,
+    proof_present: bool,
+) -> PendingLockMetadata {
+    PendingLockMetadata::new(
+        meta.backend.to_string(),
+        meta.witness_bytes as u64,
+        meta.duration_ms,
+        proof_required,
+        proof_present,
+        meta.proof_bytes.map(|bytes| bytes as u64),
+        meta.proof_hash.map(hex_encode),
+    )
 }
 
 impl From<MempoolInfo> for MempoolInfoResponse {
