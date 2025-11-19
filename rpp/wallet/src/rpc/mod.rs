@@ -84,6 +84,7 @@ use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
 use rpp_wallet_interface::runtime_telemetry::{
     noop_runtime_metrics, RuntimeMetricsHandle, WalletAction, WalletActionResult,
 };
+use tracing::info;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug)]
@@ -234,6 +235,56 @@ impl WalletRpcRouter {
             self.metrics
                 .record_wallet_action(action_label, outcome_label);
         }
+    }
+
+    fn record_prover_success(
+        &self,
+        backend: &str,
+        duration: Duration,
+        witness_bytes: u64,
+        proof_present: bool,
+    ) {
+        self.metrics.record_wallet_prover_backend(backend, true);
+        self.metrics
+            .record_wallet_prover_witness_bytes(backend, witness_bytes);
+        self.metrics
+            .record_wallet_prover_job_duration(backend, proof_present, duration);
+        self.telemetry.record_prover_job(
+            backend,
+            duration,
+            TelemetryOutcome::Success,
+            None,
+            Some(witness_bytes),
+        );
+        info!(
+            target = "wallet::prover",
+            backend,
+            witness_bytes,
+            duration_ms = duration.as_millis() as u64,
+            proof_present,
+            "wallet prover job completed"
+        );
+    }
+
+    fn record_prover_failure(&self, backend: &str, duration: Duration, code: WalletRpcErrorCode) {
+        self.metrics.record_wallet_prover_backend(backend, false);
+        self.metrics
+            .record_wallet_prover_job_duration(backend, false, duration);
+        self.metrics.record_wallet_prover_failure(code.as_str());
+        self.telemetry.record_prover_job(
+            backend,
+            duration,
+            TelemetryOutcome::Error,
+            Some(code.as_str()),
+            None,
+        );
+        info!(
+            target = "wallet::prover",
+            backend,
+            duration_ms = duration.as_millis() as u64,
+            code = %code.as_str(),
+            "wallet prover job failed"
+        );
     }
 
     fn wallet_call<T>(&self, result: Result<T, WalletError>) -> Result<T, RouterError> {
@@ -1184,9 +1235,21 @@ impl WalletRpcRouter {
         let state = drafts
             .get_mut(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
-        let (output, meta) = self.wallet.sign_and_prove(&state.draft)?;
+        let backend = self.wallet.prover_identity().backend;
+        let started = Instant::now();
+        let (output, meta) = match self.wallet.sign_and_prove(&state.draft) {
+            Ok(value) => value,
+            Err(error) => {
+                let duration = started.elapsed();
+                let code = wallet_error_code(&error);
+                self.record_prover_failure(backend, duration, code);
+                return Err(RouterError::Wallet(error));
+            }
+        };
+        let duration = started.elapsed();
         let proof_required = self.wallet.prover_config().require_proof;
         let proof_present = output.proof().is_some();
+        self.record_prover_success(backend, duration, meta.witness_bytes as u64, proof_present);
         let signed = signed_bundle_from(&state.draft, &output, &meta, proof_required)?;
         let locks = self.pending_lock_dtos()?;
         let response = SignTxResponse {

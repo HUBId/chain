@@ -78,6 +78,12 @@ pub struct RuntimeMetrics {
     #[cfg(feature = "wallet-integration")]
     wallet_prover_job_duration: Histogram<f64>,
     #[cfg(feature = "wallet-integration")]
+    wallet_prover_witness_bytes: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_prover_backend_total: Counter<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_prover_failures: Counter<u64>,
+    #[cfg(feature = "wallet-integration")]
     wallet_rescan_duration: Histogram<f64>,
     #[cfg(feature = "wallet-integration")]
     wallet_broadcast_rejected: Counter<u64>,
@@ -149,6 +155,24 @@ impl RuntimeMetrics {
                 .f64_histogram("rpp.runtime.wallet.prover.job.duration_ms")
                 .with_description("Duration of wallet prover jobs in milliseconds")
                 .with_unit("ms")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_prover_witness_bytes: meter
+                .u64_histogram("rpp.runtime.wallet.prover.witness.bytes")
+                .with_description("Size of wallet prover witnesses in bytes")
+                .with_unit("By")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_prover_backend_total: meter
+                .u64_counter("rpp.runtime.wallet.prover.jobs")
+                .with_description("Total wallet prover jobs grouped by backend and outcome")
+                .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_prover_failures: meter
+                .u64_counter("rpp.runtime.wallet.prover.failures")
+                .with_description("Total wallet prover failures grouped by error code")
+                .with_unit("1")
                 .build(),
             #[cfg(feature = "wallet-integration")]
             wallet_rescan_duration: meter
@@ -392,6 +416,43 @@ impl RuntimeMetrics {
         _duration: Duration,
     ) {
     }
+
+    /// Record the witness size produced by a wallet prover.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_prover_witness_bytes(&self, backend: &str, witness_bytes: u64) {
+        let attributes = [KeyValue::new("backend", backend.to_string())];
+        self.wallet_prover_witness_bytes
+            .record(witness_bytes, &attributes);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_prover_witness_bytes(&self, _backend: &str, _witness_bytes: u64) {}
+
+    /// Record that a wallet prover backend was invoked and its outcome.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_prover_backend(&self, backend: &str, success: bool) {
+        let attributes = [
+            KeyValue::new("backend", backend.to_string()),
+            KeyValue::new("result", if success { "success" } else { "failure" }),
+        ];
+        self.wallet_prover_backend_total.add(1, &attributes);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_prover_backend(&self, _backend: &str, _success: bool) {}
+
+    /// Record a wallet prover failure grouped by error code.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_prover_failure(&self, code: &str) {
+        let attributes = [KeyValue::new("code", code.to_string())];
+        self.wallet_prover_failures.add(1, &attributes);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_prover_failure(&self, _code: &str) {}
 
     /// Record the time taken to schedule a wallet rescan along with its outcome.
     #[cfg(feature = "wallet-integration")]
@@ -640,6 +701,18 @@ impl RuntimeMetrics {
 impl WalletRuntimeMetrics for RuntimeMetrics {
     fn record_wallet_action(&self, action: WalletAction, outcome: WalletActionResult) {
         RuntimeMetrics::record_wallet_action(self, action, outcome);
+    }
+
+    fn record_wallet_prover_backend(&self, backend: &str, success: bool) {
+        RuntimeMetrics::record_wallet_prover_backend(self, backend, success);
+    }
+
+    fn record_wallet_prover_witness_bytes(&self, backend: &str, bytes: u64) {
+        RuntimeMetrics::record_wallet_prover_witness_bytes(self, backend, bytes);
+    }
+
+    fn record_wallet_prover_failure(&self, code: &str) {
+        RuntimeMetrics::record_wallet_prover_failure(self, code);
     }
 }
 
@@ -1549,6 +1622,9 @@ mod tests {
         );
         metrics.record_wallet_fee_estimate_latency(Duration::from_millis(21));
         metrics.record_wallet_prover_job_duration("mock", true, Duration::from_millis(22));
+        metrics.record_wallet_prover_witness_bytes("mock", 1024);
+        metrics.record_wallet_prover_backend("mock", true);
+        metrics.record_wallet_prover_failure("PROVER_INTERNAL");
         metrics.record_wallet_rescan_duration(true, Duration::from_millis(23));
         metrics.record_wallet_broadcast_rejected("NODE_REJECTED");
         metrics.record_wal_flush_duration(WalFlushOutcome::Success, Duration::from_millis(30));
@@ -1628,6 +1704,18 @@ mod tests {
         assert_eq!(
             seen.get("rpp.runtime.wallet.prover.job.duration_ms"),
             Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.prover.witness.bytes"),
+            Some(&"By".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.prover.jobs"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.prover.failures"),
+            Some(&"1".to_string())
         );
         assert_eq!(
             seen.get("rpp.runtime.wallet.scan.rescan.duration_ms"),

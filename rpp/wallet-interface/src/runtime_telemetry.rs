@@ -65,6 +65,15 @@ pub enum WalletActionResult {
 pub trait RuntimeMetrics: Send + Sync {
     /// Record a wallet action outcome.
     fn record_wallet_action(&self, action: WalletAction, outcome: WalletActionResult);
+
+    /// Record the total number of prover jobs grouped by backend and outcome.
+    fn record_wallet_prover_backend(&self, backend: &str, success: bool);
+
+    /// Record the witness size emitted by the prover grouped by backend.
+    fn record_wallet_prover_witness_bytes(&self, backend: &str, bytes: u64);
+
+    /// Record a prover failure grouped by error code.
+    fn record_wallet_prover_failure(&self, code: &str);
 }
 
 /// No-op telemetry handle used when runtime metrics are unavailable.
@@ -73,6 +82,12 @@ pub struct NoopRuntimeMetrics;
 
 impl RuntimeMetrics for NoopRuntimeMetrics {
     fn record_wallet_action(&self, _action: WalletAction, _outcome: WalletActionResult) {}
+
+    fn record_wallet_prover_backend(&self, _backend: &str, _success: bool) {}
+
+    fn record_wallet_prover_witness_bytes(&self, _backend: &str, _bytes: u64) {}
+
+    fn record_wallet_prover_failure(&self, _code: &str) {}
 }
 
 /// Shared handle type used by wallet RPC components.
