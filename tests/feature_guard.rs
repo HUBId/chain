@@ -130,9 +130,10 @@ min_sats_per_vbyte = 1
 max_sats_per_vbyte = 200
 
 [wallet.prover]
-enabled = false
-mock_fallback = true
-job_timeout_secs = 300
+backend = "mock"
+require_proof = false
+allow_broadcast_without_proof = false
+timeout_secs = 300
 max_witness_bytes = 16777216
 max_concurrency = 1
 

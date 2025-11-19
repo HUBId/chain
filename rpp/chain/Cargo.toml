@@ -43,6 +43,7 @@ prover-stwo = [
     "nightly-prover",
     "prover-backend-interface/prover-stwo",
     "rpp-consensus/prover-stwo",
+    "rpp-wallet-interface/prover-stwo",
 ]
 prover-stwo-simd = [
     "prover-stwo",
@@ -55,6 +56,7 @@ prover-mock = [
     "wallet-integration",
     "prover-backend-interface/prover-mock",
     "rpp-consensus/prover-mock",
+    "rpp-wallet-interface/prover-mock",
 ]
 backend-plonky3 = [
     "dep:p3-air",

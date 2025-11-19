@@ -163,6 +163,7 @@ mod tests {
         "cli.rpc.rescan_in_progress_generic",
         "cli.rpc.draft_not_found",
         "cli.rpc.draft_unsigned",
+        "cli.rpc.draft_requires_proof",
         "ui.identity.account_missing",
         "ui.identity.zsi_required",
         "ui.identity.insufficient_balance",

@@ -26,8 +26,8 @@ async fn wallet_releases_locks_via_all_paths() -> Result<()> {
 
     let mut prover_config = rpp_wallet::config::wallet::WalletProverConfig::default();
     if cfg!(feature = "prover-stwo") {
-        prover_config.enabled = true;
-        prover_config.mock_fallback = true;
+        prover_config.backend = rpp_wallet::config::wallet::WalletProverBackend::Stwo;
+        prover_config.require_proof = true;
     }
 
     let fixture = WalletTestBuilder::default()

@@ -54,7 +54,19 @@ pub fn describe_rpc_error(code: &WalletRpcErrorCode, details: Option<&Value>) ->
         WalletRpcErrorCode::RescanInProgress => "A rescan is already in progress.",
         WalletRpcErrorCode::DraftNotFound => "The referenced draft transaction could not be found.",
         WalletRpcErrorCode::DraftUnsigned => {
-            "The draft transaction must be signed before broadcasting."
+            if let Some(details) = details {
+                if details
+                    .get("proof_required")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    "The draft transaction must include a proof before broadcasting."
+                } else {
+                    "The draft transaction must be signed before broadcasting."
+                }
+            } else {
+                "The draft transaction must be signed before broadcasting."
+            }
         }
         WalletRpcErrorCode::NodeUnavailable => "The wallet node is currently unreachable.",
         WalletRpcErrorCode::NodeRejected => "The node rejected this request.",

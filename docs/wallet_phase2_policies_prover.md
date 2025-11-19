@@ -58,13 +58,18 @@ Durable backups remain optional in Phase 2. Continue taking periodic filesystem
 
 The sync coordinator tracks three modes: full (from birthday), resume (from last checkpoint), and targeted rescan (explicit height).【F:rpp/wallet/src/indexer/scanner.rs†L40-L176】 A `rescan` RPC/CLI request accepts either `--from-height` or `--lookback-blocks` and queues a targeted pass once the latest height is known.【F:rpp/wallet/src/rpc/dto.rs†L332-L382】【F:rpp/wallet/src/rpc/mod.rs†L215-L233】【F:rpp/wallet/src/cli/wallet.rs†L803-L833】 Sync status responses expose the active mode, pending height ranges, and checkpoint timestamps so dashboards can track progress.【F:rpp/wallet/src/rpc/dto.rs†L326-L358】
 
-Configuration toggles under `wallet.rescan.*` control automatic safety sweeps. Setting `auto_trigger = true` instructs the runtime bootstrapper to schedule a lookback from `wallet.rescan.lookback_blocks` in `wallet.rescan.chunk_size` batches, which is logged during startup to confirm the knobs applied.【F:rpp/runtime/config.rs†L3233-L3264】【F:rpp/node/src/lib.rs†L814-L823】 Even with auto-trigger enabled, ad-hoc rescans remain available via the RPC for incident response.
+Configuration toggles under `wallet.rescan.*` control automatic safety sweeps. Setting `auto_trigger = true` instructs the runtime bootstrapper to schedule a lookback from `wallet.rescan.lookback_blocks` in `wallet.rescan.chunk_size` batches, which is logged during startup to confirm the knobs applied.【F:rpp/wallet-interface/src/runtime_config.rs†L753-L787】【F:rpp/node/src/lib.rs†L365-L380】 Even with auto-trigger enabled, ad-hoc rescans remain available via the RPC for incident response.
 
-### Prover configuration (mock vs. STWO)
+### Prover configuration (backends and fail-open modes)
 
-`wallet.prover.*` toggles determine whether drafts are proven and which backend to use.【F:rpp/wallet/src/config/wallet.rs†L154-L180】 By default the mock prover runs in-process (`--features prover-mock`), enforces `max_witness_bytes`, applies `job_timeout_secs`, and gates concurrency via a semaphore sized by `max_concurrency`.【F:rpp/wallet/src/engine/signing/prover.rs†L57-L125】【F:rpp/wallet/src/engine/signing/prover.rs†L212-L291】
+`wallet.prover.*` toggles now select an explicit backend and control how the runtime reacts when proofs are unavailable.【F:rpp/wallet/src/config/wallet.rs†L261-L337】 The key fields are:
 
-To enable the STWO backend, build the crate with `--features prover_stwo_backend` (an alias for `prover-stwo`) and set `wallet.prover.enabled = true`. When compiled, `build_wallet_prover` instantiates the STWO backend; otherwise the runtime requires `mock_fallback = true` or it refuses to start with a "STWO prover requested but feature disabled" error.【F:rpp/wallet/src/engine/signing/prover.rs†L40-L64】 STWO proofs record the same metadata as the mock backend and honour the shared timeouts and witness limits.【F:rpp/wallet/src/engine/signing/prover.rs†L127-L190】
+* `wallet.prover.backend` – `"mock"`, `"stwo"`, or `"disabled"`. The string must match a compiled feature; misconfigurations are rejected during config validation so operators do not unknowingly deploy a binary without the requested backend.【F:rpp/wallet/src/config/wallet.rs†L296-L315】【F:rpp/wallet-interface/src/runtime_config.rs†L1458-L1502】
+* `wallet.prover.require_proof` – when `true`, `sign` refuses to return unless the backend produced a proof. The RPC router also blocks broadcasts when proofs are required, surfacing a `DRAFT_UNSIGNED` error that points back to this knob.【F:rpp/wallet/src/wallet/mod.rs†L493-L516】【F:rpp/wallet/src/rpc/mod.rs†L1171-L1196】
+* `wallet.prover.allow_broadcast_without_proof` – lets operators explicitly fail open. When `false` (the default) a draft that only recorded signatures cannot be broadcast; enabling the toggle lets you bypass proof generation while still recording the backend metadata for pending locks.【F:rpp/wallet/src/rpc/mod.rs†L1171-L1196】
+* `wallet.prover.timeout_secs`, `max_witness_bytes`, and `max_concurrency` – the runtime aborts jobs that exceed the timeout, rejects witnesses above the configured size, and enforces concurrent job limits via a semaphore.【F:rpp/wallet/src/engine/signing/prover.rs†L210-L309】 All three gates double as fail-open controls: set them low to trigger predictable cancellations, or raise them to avoid spurious aborts when STWO runs on slower hardware.
+
+To enable the STWO backend, build the crate with `--features prover_stwo_backend` (an alias for `prover-stwo`) and set `wallet.prover.backend = "stwo"`. When compiled, `build_wallet_prover` instantiates the STWO backend; otherwise config validation and wallet start-up fail with a "STWO prover requested but feature disabled" error instead of silently falling back.【F:rpp/wallet/src/engine/signing/prover.rs†L40-L69】 STWO proofs record the same metadata as the mock backend and honour the shared timeouts and witness limits.【F:rpp/wallet/src/engine/signing/prover.rs†L127-L190】
 
 Feature flags:
 
@@ -83,7 +88,7 @@ values below while still surfacing the human-readable `message` field. Core code
 | `PENDING_LOCK_CONFLICT` | Not enough unlocked UTXOs to satisfy the draft because other drafts hold locks. | `required`, `total_available` (or `available`). |
 | `FEE_TOO_LOW` | Fee rate below wallet minimum or rejected by the node; hints advise the minimum bump. | `minimum`/`required`, optional node `hint`, `hints[]`, `phase2_code`. |
 | `FEE_TOO_HIGH` | Requested fee rate exceeds the configured ceiling. | `requested`, `maximum`. |
-| `PROVER_TIMEOUT` | Wallet prover exceeded `job_timeout_secs` and abandoned the proof. | `timeout_secs`. |
+| `PROVER_TIMEOUT` | Wallet prover exceeded `timeout_secs` and abandoned the proof. | `timeout_secs`. |
 | `PROVER_FAILED` | Prover backend/serialization/runtime error (mock or STWO). | `kind`, `message`. |
 | `WITNESS_TOO_LARGE` | Witness size breached the configured limit. | `size_bytes`, `limit_bytes`. |
 | `RESCAN_IN_PROGRESS` | A targeted rescan is already queued; new requests report the pending start height. | `requested`, `pending_from`. |
@@ -108,7 +113,7 @@ friendly CLI messaging.
 
 ### Prover timeout
 * **Symptom:** `send sign` errors with `prover timeout` and no proof materialises; locks are auto-cleared but the UI shows the failure.【F:rpp/wallet/src/engine/signing/prover.rs†L212-L291】【F:rpp/wallet/src/wallet/mod.rs†L173-L198】
-* **Action:** Increase `wallet.prover.job_timeout_secs` or reduce concurrency (`max_concurrency`) to keep runtimes within resource budgets. Large drafts may also exceed `max_witness_bytes`; raise the limit or split the spend. When STWO is disabled, ensure `mock_fallback` remains `true` so the runtime can service proofs without rebuilding.【F:rpp/wallet/src/config/wallet.rs†L154-L180】【F:rpp/wallet/src/engine/signing/prover.rs†L40-L125】
+* **Action:** Increase `wallet.prover.timeout_secs` or reduce concurrency (`max_concurrency`) to keep runtimes within resource budgets. Large drafts may also exceed `max_witness_bytes`; raise the limit or split the spend. When STWO is disabled, switch `wallet.prover.backend = "mock"` until a STWO-enabled build is available so the runtime can continue servicing proofs.【F:rpp/wallet/src/config/wallet.rs†L261-L337】【F:rpp/wallet/src/engine/signing/prover.rs†L40-L125】
 
 Refer back to this guide whenever you adjust the wallet config or roll out new prover infrastructure.
 

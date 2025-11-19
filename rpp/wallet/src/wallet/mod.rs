@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::wallet::{
-    PolicyTierHooks, WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig,
-    WalletZsiConfig,
+    PolicyTierHooks, WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverBackend,
+    WalletProverConfig, WalletZsiConfig,
 };
 use crate::db::{
     PendingLock, PendingLockMetadata, PolicySnapshot, StoredZsiArtifact, TxCacheEntry, UtxoRecord,
@@ -167,6 +167,7 @@ pub struct Wallet {
     engine: Arc<WalletEngine>,
     node_client: Arc<dyn NodeClient>,
     prover: Arc<dyn WalletProver>,
+    prover_config: WalletProverConfig,
     identifier: String,
     keystore_path: PathBuf,
     backup_path: PathBuf,
@@ -265,6 +266,7 @@ impl Wallet {
             engine,
             node_client,
             prover,
+            prover_config: prover_config.clone(),
             identifier,
             keystore_path: keystore,
             backup_path: backup,
@@ -493,6 +495,11 @@ impl Wallet {
         self.ensure_signing_allowed()?;
         match self.prover.prove(draft) {
             Ok(output) => {
+                if self.prover_config.require_proof && output.proof.is_none() {
+                    return Err(WalletError::Prover(EngineProverError::Unsupported(
+                        "wallet prover requires proofs but backend returned none",
+                    )));
+                }
                 let txid = lock_fingerprint(draft);
                 let proof_bytes = output
                     .proof
@@ -566,6 +573,10 @@ impl Wallet {
 
     pub fn telemetry_handle(&self) -> Arc<WalletActionTelemetry> {
         Arc::clone(&self.telemetry)
+    }
+
+    pub fn prover_config(&self) -> &WalletProverConfig {
+        &self.prover_config
     }
 
     pub fn store(&self) -> Arc<WalletStore> {
@@ -970,7 +981,7 @@ mod tests {
     impl SleepyWalletProver {
         fn new(timeout_secs: u64, sleep: Duration) -> Self {
             let mut config = WalletProverConfig::default();
-            config.job_timeout_secs = timeout_secs;
+            config.timeout_secs = timeout_secs;
             config.max_concurrency = 1;
             Self {
                 jobs: ProverJobManager::new(&config),
@@ -1254,9 +1265,9 @@ mod tests {
         let (policy, fees) = sample_wallet_configs();
         let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
         let mut config = WalletProverConfig::default();
-        config.enabled = true;
-        config.mock_fallback = false;
-        config.job_timeout_secs = 30;
+        config.backend = WalletProverBackend::Stwo;
+        config.require_proof = true;
+        config.timeout_secs = 30;
         let keystore = tempdir.path().join("keystore.toml");
         let backup = tempdir.path().join("backups");
         let wallet = Wallet::new(
@@ -1584,8 +1595,8 @@ mod tests {
         let (policy, fees) = sample_wallet_configs();
         let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
         let mut config = WalletProverConfig::default();
-        config.enabled = true;
-        config.mock_fallback = false;
+        config.backend = WalletProverBackend::Stwo;
+        config.require_proof = true;
         config.max_witness_bytes = 1;
         let keystore = tempdir.path().join("keystore.toml");
         let backup = tempdir.path().join("backups");

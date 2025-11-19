@@ -24,6 +24,7 @@ prover-stwo = [
     "nightly-prover",
     "prover-backend-interface/prover-stwo",
     "dep:prover-stwo-circuits",
+    "rpp-wallet-interface/prover-stwo",
 ]
 prover_stwo_backend = ["prover-stwo"]
 prover-stwo-simd = [
@@ -32,7 +33,10 @@ prover-stwo-simd = [
     "prover-backend-interface/prover-stwo-simd",
     "prover_stwo_backend/simd",
 ]
-prover-mock = ["prover-backend-interface/prover-mock"]
+prover-mock = [
+    "prover-backend-interface/prover-mock",
+    "rpp-wallet-interface/prover-mock",
+]
 backend-rpp-stark = []
 vendor_electrs = ["dep:sha2", "dep:rpp_p2p", "dep:parking_lot"]
 vendor_electrs_telemetry = []

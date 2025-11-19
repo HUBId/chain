@@ -203,10 +203,17 @@ fn friendly_message(
             rpc_message.to_string()
         }
         WalletRpcErrorCode::DraftUnsigned => {
+            let proof_required = details
+                .and_then(|value| value.get("proof_required"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
             if let Some(id) = details
                 .and_then(|value| value.get("draft_id"))
                 .map(value_to_string)
             {
+                if proof_required {
+                    return catalog.render("cli.rpc.draft_requires_proof", [("draft_id", id)]);
+                }
                 return catalog.render("cli.rpc.draft_unsigned", [("draft_id", id)]);
             }
             rpc_message.to_string()

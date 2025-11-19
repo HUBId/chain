@@ -17,6 +17,8 @@ wallet_hw = []
 vendor_electrs = []
 wallet_zsi = []
 wallet_multisig_hooks = []
+prover-mock = []
+prover-stwo = []
 
 [dependencies]
 anyhow = "1"

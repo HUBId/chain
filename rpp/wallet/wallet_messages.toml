@@ -14,6 +14,7 @@ rescan_in_progress_with_pending = "A rescan from height {pending} is already sch
 rescan_in_progress_generic = "A rescan is already scheduled (requested {requested})."
 draft_not_found = "Draft `{draft_id}` was not found; verify the identifier."
 draft_unsigned = "Draft `{draft_id}` must be signed before broadcasting; run `send sign` first."
+draft_requires_proof = "Draft `{draft_id}` must include a proof before broadcasting; enable a supported prover backend and keep `wallet.prover.require_proof = true`, or set `wallet.prover.allow_broadcast_without_proof = true` to bypass this guard."
 
 [ui.identity]
 account_missing = "wallet account not found"
