@@ -28,6 +28,8 @@ pub mod config {
     }
 }
 
+pub mod lifecycle;
+
 pub mod node {
     pub use rpp_wallet_interface::runtime_config::MempoolStatus;
 }
@@ -40,4 +42,7 @@ pub mod wallet {
     pub use rpp_wallet_interface::runtime_wallet::*;
 }
 
+pub use lifecycle::{
+    EmbeddedNodeCommand, EmbeddedNodeError, EmbeddedNodeLifecycle, EmbeddedNodeStatus,
+};
 pub use rpp_wallet_interface::runtime_config::RuntimeMode;
