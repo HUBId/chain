@@ -28,6 +28,7 @@ use rpp_wallet::rpc::dto::{
     ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
     SignTxParams, SignTxResponse, SyncStatusResponse, JSONRPC_VERSION,
 };
+use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use rpp_wallet::rpc::{SyncHandle, WalletRpcRouter};
 use rpp_wallet::telemetry::WalletActionTelemetry;
 use rpp_wallet::tests::{
@@ -355,6 +356,98 @@ async fn wallet_blocks_duplicate_spends_until_locks_clear() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wallet_runtime_reports_prover_disabled_error() -> Result<()> {
+    let mut prover = WalletProverConfig::default();
+    prover.enabled = false;
+    prover.require_proof = true;
+    let fixture = WorkflowFixture::with_prover_config(prover)
+        .context("initialise wallet fixture with disabled prover")?;
+    let wallet = fixture.wallet();
+    let sync = wallet
+        .start_sync_coordinator(fixture.indexer_client())
+        .context("start wallet sync coordinator")?;
+    let sync = Arc::new(sync);
+
+    wait_for(|| {
+        wallet
+            .list_utxos()
+            .map(|utxos| utxos.len() == 1)
+            .unwrap_or(false)
+    })
+    .await;
+
+    let runtime = fixture
+        .start_runtime(Arc::clone(&sync))
+        .context("boot wallet runtime")?;
+    let endpoint = runtime.endpoint();
+    let client = Client::new();
+
+    let derived: DeriveAddressResponse = rpc_call(
+        &client,
+        &endpoint,
+        "derive_address",
+        Some(json!(DeriveAddressParams { change: false })),
+    )
+    .await
+    .context("derive address for disabled prover")?;
+    let create_params = CreateTxParams {
+        to: derived.address.clone(),
+        amount: fixture.spend_amount(),
+        fee_rate: Some(2),
+    };
+    let draft: CreateTxResponse =
+        rpc_call(&client, &endpoint, "create_tx", Some(json!(create_params)))
+            .await
+            .context("create draft with disabled prover")?;
+    assert_eq!(wallet.pending_locks()?.len(), 1);
+
+    let request = JsonRpcRequest {
+        jsonrpc: Some(JSONRPC_VERSION.to_string()),
+        id: Some(Value::from(2)),
+        method: "sign_tx".to_string(),
+        params: Some(json!(SignTxParams {
+            draft_id: draft.draft_id.clone(),
+        })),
+    };
+    let response = client
+        .post(format!("{endpoint}/rpc"))
+        .json(&request)
+        .send()
+        .await
+        .context("send sign_tx request")?;
+    if !response.status().is_success() {
+        bail!("wallet RPC returned HTTP status {}", response.status());
+    }
+    let payload: JsonRpcResponse = response
+        .json()
+        .await
+        .context("decode disabled prover error response")?;
+    let error = payload
+        .error
+        .context("expected error payload for disabled prover")?;
+    assert_eq!(
+        error.code,
+        WalletRpcErrorCode::ProverBackendDisabled.as_i32()
+    );
+    let data = error.data.context("error payload missing data")?;
+    assert_eq!(
+        data.get("code").and_then(Value::as_str),
+        Some(WalletRpcErrorCode::ProverBackendDisabled.as_str().as_ref())
+    );
+    assert!(wallet.pending_locks()?.is_empty());
+
+    runtime
+        .shutdown()
+        .await
+        .context("shutdown wallet runtime")?;
+    sync.shutdown()
+        .await
+        .context("shutdown wallet sync coordinator")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wallet_cli_commands_render_expected_output() -> Result<()> {
     let fixture = WorkflowFixture::new().context("initialise wallet workflow fixture")?;
     let wallet = fixture.wallet();
@@ -619,6 +712,10 @@ struct WorkflowFixture {
 
 impl WorkflowFixture {
     fn new() -> Result<Self> {
+        Self::with_prover_config(WalletProverConfig::default())
+    }
+
+    fn with_prover_config(prover: WalletProverConfig) -> Result<Self> {
         let tempdir = TempDir::new().context("create wallet temp directory")?;
         let store = Arc::new(WalletStore::open(tempdir.path()).context("open wallet store")?);
 
@@ -646,7 +743,7 @@ impl WorkflowFixture {
                 },
                 policy,
                 WalletFeeConfig::default(),
-                WalletProverConfig::default(),
+                prover,
                 WalletHwConfig::default(),
                 WalletZsiConfig::default(),
                 None,

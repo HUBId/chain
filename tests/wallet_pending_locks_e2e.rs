@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use common::wallet::{wait_for, WalletTestBuilder};
-use rpp_wallet::config::wallet::WalletPolicyConfig;
+use rpp_wallet::config::wallet::{WalletPolicyConfig, WalletProverConfig};
 use rpp_wallet::node_client::NodeClientError;
 use rpp_wallet::wallet::WalletError;
 use tokio::time::sleep;
@@ -116,6 +116,47 @@ async fn wallet_releases_locks_via_all_paths() -> Result<()> {
     sync.shutdown()
         .await
         .context("shutdown wallet sync coordinator")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wallet_rejects_signing_when_backend_disabled_and_proof_required() -> Result<()> {
+    let mut prover_config = WalletProverConfig::default();
+    prover_config.enabled = false;
+    prover_config.require_proof = true;
+
+    let fixture = WalletTestBuilder::default()
+        .with_deposits(vec![65_000])
+        .with_prover(prover_config)
+        .build()
+        .context("prepare wallet fixture")?;
+    let wallet = fixture.wallet();
+
+    wait_for(|| {
+        let wallet = Arc::clone(&wallet);
+        async move {
+            wallet
+                .list_utxos()
+                .map(|utxos| utxos.len() == 1)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    let recipient = wallet
+        .derive_address(false)
+        .context("derive proof-required recipient")?;
+    let draft = wallet
+        .create_draft(recipient, 25_000, None)
+        .context("create draft with disabled backend")?;
+    assert_eq!(wallet.pending_locks()?.len(), 1);
+
+    let err = wallet
+        .sign_and_prove(&draft)
+        .expect_err("disabled backend should block signing");
+    assert!(matches!(err, WalletError::ProverBackendDisabled));
+    assert!(wallet.pending_locks()?.is_empty());
 
     Ok(())
 }

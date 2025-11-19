@@ -653,6 +653,12 @@ mod tests {
     use crate::config::wallet::WalletProverConfig;
     use crate::db::UtxoOutpoint;
     use crate::engine::{DraftInput, DraftOutput, DraftTransaction, SpendModel};
+    use metrics::{
+        Counter, CounterFn, Histogram, HistogramFn, Key, Metadata, Recorder, SharedString, Unit,
+    };
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use tokio::runtime::Builder;
 
     fn sample_draft() -> DraftTransaction {
         DraftTransaction {
@@ -670,7 +676,7 @@ mod tests {
 
     #[test]
     fn job_permit_aborts_when_timeout_is_exceeded() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = Builder::new_current_thread()
             .enable_time()
             .build()
             .expect("runtime");
@@ -698,9 +704,61 @@ mod tests {
         assert!(matches!(result, Err(ProverError::Timeout(1))));
     }
 
+    #[test]
+    fn job_permit_cancels_blocking_work() {
+        let runtime = Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("runtime");
+        let _guard = runtime.enter();
+
+        let mut config = WalletProverConfig::default();
+        config.timeout_secs = 0;
+        config.max_concurrency = 1;
+        let manager = ProverJobManager::new(&config);
+        let permit = manager.acquire().expect("permit");
+        let cancel_token = permit.cancellation_token();
+        let worker_token = cancel_token.clone();
+
+        let result = runtime.block_on(async move {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                cancel_token.cancel();
+            });
+
+            permit
+                .wait(async move {
+                    task::spawn_blocking(move || loop {
+                        if worker_token.is_cancelled() {
+                            return Err(ProverError::Cancelled);
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    })
+                    .await
+                    .map_err(map_blocking_error)
+                })
+                .await
+        });
+
+        assert!(matches!(result, Err(ProverError::Cancelled)));
+    }
+
+    #[test]
+    fn job_manager_rejects_when_backend_busy() {
+        let mut config = WalletProverConfig::default();
+        config.max_concurrency = 1;
+        let manager = ProverJobManager::new(&config);
+        let _permit = manager.acquire().expect("first permit");
+        let err = manager.acquire().expect_err("second permit should fail");
+        assert!(matches!(err, ProverError::Busy));
+    }
+
     #[cfg(feature = "prover-mock")]
     #[test]
-    fn mock_prover_rejects_witnesses_over_configured_cap() {
+    fn mock_prover_rejects_witnesses_over_configured_cap_and_records_telemetry() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
         let mut config = WalletProverConfig::default();
         config.max_witness_bytes = 1;
         let prover = MockWalletProver::new(&config);
@@ -715,6 +773,70 @@ mod tests {
                 limit
             } if limit == 1
         ));
+
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.jobs{backend=mock,error=witness_too_large,result=err,stage=prepare}"
+            ),
+            Some(1)
+        );
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn mock_prover_emits_metadata_and_telemetry() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let config = WalletProverConfig::default();
+        let prover = MockWalletProver::new(&config);
+        let draft = sample_draft();
+        let ctx = DraftProverContext::new(&draft);
+
+        let plan = prover.prepare_witness(&ctx).expect("prepare witness");
+        assert!(plan.witness_bytes() > 0);
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.jobs{backend=mock,result=ok,stage=prepare}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::histogram_values(&metrics, "wallet.prover.witness_bytes{backend=mock}"),
+            vec![plan.witness_bytes() as f64]
+        );
+
+        let prove_result = prover.prove(&ctx, plan).expect("prove");
+        let proof_bytes = prove_result
+            .proof()
+            .map(|proof| proof.as_ref().len())
+            .unwrap();
+        assert!(proof_bytes > 0);
+        assert!(TestRecorder::counter_value(
+            &metrics,
+            "wallet.prover.jobs{backend=mock,result=ok,stage=prove}"
+        )
+        .is_some());
+        assert!(!TestRecorder::histogram_values(
+            &metrics,
+            "wallet.prover.duration_ms{backend=mock}"
+        )
+        .is_empty());
+        assert_eq!(
+            TestRecorder::histogram_values(&metrics, "wallet.prover.proof_bytes{backend=mock}"),
+            vec![proof_bytes as f64]
+        );
+
+        let meta = prover
+            .attest_metadata(&ctx, &prove_result)
+            .expect("attest metadata");
+        assert_eq!(meta.backend, "mock");
+        assert_eq!(meta.witness_bytes, prove_result.witness_bytes());
+        assert_eq!(meta.proof_bytes, Some(proof_bytes));
+        assert!(meta.proof_hash.is_some());
+        assert!(meta.duration_ms > 0);
     }
 
     #[cfg(feature = "prover-stwo")]
@@ -736,5 +858,128 @@ mod tests {
                 limit
             } if limit == 1
         ));
+    }
+}
+
+#[derive(Default, Clone)]
+struct TestRecorderInner {
+    counters: Mutex<HashMap<String, u64>>,
+    histograms: Mutex<HashMap<String, Vec<f64>>>,
+}
+
+#[derive(Clone)]
+struct TestRecorder {
+    inner: Arc<TestRecorderInner>,
+}
+
+impl TestRecorder {
+    fn install() -> Arc<TestRecorderInner> {
+        static RECORDER: OnceLock<Arc<TestRecorderInner>> = OnceLock::new();
+        RECORDER
+            .get_or_init(|| {
+                let inner = Arc::new(TestRecorderInner::default());
+                let recorder = TestRecorder {
+                    inner: Arc::clone(&inner),
+                };
+                metrics::set_boxed_recorder(Box::new(recorder)).expect("set recorder");
+                inner
+            })
+            .clone()
+    }
+
+    fn reset(inner: &Arc<TestRecorderInner>) {
+        inner.counters.lock().unwrap().clear();
+        inner.histograms.lock().unwrap().clear();
+    }
+
+    fn counter_value(inner: &Arc<TestRecorderInner>, key: &str) -> Option<u64> {
+        inner.counters.lock().unwrap().get(key).copied()
+    }
+
+    fn histogram_values(inner: &Arc<TestRecorderInner>, key: &str) -> Vec<f64> {
+        inner
+            .histograms
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+impl Recorder for TestRecorder {
+    fn describe_counter(&self, _: Key, _: Option<Unit>, _: SharedString) {}
+
+    fn describe_gauge(&self, _: Key, _: Option<Unit>, _: SharedString) {}
+
+    fn describe_histogram(&self, _: Key, _: Option<Unit>, _: SharedString) {}
+
+    fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
+        let formatted = format_key(key);
+        Counter::from_arc(Arc::new(TestCounterHandle {
+            key: formatted,
+            inner: Arc::clone(&self.inner),
+        }))
+    }
+
+    fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> metrics::Gauge {
+        metrics::Gauge::noop()
+    }
+
+    fn register_histogram(&self, key: &Key, _: &Metadata<'_>) -> Histogram {
+        let formatted = format_key(key);
+        Histogram::from_arc(Arc::new(TestHistogramHandle {
+            key: formatted,
+            inner: Arc::clone(&self.inner),
+        }))
+    }
+}
+
+struct TestCounterHandle {
+    key: String,
+    inner: Arc<TestRecorderInner>,
+}
+
+impl CounterFn for TestCounterHandle {
+    fn increment(&self, value: u64) {
+        let mut counters = self.inner.counters.lock().unwrap();
+        let entry = counters.entry(self.key.clone()).or_default();
+        *entry = entry.saturating_add(value);
+    }
+
+    fn absolute(&self, value: u64) {
+        let mut counters = self.inner.counters.lock().unwrap();
+        let entry = counters.entry(self.key.clone()).or_default();
+        *entry = (*entry).max(value);
+    }
+}
+
+struct TestHistogramHandle {
+    key: String,
+    inner: Arc<TestRecorderInner>,
+}
+
+impl HistogramFn for TestHistogramHandle {
+    fn record(&self, value: f64) {
+        let mut histograms = self.inner.histograms.lock().unwrap();
+        histograms.entry(self.key.clone()).or_default().push(value);
+    }
+}
+
+fn format_key(key: &Key) -> String {
+    let mut labels: Vec<_> = key
+        .labels()
+        .map(|label| (label.key().to_owned(), label.value().to_owned()))
+        .collect();
+    labels.sort_by(|a, b| a.0.cmp(&b.0));
+    if labels.is_empty() {
+        key.name().to_owned()
+    } else {
+        let joined = labels
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}{{{joined}}}", key.name())
     }
 }
