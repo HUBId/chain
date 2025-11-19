@@ -19,11 +19,12 @@ use dto::{
     DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto, EmptyParams,
     EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetPolicyResponse,
     HardwareDeviceDto, HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse,
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
-    PolicyPreviewResponse, PolicySnapshotDto, PolicyTierHooks as PolicyTierHooksDto, ProverMetaDto,
-    ProverMetaParams, ProverMetaResponse, ProverMetadataDto, ProverStatusDto, ProverStatusParams,
-    ProverStatusResponse, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, LifecycleStateDto, LifecycleStatusResponse,
+    ListPendingLocksResponse, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
+    PendingLockDto, PolicyPreviewResponse, PolicySnapshotDto,
+    PolicyTierHooks as PolicyTierHooksDto, ProverMetaDto, ProverMetaParams, ProverMetaResponse,
+    ProverMetadataDto, ProverStatusDto, ProverStatusParams, ProverStatusResponse,
+    RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
     ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
     SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto,
     SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
@@ -71,6 +72,7 @@ use crate::node_client::{
     submission_from_draft, BlockFeeSummary, MempoolInfo, NodeClientError, NodePolicyHint,
     NodeRejectionHint,
 };
+use crate::runtime::lifecycle::{EmbeddedNodeError, EmbeddedNodeLifecycle, EmbeddedNodeStatus};
 use crate::telemetry::{
     TelemetryCounter, TelemetryCounters, TelemetryOutcome, WalletActionTelemetry,
     WalletTelemetryAction,
@@ -152,6 +154,7 @@ pub struct WalletRpcRouter {
     next_id: AtomicU64,
     sync: Option<Arc<dyn SyncHandle>>,
     metrics: RuntimeMetricsHandle,
+    lifecycle: Option<EmbeddedNodeLifecycle>,
 }
 
 impl Drop for WalletRpcRouter {
@@ -170,6 +173,7 @@ impl WalletRpcRouter {
         wallet: Arc<Wallet>,
         sync: Option<Arc<dyn SyncHandle>>,
         metrics: RuntimeMetricsHandle,
+        lifecycle: Option<EmbeddedNodeLifecycle>,
     ) -> Self {
         let telemetry = wallet.telemetry_handle();
         telemetry.record_session("start");
@@ -180,6 +184,7 @@ impl WalletRpcRouter {
             next_id: AtomicU64::new(1),
             sync,
             metrics,
+            lifecycle,
         }
     }
 
@@ -421,6 +426,18 @@ impl WalletRpcRouter {
             "broadcast_raw" => {
                 let params: BroadcastRawParams = parse_params(params)?;
                 self.broadcast_raw(params.tx_hex)
+            }
+            "lifecycle.status" => {
+                parse_params::<EmptyParams>(params)?;
+                self.lifecycle_status()
+            }
+            "lifecycle.start" => {
+                parse_params::<EmptyParams>(params)?;
+                self.lifecycle_start()
+            }
+            "lifecycle.stop" => {
+                parse_params::<EmptyParams>(params)?;
+                self.lifecycle_stop()
             }
             "prover.status" => {
                 let params: ProverStatusParams = parse_params(params)?;
@@ -1421,6 +1438,42 @@ impl WalletRpcRouter {
             .map(|_| ())
             .map_err(RouterError::from)
     }
+
+    fn lifecycle_handle(&self) -> Result<&EmbeddedNodeLifecycle, RouterError> {
+        self.lifecycle.as_ref().ok_or(RouterError::InvalidRequest(
+            "embedded node lifecycle not configured",
+        ))
+    }
+
+    fn lifecycle_status(&self) -> Result<Value, RouterError> {
+        let lifecycle = self.lifecycle_handle()?;
+        let response = lifecycle_status_response(lifecycle.status(), lifecycle.log_tail());
+        to_value(response)
+    }
+
+    fn lifecycle_start(&self) -> Result<Value, RouterError> {
+        let lifecycle = self.lifecycle_handle()?;
+        let response = match lifecycle.start() {
+            Ok(status) => lifecycle_status_response(status, lifecycle.log_tail()),
+            Err(error) => lifecycle_error_response(error, lifecycle.log_tail()),
+        };
+        to_value(response)
+    }
+
+    fn lifecycle_stop(&self) -> Result<Value, RouterError> {
+        let lifecycle = self.lifecycle_handle()?;
+        let response = match lifecycle.stop() {
+            Ok(()) => LifecycleStatusResponse {
+                status: LifecycleStateDto::Stopped,
+                pid: None,
+                port_in_use: None,
+                error: None,
+                log_tail: lifecycle.log_tail(),
+            },
+            Err(error) => lifecycle_error_response(error, lifecycle.log_tail()),
+        };
+        to_value(response)
+    }
 }
 
 #[derive(Debug)]
@@ -1804,6 +1857,73 @@ fn hardware_error_to_json(error: &HardwareSignerError) -> JsonRpcError {
         }
         HardwareSignerError::Unsupported(reason) => {
             json_error(WalletRpcErrorCode::InvalidRequest, reason.clone(), None)
+        }
+    }
+}
+
+fn lifecycle_status_response(
+    status: EmbeddedNodeStatus,
+    log_tail: Vec<String>,
+) -> LifecycleStatusResponse {
+    match status {
+        EmbeddedNodeStatus::Running { pid } => LifecycleStatusResponse {
+            status: LifecycleStateDto::Running,
+            pid: Some(pid),
+            port_in_use: None,
+            error: None,
+            log_tail,
+        },
+        EmbeddedNodeStatus::Stopped => LifecycleStatusResponse {
+            status: LifecycleStateDto::Stopped,
+            pid: None,
+            port_in_use: None,
+            error: None,
+            log_tail,
+        },
+        EmbeddedNodeStatus::Error { message } => LifecycleStatusResponse {
+            status: LifecycleStateDto::Error,
+            pid: None,
+            port_in_use: None,
+            error: Some(message),
+            log_tail,
+        },
+    }
+}
+
+fn lifecycle_error_response(
+    error: EmbeddedNodeError,
+    log_tail: Vec<String>,
+) -> LifecycleStatusResponse {
+    match error {
+        EmbeddedNodeError::AlreadyRunning { pid } => LifecycleStatusResponse {
+            status: LifecycleStateDto::AlreadyRunning,
+            pid: Some(pid),
+            port_in_use: None,
+            error: None,
+            log_tail,
+        },
+        EmbeddedNodeError::PortInUse { addr } => LifecycleStatusResponse {
+            status: LifecycleStateDto::PortInUse,
+            pid: None,
+            port_in_use: Some(addr.to_string()),
+            error: None,
+            log_tail,
+        },
+        EmbeddedNodeError::Disabled => LifecycleStatusResponse {
+            status: LifecycleStateDto::Error,
+            pid: None,
+            port_in_use: None,
+            error: Some("embedded node runtime is disabled".to_string()),
+            log_tail,
+        },
+        EmbeddedNodeError::SpawnFailed(reason) | EmbeddedNodeError::ShutdownFailed(reason) => {
+            LifecycleStatusResponse {
+                status: LifecycleStateDto::Error,
+                pid: None,
+                port_in_use: None,
+                error: Some(reason),
+                log_tail,
+            }
         }
     }
 }
@@ -2248,9 +2368,9 @@ fn map_policy_tier_hooks(hooks: &crate::config::wallet::PolicyTierHooks) -> Poli
 
 #[cfg(test)]
 mod tests {
-    use super::dto::WatchOnlyStatusResponse;
     #[cfg(feature = "wallet_hw")]
     use super::dto::{HardwareEnumerateResponse, HardwareSignResponse};
+    use super::dto::{LifecycleStateDto, LifecycleStatusResponse, WatchOnlyStatusResponse};
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{
@@ -2268,10 +2388,13 @@ mod tests {
         BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
         NodeRejectionHint, StubNodeClient,
     };
+    use crate::runtime::lifecycle::{EmbeddedNodeCommand, EmbeddedNodeLifecycle};
+    use rpp_wallet_interface::runtime_config::WalletNodeRuntimeConfig;
     use serde_json::json;
     use std::borrow::Cow;
+    use std::net::TcpListener;
     use std::sync::Mutex;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     fn router_fixture(
@@ -2300,7 +2423,7 @@ mod tests {
         .expect("wallet");
         let metrics = noop_runtime_metrics();
         (
-            WalletRpcRouter::new(Arc::new(wallet), sync, metrics),
+            WalletRpcRouter::new(Arc::new(wallet), sync, metrics, None),
             store,
             dir,
         )
@@ -2360,7 +2483,7 @@ mod tests {
             .expect("configure signer");
         let metrics = noop_runtime_metrics();
         (
-            WalletRpcRouter::new(Arc::new(wallet), None, metrics),
+            WalletRpcRouter::new(Arc::new(wallet), None, metrics, None),
             signer,
             dir,
         )
@@ -2389,7 +2512,54 @@ mod tests {
         .expect("wallet");
         let _persist = dir.into_path();
         let metrics = noop_runtime_metrics();
-        WalletRpcRouter::new(Arc::new(wallet), None, metrics)
+        WalletRpcRouter::new(Arc::new(wallet), None, metrics, None)
+    }
+
+    fn lifecycle_router(command: &str) -> (WalletRpcRouter, tempfile::TempDir) {
+        lifecycle_router_with_ports(command, Vec::new())
+    }
+
+    fn lifecycle_router_with_ports(
+        command: &str,
+        ports: Vec<std::net::SocketAddr>,
+    ) -> (WalletRpcRouter, tempfile::TempDir) {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
+        let telemetry = Arc::new(WalletActionTelemetry::new(false));
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [42u8; 32],
+            },
+            WalletPolicyConfig::default(),
+            WalletFeeConfig::default(),
+            WalletProverConfig::default(),
+            WalletHwConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            Arc::new(StubNodeClient::default()),
+            WalletPaths::new(keystore, backup),
+            Arc::clone(&telemetry),
+        )
+        .expect("wallet");
+        let mut node_command = EmbeddedNodeCommand::new("sh");
+        node_command.args = vec!["-c".into(), command.into()];
+        let lifecycle = EmbeddedNodeLifecycle::new(
+            WalletNodeRuntimeConfig {
+                embedded: true,
+                gossip_endpoints: Vec::new(),
+            },
+            node_command,
+            ports,
+            vec!["SECRET".into()],
+        );
+        let metrics = noop_runtime_metrics();
+        (
+            WalletRpcRouter::new(Arc::new(wallet), None, metrics, Some(lifecycle)),
+            dir,
+        )
     }
 
     #[test]
@@ -2550,6 +2720,96 @@ mod tests {
             .watch_only_record()
             .expect("post-disable record")
             .is_none());
+    }
+
+    #[test]
+    fn lifecycle_routes_expose_running_status_and_logs() {
+        let (router, _dir) = lifecycle_router("echo SECRET && sleep 1");
+
+        let start_response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "lifecycle.start".into(),
+            params: Some(json!({})),
+        });
+        let payload: LifecycleStatusResponse =
+            serde_json::from_value(start_response.result.unwrap()).unwrap();
+
+        assert_eq!(payload.status, LifecycleStateDto::Running);
+        assert!(payload.pid.is_some());
+
+        std::thread::sleep(Duration::from_millis(50));
+        let status_response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(2)),
+            method: "lifecycle.status".into(),
+            params: Some(json!({})),
+        });
+        let status: LifecycleStatusResponse =
+            serde_json::from_value(status_response.result.unwrap()).unwrap();
+        assert_eq!(status.status, LifecycleStateDto::Running);
+        assert!(status.log_tail.iter().any(|line| line.contains("***")));
+        assert!(status.log_tail.iter().all(|line| !line.contains("SECRET")));
+
+        let _ = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(3)),
+            method: "lifecycle.stop".into(),
+            params: Some(json!({})),
+        });
+    }
+
+    #[test]
+    fn lifecycle_start_reports_already_running() {
+        let (router, _dir) = lifecycle_router("sleep 2");
+
+        let first = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "lifecycle.start".into(),
+            params: Some(json!({})),
+        });
+        let first_status: LifecycleStatusResponse =
+            serde_json::from_value(first.result.unwrap()).unwrap();
+        let pid = first_status.pid.expect("pid");
+
+        let second = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(2)),
+            method: "lifecycle.start".into(),
+            params: Some(json!({})),
+        });
+        let second_status: LifecycleStatusResponse =
+            serde_json::from_value(second.result.unwrap()).unwrap();
+
+        assert_eq!(second_status.status, LifecycleStateDto::AlreadyRunning);
+        assert_eq!(second_status.pid, Some(pid));
+
+        let _ = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(3)),
+            method: "lifecycle.stop".into(),
+            params: Some(json!({})),
+        });
+    }
+
+    #[test]
+    fn lifecycle_start_reports_port_conflicts() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("listener address");
+        let (router, _dir) = lifecycle_router_with_ports("sleep 1", vec![addr]);
+
+        let response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "lifecycle.start".into(),
+            params: Some(json!({})),
+        });
+        let payload: LifecycleStatusResponse =
+            serde_json::from_value(response.result.unwrap()).unwrap();
+
+        assert_eq!(payload.status, LifecycleStateDto::PortInUse);
+        assert_eq!(payload.port_in_use.as_deref(), Some(&addr.to_string()));
     }
 
     #[derive(Clone)]
@@ -2784,8 +3044,12 @@ mod tests {
         )
         .expect("wallet");
         let sync = Arc::new(RecordingSync::default());
-        let router =
-            WalletRpcRouter::new(Arc::new(wallet), Some(sync.clone()), noop_runtime_metrics());
+        let router = WalletRpcRouter::new(
+            Arc::new(wallet),
+            Some(sync.clone()),
+            noop_runtime_metrics(),
+            None,
+        );
         let bundle = router
             .wallet
             .create_draft("addr".into(), 9_000, None)

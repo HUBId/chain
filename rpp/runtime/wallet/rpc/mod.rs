@@ -714,6 +714,24 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         ROLES_ADMIN,
     ),
     (
+        "lifecycle.status",
+        WalletRpcMethod::JsonLifecycleStatus,
+        Some(30),
+        ROLES_VIEWER,
+    ),
+    (
+        "lifecycle.start",
+        WalletRpcMethod::JsonLifecycleStart,
+        Some(6),
+        ROLES_ADMIN,
+    ),
+    (
+        "lifecycle.stop",
+        WalletRpcMethod::JsonLifecycleStop,
+        Some(6),
+        ROLES_ADMIN,
+    ),
+    (
         "rescan",
         WalletRpcMethod::JsonRescan,
         Some(6),
@@ -1050,7 +1068,9 @@ fn build_cors_layer(config: &WalletRuntimeConfig) -> Result<CorsLayer, ChainErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use rpp_wallet_interface::rpc::JSONRPC_VERSION;
+    use serde_json::{json, Value};
+    use std::num::NonZeroU64;
     use tempfile::tempdir;
 
     #[derive(Clone)]
@@ -1061,6 +1081,52 @@ mod tests {
     impl WalletAuditResult for DummyResponse {
         fn audit_result_code(&self) -> i32 {
             self.code
+        }
+    }
+
+    fn lifecycle_handler(
+        rate_limit: Option<NonZeroU64>,
+        required_roles: &'static [WalletRole],
+    ) -> JsonRpcHandler {
+        let metrics = Arc::new(RuntimeMetrics::noop());
+        let audit = Arc::new(WalletAuditLogger::disabled());
+        let handler_fn: RpcHandlerFn =
+            Arc::new(
+                |invocation: RpcInvocation<'_, JsonRpcRequest>| JsonRpcResponse {
+                    jsonrpc: JSONRPC_VERSION.to_string(),
+                    id: invocation.payload.id.clone(),
+                    result: Some(json!({ "ok": true })),
+                    error: None,
+                },
+            );
+        authenticated_handler::<_, JsonRpcRequest, _>(
+            StaticAuthenticator::new(Some(AuthToken::new("secret"))),
+            handler_fn,
+            metrics,
+            WalletRpcMethod::JsonLifecycleStart,
+            "lifecycle.start",
+            rate_limit,
+            required_roles,
+            audit,
+        )
+    }
+
+    fn lifecycle_invocation(
+        token: Option<&str>,
+        roles: WalletRoleSet,
+    ) -> RpcInvocation<'static, JsonRpcRequest> {
+        RpcInvocation {
+            request: RpcRequest {
+                bearer_token: token,
+                identities: Vec::new(),
+                roles,
+            },
+            payload: JsonRpcRequest {
+                jsonrpc: Some(JSONRPC_VERSION.to_string()),
+                id: Some(json!(1)),
+                method: "lifecycle.start".into(),
+                params: None,
+            },
         }
     }
 
@@ -1156,6 +1222,46 @@ mod tests {
         assert!(roles_sets
             .iter()
             .any(|roles| roles == &vec![Value::from("operator")]));
+    }
+
+    #[test]
+    fn lifecycle_methods_require_authentication() {
+        let handler = lifecycle_handler(None, ROLES_ADMIN);
+        let invocation = lifecycle_invocation(None, WalletRoleSet::new());
+
+        let err = handler
+            .call(invocation)
+            .expect_err("missing token should be unauthorized");
+        assert_eq!(err.code(), CODE_UNAUTHORIZED);
+    }
+
+    #[test]
+    fn lifecycle_methods_enforce_rbac() {
+        let handler = lifecycle_handler(None, ROLES_ADMIN);
+        let mut roles = WalletRoleSet::new();
+        roles.insert(WalletRole::Viewer);
+        let invocation = lifecycle_invocation(Some("secret"), roles);
+
+        let err = handler.call(invocation).expect_err("rbac failure expected");
+        assert_eq!(err.code(), CODE_RBAC_FORBIDDEN);
+        assert_eq!(err.wallet_code(), Some(&WalletRpcErrorCode::RbacForbidden));
+    }
+
+    #[test]
+    fn lifecycle_methods_respect_rate_limits() {
+        let handler = lifecycle_handler(NonZeroU64::new(1), ROLES_ADMIN);
+        let mut roles = WalletRoleSet::new();
+        roles.insert(WalletRole::Admin);
+
+        let first = handler
+            .call(lifecycle_invocation(Some("secret"), roles.clone()))
+            .expect("first invocation allowed");
+        assert!(first.error.is_none());
+
+        let err = handler
+            .call(lifecycle_invocation(Some("secret"), roles))
+            .expect_err("rate limiter should reject second call");
+        assert_eq!(err.code(), CODE_RATE_LIMITED);
     }
 
     fn read_audit_records(dir: &std::path::Path) -> Vec<Value> {

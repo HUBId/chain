@@ -642,6 +642,29 @@ pub struct EstimateFeeParams {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleStateDto {
+    Running,
+    Stopped,
+    AlreadyRunning,
+    PortInUse,
+    Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleStatusResponse {
+    pub status: LifecycleStateDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_in_use: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log_tail: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EstimateFeeResponse {
     pub confirmation_target: u16,
     pub fee_rate: u64,
@@ -1589,6 +1612,19 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn lifecycle_status_response_roundtrip() {
+        let response = LifecycleStatusResponse {
+            status: LifecycleStateDto::PortInUse,
+            pid: Some(42),
+            port_in_use: Some("127.0.0.1:18444".into()),
+            error: Some("port occupied".into()),
+            log_tail: vec!["line1".into(), "line2".into()],
+        };
+
+        roundtrip(&response);
     }
 
     #[test]

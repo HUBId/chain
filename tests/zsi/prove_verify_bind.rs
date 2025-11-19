@@ -257,7 +257,7 @@ fn rpc_router_handles_zsi_binding_and_proof_paths() {
     let harness = WalletHarness::with_zsi_enabled();
     let wallet = Arc::clone(&harness.wallet);
     let metrics = RuntimeMetrics::noop();
-    let router = WalletRpcRouter::new(wallet, None, metrics);
+    let router = WalletRpcRouter::new(wallet, None, metrics, None);
 
     let params = ZsiProofParams {
         operation: ZsiOperation::Issue,
