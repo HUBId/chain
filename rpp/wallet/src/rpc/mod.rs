@@ -2061,6 +2061,8 @@ fn pending_lock_metadata_from(
         proof_present,
         meta.proof_bytes.map(|bytes| bytes as u64),
         meta.proof_hash.map(hex_encode),
+        None,
+        None,
     )
 }
 
@@ -2717,7 +2719,8 @@ mod tests {
             spend_model: SpendModel::Exact { amount: 14_000 },
         };
         let txid = Wallet::draft_lock_id(&draft);
-        let metadata = PendingLockMetadata::new("instant".into(), 0, 0, true, false, None, None);
+        let metadata =
+            PendingLockMetadata::new("instant".into(), 0, 0, true, false, None, None, None, None);
         let lock = PendingLock::new(draft.inputs[0].outpoint.clone(), 1, Some(txid))
             .with_metadata(metadata.clone());
         let mut batch = store.batch().expect("batch");

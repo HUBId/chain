@@ -314,6 +314,12 @@ impl WalletStore {
         Ok(Some(codec::decode_prover_meta(&bytes)?))
     }
 
+    /// Delete prover metadata captured for a given transaction.
+    pub fn delete_prover_meta(&self, txid: &[u8; 32]) -> Result<(), WalletStoreError> {
+        let key = prover_meta_key(txid);
+        self.prover_meta_cf.remove(&key).map_err(map_cf_error)
+    }
+
     /// Fetch a cached transaction entry by txid.
     pub fn get_tx_cache_entry(
         &self,
@@ -641,6 +647,11 @@ impl<'a> WalletStoreBatch<'a> {
             return Ok(None);
         };
         Ok(Some(codec::decode_prover_meta(&bytes)?))
+    }
+
+    pub fn delete_prover_meta(&mut self, txid: &[u8; 32]) -> Result<(), WalletStoreError> {
+        let key = prover_meta_key(txid);
+        self.prover_meta_cf.remove(&key).map_err(map_cf_error)
     }
 
     pub fn delete_zsi_artifact(&mut self, identity: &str, commitment_digest: &str) {
