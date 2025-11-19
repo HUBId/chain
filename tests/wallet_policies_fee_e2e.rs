@@ -124,26 +124,23 @@ async fn wallet_respects_fee_hints_and_policy_limits() -> Result<()> {
     assert!(locks[0].metadata.backend.is_empty());
     assert!(locks[0].spending_txid.is_none());
 
-    let proof_output = wallet
+    let (prove_result, meta) = wallet
         .sign_and_prove(&draft)
         .context("sign and prove draft")?;
-    assert!(!proof_output.backend.is_empty());
-    assert!(proof_output.witness_bytes > 0);
+    assert!(!meta.backend.is_empty());
+    assert!(meta.witness_bytes > 0);
     if cfg!(feature = "prover-stwo") {
-        assert_eq!(proof_output.backend, "stwo");
-        assert!(proof_output.proof.is_some());
+        assert_eq!(meta.backend, "stwo");
+        assert!(prove_result.proof().is_some());
     } else {
-        assert_eq!(proof_output.backend, "mock");
+        assert_eq!(meta.backend, "mock");
     }
 
     let locks = wallet.pending_locks().context("locks after signing")?;
     assert_eq!(locks.len(), 1);
     assert!(locks[0].spending_txid.is_some());
-    assert_eq!(locks[0].metadata.backend, proof_output.backend);
-    assert_eq!(
-        locks[0].metadata.witness_bytes,
-        proof_output.witness_bytes as u64
-    );
+    assert_eq!(locks[0].metadata.backend, meta.backend);
+    assert_eq!(locks[0].metadata.witness_bytes, meta.witness_bytes as u64);
 
     node.fail_next_submission(NodeClientError::rejected_with_hint(
         "fee below floor",
@@ -186,8 +183,10 @@ async fn wallet_respects_fee_hints_and_policy_limits() -> Result<()> {
         .create_draft(recipient, spend_amount, Some(override_rate))
         .context("create override draft")?;
     assert_eq!(retry.fee_rate, override_rate);
-    let signed_retry = wallet.sign_and_prove(&retry).context("sign retry draft")?;
-    assert_eq!(signed_retry.backend, proof_output.backend);
+    let (_, retry_meta) = wallet
+        .sign_and_prove(&retry)
+        .context("sign retry draft")?;
+    assert_eq!(retry_meta.backend, meta.backend);
     wallet
         .broadcast(&retry)
         .context("successful broadcast should clear locks")?;

@@ -161,8 +161,9 @@ material.
 #### `sign_tx`
 
 - **Request**: `{ draft_id }`.
-- **Response**: Signing outcome `{ draft_id, backend, witness_bytes,
-  proof_generated, proof_size?, duration_ms }`.
+- **Response**: Signing outcome `{ draft_id, signed: { tx_hex, proof_hex?,
+  metadata: { backend, witness_bytes, prove_duration_ms, proof_required,
+  proof_present, proof_bytes?, proof_hash? } }, locks }`.
 - **Failures**: `-32040` if the draft does not exist, `-32010` for signing
   failures.
 

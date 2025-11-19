@@ -4,7 +4,7 @@ use iced::{Alignment, Command, Element, Length};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BroadcastResponse, CreateTxParams, CreateTxResponse, EstimateFeeResponse,
-    PolicyPreviewResponse, SignTxResponse,
+    PolicyPreviewResponse, ProverMetadataDto, SignTxResponse, SignedTxProverBundleDto,
 };
 
 use crate::ui::commands::{self, RpcCallError};
@@ -451,28 +451,45 @@ impl State {
     }
 
     fn signature_details(&self, signature: &SignTxResponse) -> Element<Message> {
+        let metadata = &signature.signed.metadata;
         column![
             text(format!("Draft ID: {}", signature.draft_id)).size(16),
-            text(format!("Backend: {}", signature.backend)).size(16),
-            text(format!("Witness bytes: {}", signature.witness_bytes)).size(16),
+            text(format!("Backend: {}", metadata.backend)).size(16),
+            text(format!("Witness bytes: {}", metadata.witness_bytes)).size(16),
             text(format!(
-                "Proof generated: {}",
-                if signature.proof_generated {
-                    "Yes"
-                } else {
-                    "No"
-                }
+                "Proof required: {}",
+                if metadata.proof_required { "Yes" } else { "No" }
+            ))
+            .size(16),
+            text(format!(
+                "Proof present: {}",
+                if metadata.proof_present { "Yes" } else { "No" }
             ))
             .size(16),
             text(format!(
                 "Proof size: {}",
-                signature
-                    .proof_size
+                metadata
+                    .proof_bytes
                     .map(|size| format!("{} bytes", size))
                     .unwrap_or_else(|| "N/A".into())
             ))
             .size(16),
-            text(format!("Prover duration: {} ms", signature.duration_ms)).size(16),
+            text(format!(
+                "Prover duration: {} ms",
+                metadata.prove_duration_ms
+            ))
+            .size(16),
+            text(format!(
+                "Submission bytes: {}",
+                signature.signed.tx_hex.len() / 2
+            ))
+            .size(16),
+            text(format!("Submission hex: {}", signature.signed.tx_hex)).size(16),
+            text(format!(
+                "Proof hex: {}",
+                signature.signed.proof_hex.as_deref().unwrap_or("N/A")
+            ))
+            .size(16),
         ]
         .spacing(4)
         .into()
@@ -931,11 +948,19 @@ mod tests {
     fn sample_signature() -> SignTxResponse {
         SignTxResponse {
             draft_id: "draft-1".into(),
-            backend: "mock".into(),
-            witness_bytes: 128,
-            proof_generated: true,
-            proof_size: Some(256),
-            duration_ms: 1_500,
+            signed: SignedTxProverBundleDto {
+                tx_hex: "deadbeef".into(),
+                proof_hex: Some("bead".into()),
+                metadata: ProverMetadataDto {
+                    backend: "mock".into(),
+                    witness_bytes: 128,
+                    prove_duration_ms: 1_500,
+                    proof_required: true,
+                    proof_present: true,
+                    proof_bytes: Some(256),
+                    proof_hash: Some("c0ffee".into()),
+                },
+            },
             locks: Vec::new(),
         }
     }
