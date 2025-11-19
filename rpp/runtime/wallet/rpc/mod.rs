@@ -571,6 +571,18 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         ROLES_OPERATOR,
     ),
     (
+        "prover.status",
+        WalletRpcMethod::JsonProverStatus,
+        Some(60),
+        ROLES_VIEWER,
+    ),
+    (
+        "prover.meta",
+        WalletRpcMethod::JsonProverMeta,
+        Some(60),
+        ROLES_VIEWER,
+    ),
+    (
         "hw.enumerate",
         WalletRpcMethod::JsonHwEnumerate,
         Some(30),

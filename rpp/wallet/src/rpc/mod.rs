@@ -21,8 +21,9 @@ use dto::{
     HardwareDeviceDto, HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse,
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
     ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, PendingLockDto,
-    PolicyPreviewResponse, PolicySnapshotDto, PolicyTierHooks as PolicyTierHooksDto,
-    ProverMetadataDto, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
+    PolicyPreviewResponse, PolicySnapshotDto, PolicyTierHooks as PolicyTierHooksDto, ProverMetaDto,
+    ProverMetaParams, ProverMetaResponse, ProverMetadataDto, ProverStatusDto, ProverStatusParams,
+    ProverStatusResponse, RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
     ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
     SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto,
     SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
@@ -51,7 +52,10 @@ use crate::backup::{
 };
 #[cfg(feature = "wallet_zsi")]
 use crate::db::StoredZsiArtifact;
-use crate::db::{PendingLock, PendingLockMetadata, PolicySnapshot, TxCacheEntry, UtxoRecord};
+use crate::db::{
+    PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta as StoredProverMeta, TxCacheEntry,
+    UtxoRecord,
+};
 use crate::engine::signing::{ProveResult, ProverMeta};
 use crate::engine::{
     BuildMetadata, BuilderError, DraftBundle, DraftTransaction, EngineError, FeeError,
@@ -72,8 +76,8 @@ use crate::telemetry::{
     WalletTelemetryAction,
 };
 use crate::wallet::{
-    PolicyPreview, Wallet, WalletError, WalletMode, WalletPaths, WalletSyncCoordinator,
-    WalletSyncError, WatchOnlyError, ZsiError,
+    PolicyPreview, ProverStatus, Wallet, WalletError, WalletMode, WalletPaths,
+    WalletSyncCoordinator, WalletSyncError, WatchOnlyError, ZsiError,
 };
 #[cfg(feature = "wallet_zsi")]
 use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
@@ -366,6 +370,14 @@ impl WalletRpcRouter {
             "broadcast_raw" => {
                 let params: BroadcastRawParams = parse_params(params)?;
                 self.broadcast_raw(params.tx_hex)
+            }
+            "prover.status" => {
+                let params: ProverStatusParams = parse_params(params)?;
+                self.handle_prover_status(params.txid)
+            }
+            "prover.meta" => {
+                let params: ProverMetaParams = parse_params(params)?;
+                self.handle_prover_meta(params.txid)
             }
             #[cfg(feature = "wallet_zsi")]
             "zsi.prove" => {
@@ -1241,6 +1253,23 @@ impl WalletRpcRouter {
         to_value(BroadcastRawResponse { accepted: true })
     }
 
+    fn handle_prover_status(&self, txid_hex: String) -> Result<Value, RouterError> {
+        let txid = parse_txid_hex(&txid_hex)?;
+        let status = self.wallet_call(self.wallet.prover_status(&txid))?;
+        to_value(ProverStatusResponse {
+            txid: txid_hex,
+            status: prover_status_to_dto(status),
+        })
+    }
+
+    fn handle_prover_meta(&self, txid_hex: String) -> Result<Value, RouterError> {
+        let txid = parse_txid_hex(&txid_hex)?;
+        let metadata = self
+            .wallet_call(self.wallet.prover_metadata(&txid))?
+            .map(prover_meta_to_dto);
+        to_value(ProverMetaResponse { metadata })
+    }
+
     fn watch_only_status(&self) -> Result<Value, RouterError> {
         match self.wallet.watch_only_status() {
             Ok(status) => {
@@ -1986,6 +2015,14 @@ fn to_value<T: Serialize>(value: T) -> Result<Value, RouterError> {
     serde_json::to_value(value).map_err(|error| RouterError::Serialization(error.to_string()))
 }
 
+fn parse_txid_hex(txid_hex: &str) -> Result<[u8; 32], RouterError> {
+    let bytes = hex_decode(txid_hex)
+        .map_err(|error| RouterError::InvalidParams(format!("invalid txid hex: {error}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| RouterError::InvalidParams("txid must be 32 bytes".to_string()))
+}
+
 fn spend_model_to_dto(model: &SpendModel) -> DraftSpendModelDto {
     match model {
         SpendModel::Exact { amount } => DraftSpendModelDto::Exact { amount: *amount },
@@ -2045,6 +2082,28 @@ fn prover_metadata_to_dto(
         proof_present,
         proof_bytes: meta.proof_bytes.map(|bytes| bytes as u64),
         proof_hash: meta.proof_hash.map(hex_encode),
+    }
+}
+
+fn prover_status_to_dto(status: ProverStatus) -> ProverStatusDto {
+    match status {
+        ProverStatus::Pending => ProverStatusDto::Pending,
+        ProverStatus::Recorded => ProverStatusDto::Recorded,
+        ProverStatus::Unknown => ProverStatusDto::Unknown,
+    }
+}
+
+fn prover_meta_to_dto(meta: StoredProverMeta) -> ProverMetaDto {
+    ProverMetaDto {
+        txid: hex_encode(meta.txid),
+        backend: meta.backend,
+        prove_duration_ms: meta.prove_duration_ms,
+        witness_bytes: meta.witness_bytes,
+        proof_bytes: meta.proof_bytes,
+        proof_hash: meta.proof_hash,
+        started_at_ms: meta.started_at_ms,
+        finished_at_ms: meta.finished_at_ms,
+        result: meta.result,
     }
 }
 

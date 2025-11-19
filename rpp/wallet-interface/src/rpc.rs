@@ -254,6 +254,79 @@ pub struct SignedTxProverBundleDto {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `prover.status` RPC method.
+pub struct ProverStatusParams {
+    /// Transaction identifier being inspected.
+    pub txid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result returned by `prover.status`.
+pub struct ProverStatusResponse {
+    /// Transaction identifier being inspected.
+    pub txid: String,
+    /// Current prover status for the transaction.
+    pub status: ProverStatusDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// States tracked by the prover status endpoint.
+pub enum ProverStatusDto {
+    /// Prover job is pending or inputs remain locked.
+    Pending,
+    /// Prover metadata has been recorded for the transaction.
+    Recorded,
+    /// No prover state is available for the transaction.
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Parameters accepted by the `prover.meta` RPC method.
+pub struct ProverMetaParams {
+    /// Transaction identifier whose prover metadata is requested.
+    pub txid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Result returned by `prover.meta` when metadata is available.
+pub struct ProverMetaDto {
+    /// Transaction identifier the metadata is associated with.
+    pub txid: String,
+    /// Backend that produced the witness and proof.
+    pub backend: String,
+    /// Duration of the prover job in milliseconds.
+    pub prove_duration_ms: u64,
+    /// Total witness bytes processed during proving.
+    pub witness_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    /// Size of the generated proof in bytes, when present.
+    pub proof_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    /// Hex-encoded hash of the generated proof, when available.
+    pub proof_hash: Option<String>,
+    /// Timestamp (ms) when the prover job began.
+    pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    /// Timestamp (ms) when the prover job finished, when known.
+    pub finished_at_ms: Option<u64>,
+    /// Backend-provided result description.
+    pub result: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Wrapper returned by `prover.meta`.
+pub struct ProverMetaResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    /// Recorded metadata if available for the transaction.
+    pub metadata: Option<ProverMetaDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicySnapshotDto {
     pub revision: u64,
     pub updated_at: u64,
