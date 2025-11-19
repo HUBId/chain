@@ -519,6 +519,30 @@ impl Wallet {
             .release_locks_for_inputs(draft.inputs.iter().map(|input| &input.outpoint))?)
     }
 
+    pub fn release_locks_for_draft(
+        &self,
+        draft: &DraftTransaction,
+    ) -> Result<Vec<PendingLock>, WalletError> {
+        let txid = lock_fingerprint(draft);
+        Ok(self.engine.release_locks_by_txid(&txid)?)
+    }
+
+    pub fn locks_for_draft(
+        &self,
+        draft: &DraftTransaction,
+    ) -> Result<Vec<PendingLock>, WalletError> {
+        let txid = lock_fingerprint(draft);
+        self.locks_for_txid(&txid)
+    }
+
+    fn locks_for_txid(&self, txid: &[u8; 32]) -> Result<Vec<PendingLock>, WalletError> {
+        let locks = self.engine.pending_locks()?;
+        Ok(locks
+            .into_iter()
+            .filter(|lock| lock.spending_txid.as_ref() == Some(txid))
+            .collect())
+    }
+
     pub fn policy_preview(&self) -> PolicyPreview {
         let policy = self.engine.policy_engine();
         PolicyPreview {
@@ -575,10 +599,6 @@ impl Wallet {
         match result {
             Ok((output, meta)) => {
                 let proof_generated = output.proof().is_some();
-                if self.prover_config.require_proof && !proof_generated {
-                    self.engine.release_locks_for_inputs(inputs.iter())?;
-                    return Err(WalletError::ProofMissing);
-                }
                 let txid = lock_fingerprint(draft);
                 let proof_bytes = meta.proof_bytes.map(|bytes| bytes as u64);
                 let proof_hash = meta.proof_hash.map(hex::encode);
@@ -605,6 +625,19 @@ impl Wallet {
     pub fn broadcast(&self, draft: &DraftTransaction) -> Result<(), WalletError> {
         self.ensure_broadcast_allowed()?;
         let txid = lock_fingerprint(draft);
+        let expected_inputs = draft.inputs.len();
+        let locks = self.locks_for_txid(&txid)?;
+        if expected_inputs > 0 && locks.len() != expected_inputs {
+            self.engine.release_locks_by_txid(&txid)?;
+            return Err(WalletError::ProofMissing);
+        }
+        if self.prover_config.require_proof {
+            let missing_proof = locks.iter().any(|lock| !lock.metadata.proof_present);
+            if missing_proof {
+                self.engine.release_locks_by_txid(&txid)?;
+                return Err(WalletError::ProofMissing);
+            }
+        }
         let submission = crate::node_client::submission_from_draft(draft);
         match self.node_client.submit_tx(&submission) {
             Ok(()) => {
@@ -677,6 +710,10 @@ impl Wallet {
 
     pub fn engine_handle(&self) -> Arc<WalletEngine> {
         Arc::clone(&self.engine)
+    }
+
+    pub fn draft_lock_id(draft: &DraftTransaction) -> [u8; 32] {
+        lock_fingerprint(draft)
     }
 
     pub fn latest_fee_quote(&self) -> Option<FeeQuote> {
@@ -1320,6 +1357,7 @@ mod tests {
             engine,
             node_client,
             prover,
+            prover_config: WalletProverConfig::default(),
             identifier,
             keystore_path: PathBuf::new(),
             backup_path: PathBuf::new(),
@@ -1471,6 +1509,80 @@ mod tests {
                 && lock.metadata.proof_bytes == proof_bytes
                 && lock.metadata.proof_hash == proof_hash
         }));
+        drop(tempdir);
+    }
+
+    #[test]
+    fn broadcast_rejects_missing_proof_when_policy_enforced() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 60_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let prover: Arc<dyn WalletProver> = Arc::new(InstantWalletProver::default());
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            prover,
+            Arc::clone(&node_client),
+        );
+        wallet.prover_config.require_proof = true;
+
+        let draft = make_draft(&wallet, 15_000);
+        let _ = wallet
+            .sign_and_prove(&draft)
+            .expect("signing without proof");
+        let err = wallet.broadcast(&draft).expect_err("broadcast rejected");
+        assert!(matches!(err, WalletError::ProofMissing));
+        assert!(wallet.pending_locks().expect("locks released").is_empty());
+
+        drop(tempdir);
+    }
+
+    #[cfg(feature = "prover-mock")]
+    #[test]
+    fn broadcast_succeeds_with_proof_when_policy_requires() {
+        let runtime = runtime_guard();
+        let _guard = runtime.enter();
+
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 70_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let mut prover_config = WalletProverConfig::default();
+        prover_config.require_proof = true;
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+        let wallet = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [8u8; 32],
+            },
+            policy,
+            fees,
+            prover_config,
+            WalletHwConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            Arc::clone(&node_client),
+            WalletPaths::new(
+                tempdir.path().join("keystore.toml"),
+                tempdir.path().join("backups"),
+            ),
+            Arc::new(WalletActionTelemetry::new(false)),
+        )
+        .expect("wallet");
+
+        let draft = make_draft(&wallet, 20_000);
+        let _ = wallet.sign_and_prove(&draft).expect("mock prove");
+        wallet.broadcast(&draft).expect("broadcast succeeds");
+        assert!(wallet.pending_locks().expect("locks released").is_empty());
+
         drop(tempdir);
     }
 

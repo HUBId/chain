@@ -155,6 +155,10 @@ pub struct PendingLockMetadata {
     pub witness_bytes: u64,
     #[serde(default)]
     pub prove_duration_ms: u64,
+    #[serde(default)]
+    pub proof_required: bool,
+    #[serde(default)]
+    pub proof_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub proof_bytes: Option<u64>,
@@ -168,6 +172,8 @@ impl PendingLockMetadata {
         backend: String,
         witness_bytes: u64,
         prove_duration_ms: u64,
+        proof_required: bool,
+        proof_present: bool,
         proof_bytes: Option<u64>,
         proof_hash: Option<String>,
     ) -> Self {
@@ -175,6 +181,8 @@ impl PendingLockMetadata {
             backend,
             witness_bytes,
             prove_duration_ms,
+            proof_required,
+            proof_present,
             proof_bytes,
             proof_hash,
         }
@@ -343,7 +351,8 @@ mod tests {
 
     #[test]
     fn pending_lock_roundtrip() {
-        let metadata = PendingLockMetadata::new("mock".into(), 42, 1_000, Some(512), None);
+        let metadata =
+            PendingLockMetadata::new("mock".into(), 42, 1_000, true, true, Some(512), None);
         let lock = PendingLock::new(
             UtxoOutpoint::new([2u8; 32], 11),
             1_650_000_000_000,
