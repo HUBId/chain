@@ -206,6 +206,13 @@ pub struct PolicyPreview {
     pub tier_hooks: PolicyTierHooks,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProverStatus {
+    Pending,
+    Recorded,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WalletPaths {
     pub keystore: PathBuf,
@@ -543,6 +550,30 @@ impl Wallet {
             .into_iter()
             .filter(|lock| lock.spending_txid.as_ref() == Some(txid))
             .collect())
+    }
+
+    pub fn prover_status(&self, txid: &[u8; 32]) -> Result<ProverStatus, WalletError> {
+        if !self.locks_for_txid(txid)?.is_empty() {
+            return Ok(ProverStatus::Pending);
+        }
+
+        if self
+            .store
+            .get_prover_meta(txid)
+            .map_err(store_error)?
+            .is_some()
+        {
+            return Ok(ProverStatus::Recorded);
+        }
+
+        Ok(ProverStatus::Unknown)
+    }
+
+    pub fn prover_metadata(
+        &self,
+        txid: &[u8; 32],
+    ) -> Result<Option<StoredProverMeta>, WalletError> {
+        self.store.get_prover_meta(txid).map_err(store_error)
     }
 
     pub fn policy_preview(&self) -> PolicyPreview {
