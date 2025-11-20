@@ -461,8 +461,10 @@ PY
           cp .env.example .env
           {
             echo 'RPP_NODE_RPC_PORT=8080'
+            echo 'RPP_NODE_METRICS_PORT=9797'
             echo 'VALIDATOR_UI_PORT=3000'
             echo 'VALIDATOR_UI_API_BASE_URL=http://rpp-node:8080'
+            echo 'RPP_NODE_CONFIG_HOST_PATH=./config/node.telemetry.metrics.toml'
           } >>.env
       - name: Build and start services
         env:
@@ -485,6 +487,11 @@ PY
           done
           echo 'Node readiness endpoint did not become healthy in time' >&2
           exit 1
+
+      - name: Fetch metrics endpoint
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error http://127.0.0.1:9797/metrics | head -n 5
       - name: Wait for validator UI
         run: |
           set -euo pipefail
