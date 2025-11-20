@@ -231,6 +231,23 @@ The wallet can delegate signing to hardware devices, such as Ledger or FIDO-base
    considerations listed in this guide and follow the [Wallet Operator Runbook](./wallet_operator_runbook.md)
    so each migration captures acceptance evidence alongside the schema/config diffs.
 
+## Freigabe-Checkliste
+
+* [ ] Vendor-spezifische Artefakte liegen vor und sind auf Integrität geprüft. Die
+      Firmware- und Paketmanifeste unter `rpp/wallet/src/hw/artifacts/` enthalten die
+      erwarteten SHA-256-Werte und verweisen auf die signierten Bundles (z. B.
+      `firmware/ledger_nano_x_v2.1.0.bin`, `packages/trezor_suite_24.12.1.tar.gz`).
+* [ ] Hardwaregeräte wurden im freigeschalteten Zustand getestet. Der Wallet-Testlauf mit
+      `wallet_hw` bestätigt, dass die attestiere Signatur- und Public-Key-Pfade für die in den
+      Manifesten aufgeführten Geräte funktionieren.
+* [ ] Release-Pipeline referenziert die Artefakte: Build-/Deploy-Skripte laden die Pakete aus
+      dem gehashten Pfad und protokollieren die Prüfsumme, bevor Hardware-Signing freigegeben
+      wird.
+* [ ] RPC- und GUI-Oberflächen zeigen die freigeschalteten Geräte; udev/Bridge-Regeln sind
+      in den Zielumgebungen installiert.
+* [ ] Backup/Recovery- und ZSI-Pfade wurden erneut durchgespielt, um sicherzustellen, dass
+      Hardware-Änderungen keine Migrationsschritte blockieren.
+
 ## Operator Checklist
 
 * [ ] Apply database migrations and verify schema version 4.
