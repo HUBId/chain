@@ -28,7 +28,7 @@ fn address_manager_respects_gap_limit_until_usage_recorded() {
     let third = manager.next_external_address();
     assert!(matches!(third, Err(AddressError::GapLimit { .. })));
     manager
-        .mark_address_used(AddressKind::External, 0)
+        .mark_address_used(AddressKind::External, 0, None)
         .expect("mark used");
     let third = manager.next_external_address().expect("third after usage");
     assert_ne!(third.address, second.address);

@@ -8,8 +8,9 @@ use crate::config::wallet::{
     WalletProverConfig, WalletZsiConfig,
 };
 use crate::db::{
-    PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta as StoredProverMeta,
-    StoredZsiArtifact, TxCacheEntry, UtxoRecord, WalletStore, WalletStoreError,
+    AddressKind, AddressMetadata, PendingLock, PendingLockMetadata, PolicySnapshot,
+    ProverMeta as StoredProverMeta, StoredZsiArtifact, TxCacheEntry, UtxoRecord, WalletStore,
+    WalletStoreError,
 };
 use crate::engine::signing::{
     build_wallet_prover, DraftProverContext, ProveResult, ProverError as EngineProverError,
@@ -204,6 +205,31 @@ pub struct PolicyPreview {
     pub spend_limit_daily: Option<u128>,
     pub pending_lock_timeout: u64,
     pub tier_hooks: PolicyTierHooks,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressStatus {
+    Unused,
+    Used,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddressEntry {
+    pub address: String,
+    pub change: bool,
+    pub index: u32,
+    pub status: AddressStatus,
+    pub label: Option<String>,
+    pub note: Option<String>,
+    pub first_seen_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddressPage {
+    pub addresses: Vec<AddressEntry>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,6 +441,119 @@ impl Wallet {
             self.engine.next_external_address()?
         };
         Ok(derived.address)
+    }
+
+    pub fn list_addresses(
+        &self,
+        change: Option<bool>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<AddressPage, WalletError> {
+        let kinds: Vec<AddressKind> = match change {
+            Some(true) => vec![AddressKind::Internal],
+            Some(false) => vec![AddressKind::External],
+            None => vec![AddressKind::External, AddressKind::Internal],
+        };
+
+        let store = self.engine.store();
+        let mut entries = Vec::new();
+        for kind in kinds {
+            let addresses = store.iter_addresses(kind).map_err(store_error)?;
+            for (index, address) in addresses {
+                let metadata = store
+                    .get_address_metadata(kind, index)
+                    .map_err(store_error)?
+                    .unwrap_or_default();
+                let status = if metadata.used {
+                    AddressStatus::Used
+                } else {
+                    AddressStatus::Unused
+                };
+                entries.push(AddressEntry {
+                    address,
+                    change: matches!(kind, AddressKind::Internal),
+                    index,
+                    status,
+                    label: metadata.label,
+                    note: metadata.note,
+                    first_seen_height: metadata.first_seen_height,
+                });
+            }
+        }
+
+        entries.sort_by(|a, b| b.index.cmp(&a.index).then(a.change.cmp(&b.change)));
+
+        let clamped_page_size = page_size.clamp(1, 100);
+        let start = (page as usize).saturating_mul(clamped_page_size as usize);
+        let total = entries.len() as u32;
+        let addresses = if start >= entries.len() {
+            Vec::new()
+        } else {
+            let end = (start + clamped_page_size as usize).min(entries.len());
+            entries[start..end].to_vec()
+        };
+
+        Ok(AddressPage {
+            addresses,
+            page,
+            page_size: clamped_page_size,
+            total,
+        })
+    }
+
+    pub fn set_address_label(
+        &self,
+        address: &str,
+        label: String,
+        note: Option<String>,
+    ) -> Result<Option<AddressEntry>, WalletError> {
+        let store = self.engine.store();
+        let mut target: Option<(AddressKind, u32, String)> = None;
+        for kind in [AddressKind::External, AddressKind::Internal] {
+            let addresses = store.iter_addresses(kind).map_err(store_error)?;
+            if let Some((index, matched)) = addresses
+                .into_iter()
+                .find(|(_, existing)| existing == address)
+            {
+                target = Some((kind, index, matched));
+                break;
+            }
+        }
+
+        let Some((kind, index, stored_address)) = target else {
+            return Ok(None);
+        };
+
+        let mut metadata = store
+            .get_address_metadata(kind, index)
+            .map_err(store_error)?
+            .unwrap_or_default();
+        metadata.label = Some(label);
+        if let Some(note) = note {
+            metadata.note = Some(note);
+        }
+
+        let mut batch = store.batch().map_err(store_error)?;
+        batch
+            .put_address_metadata(kind, index, &metadata)
+            .map_err(store_error)?;
+        batch.commit().map_err(store_error)?;
+
+        let status = if metadata.used {
+            AddressStatus::Used
+        } else {
+            AddressStatus::Unused
+        };
+
+        Ok(Some(AddressEntry {
+            address: stored_address,
+            change: matches!(kind, AddressKind::Internal),
+            index,
+            status,
+            label: metadata.label,
+            note: metadata.note,
+            first_seen_height: metadata.first_seen_height,
+        }))
     }
 
     pub fn create_draft(

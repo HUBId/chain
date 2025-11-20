@@ -8,8 +8,8 @@ use storage_firewood::{
 
 use crate::db::{
     codec::{
-        self, Address, CodecError, PendingLock, PolicySnapshot, ProverMeta, StoredZsiArtifact,
-        TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
+        self, Address, AddressMetadata, CodecError, PendingLock, PolicySnapshot, ProverMeta,
+        StoredZsiArtifact, TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
     },
     migrations, schema,
 };
@@ -211,6 +211,40 @@ impl WalletStore {
                 let index = parse_u32_suffix(&key[prefix.len()..])?;
                 let address = codec::decode_address(&value)?;
                 Ok((index, address))
+            })
+            .collect::<Result<Vec<_>, WalletStoreError>>();
+        drop(guard);
+        entries
+    }
+
+    /// Load stored metadata for a derived address, if present.
+    pub fn get_address_metadata(
+        &self,
+        kind: AddressKind,
+        index: u32,
+    ) -> Result<Option<AddressMetadata>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let key = address_metadata_key(kind, index);
+        let Some(bytes) = guard.get(&key) else {
+            return Ok(None);
+        };
+        drop(guard);
+        Ok(Some(codec::decode_address_metadata(&bytes)?))
+    }
+
+    /// Enumerate metadata for all known addresses inside a namespace.
+    pub fn iter_address_metadata(
+        &self,
+        kind: AddressKind,
+    ) -> Result<Vec<(u32, AddressMetadata)>, WalletStoreError> {
+        let mut guard = self.lock()?;
+        let prefix = kind.metadata_namespace();
+        let entries = guard
+            .scan_prefix(prefix)
+            .map(|(key, value)| {
+                let index = parse_u32_suffix(&key[prefix.len()..])?;
+                let metadata = codec::decode_address_metadata(&value)?;
+                Ok((index, metadata))
             })
             .collect::<Result<Vec<_>, WalletStoreError>>();
         drop(guard);
@@ -464,6 +498,13 @@ impl AddressKind {
             AddressKind::Internal => schema::ADDR_INTERNAL_NAMESPACE,
         }
     }
+
+    fn metadata_namespace(self) -> &'static [u8] {
+        match self {
+            AddressKind::External => schema::ADDR_EXTERNAL_META_NAMESPACE,
+            AddressKind::Internal => schema::ADDR_INTERNAL_META_NAMESPACE,
+        }
+    }
 }
 
 /// Wrapper around a Firewood write batch.
@@ -560,6 +601,17 @@ impl<'a> WalletStoreBatch<'a> {
     ) -> Result<(), WalletStoreError> {
         let value = codec::encode_address(address)?;
         self.guard.put(address_key(kind, index), value);
+        Ok(())
+    }
+
+    pub fn put_address_metadata(
+        &mut self,
+        kind: AddressKind,
+        index: u32,
+        metadata: &AddressMetadata,
+    ) -> Result<(), WalletStoreError> {
+        let value = codec::encode_address_metadata(metadata)?;
+        self.guard.put(address_metadata_key(kind, index), value);
         Ok(())
     }
 
@@ -769,6 +821,12 @@ fn backup_meta_key(key: &str) -> Vec<u8> {
 
 fn address_key(kind: AddressKind, index: u32) -> Vec<u8> {
     let mut key = kind.namespace().to_vec();
+    key.extend_from_slice(&index.to_be_bytes());
+    key
+}
+
+fn address_metadata_key(kind: AddressKind, index: u32) -> Vec<u8> {
+    let mut key = kind.metadata_namespace().to_vec();
     key.extend_from_slice(&index.to_be_bytes());
     key
 }

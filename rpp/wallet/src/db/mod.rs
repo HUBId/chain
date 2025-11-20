@@ -5,8 +5,8 @@ pub mod store;
 
 pub use codec::StoredZsiArtifact;
 pub use codec::{
-    Address, PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta, TxCacheEntry,
-    UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
+    Address, AddressMetadata, PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta,
+    TxCacheEntry, UtxoOutpoint, UtxoRecord, WatchOnlyRecord,
 };
 pub use store::{AddressKind, WalletStore, WalletStoreBatch, WalletStoreError};
 

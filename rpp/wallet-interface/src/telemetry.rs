@@ -46,6 +46,10 @@ pub enum WalletTelemetryAction {
     #[cfg(feature = "wallet_zsi")]
     /// Delete a zero-knowledge record.
     ZsiDelete,
+    /// Enumerate known wallet addresses.
+    ListAddresses,
+    /// Update metadata associated with a wallet address.
+    SetAddressLabel,
     /// Enumerate connected hardware wallets.
     HwEnumerate,
     /// Sign via a hardware wallet.

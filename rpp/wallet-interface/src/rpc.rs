@@ -159,6 +159,58 @@ pub struct DeriveAddressResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AddressStatusDto {
+    Unused,
+    Used,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddressMetadataDto {
+    pub address: String,
+    pub change: bool,
+    pub index: u32,
+    pub status: AddressStatusDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_seen_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListAddressesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListAddressesResponse {
+    pub addresses: Vec<AddressMetadataDto>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetAddressLabelParams {
+    pub address: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetAddressLabelResponse {
+    pub address: AddressMetadataDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateTxParams {
     pub to: String,
     pub amount: u128,

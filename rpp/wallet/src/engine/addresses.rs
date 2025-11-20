@@ -4,7 +4,8 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use std::convert::TryInto;
 
 use crate::db::{
-    AddressKind, PendingLock, PendingLockMetadata, UtxoOutpoint, WalletStore, WalletStoreError,
+    AddressKind, AddressMetadata, PendingLock, PendingLockMetadata, UtxoOutpoint, WalletStore,
+    WalletStoreError,
 };
 use crate::proof_backend::Blake2sHasher;
 
@@ -65,7 +66,24 @@ impl AddressManager {
         self.next_address(AddressKind::Internal)
     }
 
-    pub fn mark_address_used(&self, kind: AddressKind, _index: u32) -> Result<(), AddressError> {
+    pub fn mark_address_used(
+        &self,
+        kind: AddressKind,
+        index: u32,
+        first_seen_height: Option<u64>,
+    ) -> Result<(), AddressError> {
+        let mut metadata = self
+            .store
+            .get_address_metadata(kind, index)?
+            .unwrap_or_default();
+        metadata.used = true;
+        if let Some(height) = first_seen_height {
+            metadata.first_seen_height = match metadata.first_seen_height {
+                Some(current) => Some(current.min(height)),
+                None => Some(height),
+            };
+        }
+
         let mut batch = self.store.batch()?;
         let key = match kind {
             AddressKind::External => META_EXTERNAL_UNUSED,
@@ -74,6 +92,7 @@ impl AddressManager {
         let unused = self.load_counter(key)?;
         let updated = unused.saturating_sub(1);
         batch.put_meta(key, &updated.to_be_bytes());
+        batch.put_address_metadata(kind, index, &metadata)?;
         batch.commit()?;
         Ok(())
     }
@@ -256,6 +275,7 @@ impl AddressManager {
         let address = self.derive_address(&path)?;
         let mut batch = self.store.batch()?;
         batch.put_address(kind, cursor, &address)?;
+        batch.put_address_metadata(kind, cursor, &AddressMetadata::default())?;
         batch.put_meta(cursor_key, &(cursor + 1).to_be_bytes());
         batch.put_meta(unused_key, &(unused + 1).to_be_bytes());
         batch.commit()?;

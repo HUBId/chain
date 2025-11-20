@@ -199,10 +199,14 @@ impl WalletScanner {
                 break;
             };
             scanned += 1;
-            if self.scan_single_address(store, &address, latest_height)? {
-                self.engine
-                    .address_manager()
-                    .mark_address_used(kind, address.index)?;
+            if let Some(first_seen_height) =
+                self.scan_single_address(store, &address, latest_height)?
+            {
+                self.engine.address_manager().mark_address_used(
+                    kind,
+                    address.index,
+                    Some(first_seen_height),
+                )?;
             }
         }
 
@@ -214,7 +218,7 @@ impl WalletScanner {
         store: &Arc<WalletStore>,
         address: &TrackedAddress,
         latest_height: u64,
-    ) -> Result<bool, ScannerError> {
+    ) -> Result<Option<u64>, ScannerError> {
         let scripthash = decode_address_scripthash(&address.address)?;
 
         let _status = self
@@ -226,6 +230,7 @@ impl WalletScanner {
 
         let mut new_utxos = Vec::new();
         let mut tx_requests = HashSet::new();
+        let mut first_seen_height: Option<u64> = None;
         for utxo in utxo_response.utxos {
             let outpoint = UtxoOutpoint::new(utxo.outpoint.txid, utxo.outpoint.vout);
             if store.get_utxo(&outpoint)?.is_some() {
@@ -240,6 +245,10 @@ impl WalletScanner {
                 utxo.height,
             ));
             tx_requests.insert(utxo.outpoint.txid);
+            if let Some(height) = utxo.height {
+                first_seen_height =
+                    Some(first_seen_height.map_or(height, |current| current.min(height)));
+            }
         }
 
         let mut new_txs = Vec::new();
@@ -256,7 +265,7 @@ impl WalletScanner {
         }
 
         if new_utxos.is_empty() && new_txs.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
 
         let mut batch = store.batch()?;
@@ -276,7 +285,10 @@ impl WalletScanner {
         persist_last_scan_ts(&mut checkpoint_batch, Some(ts))?;
         checkpoint_batch.commit()?;
 
-        Ok(true)
+        let observed_height = first_seen_height
+            .or_else(|| (!new_utxos.is_empty() || !new_txs.is_empty()).then_some(latest_height));
+
+        Ok(observed_height)
     }
 
     fn load_known_addresses(&self, kind: AddressKind) -> Result<Vec<TrackedAddress>, ScannerError> {

@@ -25,6 +25,10 @@ pub const BACKUP_META_NAMESPACE: &[u8] = b"wallet/backup_meta/";
 pub const ADDR_EXTERNAL_NAMESPACE: &[u8] = b"wallet/addr_external/";
 /// Namespace for change or internally generated addresses.
 pub const ADDR_INTERNAL_NAMESPACE: &[u8] = b"wallet/addr_internal/";
+/// Namespace for metadata tied to receive addresses.
+pub const ADDR_EXTERNAL_META_NAMESPACE: &[u8] = b"wallet/addr_external_meta/";
+/// Namespace for metadata tied to change addresses.
+pub const ADDR_INTERNAL_META_NAMESPACE: &[u8] = b"wallet/addr_internal_meta/";
 /// Namespace for materialised UTXO records tracked by the wallet.
 pub const UTXOS_NAMESPACE: &[u8] = b"wallet/utxos/";
 /// Namespace tracking pending spend locks for wallet-controlled UTXOs.
