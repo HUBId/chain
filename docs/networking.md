@@ -2,32 +2,45 @@
 
 The networking harness exposes curated simulation scenarios that exercise the
 libp2p stack under adverse conditions. This document highlights the
-partitioned-flood scenario added to the simnet catalogue and explains how to
-interpret the derived metrics.
+compound-partitioned-backpressure drill and explains how to interpret the
+derived metrics.
 
-## Partitioned Flood Scenario
+## Compound Partitioned Backpressure Scenario
 
 > **Runbook:** [Network partition response](./operations/network_partition.md)
 
-The [`tools/simnet/scenarios/partitioned_flood.ron`](../tools/simnet/scenarios/partitioned_flood.ron)
-wrapper executes the [`scenarios/partitioned_flood.toml`](../scenarios/partitioned_flood.toml)
+The [`tools/simnet/scenarios/compound_partitioned_backpressure.ron`](../tools/simnet/scenarios/compound_partitioned_backpressure.ron)
+wrapper executes the
+[`scenarios/compound_partitioned_backpressure.toml`](../scenarios/compound_partitioned_backpressure.toml)
 configuration in-process. The topology alternates two regions, introduces a
-transient partition, and enables churn to force peer recovery while aggressively
-publishing transactions. The flood phase ramps the publish rate to 42 tx/s and
-is followed by a cool-down window that allows the mesh to recover.
+transient partition with churn, and drives a bursty 140 tx/s flood to force
+both the gossip rate limiter and backpressure queue guards to engage before
+giving the mesh a recovery window.【F:tools/simnet/scenarios/compound_partitioned_backpressure.ron†L1-L15】【F:scenarios/compound_partitioned_backpressure.toml†L1-L53】
 
 To reproduce the nightly run locally:
 
 ```bash
 cargo run --locked --package simnet -- \
-  --scenario tools/simnet/scenarios/partitioned_flood.ron \
-  --artifacts-dir target/simnet/partitioned-flood
+  --scenario tools/simnet/scenarios/compound_partitioned_backpressure.ron \
+  --artifacts-dir target/simnet/compound-partitioned-backpressure
 python3 scripts/analyze_simnet.py \
-  target/simnet/partitioned-flood/summaries/partitioned_flood.json
+  target/simnet/compound-partitioned-backpressure/summaries/compound_partitioned_backpressure.json
 ```
 
 The analysis script prints propagation, recovery, bandwidth, and backpressure
 summaries. It also enforces thresholds that align with the nightly workflow.
+
+### Expected signals
+
+* **Rate limiting engages:** `bandwidth_throttling` should record at least one
+  throttled peer and slow-peer event, indicating the gossip rate limiter
+  reacted to the flood burst.【F:scripts/analyze_simnet.py†L204-L212】
+* **Backpressure kicks in:** the `gossip_backpressure` block must show events,
+  unique peers, and queue-full samples to prove queue-depth heuristics were
+  exercised during the partitioned flood.【F:scripts/analyze_simnet.py†L214-L227】
+* **Recovery is observed:** partition start/end markers are paired with
+  resume-latency samples so the report captures backpressure mitigation and
+  recovery once the partition heals.【F:scripts/analyze_simnet.py†L186-L202】
 
 ## Metrics of Interest
 
@@ -46,8 +59,8 @@ summaries. It also enforces thresholds that align with the nightly workflow.
   phase stresses backpressure handling.
 
 The raw event stream is written to
-`target/simnet/partitioned-flood/summaries/partitioned_flood.json`, while the
-CSV export offers a condensed view suitable for dashboards.
+`target/simnet/compound-partitioned-backpressure/summaries/compound_partitioned_backpressure.json`,
+while the CSV export offers a condensed view suitable for dashboards.
 
 ## Gossip bandwidth and queue controls
 
@@ -59,7 +72,7 @@ coverage in staging.
 
 | Key / env | Purpose | CI-ready default | Production default |
 | --- | --- | --- | --- |
-| `network.p2p.gossip_rate_limit_per_sec` | Per-peer publish cap enforced by the gossip rate limiter. | 128 msgs/s via the flood-safe template used in partitioned-flood drills.【F:config/examples/flood-safe.toml†L1-L124】 | 256 msgs/s via the validator template used by production meshes.【F:config/examples/high-throughput.toml†L1-L132】 |
+| `network.p2p.gossip_rate_limit_per_sec` | Per-peer publish cap enforced by the gossip rate limiter. | 128 msgs/s via the flood-safe template used in compound-partitioned-backpressure drills.【F:config/examples/flood-safe.toml†L1-L124】 | 256 msgs/s via the validator template used by production meshes.【F:config/examples/high-throughput.toml†L1-L132】 |
 | `network.p2p.reputation_heuristics.gossip_backpressure_threshold` | Queue depth that triggers backpressure penalties and slow-peer scoring. | 4 (matched by CI drills).【F:config/examples/flood-safe.toml†L116-L124】 | 4 (matched by production validators).【F:config/examples/high-throughput.toml†L124-L132】 |
 | `network.p2p.reputation_heuristics.gossip_backpressure_penalty` | Weight applied to peers that exceed the threshold. | 0.25 (default penalty).【F:config/examples/flood-safe.toml†L116-L124】 | 0.25 (default penalty).【F:config/examples/high-throughput.toml†L124-L132】 |
 
@@ -67,7 +80,7 @@ Recommended defaults:
 
 * **CI and chaos drills:** Use `config/examples/flood-safe.toml` to cap
   per-peer gossip at 128 msgs/s and enforce the default queue threshold/policy
-  that the partitioned-flood simnet scenario expects.【F:config/examples/flood-safe.toml†L1-L124】
+  that the compound-partitioned-backpressure simnet scenario expects.【F:config/examples/flood-safe.toml†L1-L124】
 * **Production meshes:** Use `config/examples/high-throughput.toml` to align
   validators with the shipped 256 msgs/s cap while retaining the same
   backpressure heuristics for consistent alerting.【F:config/examples/high-throughput.toml†L1-L132】
@@ -200,11 +213,12 @@ and per-topic mesh pressure:
 
 ## Nightly Coverage
 
-The nightly workflow includes an optional job named `simnet-partitioned-flood`
-that executes the scenario, runs the analyzer, and uploads a compressed artifact
-containing the summary directory. The job is marked as non-blocking but still
-runs on every schedule, providing continuous telemetry on partition recovery and
-backpressure heuristics.
+The nightly workflow includes an optional job named
+`simnet-compound-partitioned-backpressure` that executes the scenario, runs the
+analyzer, and uploads a compressed artifact containing the summary directory.
+The job is marked as non-blocking but still runs on every schedule, providing
+continuous telemetry on partition recovery, rate limiting, and backpressure
+heuristics under compound stress.【F:.github/workflows/nightly.yml†L957-L1006】
 
 Replay protection coverage is exercised via the `networking` integration suite.
 The `replay_alert_probe_saturates_window_triggers_alerts` test loads the sample

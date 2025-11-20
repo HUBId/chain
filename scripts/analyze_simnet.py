@@ -189,20 +189,42 @@ def main(argv: List[str]) -> int:
             failures.append(
                 f"{path} recovery max resume {max_resume:.2f}ms exceeds threshold {args.max_resume_latency:.2f}ms"
             )
-        if recovery and not (recovery.get("resume_latencies_ms") or []):
-            failures.append(f"{path} expected peer recovery resume events but none were recorded")
+
+        fault_kinds = {fault.get("kind") for fault in summary.get("faults") or []}
+        if "partition_start" in fault_kinds and "partition_end" not in fault_kinds:
+            failures.append(f"{path} recorded a partition_start without a corresponding partition_end event")
+        if "partition_end" in fault_kinds:
+            if not recovery:
+                failures.append(f"{path} recorded a partition_end without recovery metrics")
+            elif not (recovery.get("resume_latencies_ms") or []):
+                failures.append(
+                    f"{path} expected peer recovery resume events but none were recorded"
+                )
 
         bandwidth = summary.get("bandwidth") or {}
         if bandwidth and bandwidth.get("throttled_peers", 0) == 0:
             failures.append(
                 f"{path} reported bandwidth throttling metrics without throttled peers"
             )
+        if bandwidth and bandwidth.get("slow_peer_events", 0) == 0:
+            failures.append(
+                f"{path} reported bandwidth throttling metrics without slow-peer events"
+            )
 
         backpressure = summary.get("gossip_backpressure") or {}
-        if backpressure and backpressure.get("queue_full_messages", 0) == 0:
-            failures.append(
-                f"{path} reported gossip backpressure metrics without queue exhaustion"
-            )
+        if backpressure:
+            if backpressure.get("events", 0) == 0:
+                failures.append(
+                    f"{path} reported gossip backpressure metrics without events"
+                )
+            if backpressure.get("unique_peers", 0) == 0:
+                failures.append(
+                    f"{path} reported gossip backpressure metrics without unique peers"
+                )
+            if backpressure.get("queue_full_messages", 0) == 0:
+                failures.append(
+                    f"{path} reported gossip backpressure metrics without queue-full samples"
+                )
 
     if failures:
         for failure in failures:

@@ -1,0 +1,60 @@
+[sim]
+seed = 802701
+# Run long enough to observe mitigations kicking in and recovery after the partition heals.
+duration_ms = 52000
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.18
+
+[regions]
+assignments = [
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+]
+
+[links]
+intra = { delay_ms = 20, jitter_ms = 4, loss = 0.0 }
+A-B = { delay_ms = 160, jitter_ms = 40, loss = 0.05 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.08 }
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 8000
+model = "poisson"
+lambda_per_sec = 10.0
+
+[[traffic.tx.phases]]
+name = "compound-flood"
+duration_ms = 26000
+model = "on_off_bursty"
+on_lambda_per_sec = 140.0
+on_duration_ms = 1800
+off_duration_ms = 600
+
+[[traffic.tx.phases]]
+name = "recovery"
+duration_ms = 18000
+model = "poisson"
+lambda_per_sec = 12.0
+
+[faults.partition]
+start_ms = 7000
+duration_ms = 12000
+group_a = "A"
+group_b = "B"
+
+[faults.churn]
+start_ms = 11000
+rate_per_min = 48.0
+restart_after_ms = 2200
+
+[metrics]
+json = "target/simnet/compound-partitioned-backpressure/summaries/compound_partitioned_backpressure.json"
+csv = "target/simnet/compound-partitioned-backpressure/summaries/compound_partitioned_backpressure.csv"

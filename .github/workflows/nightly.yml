@@ -966,8 +966,8 @@ EOF
           name: snapshot_partition_report.json
           path: snapshot_partition_report.json
 
-  simnet-partitioned-flood:
-    name: Simnet partitioned flood (optional)
+  simnet-compound-partitioned-backpressure:
+    name: Simnet compound backpressure (optional)
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -979,29 +979,29 @@ EOF
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Execute partitioned flood scenario
+      - name: Execute compound partitioned backpressure scenario
         run: |
           set -euo pipefail
-          rm -rf target/simnet/partitioned-flood
+          rm -rf target/simnet/compound-partitioned-backpressure
           cargo run --locked --package simnet -- \
-            --scenario tools/simnet/scenarios/partitioned_flood.ron \
-            --artifacts-dir target/simnet/partitioned-flood
+            --scenario tools/simnet/scenarios/compound_partitioned_backpressure.ron \
+            --artifacts-dir target/simnet/compound-partitioned-backpressure
 
-      - name: Analyze partitioned flood summary
+      - name: Analyze compound backpressure summary
         run: |
           set -euo pipefail
           python3 scripts/analyze_simnet.py \
-            target/simnet/partitioned-flood/summaries/partitioned_flood.json
+            target/simnet/compound-partitioned-backpressure/summaries/compound_partitioned_backpressure.json
 
-      - name: Package partitioned flood artifacts
+      - name: Package compound backpressure artifacts
         run: |
-          tar -czf simnet-partitioned-flood.tar.gz -C target/simnet partitioned-flood
+          tar -czf simnet-compound-partitioned-backpressure.tar.gz -C target/simnet compound-partitioned-backpressure
 
-      - name: Upload partitioned flood results
+      - name: Upload compound backpressure results
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-partitioned-flood
-          path: simnet-partitioned-flood.tar.gz
+          name: simnet-compound-partitioned-backpressure
+          path: simnet-compound-partitioned-backpressure.tar.gz
 
   nightly-status:
     name: Publish nightly CI status snapshot
