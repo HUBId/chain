@@ -51,3 +51,18 @@ cargo run --locked --package snapshot-verify -- \
 The verifier reports signature validity, per-chunk checksum status, and exits
 non-zero if any mismatch is detected. Incorporate this command into deployment
 pipelines and post-incident audits.
+
+## Snapshot download retries
+
+The `rpp-node validator snapshot` commands use an HTTP client to start, poll,
+resume, and cancel snapshot sessions through the validator RPC. Transient RPC
+errors are retried with an exponential backoff. The retry parameters can be
+controlled per invocation:
+
+* `--snapshot-retry-attempts` (default: `3`) – total request attempts before
+  surfacing an error to the caller.
+* `--snapshot-retry-backoff-ms` (default: `200`) – the initial backoff delay in
+  milliseconds. Each retry doubles the delay until attempts are exhausted.
+
+Tune these flags when scripting against unstable links so transient failures do
+not abort snapshot downloads, while still surfacing permanent errors promptly.

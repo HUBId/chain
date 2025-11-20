@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
@@ -27,6 +28,7 @@ const SNAPSHOT_ROOT: &str = "deadbeefcafebabe";
 struct SnapshotServerState {
     expected_token: String,
     statuses: Arc<Mutex<HashMap<u64, SnapshotStatusPayload>>>,
+    start_failures: Arc<AtomicU32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,11 +68,16 @@ struct SnapshotTestServer {
     addr: std::net::SocketAddr,
     shutdown: tokio::sync::oneshot::Sender<()>,
     task: JoinHandle<()>,
+    state: Option<SnapshotServerState>,
 }
 
 impl SnapshotTestServer {
     fn port(&self) -> u16 {
         self.addr.port()
+    }
+
+    fn state(&self) -> Option<SnapshotServerState> {
+        self.state.clone()
     }
 
     async fn shutdown(self) {
@@ -164,6 +171,73 @@ async fn snapshot_cli_happy_path() -> Result<()> {
 }
 
 #[tokio::test]
+async fn snapshot_cli_retries_transient_errors() -> Result<()> {
+    init_logger();
+    let server = spawn_snapshot_server().context("failed to launch snapshot test server")?;
+    if let Some(state) = server.state() {
+        state.start_failures.store(2, Ordering::SeqCst);
+    }
+    let temp = TempDir::new().context("failed to create temp directory")?;
+    let config_path = temp.path().join("validator.toml");
+    write_validator_config(&config_path, server.port())?;
+
+    let peer = "12D3KooWE6retryPeer";
+
+    AssertCommand::cargo_bin("rpp-node")?
+        .arg("validator")
+        .arg("snapshot")
+        .arg("start")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--peer")
+        .arg(peer)
+        .arg("--snapshot-retry-attempts")
+        .arg("5")
+        .arg("--snapshot-retry-backoff-ms")
+        .arg("10")
+        .assert()
+        .success()
+        .stdout(contains("snapshot session started:"))
+        .stdout(contains(format!("peer: {peer}")));
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn snapshot_cli_surfaces_permanent_errors_cleanly() -> Result<()> {
+    init_logger();
+    let server = spawn_snapshot_server().context("failed to launch snapshot test server")?;
+    if let Some(state) = server.state() {
+        state.start_failures.store(5, Ordering::SeqCst);
+    }
+    let temp = TempDir::new().context("failed to create temp directory")?;
+    let config_path = temp.path().join("validator.toml");
+    write_validator_config(&config_path, server.port())?;
+
+    AssertCommand::cargo_bin("rpp-node")?
+        .arg("validator")
+        .arg("snapshot")
+        .arg("start")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--peer")
+        .arg("12D3permanentPeer")
+        .arg("--snapshot-retry-attempts")
+        .arg("3")
+        .arg("--snapshot-retry-backoff-ms")
+        .arg("5")
+        .assert()
+        .failure()
+        .stderr(contains(
+            "snapshot RPC returned 503 Service Unavailable after 3 attempts",
+        ));
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn snapshot_cli_propagates_errors() -> Result<()> {
     init_logger();
     let server = spawn_error_server().context("failed to launch error server")?;
@@ -181,7 +255,9 @@ async fn snapshot_cli_propagates_errors() -> Result<()> {
         .arg("12D3errorPeer")
         .assert()
         .failure()
-        .stderr(contains("RPC returned 500"));
+        .stderr(contains(
+            "snapshot RPC returned 500 Internal Server Error after 3 attempts",
+        ));
 
     server.shutdown().await;
     Ok(())
@@ -224,6 +300,7 @@ fn spawn_snapshot_server() -> Result<SnapshotTestServer> {
     let state = SnapshotServerState {
         expected_token: TEST_TOKEN.to_string(),
         statuses: Arc::new(Mutex::new(HashMap::new())),
+        start_failures: Arc::new(AtomicU32::new(0)),
     };
 
     let app = Router::new()
@@ -232,9 +309,9 @@ fn spawn_snapshot_server() -> Result<SnapshotTestServer> {
             "/p2p/snapshots/:id",
             get(snapshot_status).delete(cancel_snapshot),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
-    launch_server(app)
+    launch_server(app, Some(state))
 }
 
 fn spawn_error_server() -> Result<SnapshotTestServer> {
@@ -244,10 +321,16 @@ fn spawn_error_server() -> Result<SnapshotTestServer> {
             "/p2p/snapshots/:id",
             get(snapshot_status_error).delete(cancel_snapshot_error),
         );
-    launch_server(app)
+    launch_server(app, None)
 }
 
-fn launch_server(app: Router) -> Result<SnapshotTestServer> {
+fn launch_server<S>(
+    app: Router<S>,
+    state: Option<SnapshotServerState>,
+) -> Result<SnapshotTestServer>
+where
+    S: Clone + Send + Sync + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind test listener")?;
     listener
         .set_nonblocking(true)
@@ -269,6 +352,7 @@ fn launch_server(app: Router) -> Result<SnapshotTestServer> {
         addr,
         shutdown: shutdown_tx,
         task,
+        state,
     })
 }
 
@@ -278,6 +362,10 @@ async fn start_snapshot(
     Json(request): Json<StartRequest>,
 ) -> Result<Json<SnapshotStatusPayload>, StatusCode> {
     authorize(&headers, &state.expected_token);
+    if state.start_failures.load(Ordering::SeqCst) > 0 {
+        state.start_failures.fetch_sub(1, Ordering::SeqCst);
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     let session = request
         .resume
         .as_ref()
