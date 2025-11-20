@@ -9,10 +9,13 @@ use predicates::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempPath};
+
+use serde_json::{json, Map, Value};
 
 const PRG: &str = "fwdctl";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const FIXTURE_SCHEMA_VERSION: u64 = 1;
 
 macro_rules! fixtures {
     ($($key:expr => $value:expr),* $(,)?) => {{
@@ -23,32 +26,92 @@ macro_rules! fixtures {
 }
 
 fn fwdctl_load(entries: Vec<(String, String)>) -> Result<()> {
-    use serde_json::{Map, Value};
+    let (temp_path, path_buf) = write_fixture(entries, FIXTURE_SCHEMA_VERSION)?;
 
-    let mut map = Map::with_capacity(entries.len());
-    for (key, value) in entries {
-        map.insert(key, Value::String(value));
-    }
-
-    let mut fixture = NamedTempFile::new().map_err(|err| anyhow!(err))?;
-    serde_json::to_writer_pretty(fixture.as_file_mut(), &Value::Object(map))
-        .map_err(|err| anyhow!(err))?;
-    let temp_path = fixture.into_temp_path();
-    let path_buf = temp_path.to_path_buf();
-
-    let assert = Command::cargo_bin(PRG)?
+    Command::cargo_bin(PRG)?
         .arg("load")
         .arg("--db")
         .arg(tmpdb::path())
         .arg("--file")
         .arg(&path_buf)
-        .assert();
-
-    assert.success().stdout(predicate::str::contains("Loaded"));
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Loaded"));
 
     temp_path.close().map_err(|err| anyhow!(err))?;
 
     Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_load_rejects_missing_schema() -> Result<()> {
+    let mut entries = Map::new();
+    entries.insert("key".to_string(), Value::String("value".to_string()));
+
+    let fixture = Value::Object(entries);
+    let (temp_path, path_buf) = write_fixture_value(&fixture)?;
+
+    Command::cargo_bin(PRG)?
+        .arg("load")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .arg("--file")
+        .arg(&path_buf)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("schema.version"));
+
+    temp_path.close().map_err(|err| anyhow!(err))?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_load_rejects_unknown_schema_version() -> Result<()> {
+    let (temp_path, path_buf) =
+        write_fixture(fixtures!("key" => "value"), FIXTURE_SCHEMA_VERSION + 1)?;
+
+    Command::cargo_bin(PRG)?
+        .arg("load")
+        .arg("--db")
+        .arg(tmpdb::path())
+        .arg("--file")
+        .arg(&path_buf)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported fixture schema version",
+        ));
+
+    temp_path.close().map_err(|err| anyhow!(err))?;
+
+    Ok(())
+}
+
+fn write_fixture(entries: Vec<(String, String)>, version: u64) -> Result<(TempPath, PathBuf)> {
+    let mut map = Map::with_capacity(entries.len());
+    for (key, value) in entries {
+        map.insert(key, Value::String(value));
+    }
+
+    let fixture = json!({
+        "schema": {
+            "version": version,
+        },
+        "entries": Value::Object(map),
+    });
+
+    write_fixture_value(&fixture)
+}
+
+fn write_fixture_value(fixture: &Value) -> Result<(TempPath, PathBuf)> {
+    let mut file = NamedTempFile::new().map_err(|err| anyhow!(err))?;
+    serde_json::to_writer_pretty(file.as_file_mut(), fixture).map_err(|err| anyhow!(err))?;
+    let temp_path = file.into_temp_path();
+    let path_buf = temp_path.to_path_buf();
+    Ok((temp_path, path_buf))
 }
 
 // Removes the firewood database on disk

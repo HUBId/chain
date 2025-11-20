@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use clap::Args;
 use firewood::db::BatchOp;
 use firewood::v2::api;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{insert, DatabasePath};
 
@@ -27,21 +27,33 @@ pub struct Options {
     pub file: PathBuf,
 }
 
+const FIXTURE_SCHEMA_VERSION: u64 = 1;
+
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("loading fixtures from {:?}", opts.file);
 
     let file = File::open(&opts.file)?;
-    let payload: Value =
-        serde_json::from_reader(file).map_err(|err| api::Error::InternalError(Box::new(err)))?;
-
-    let object = payload.as_object().ok_or_else(|| {
+    let fixture: Fixture = serde_json::from_reader(file).map_err(|err| {
         io::Error::new(
             ErrorKind::InvalidData,
-            "fixture file must be a JSON object mapping keys to string values",
+            format!(
+                "failed to parse fixture file (expected object with `schema.version` and `entries`): {err}"
+            ),
         )
     })?;
 
-    let entry_count = object.len();
+    if fixture.schema.version != FIXTURE_SCHEMA_VERSION {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "unsupported fixture schema version {} (expected {})",
+                fixture.schema.version, FIXTURE_SCHEMA_VERSION
+            ),
+        )
+        .into());
+    }
+
+    let entry_count = fixture.entries.len();
     if entry_count == 0 {
         println!(
             "Loaded 0 entries from {} (no operations applied)",
@@ -51,7 +63,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     let mut batch = Vec::with_capacity(entry_count);
-    for (key, value) in object.iter() {
+    for (key, value) in fixture.entries.iter() {
         let value_str = value.as_str().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::InvalidData,
@@ -71,4 +83,15 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         opts.file.display()
     );
     Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Fixture {
+    schema: FixtureSchema,
+    entries: Map<String, Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FixtureSchema {
+    version: u64,
 }
