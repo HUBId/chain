@@ -8,8 +8,9 @@ use crate::config::WalletConfig;
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BlockFeeSummaryDto, ListPendingLocksResponse, MempoolInfoResponse, PendingLockDto,
-    RecentBlocksResponse, ReleasePendingLocksResponse, RescanParams, RescanResponse, SyncModeDto,
-    SyncStatusResponse, TelemetryCountersResponse,
+    RecentBlocksResponse, ReleasePendingLocksResponse, RescanAbortResponse, RescanParams,
+    RescanResponse, RescanStatusResponse, SyncModeDto, SyncStatusResponse,
+    TelemetryCountersResponse,
 };
 use crate::rpc::dto::{LifecycleStateDto, LifecycleStatusResponse};
 #[cfg(feature = "wallet_zsi")]
@@ -242,11 +243,13 @@ pub struct State {
     refresh_inflight: bool,
     refresh_pending: usize,
     rescan_inflight: bool,
+    rescan_abort_inflight: bool,
     release_inflight: bool,
     pending_rescan: Option<RescanPrompt>,
     release_confirmation: bool,
     rescan_height_input: String,
     rescan_height_error: Option<String>,
+    rescan_status: Snapshot<RescanStatusResponse>,
     feedback: Option<String>,
 }
 
@@ -269,6 +272,7 @@ pub enum Message {
     MempoolInfoLoaded(Result<MempoolInfoResponse, RpcCallError>),
     RecentBlocksLoaded(Result<Vec<BlockFeeSummaryDto>, RpcCallError>),
     TelemetryLoaded(Result<TelemetryCountersResponse, RpcCallError>),
+    RescanStatusLoaded(Result<RescanStatusResponse, RpcCallError>),
     #[cfg(feature = "wallet_zsi")]
     RefreshZsi,
     #[cfg(feature = "wallet_zsi")]
@@ -304,6 +308,8 @@ pub enum Message {
     ConfirmRescan,
     CancelRescan,
     RescanSubmitted(Result<RescanResponse, RpcCallError>),
+    AbortRescan,
+    RescanAbortSubmitted(Result<RescanAbortResponse, RpcCallError>),
     ReleaseLocksRequested,
     ConfirmReleaseLocks,
     CancelReleaseLocks,
@@ -341,11 +347,13 @@ impl State {
         self.refresh_inflight = false;
         self.refresh_pending = 0;
         self.rescan_inflight = false;
+        self.rescan_abort_inflight = false;
         self.release_inflight = false;
         self.pending_rescan = None;
         self.release_confirmation = false;
         self.rescan_height_input.clear();
         self.rescan_height_error = None;
+        self.rescan_status = Snapshot::Idle;
         self.feedback = None;
     }
 
@@ -488,6 +496,14 @@ impl State {
                 match result {
                     Ok(counters) => self.telemetry.set_loaded(counters),
                     Err(error) => self.telemetry.set_error(&error),
+                }
+                self.finish_refresh();
+                Command::none()
+            }
+            Message::RescanStatusLoaded(result) => {
+                match result {
+                    Ok(status) => self.rescan_status.set_loaded(status),
+                    Err(error) => self.rescan_status.set_error(&error),
                 }
                 self.finish_refresh();
                 Command::none()
@@ -753,11 +769,51 @@ impl State {
                             "Rescan scheduled from height {}.",
                             response.from_height
                         ));
-                        Command::none()
+                        if self.refresh_inflight {
+                            Command::none()
+                        } else {
+                            self.refresh(client)
+                        }
                     }
                     Err(error) => {
                         self.feedback = Some(format!(
                             "Failed to schedule rescan: {}",
+                            format_rpc_error(&error)
+                        ));
+                        Command::none()
+                    }
+                }
+            }
+            Message::AbortRescan => {
+                if self.rescan_abort_inflight || !self.rescan_abortable() {
+                    return Command::none();
+                }
+                self.rescan_abort_inflight = true;
+                commands::rpc(
+                    "rescan.abort",
+                    client,
+                    |client| async move { client.rescan_abort().await },
+                    Message::RescanAbortSubmitted,
+                )
+            }
+            Message::RescanAbortSubmitted(result) => {
+                self.rescan_abort_inflight = false;
+                match result {
+                    Ok(response) => {
+                        if response.aborted {
+                            self.feedback = Some("Rescan abort requested.".into());
+                        } else {
+                            self.feedback = Some("No active rescan to abort.".into());
+                        }
+                        if self.refresh_inflight {
+                            Command::none()
+                        } else {
+                            self.refresh(client)
+                        }
+                    }
+                    Err(error) => {
+                        self.feedback = Some(format!(
+                            "Failed to abort rescan: {}",
                             format_rpc_error(&error)
                         ));
                         Command::none()
@@ -1040,7 +1096,7 @@ impl State {
     }
 
     fn actions_view(&self) -> Element<Message> {
-        let mut row = row![]
+        let mut controls = row![]
             .spacing(12)
             .align_items(Alignment::Center)
             .width(Length::Fill);
@@ -1055,7 +1111,7 @@ impl State {
         {
             birthday_button = birthday_button.on_press(Message::RequestRescanFromBirthday);
         }
-        row = row.push(birthday_button);
+        controls = controls.push(birthday_button);
 
         let height_input = text_input("Height", &self.rescan_height_input)
             .on_input(Message::RescanHeightChanged)
@@ -1068,10 +1124,10 @@ impl State {
             height_button = height_button.on_press(Message::RequestRescanFromHeight);
         }
 
-        row = row.push(height_input).push(height_button);
+        controls = controls.push(height_input).push(height_button);
 
         if let Some(error) = &self.rescan_height_error {
-            row = row.push(text(error).size(14));
+            controls = controls.push(text(error).size(14));
         }
 
         let mut release_button = button(text("Release pending locks")).padding(12);
@@ -1079,7 +1135,106 @@ impl State {
             release_button = release_button.on_press(Message::ReleaseLocksRequested);
         }
 
-        row.push(release_button).into()
+        let mut content = column![controls].spacing(8).width(Length::Fill);
+
+        if let Some(status) = self.rescan_status_view() {
+            content = content.push(status);
+        }
+
+        content.push(release_button).into()
+    }
+
+    fn rescan_status_view(&self) -> Option<Element<Message>> {
+        match &self.rescan_status {
+            Snapshot::Idle => None,
+            Snapshot::Loading => Some(
+                container(text("Loading rescan status...").size(14))
+                    .width(Length::Fill)
+                    .into(),
+            ),
+            Snapshot::Error(error) => Some(
+                container(text(format!("Rescan status unavailable: {error}")))
+                    .width(Length::Fill)
+                    .into(),
+            ),
+            Snapshot::Loaded(status) => {
+                if !status.active && status.scheduled_from.is_none() && status.last_error.is_none()
+                {
+                    return None;
+                }
+
+                let mut lines = Vec::new();
+                if let Some(from) = status.scheduled_from {
+                    lines.push(format!("Scheduled from height: {from}"));
+                }
+
+                let current_height = status.current_height.or_else(|| {
+                    self.sync_status
+                        .as_ref()
+                        .and_then(|sync| sync.current_height)
+                });
+                let target_height = status.target_height.or_else(|| {
+                    self.sync_status
+                        .as_ref()
+                        .and_then(|sync| sync.target_height)
+                });
+
+                if let (Some(current), Some(target)) = (current_height, target_height) {
+                    let percent = if target == 0 {
+                        0.0
+                    } else {
+                        ((current as f64 / target as f64) * 100.0).min(100.0)
+                    };
+                    lines.push(format!(
+                        "Progress: {current}/{target} blocks ({percent:.1}%)"
+                    ));
+                    if target > current {
+                        lines.push(format!("Remaining blocks: {}", target - current));
+                    }
+                    lines.push("ETA: calculating from current pace".to_string());
+                }
+
+                if let Some(sync) = &self.sync_status {
+                    if matches!(sync.mode, Some(SyncModeDto::Rescan { .. })) {
+                        if let Some(scanned) = sync.scanned_scripthashes {
+                            lines.push(format!("Addresses scanned: {scanned}"));
+                        }
+                        if let Some(txs) = sync.discovered_transactions {
+                            lines.push(format!("Transactions discovered: {txs}"));
+                        }
+                    }
+                }
+
+                if let Some(latest) = status.latest_height {
+                    lines.push(format!("Latest indexed height: {latest}"));
+                }
+                if let Some(error) = &status.last_error {
+                    lines.push(format!("Last rescan error: {error}"));
+                }
+
+                let mut body = column![text("Rescan status").size(16)]
+                    .spacing(6)
+                    .width(Length::Fill);
+                for line in lines {
+                    body = body.push(text(line).size(14));
+                }
+
+                if self.rescan_abortable() {
+                    let label = if status.active {
+                        "Abort active rescan"
+                    } else {
+                        "Cancel scheduled rescan"
+                    };
+                    let mut abort = button(text(label)).padding(8);
+                    if !self.rescan_abort_inflight {
+                        abort = abort.on_press(Message::AbortRescan);
+                    }
+                    body = body.push(abort);
+                }
+
+                Some(container(body).width(Length::Fill).into())
+            }
+        }
     }
 
     fn lifecycle_summary_card(&self) -> Element<Message> {
@@ -1647,6 +1802,15 @@ impl State {
             Message::TelemetryLoaded,
         ));
 
+        self.rescan_status.set_loading();
+        self.refresh_pending += 1;
+        commands.push(commands::rpc(
+            "rescan.status",
+            client.clone(),
+            |client| async move { client.rescan_status().await },
+            Message::RescanStatusLoaded,
+        ));
+
         #[cfg(feature = "wallet_hw")]
         {
             if self.hardware_config_enabled() {
@@ -1748,6 +1912,14 @@ impl State {
         if self.rescan_inflight || self.pending_rescan.is_some() {
             return true;
         }
+        if self.rescan_abort_inflight {
+            return true;
+        }
+        if let Snapshot::Loaded(status) = &self.rescan_status {
+            if status.active || status.scheduled_from.is_some() {
+                return true;
+            }
+        }
         if let Some(status) = &self.sync_status {
             if status.syncing {
                 if matches!(status.mode, Some(SyncModeDto::Rescan { .. }))
@@ -1756,6 +1928,16 @@ impl State {
                     return true;
                 }
             }
+        }
+        false
+    }
+
+    fn rescan_abortable(&self) -> bool {
+        if self.rescan_abort_inflight {
+            return false;
+        }
+        if let Snapshot::Loaded(status) = &self.rescan_status {
+            return status.active || status.scheduled_from.is_some();
         }
         false
     }
@@ -2041,6 +2223,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::rpc::client::WalletRpcClientError;
+    use crate::rpc::dto::{RescanAbortResponse, RescanStatusResponse};
     use crate::rpc::error::WalletRpcErrorCode;
     #[cfg(feature = "wallet_zsi")]
     use crate::zsi::bind::ZsiOperation;
@@ -2078,6 +2261,37 @@ mod tests {
         assert!(state.pending_rescan.is_none());
         let _ = state.update(client, Message::ConfirmRescan);
         assert!(state.rescan_inflight);
+    }
+
+    #[test]
+    fn rescan_status_blocks_controls_and_enables_abort() {
+        let mut state = State::default();
+        state.rescan_status = Snapshot::Loaded(RescanStatusResponse {
+            scheduled_from: Some(4),
+            active: true,
+            current_height: Some(5),
+            target_height: Some(10),
+            latest_height: Some(12),
+            last_error: None,
+        });
+        assert!(state.rescan_blocked());
+        let command = state.update(dummy_client(), Message::AbortRescan);
+        assert!(state.rescan_abort_inflight);
+        assert!(!command.actions().is_empty());
+    }
+
+    #[test]
+    fn rescan_abort_completion_sets_feedback() {
+        let mut state = State::default();
+        state.rescan_abort_inflight = true;
+        let command = state.update(
+            dummy_client(),
+            Message::RescanAbortSubmitted(Ok(RescanAbortResponse { aborted: true })),
+        );
+        assert!(state.feedback.is_some());
+        assert!(state.refresh_inflight);
+        assert!(!state.rescan_abort_inflight);
+        let _ = command;
     }
 
     #[test]
