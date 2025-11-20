@@ -412,6 +412,13 @@ impl Application for WalletApp {
                 .push(time::every(self.model.sync_poll_interval).map(|_| Message::SyncTick));
         }
 
+        if self.model.session.is_unlocked() && self.model.active_route == Route::Receive {
+            subscriptions.push(
+                time::every(self.model.sync_poll_interval)
+                    .map(|_| Message::Receive(receive::Message::PollAddresses)),
+            );
+        }
+
         Subscription::batch(subscriptions)
     }
 
