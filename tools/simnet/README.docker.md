@@ -42,3 +42,23 @@ docker run --rm \
   --artifacts-dir /simnet/artifacts \
   --keep-alive
 ```
+
+## Flood profiles and reruns
+
+Use the shipping templates under `config/examples/` to keep gossip bandwidth and
+queue parameters aligned with the simnet flood scenarios:
+
+* **Flood-safe (CI parity):** `config/examples/flood-safe.toml` keeps the
+  128 msgs/s gossip cap and backpressure thresholds used in the partitioned
+  flood drill.【F:config/examples/flood-safe.toml†L1-L124】 Point `RPP_CONFIG` at
+  this file before launching the harness:
+
+  ```sh
+  RPP_CONFIG=config/examples/flood-safe.toml cargo run --locked --package simnet -- \
+    --scenario tools/simnet/scenarios/partitioned_flood.ron \
+    --artifacts-dir target/simnet/partitioned-flood
+  ```
+
+* **High-throughput (production parity):**
+  `config/examples/high-throughput.toml` mirrors the validator gossip limits so
+  production drills reuse the same mesh parameters.【F:config/examples/high-throughput.toml†L1-L132】
