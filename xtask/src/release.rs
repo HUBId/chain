@@ -24,6 +24,7 @@ const PROOF_VERSION_SOURCES: &[ProofVersionSource] = &[
 ];
 
 const PROOF_AFFECTING_PREFIXES: &[&str] = &[
+    "vendor/rpp-stark/",
     "firewood/src/proofs",
     "rpp/zk/",
     "rpp/proofs/",
@@ -37,11 +38,6 @@ const PROOF_AFFECTING_PREFIXES: &[&str] = &[
     "prover/stwo/src/",
     "prover/stwo/tests/",
     "prover/fuzz/",
-    "vendor/rpp-stark/air/",
-    "vendor/rpp-stark/benches/",
-    "vendor/rpp-stark/src/",
-    "vendor/rpp-stark/tests/",
-    "vendor/rpp-stark/vectors/",
     "tests/snapshots/proof",
 ];
 
@@ -333,7 +329,7 @@ fn proof_version_guard_usage() {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_proof_version;
+    use super::{extract_proof_version, is_proof_affecting};
 
     #[test]
     fn parses_version_constant() {
@@ -345,5 +341,13 @@ mod tests {
     fn ignores_lines_without_constant() {
         let input = "const OTHER: u16 = 3;";
         assert_eq!(extract_proof_version(input), None);
+    }
+
+    #[test]
+    fn vendor_tree_is_proof_affecting() {
+        assert!(is_proof_affecting("vendor/rpp-stark/src/proof/verifier.rs"));
+        assert!(is_proof_affecting(
+            "vendor\\rpp-stark\\vectors\\stwo\\mini\\header.json"
+        ));
     }
 }

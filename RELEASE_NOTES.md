@@ -15,6 +15,10 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   Plonky3 backend (including aliases such as `plonky3-backend`) or the
   `prover-mock` feature, emitting an explicit error so production builds cannot
   link the deterministic stub.【F:scripts/build_release.sh†L105-L145】
+- Release/CI now treats the vendored STWO stack as proof-affecting by default:
+  any change under `vendor/rpp-stark/` (including Golden Vectors and verifier
+  code) must carry a `PROOF_VERSION` bump. The `proof-version-policy` pipeline
+  enforces this via `cargo xtask proof-version-guard` and fails otherwise.
 - Reopened the Plonky3 backend milestone: the blueprint now tracks
   `proofs.plonky3_vendor_backend` and `proofs.plonky3_ci_matrix` as
   `InProgress` until the vendor prover/verifier is integrated, mirroring the

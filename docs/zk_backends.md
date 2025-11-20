@@ -36,7 +36,8 @@
 - Der Befehl `cargo xtask proof-version-guard --base origin/main` prüft diese Pfade und bricht ab, wenn die Konstanten nicht
   angepasst wurden. Nutze `--base <ref>`, wenn der Release-/Feature-Branch von einem anderen Stand als `origin/main` abzweigt.
   Der Guard liest beide Stände aus Git und gleicht die Werte aus `vendor/rpp-stark/src/proof/types.rs` und `firewood/src/proofs.rs`
-  miteinander ab.【F:xtask/src/release.rs†L1-L208】
+  miteinander ab. Jeder Vendor-Refresh unter `vendor/rpp-stark/` (inklusive `vectors/` und Verifier-Code) gilt als proof-affecting
+  und erfordert zwingend einen Bump; der CI-Job `proof-version-policy` bricht andernfalls ab.【F:xtask/src/release.rs†L1-L209】
 - Pull-Requests, die Proof- oder ZK-Module anfassen, laufen automatisch durch den CI-Job `proof-version-policy`, der denselben
   Guard via `cargo xtask proof-version-guard` ausführt und bei Verstößen das Review blockiert.【F:.github/workflows/ci.yml†L1-L80】
 - Dokumentiere jeden Bump in den Release Notes (`docs/release_notes.md`) und aktualisiere bei Bedarf zusätzliche Artefakte wie
