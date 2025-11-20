@@ -80,6 +80,53 @@ PY
             exit 1
           fi
 
+  phasec-status-freshness:
+    name: Phase‑C status freshness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Validate phaseC_status.md is current
+        env:
+          MAX_AGE_HOURS: 192
+        run: |
+          set -euo pipefail
+
+          timestamp_line=$(sed -n 's/^### Phase‑C Kontrollen — //p' phaseC_status.md | head -n 1)
+          if [[ -z "$timestamp_line" ]]; then
+            echo "::error file=phaseC_status.md::Konnte Phase‑C-Zeitstempel nicht lesen" >&2
+            exit 1
+          fi
+
+          if ! timestamp_epoch=$(date -u -d "$timestamp_line" +%s 2>/dev/null); then
+            printf '::error file=phaseC_status.md::Ungültiger Zeitstempel "%s"\n' "$timestamp_line" >&2
+            exit 1
+          fi
+
+          now_epoch=$(date -u +%s)
+          age_hours=$(( (now_epoch - timestamp_epoch) / 3600 ))
+          max_age=${MAX_AGE_HOURS:-192}
+
+          missing_sections=()
+          if ! grep -Fq 'WORM-Retention' phaseC_status.md; then
+            missing_sections+=("WORM-Retention")
+          fi
+          if ! grep -Fq 'Snapshot Partition Drill' phaseC_status.md; then
+            missing_sections+=("Snapshot Partition Drill")
+          fi
+
+          if (( age_hours > max_age )); then
+            printf '::error file=phaseC_status.md::Phase‑C-Status ist %sh alt (Limit %sh)\n' "$age_hours" "$max_age" >&2
+            exit 1
+          fi
+
+          if [[ ${#missing_sections[@]} -gt 0 ]]; then
+            printf '::error file=phaseC_status.md::Fehlende Tabellenzeilen: %s\n' "${missing_sections[*]}" >&2
+            exit 1
+          fi
+
+          printf 'Phase‑C-Status ist %sh alt und enthält WORM-/Chaos-Einträge.\n' "$age_hours"
+
   dashboards-json:
     name: Validate dashboard exports
     runs-on: ubuntu-latest
