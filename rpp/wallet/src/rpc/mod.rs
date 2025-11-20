@@ -1039,8 +1039,10 @@ impl WalletRpcRouter {
     #[cfg(feature = "wallet_multisig_hooks")]
     fn multisig_export(&self, params: MultisigExportParams) -> Result<Value, RouterError> {
         let draft_id = params.draft_id;
-        let drafts = match self.lock_drafts() {
-            Ok(drafts) => drafts,
+        let metadata = match self.lock_drafts() {
+            Ok(drafts) => drafts
+                .get(&draft_id)
+                .and_then(|state| state.metadata.multisig.clone()),
             Err(error) => {
                 self.record_action(
                     WalletTelemetryAction::MultisigExport,
@@ -1049,37 +1051,52 @@ impl WalletRpcRouter {
                 return Err(error);
             }
         };
-        let metadata = match drafts.get(&draft_id) {
-            Some(state) => state.metadata.multisig.clone(),
+
+        let metadata = match metadata {
+            Some(metadata) => Some(metadata),
+            None => match self.wallet.multisig_coordinator().load_export(&draft_id) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    self.record_action(
+                        WalletTelemetryAction::MultisigExport,
+                        TelemetryOutcome::Error,
+                    );
+                    return Err(RouterError::Wallet(WalletError::Multisig(error)));
+                }
+            },
+        };
+
+        match metadata {
+            Some(metadata) => {
+                let export = match self
+                    .wallet
+                    .multisig_coordinator()
+                    .export_metadata(&draft_id, Some(metadata.clone()))
+                {
+                    Ok(export) => export,
+                    Err(error) => {
+                        self.record_action(
+                            WalletTelemetryAction::MultisigExport,
+                            TelemetryOutcome::Error,
+                        );
+                        return Err(RouterError::Wallet(WalletError::Multisig(error)));
+                    }
+                };
+                self.record_action(
+                    WalletTelemetryAction::MultisigExport,
+                    TelemetryOutcome::Success,
+                );
+                let metadata = export.metadata.as_ref().map(MultisigDraftMetadataDto::from);
+                to_value(MultisigExportResponse { draft_id, metadata })
+            }
             None => {
                 self.record_action(
                     WalletTelemetryAction::MultisigExport,
                     TelemetryOutcome::Error,
                 );
-                return Err(RouterError::MissingDraft(draft_id.clone()));
+                Err(RouterError::MissingDraft(draft_id))
             }
-        };
-        drop(drafts);
-        let export = match self
-            .wallet
-            .multisig_coordinator()
-            .export_metadata(&draft_id, metadata.clone())
-        {
-            Ok(export) => export,
-            Err(error) => {
-                self.record_action(
-                    WalletTelemetryAction::MultisigExport,
-                    TelemetryOutcome::Error,
-                );
-                return Err(RouterError::Wallet(WalletError::Multisig(error)));
-            }
-        };
-        self.record_action(
-            WalletTelemetryAction::MultisigExport,
-            TelemetryOutcome::Success,
-        );
-        let metadata = export.metadata.as_ref().map(MultisigDraftMetadataDto::from);
-        to_value(MultisigExportResponse { draft_id, metadata })
+        }
     }
 
     fn estimate_fee(&self, params: EstimateFeeParams) -> Result<Value, RouterError> {
@@ -2562,6 +2579,8 @@ mod tests {
     #[cfg(feature = "wallet_hw")]
     use super::dto::{HardwareEnumerateResponse, HardwareSignResponse};
     use super::dto::{LifecycleStateDto, LifecycleStatusResponse, WatchOnlyStatusResponse};
+    #[cfg(feature = "wallet_multisig_hooks")]
+    use super::dto::{MultisigExportParams, MultisigExportResponse};
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{
@@ -2575,6 +2594,8 @@ mod tests {
     #[cfg(feature = "wallet_hw")]
     use crate::hw::{HardwareDevice, HardwareSignature, HardwareSignerError, MockHardwareSigner};
     use crate::indexer::scanner::SyncCheckpoints;
+    #[cfg(feature = "wallet_multisig_hooks")]
+    use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
     use crate::node_client::{
         BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError, NodeClientResult,
         NodeRejectionHint, StubNodeClient,
@@ -3099,6 +3120,42 @@ mod tests {
             Self {
                 inner: StubNodeClient::default(),
             }
+        }
+
+        #[cfg(feature = "wallet_multisig_hooks")]
+        #[test]
+        fn multisig_export_reads_from_coordinator_store() {
+            let (router, _store, _dir) = router_fixture(None);
+            let scope = MultisigScope::new(1, 2).expect("scope");
+            let cosigner =
+                Cosigner::new("aa11bb22cc33dd44ee55ff66aa77bb88", None).expect("cosigner");
+            let metadata = MultisigDraftMetadata {
+                scope: scope.clone(),
+                cosigners: vec![cosigner.clone()],
+            };
+
+            router
+                .wallet
+                .multisig_coordinator()
+                .export_metadata("draft-1", Some(metadata.clone()))
+                .expect("persist export");
+
+            let response: MultisigExportResponse = serde_json::from_value(
+                router
+                    .multisig_export(MultisigExportParams {
+                        draft_id: "draft-1".to_string(),
+                    })
+                    .expect("export metadata"),
+            )
+            .expect("deserialize export response");
+
+            assert_eq!(response.draft_id, "draft-1");
+            let returned = response.metadata.expect("metadata present");
+            assert_eq!(returned.scope.threshold, scope.threshold());
+            assert_eq!(returned.scope.participants, scope.participants());
+            assert_eq!(returned.cosigners.len(), 1);
+            assert_eq!(returned.cosigners[0].fingerprint, cosigner.fingerprint);
+            assert_eq!(returned.cosigners[0].endpoint, cosigner.endpoint);
         }
     }
 
