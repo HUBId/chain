@@ -291,11 +291,31 @@ impl PolicySnapshot {
     }
 }
 
+/// Metadata describing a derived address.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddressMetadata {
+    pub used: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_seen_height: Option<u64>,
+}
+
 pub fn encode_address(address: &Address) -> Result<Vec<u8>, CodecError> {
     Ok(options().serialize(address)?)
 }
 
 pub fn decode_address(bytes: &[u8]) -> Result<Address, CodecError> {
+    Ok(options().deserialize(bytes)?)
+}
+
+pub fn encode_address_metadata(metadata: &AddressMetadata) -> Result<Vec<u8>, CodecError> {
+    Ok(options().serialize(metadata)?)
+}
+
+pub fn decode_address_metadata(bytes: &[u8]) -> Result<AddressMetadata, CodecError> {
     Ok(options().deserialize(bytes)?)
 }
 

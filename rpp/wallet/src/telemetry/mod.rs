@@ -40,6 +40,8 @@ impl WalletTelemetryAction {
             Self::ZsiList => "zsi.list",
             #[cfg(feature = "wallet_zsi")]
             Self::ZsiDelete => "zsi.delete",
+            Self::ListAddresses => "list_addresses",
+            Self::SetAddressLabel => "set_address_label",
             Self::HwEnumerate => "hw.enumerate",
             Self::HwSign => "hw.sign",
         }

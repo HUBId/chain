@@ -12,23 +12,25 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use dto::{
-    BackupExportParams, BackupExportResponse, BackupImportParams, BackupImportResponse,
-    BackupMetadataDto, BackupValidateParams, BackupValidateResponse, BackupValidationModeDto,
-    BalanceResponse, BlockFeeSummaryDto, BroadcastParams, BroadcastRawParams, BroadcastRawResponse,
-    BroadcastResponse, CreateTxParams, CreateTxResponse, DerivationPathDto, DeriveAddressParams,
-    DeriveAddressResponse, DraftInputDto, DraftOutputDto, DraftSpendModelDto, EmptyParams,
-    EstimateFeeParams, EstimateFeeResponse, FeeEstimateSourceDto, GetPolicyResponse,
-    HardwareDeviceDto, HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse,
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, LifecycleStateDto, LifecycleStatusResponse,
+    AddressMetadataDto, AddressStatusDto, BackupExportParams, BackupExportResponse,
+    BackupImportParams, BackupImportResponse, BackupMetadataDto, BackupValidateParams,
+    BackupValidateResponse, BackupValidationModeDto, BalanceResponse, BlockFeeSummaryDto,
+    BroadcastParams, BroadcastRawParams, BroadcastRawResponse, BroadcastResponse, CreateTxParams,
+    CreateTxResponse, DerivationPathDto, DeriveAddressParams, DeriveAddressResponse, DraftInputDto,
+    DraftOutputDto, DraftSpendModelDto, EmptyParams, EstimateFeeParams, EstimateFeeResponse,
+    FeeEstimateSourceDto, GetPolicyResponse, HardwareDeviceDto, HardwareEnumerateResponse,
+    HardwareSignParams, HardwareSignResponse, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+    LifecycleStateDto, LifecycleStatusResponse, ListAddressesParams, ListAddressesResponse,
     ListPendingLocksResponse, ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse,
     PendingLockDto, PolicyPreviewResponse, PolicySnapshotDto,
     PolicyTierHooks as PolicyTierHooksDto, ProverMetaDto, ProverMetaParams, ProverMetaResponse,
     ProverMetadataDto, ProverStatusDto, ProverStatusParams, ProverStatusResponse,
     RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
-    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetPolicyParams, SetPolicyResponse,
-    SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto,
-    SyncStatusParams, SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse,
-    TransactionEntryDto, UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetAddressLabelParams,
+    SetAddressLabelResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse,
+    TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto, UtxoDto,
+    WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -390,10 +392,18 @@ impl WalletRpcRouter {
                 let entries = self.wallet.list_transactions()?;
                 self.respond_transactions(entries)
             }
+            "list_addresses" => {
+                let params: ListAddressesParams = parse_params(params)?;
+                self.list_addresses(params)
+            }
             "derive_address" => {
                 let params: DeriveAddressParams = parse_params(params)?;
                 let address = self.wallet.derive_address(params.change)?;
                 to_value(DeriveAddressResponse { address })
+            }
+            "set_address_label" => {
+                let params: SetAddressLabelParams = parse_params(params)?;
+                self.set_address_label(params)
             }
             "create_tx" => {
                 let params: CreateTxParams = parse_params(params)?;
@@ -700,6 +710,72 @@ impl WalletRpcRouter {
             })
             .collect();
         to_value(ListTransactionsResponse { entries: mapped })
+    }
+
+    fn list_addresses(&self, params: ListAddressesParams) -> Result<Value, RouterError> {
+        let page = params.page.unwrap_or(0);
+        let page_size = params.page_size.unwrap_or(20);
+        match self.wallet_call(self.wallet.list_addresses(params.change, page, page_size)) {
+            Ok(list) => {
+                self.record_action(
+                    WalletTelemetryAction::ListAddresses,
+                    TelemetryOutcome::Success,
+                );
+                let addresses = list
+                    .addresses
+                    .iter()
+                    .map(AddressMetadataDto::from)
+                    .collect();
+                to_value(ListAddressesResponse {
+                    addresses,
+                    page: list.page,
+                    page_size: list.page_size,
+                    total: list.total,
+                })
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::ListAddresses,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn set_address_label(&self, params: SetAddressLabelParams) -> Result<Value, RouterError> {
+        let SetAddressLabelParams {
+            address,
+            label,
+            note,
+        } = params;
+        match self.wallet_call(self.wallet.set_address_label(&address, label, note)) {
+            Ok(Some(entry)) => {
+                self.record_action(
+                    WalletTelemetryAction::SetAddressLabel,
+                    TelemetryOutcome::Success,
+                );
+                to_value(SetAddressLabelResponse {
+                    address: AddressMetadataDto::from(&entry),
+                })
+            }
+            Ok(None) => {
+                self.record_action(
+                    WalletTelemetryAction::SetAddressLabel,
+                    TelemetryOutcome::Error,
+                );
+                Err(RouterError::InvalidParams(format!(
+                    "address not found: {address}"
+                )))
+            }
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::SetAddressLabel,
+                    TelemetryOutcome::Error,
+                );
+                Err(error)
+            }
+        }
     }
 
     fn create_tx(&self, params: CreateTxParams) -> Result<Value, RouterError> {

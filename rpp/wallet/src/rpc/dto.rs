@@ -1,6 +1,7 @@
 use crate::engine::{FeeCongestionLevel, FeeEstimateSource};
 #[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, MultisigDraftMetadata, MultisigScope};
+use crate::wallet::{AddressEntry, AddressStatus};
 use serde_json::Value;
 
 pub use crate::interface_rpc::*;
@@ -91,6 +92,29 @@ impl From<&MultisigScope> for MultisigScopeDto {
         Self {
             threshold: scope.threshold(),
             participants: scope.participants(),
+        }
+    }
+}
+
+impl From<AddressStatus> for AddressStatusDto {
+    fn from(status: AddressStatus) -> Self {
+        match status {
+            AddressStatus::Unused => AddressStatusDto::Unused,
+            AddressStatus::Used => AddressStatusDto::Used,
+        }
+    }
+}
+
+impl From<&AddressEntry> for AddressMetadataDto {
+    fn from(entry: &AddressEntry) -> Self {
+        Self {
+            address: entry.address.clone(),
+            change: entry.change,
+            index: entry.index,
+            status: entry.status.into(),
+            label: entry.label.clone(),
+            note: entry.note.clone(),
+            first_seen_height: entry.first_seen_height,
         }
     }
 }
@@ -206,6 +230,40 @@ mod tests {
     fn derive_address_response_roundtrip() {
         let response = DeriveAddressResponse {
             address: "wallet1".to_string(),
+        };
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn address_metadata_roundtrip() {
+        let dto = AddressMetadataDto {
+            address: "wallet1".to_string(),
+            change: false,
+            index: 7,
+            status: AddressStatusDto::Used,
+            label: Some("primary".to_string()),
+            note: Some("note".to_string()),
+            first_seen_height: Some(5),
+        };
+        roundtrip(&dto);
+    }
+
+    #[test]
+    fn list_addresses_response_roundtrip() {
+        let dto = AddressMetadataDto {
+            address: "wallet1".to_string(),
+            change: true,
+            index: 3,
+            status: AddressStatusDto::Unused,
+            label: None,
+            note: None,
+            first_seen_height: None,
+        };
+        let response = ListAddressesResponse {
+            addresses: vec![dto],
+            page: 0,
+            page_size: 10,
+            total: 1,
         };
         roundtrip(&response);
     }
