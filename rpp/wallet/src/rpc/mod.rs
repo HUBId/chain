@@ -26,11 +26,12 @@ use dto::{
     PolicyTierHooks as PolicyTierHooksDto, ProverMetaDto, ProverMetaParams, ProverMetaResponse,
     ProverMetadataDto, ProverStatusDto, ProverStatusParams, ProverStatusResponse,
     RecentBlocksParams, RecentBlocksResponse, ReleasePendingLocksParams,
-    ReleasePendingLocksResponse, RescanParams, RescanResponse, SetAddressLabelParams,
-    SetAddressLabelResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SignedTxProverBundleDto, SyncCheckpointDto, SyncModeDto, SyncStatusParams, SyncStatusResponse,
-    TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto, UtxoDto,
-    WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    ReleasePendingLocksResponse, RescanAbortResponse, RescanParams, RescanResponse,
+    RescanStatusResponse, SetAddressLabelParams, SetAddressLabelResponse, SetPolicyParams,
+    SetPolicyResponse, SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto,
+    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
+    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -66,7 +67,7 @@ use crate::engine::{
 };
 #[cfg(feature = "wallet_hw")]
 use crate::hw::{HardwareDevice, HardwareSignRequest, HardwareSignature, HardwareSignerError};
-use crate::indexer::scanner::{SyncMode, SyncStatus};
+use crate::indexer::scanner::{ScannerError, SyncMode, SyncStatus};
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 #[cfg(feature = "wallet_multisig_hooks")]
 use crate::multisig::{Cosigner, CosignerRegistry, MultisigScope};
@@ -119,6 +120,8 @@ pub trait SyncHandle: Send + Sync {
     fn latest_status(&self) -> Option<SyncStatus>;
     fn last_error(&self) -> Option<WalletSyncError>;
     fn request_rescan(&self, from_height: u64) -> Result<bool, WalletSyncError>;
+    fn pending_rescan_from(&self) -> Option<u64>;
+    fn abort_rescan(&self) -> bool;
     fn record_node_failure(&self, _error: &NodeClientError) {}
     fn clear_node_failure(&self) {}
 }
@@ -138,6 +141,14 @@ impl SyncHandle for WalletSyncCoordinator {
 
     fn request_rescan(&self, from_height: u64) -> Result<bool, WalletSyncError> {
         WalletSyncCoordinator::request_rescan(self, from_height)
+    }
+
+    fn pending_rescan_from(&self) -> Option<u64> {
+        WalletSyncCoordinator::pending_rescan_from(self)
+    }
+
+    fn abort_rescan(&self) -> bool {
+        WalletSyncCoordinator::abort_rescan(self)
     }
 
     fn record_node_failure(&self, error: &NodeClientError) {
@@ -656,6 +667,14 @@ impl WalletRpcRouter {
             "rescan" => {
                 let params: RescanParams = parse_params(params)?;
                 self.handle_rescan(params)
+            }
+            "rescan.status" => {
+                parse_params::<EmptyParams>(params)?;
+                self.handle_rescan_status()
+            }
+            "rescan.abort" => {
+                parse_params::<EmptyParams>(params)?;
+                self.handle_rescan_abort()
             }
             "backup.export" => {
                 let params: BackupExportParams = parse_params(params)?;
@@ -1226,6 +1245,43 @@ impl WalletRpcRouter {
         })
     }
 
+    fn handle_rescan_status(&self) -> Result<Value, RouterError> {
+        let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
+        let status = sync.latest_status();
+        let mut scheduled_from = sync.pending_rescan_from();
+        let mut active = false;
+        let mut current_height = None;
+        let mut target_height = None;
+        let mut latest_height = None;
+
+        if let Some(status) = status {
+            latest_height = Some(status.latest_height);
+            current_height = Some(status.current_height);
+            target_height = Some(status.target_height);
+            if let SyncMode::Rescan { from_height } = status.mode {
+                scheduled_from = Some(from_height);
+                active = sync.is_syncing();
+            }
+        }
+
+        let response = RescanStatusResponse {
+            scheduled_from,
+            active,
+            current_height,
+            target_height,
+            latest_height,
+            last_error: sync.last_error().map(|error| error.to_string()),
+        };
+
+        to_value(response)
+    }
+
+    fn handle_rescan_abort(&self) -> Result<Value, RouterError> {
+        let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
+        let aborted = sync.abort_rescan();
+        to_value(RescanAbortResponse { aborted })
+    }
+
     fn handle_backup_export(&self, params: BackupExportParams) -> Result<Value, RouterError> {
         let BackupExportParams {
             passphrase,
@@ -1609,7 +1665,7 @@ impl RouterError {
             RouterError::InvalidParams(_) => Some(WalletRpcErrorCode::InvalidParams),
             RouterError::Wallet(error) => Some(wallet_error_code(error)),
             RouterError::WatchOnly(error) => Some(watch_only_error_code(error)),
-            RouterError::Sync(_) => Some(WalletRpcErrorCode::SyncError),
+            RouterError::Sync(error) => Some(wallet_sync_error_code(error)),
             RouterError::Node(error) => Some(node_error_code(error)),
             RouterError::Backup(_) => Some(WalletRpcErrorCode::InternalError),
             RouterError::MissingDraft(_) => Some(WalletRpcErrorCode::DraftNotFound),
@@ -1705,10 +1761,22 @@ fn send_stage_for_method(method: &str) -> Option<&'static str> {
 }
 
 fn rescan_stage_for_method(method: &str) -> Option<&'static str> {
-    if method == "rescan" {
-        Some("reschedule")
-    } else {
-        None
+    match method {
+        "rescan" => Some("reschedule"),
+        "rescan.status" => Some("status"),
+        "rescan.abort" => Some("abort"),
+        _ => None,
+    }
+}
+
+fn wallet_sync_error_code(error: &WalletSyncError) -> WalletRpcErrorCode {
+    match error {
+        WalletSyncError::Scanner(inner) => match inner.as_ref() {
+            ScannerError::Indexer(_) => WalletRpcErrorCode::IndexerUnavailable,
+            ScannerError::Aborted => WalletRpcErrorCode::RescanAborted,
+            _ => WalletRpcErrorCode::SyncError,
+        },
+        WalletSyncError::Stopped => WalletRpcErrorCode::SyncError,
     }
 }
 
@@ -1723,7 +1791,7 @@ fn wallet_error_code(error: &WalletError) -> WalletRpcErrorCode {
         WalletError::ProverInternal { .. } => WalletRpcErrorCode::ProverInternal,
         WalletError::ProofMissing => WalletRpcErrorCode::ProverProofMissing,
         WalletError::Node(node) => node_error_code(node),
-        WalletError::Sync(_) => WalletRpcErrorCode::SyncError,
+        WalletError::Sync(sync) => wallet_sync_error_code(sync),
         WalletError::WatchOnly(watch_only) => watch_only_error_code(watch_only),
         #[cfg(feature = "wallet_multisig_hooks")]
         WalletError::Multisig(_) => WalletRpcErrorCode::InvalidParams,
@@ -2075,11 +2143,23 @@ fn backup_error_to_json(error: &BackupError) -> JsonRpcError {
 
 fn wallet_sync_error_to_json(error: &WalletSyncError) -> JsonRpcError {
     match error {
-        WalletSyncError::Scanner(inner) => json_error(
-            WalletRpcErrorCode::SyncError,
-            inner.to_string(),
-            Some(json!({ "kind": "scanner" })),
-        ),
+        WalletSyncError::Scanner(inner) => match inner.as_ref() {
+            ScannerError::Indexer(_) => json_error(
+                WalletRpcErrorCode::IndexerUnavailable,
+                inner.to_string(),
+                Some(json!({ "kind": "scanner" })),
+            ),
+            ScannerError::Aborted => json_error(
+                WalletRpcErrorCode::RescanAborted,
+                "wallet rescan aborted",
+                Some(json!({ "kind": "scanner" })),
+            ),
+            _ => json_error(
+                WalletRpcErrorCode::SyncError,
+                inner.to_string(),
+                Some(json!({ "kind": "scanner" })),
+            ),
+        },
         WalletSyncError::Stopped => json_error(
             WalletRpcErrorCode::SyncError,
             error.to_string(),
@@ -2931,6 +3011,14 @@ mod tests {
         fn request_rescan(&self, _from_height: u64) -> Result<bool, WalletSyncError> {
             panic!("rescan should not be invoked when height is invalid");
         }
+
+        fn pending_rescan_from(&self) -> Option<u64> {
+            None
+        }
+
+        fn abort_rescan(&self) -> bool {
+            false
+        }
     }
 
     #[derive(Default)]
@@ -2962,6 +3050,14 @@ mod tests {
 
         fn last_error(&self) -> Option<WalletSyncError> {
             None
+        }
+
+        fn pending_rescan_from(&self) -> Option<u64> {
+            None
+        }
+
+        fn abort_rescan(&self) -> bool {
+            false
         }
 
         fn request_rescan(&self, _from_height: u64) -> Result<bool, WalletSyncError> {

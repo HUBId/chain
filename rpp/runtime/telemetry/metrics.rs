@@ -1019,6 +1019,10 @@ pub enum WalletRpcMethod {
     JsonSyncStatus,
     /// JSON-RPC: `rescan`.
     JsonRescan,
+    /// JSON-RPC: `rescan.status`.
+    JsonRescanStatus,
+    /// JSON-RPC: `rescan.abort`.
+    JsonRescanAbort,
     /// JSON-RPC: `zsi_prove`.
     #[cfg(feature = "wallet_zsi")]
     JsonZsiProve,
@@ -1136,6 +1140,8 @@ impl MetricLabel for WalletRpcMethod {
             Self::JsonReleasePendingLocks => "json_release_pending_locks",
             Self::JsonSyncStatus => "json_sync_status",
             Self::JsonRescan => "json_rescan",
+            Self::JsonRescanStatus => "json_rescan_status",
+            Self::JsonRescanAbort => "json_rescan_abort",
             #[cfg(feature = "wallet_zsi")]
             Self::JsonZsiProve => "json_zsi_prove",
             #[cfg(feature = "wallet_zsi")]
