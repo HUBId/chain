@@ -78,9 +78,20 @@ Runtime nodes expose the verification status over REST and an SSE head stream:
   so clients can track progress without polling.【F:rpp/rpc/src/routes/state_sync.rs†L20-L204】【F:rpp/rpc/api.rs†L122-L162】
 
 The runtime records dedicated telemetry while serving chunks: stream starts,
-per-chunk counters, active stream samples, and backpressure events are exported
-via the `rpp.runtime.state_sync.stream.{starts,chunks,active,backpressure}`
-metrics.【F:rpp/runtime/telemetry/metrics.rs†L220-L466】
+per-chunk counters, per-stream chunk totals, active stream samples, last-chunk
+age, and backpressure events are exported via the
+`rpp.runtime.state_sync.stream.{starts,chunks,chunks_sent,active,last_chunk_age.seconds,backpressure}`
+metrics.【F:rpp/runtime/telemetry/metrics.rs†L111-L139】【F:rpp/runtime/sync.rs†L386-L445】
+
+### State-sync stream alerts
+
+Operators can plug the state-sync stream telemetry into Prometheus/Alertmanager
+to guard against stalled or slow sessions. The sample rules in
+`ops/alerts/storage/state_sync_stream.yaml` flag moving-average chunk gaps above
+30s/120s and stalled throughput below 0.1 chunks per second after recent
+progress.【F:ops/alerts/storage/state_sync_stream.yaml†L1-L45】 These thresholds
+match the runtime metrics listed above so on-call engineers can correlate alert
+firings with chunk-level telemetry.
 
 The RPC layer mirrors verification failures from the runtime, so clients can
 surface metadata mismatches, missing receipts, or proof errors immediately. Unit
