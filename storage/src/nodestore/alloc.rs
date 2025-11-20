@@ -35,7 +35,8 @@ use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 
 use crate::{
-    firewood_counter, FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage,
+    firewood_counter, firewood_gauge, FreeListParent, MaybePersistedNode, ReadableStorage,
+    WritableStorage,
 };
 
 /// Returns the maximum size needed to encode a `VarInt`.
@@ -460,6 +461,19 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
                     self.split_free_block(address, current_index, requested_index)?;
                 }
 
+                firewood_counter!(
+                    "firewood.allocations.reused",
+                    "Node allocations served from free lists by index",
+                    "index" => index_name(requested_index)
+                )
+                .increment(1);
+                firewood_gauge!(
+                    "firewood.freelist.available",
+                    "Free list entries available by area size",
+                    "index" => index_name(current_index)
+                )
+                .decrement(1.0);
+
                 trace!("Allocating from free list: addr: {address:?}, size: {requested_index}");
                 firewood_counter!(
                     "firewood.space.reused",
@@ -503,6 +517,12 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
             .set_size(self.header.size().saturating_add(area_size));
         debug_assert!(addr.is_aligned());
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
+        firewood_counter!(
+            "firewood.allocations.from_end",
+            "Node allocations that extend the nodestore size",
+            "index" => index_name(index)
+        )
+        .increment(1);
         Ok((addr, index))
     }
 
@@ -595,6 +615,14 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
                     .file_io_error(e, address.get(), Some("split_free_block".to_string()))
             })?;
 
+            firewood_counter!(
+                "firewood.freelist.split",
+                "Free list blocks split to satisfy allocations",
+                "from_index" => index_name(current_index),
+                "target_index" => index_name(target_index)
+            )
+            .increment(1);
+
             let remainder_addr = address
                 .advance(prev_size)
                 .expect("remainder address should be non-zero");
@@ -617,6 +645,12 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
         self.storage.write(address.get(), &stored_area_bytes)?;
         self.storage.add_to_free_list_cache(address, next);
         self.header.free_lists_mut()[area_index.as_usize()] = Some(address);
+        firewood_gauge!(
+            "firewood.freelist.available",
+            "Free list entries available by area size",
+            "index" => index_name(area_index)
+        )
+        .increment(1.0);
         Ok(())
     }
 }
@@ -927,9 +961,160 @@ mod tests {
     use crate::area_index;
     use crate::linear::memory::MemStore;
     use crate::noop_storage_metrics;
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
     use rand::seq::IteratorRandom;
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
     use test_case::test_case;
     use test_utils::{test_write_free_area, test_write_header};
+
+    fn prometheus_handle() -> &'static PrometheusHandle {
+        static PROMETHEUS: OnceLock<PrometheusHandle> = OnceLock::new();
+        PROMETHEUS.get_or_init(|| {
+            PrometheusBuilder::new()
+                .install_recorder()
+                .expect("install metrics")
+        })
+    }
+
+    fn parse_labels(segment: &str) -> HashMap<&str, &str> {
+        segment
+            .split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.split('=');
+                let key = parts.next()?.trim();
+                let value = parts
+                    .next()
+                    .and_then(|raw| raw.trim().strip_prefix('"'))
+                    .and_then(|raw| raw.strip_suffix('"'))?;
+                Some((key, value))
+            })
+            .collect()
+    }
+
+    fn metric_value(metrics: &str, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
+        metrics.lines().find_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || !line.starts_with(name) {
+                return None;
+            }
+
+            let (label_segment, value_segment) = match line.find('{') {
+                Some(start) => {
+                    let end = line.find('}')?;
+                    (&line[start + 1..end], line[end + 1..].trim())
+                }
+                None => ("", line[name.len()..].trim()),
+            };
+
+            let parsed_labels = parse_labels(label_segment);
+            if labels
+                .iter()
+                .all(|(key, value)| parsed_labels.get(key).copied() == Some(*value))
+            {
+                value_segment.split_whitespace().last()?.parse().ok()
+            } else {
+                None
+            }
+        })
+    }
+
+    fn metric_delta(before: &str, after: &str, name: &str, labels: &[(&str, &str)]) -> f64 {
+        let before_value = metric_value(before, name, labels).unwrap_or_default();
+        let after_value = metric_value(after, name, labels).unwrap_or_default();
+        after_value - before_value
+    }
+
+    #[test]
+    fn allocation_metrics_cover_multiple_area_sizes() {
+        let prometheus = prometheus_handle();
+
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
+        let mut allocator = NodeAllocator::new(nodestore.storage.as_ref(), &mut nodestore.header);
+
+        let small_index = area_index!(1);
+        let large_index = area_index!(3);
+
+        let base_addr = LinearAddress::new(NodeStoreHeader::SIZE).unwrap();
+        allocator
+            .add_free_block(base_addr, large_index)
+            .expect("seed large free block");
+        let small_addr = base_addr
+            .advance(large_index.size())
+            .expect("small block address");
+        allocator
+            .add_free_block(small_addr, small_index)
+            .expect("seed small free block");
+
+        let seeded_metrics = prometheus.render();
+
+        let (first_addr, first_index) = allocator
+            .allocate_from_freed(small_index.size())
+            .expect("free list traversal succeeds")
+            .expect("first allocation should reuse seed block");
+        assert_eq!(first_index, small_index);
+        assert_eq!(first_addr, small_addr);
+
+        let (split_addr, split_index) = allocator
+            .allocate_from_freed(small_index.size())
+            .expect("split traversal succeeds")
+            .expect("second allocation should split larger block");
+        assert_eq!(split_index, small_index);
+        assert_eq!(split_addr, base_addr);
+
+        let final_metrics = prometheus.render();
+
+        let reused_small = metric_delta(
+            &seeded_metrics,
+            &final_metrics,
+            "firewood_allocations_reused",
+            &[("index", index_name(small_index))],
+        );
+        assert_eq!(reused_small, 2.0);
+
+        let split_from_large = metric_delta(
+            &seeded_metrics,
+            &final_metrics,
+            "firewood_freelist_split",
+            &[
+                ("from_index", index_name(large_index)),
+                ("target_index", index_name(small_index)),
+            ],
+        );
+        assert_eq!(split_from_large, 1.0);
+
+        let split_from_prev = metric_delta(
+            &seeded_metrics,
+            &final_metrics,
+            "firewood_freelist_split",
+            &[
+                (
+                    "from_index",
+                    index_name(AreaIndex::try_from(large_index.get() - 1).unwrap()),
+                ),
+                ("target_index", index_name(small_index)),
+            ],
+        );
+        assert_eq!(split_from_prev, 1.0);
+
+        let available_small = metric_value(
+            &final_metrics,
+            "firewood_freelist_available",
+            &[("index", index_name(small_index))],
+        )
+        .expect("gauge present for small index");
+        let available_large = metric_value(
+            &final_metrics,
+            "firewood_freelist_available",
+            &[("index", index_name(large_index))],
+        )
+        .expect("gauge present for large index");
+
+        assert_eq!(available_small, 2.0);
+        assert_eq!(available_large, 0.0);
+    }
 
     #[test_case(&[0x01, 0x01, 0x01, 0x2a], Some((area_index!(1), 42)); "old format")]
     // StoredArea::new(12, Area::<Node, _>::Free(FreeArea::new(None)));

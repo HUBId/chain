@@ -57,6 +57,7 @@ pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true
 test-case.workspace = true
+metrics-exporter-prometheus = "=0.17.2"
 
 [features]
 logger = ["log"]
