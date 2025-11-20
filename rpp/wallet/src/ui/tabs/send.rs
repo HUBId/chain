@@ -4,8 +4,10 @@ use iced::{Alignment, Command, Element, Length};
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
 use crate::rpc::dto::{
     BroadcastResponse, CreateTxParams, CreateTxResponse, EstimateFeeResponse,
-    PolicyPreviewResponse, ProverMetadataDto, SignTxResponse, SignedTxProverBundleDto,
+    ListPendingLocksResponse, PolicyPreviewResponse, ProverMetadataDto,
+    ReleasePendingLocksResponse, SignTxResponse, SignedTxProverBundleDto,
 };
+use crate::rpc::error::WalletRpcErrorCode;
 
 use crate::ui::commands::{self, RpcCallError};
 use crate::ui::error_map::{describe_rpc_error, technical_details};
@@ -130,6 +132,8 @@ pub struct State {
     draft: RequestState<CreateTxResponse>,
     signature: RequestState<SignTxResponse>,
     broadcast: RequestState<BroadcastResponse>,
+    pending_locks: RequestState<ListPendingLocksResponse>,
+    release_locks: RequestState<ReleasePendingLocksResponse>,
     error_banner: Option<ErrorBanner>,
 }
 
@@ -195,6 +199,16 @@ impl State {
                 self.apply_broadcast_result(result);
                 Command::none()
             }
+            Message::RefreshLocks => self.refresh_locks(client),
+            Message::LocksLoaded(result) => {
+                self.apply_locks_result(result);
+                Command::none()
+            }
+            Message::ReleaseLocks => self.release_locks(client),
+            Message::LocksReleased(result) => {
+                self.apply_release_result(result);
+                Command::none()
+            }
             Message::DismissError => {
                 self.error_banner = None;
                 Command::none()
@@ -222,6 +236,7 @@ impl State {
             .push(self.preview_section())
             .push(self.draft_section())
             .push(self.signature_section())
+            .push(self.pending_locks_section())
             .push(self.broadcast_section());
 
         container(layout).width(Length::Fill).into()
@@ -464,7 +479,7 @@ impl State {
 
     fn signature_details(&self, signature: &SignTxResponse) -> Element<Message> {
         let metadata = &signature.signed.metadata;
-        column![
+        let mut details = column![
             text(format!("Draft ID: {}", signature.draft_id)).size(16),
             text(format!("Backend: {}", metadata.backend)).size(16),
             text(format!("Witness bytes: {}", metadata.witness_bytes)).size(16),
@@ -508,7 +523,110 @@ impl State {
             ))
             .size(16),
         ]
-        .spacing(4)
+        .spacing(4);
+
+        if signature.locks.is_empty() {
+            details = details.push(text("No pending locks reported for this signature.").size(16));
+        } else {
+            details = details.push(text("Locks created by this signature:").size(16));
+            for lock in &signature.locks {
+                details = details.push(self.lock_details(lock));
+            }
+        }
+
+        details.into()
+    }
+
+    fn pending_locks_section(&self) -> Element<Message> {
+        let mut refresh_button = button(text("Refresh locks")).padding(12);
+        if !self.pending_locks.is_loading() && !self.signature.is_loading() {
+            refresh_button = refresh_button.on_press(Message::RefreshLocks);
+        }
+
+        let mut release_button = button(text("Release locks")).padding(12);
+        if !self.release_locks.is_loading() {
+            release_button = release_button.on_press(Message::ReleaseLocks);
+        }
+
+        let lock_status = match &self.pending_locks {
+            RequestState::Idle => text("No pending lock data loaded.").size(16).into(),
+            RequestState::Loading => text("Loading pending locks...").size(16).into(),
+            RequestState::Success(list) => self.render_lock_list(list),
+            RequestState::Failure(failure) => text(&failure.summary).size(16).into(),
+        };
+
+        let release_status = match &self.release_locks {
+            RequestState::Idle => None,
+            RequestState::Loading => Some(text("Releasing locks...").size(14).into()),
+            RequestState::Success(result) => Some(
+                text(format!("Released {} locks", result.released.len()))
+                    .size(14)
+                    .into(),
+            ),
+            RequestState::Failure(failure) => Some(text(&failure.summary).size(14).into()),
+        };
+
+        let mut content = column![
+            row![
+                text("Pending locks").size(20),
+                refresh_button.spacing(8),
+                release_button.spacing(8)
+            ]
+            .spacing(16),
+            lock_status,
+        ]
+        .spacing(8);
+
+        if let Some(status) = release_status {
+            content = content.push(status);
+        }
+
+        container(content).width(Length::Fill).into()
+    }
+
+    fn render_lock_list(&self, list: &ListPendingLocksResponse) -> Element<Message> {
+        if list.locks.is_empty() {
+            return text("No pending locks recorded.").size(16).into();
+        }
+
+        let mut locks =
+            column![text(format!("{} pending locks", list.locks.len())).size(16)].spacing(4);
+        for lock in &list.locks {
+            locks = locks.push(self.lock_details(lock));
+        }
+
+        locks.into()
+    }
+
+    fn lock_details(&self, lock: &crate::rpc::dto::PendingLockDto) -> Element<Message> {
+        column![
+            text(format!(
+                "• {}:{} locked at {} ms",
+                lock.utxo_txid, lock.utxo_index, lock.locked_at_ms
+            ))
+            .size(16),
+            text(format!(
+                "  backend: {} • witness bytes: {} • prove duration: {} ms",
+                lock.backend, lock.witness_bytes, lock.prove_duration_ms
+            ))
+            .size(14),
+            text(format!(
+                "  proof required: {} • proof present: {}",
+                if lock.proof_required { "yes" } else { "no" },
+                if lock.proof_present { "yes" } else { "no" }
+            ))
+            .size(14),
+            text(format!(
+                "  proof bytes: {} • proof hash: {} • spending txid: {}",
+                lock.proof_bytes
+                    .map(|bytes| bytes.to_string())
+                    .unwrap_or_else(|| "n/a".into()),
+                lock.proof_hash.clone().unwrap_or_else(|| "n/a".into()),
+                lock.spending_txid.clone().unwrap_or_else(|| "n/a".into())
+            ))
+            .size(14),
+        ]
+        .spacing(2)
         .into()
     }
 
@@ -558,6 +676,8 @@ impl State {
         self.draft = RequestState::Idle;
         self.signature = RequestState::Idle;
         self.broadcast = RequestState::Idle;
+        self.pending_locks = RequestState::Idle;
+        self.release_locks = RequestState::Idle;
 
         commands.push(commands::rpc(
             "policy_preview",
@@ -642,6 +762,8 @@ impl State {
         self.draft.set_loading();
         self.signature = RequestState::Idle;
         self.broadcast = RequestState::Idle;
+        self.pending_locks = RequestState::Idle;
+        self.release_locks = RequestState::Idle;
 
         commands::rpc(
             "create_tx",
@@ -681,6 +803,8 @@ impl State {
 
         self.signature.set_loading();
         self.broadcast = RequestState::Idle;
+        self.pending_locks = RequestState::Idle;
+        self.release_locks = RequestState::Idle;
 
         commands::rpc(
             "sign_tx",
@@ -697,6 +821,11 @@ impl State {
         match result {
             Ok(signature) => {
                 self.signature.set_success(signature);
+                if let Some(signature) = self.signature.as_success() {
+                    self.pending_locks.set_success(ListPendingLocksResponse {
+                        locks: signature.locks.clone(),
+                    });
+                }
                 self.error_banner = None;
                 telemetry::global()
                     .record_send_step_success(OperationStage::SignDraft.metric_label());
@@ -745,6 +874,74 @@ impl State {
                 let failure = failure_from_rpc(OperationStage::Broadcast, &error);
                 self.broadcast.set_failure(failure.clone());
                 self.set_error_banner(failure);
+            }
+        }
+    }
+
+    fn refresh_locks(&mut self, client: WalletRpcClient) -> Command<Message> {
+        self.error_banner = None;
+        self.pending_locks.set_loading();
+        commands::rpc(
+            "list_pending_locks",
+            client,
+            |client| async move { client.list_pending_locks().await },
+            map_pending_locks,
+        )
+    }
+
+    fn apply_locks_result(&mut self, result: Result<ListPendingLocksResponse, RpcCallError>) {
+        match result {
+            Ok(locks) => {
+                self.pending_locks.set_success(locks);
+                self.error_banner = None;
+                telemetry::global().record_lock_outcome(
+                    telemetry::LockAction::RefreshPendingLocks,
+                    crate::telemetry::TelemetryOutcome::Success,
+                );
+            }
+            Err(error) => {
+                let failure = failure_for_action("Pending lock refresh", &error);
+                self.pending_locks.set_failure(failure.clone());
+                self.set_error_banner(failure);
+                telemetry::global().record_lock_outcome(
+                    telemetry::LockAction::RefreshPendingLocks,
+                    crate::telemetry::TelemetryOutcome::Error,
+                );
+            }
+        }
+    }
+
+    fn release_locks(&mut self, client: WalletRpcClient) -> Command<Message> {
+        self.error_banner = None;
+        self.release_locks.set_loading();
+        commands::rpc(
+            "release_pending_locks",
+            client,
+            |client| async move { client.release_pending_locks().await },
+            map_release_locks,
+        )
+    }
+
+    fn apply_release_result(&mut self, result: Result<ReleasePendingLocksResponse, RpcCallError>) {
+        match result {
+            Ok(released) => {
+                self.release_locks.set_success(released);
+                self.pending_locks
+                    .set_success(ListPendingLocksResponse { locks: Vec::new() });
+                self.error_banner = None;
+                telemetry::global().record_lock_outcome(
+                    telemetry::LockAction::ReleasePendingLocks,
+                    crate::telemetry::TelemetryOutcome::Success,
+                );
+            }
+            Err(error) => {
+                let failure = failure_for_action("Lock release", &error);
+                self.release_locks.set_failure(failure.clone());
+                self.set_error_banner(failure);
+                telemetry::global().record_lock_outcome(
+                    telemetry::LockAction::ReleasePendingLocks,
+                    crate::telemetry::TelemetryOutcome::Error,
+                );
             }
         }
     }
@@ -871,6 +1068,10 @@ pub enum Message {
     DraftSigned(Result<SignTxResponse, RpcCallError>),
     BroadcastDraft,
     DraftBroadcast(Result<BroadcastResponse, RpcCallError>),
+    RefreshLocks,
+    LocksLoaded(Result<ListPendingLocksResponse, RpcCallError>),
+    ReleaseLocks,
+    LocksReleased(Result<ReleasePendingLocksResponse, RpcCallError>),
     DismissError,
     ToggleErrorDetails,
 }
@@ -892,11 +1093,53 @@ fn failure_from_rpc(stage: OperationStage, error: &RpcCallError) -> RequestFailu
                 ..
             } => {
                 let description = describe_rpc_error(code, details.as_ref());
+                let mut detail =
+                    technical_details(message, details.as_ref()).or(description.technical.clone());
+
+                detail = match code {
+                    WalletRpcErrorCode::PendingLockConflict => Some(
+                        "Pending locks are blocking this request. Refresh pending locks and release them if safe before retrying."
+                            .into(),
+                    ),
+                    WalletRpcErrorCode::ProverTimeout => Some(
+                        "Proof generation exceeded the time limit. Retry signing or release pending locks before trying again."
+                            .into(),
+                    ),
+                    WalletRpcErrorCode::NodeRejected => Some(
+                        "The node rejected this request. Check node connectivity and policy, then retry once locks are clear."
+                            .into(),
+                    ),
+                    _ => detail,
+                };
+                RequestFailure::new(description.headline, detail)
+            }
+            other => RequestFailure::new(format!("{} failed: {}", stage.label(), other), None),
+        },
+    }
+}
+
+fn failure_for_action(action: &str, error: &RpcCallError) -> RequestFailure {
+    match error {
+        RpcCallError::Timeout(duration) => RequestFailure::new(
+            format!("{action} request timed out."),
+            Some(format!(
+                "No response received within {} seconds.",
+                duration.as_secs()
+            )),
+        ),
+        RpcCallError::Client(inner) => match inner {
+            WalletRpcClientError::Rpc {
+                code,
+                message,
+                details,
+                ..
+            } => {
+                let description = describe_rpc_error(code, details.as_ref());
                 let detail =
                     technical_details(message, details.as_ref()).or(description.technical.clone());
                 RequestFailure::new(description.headline, detail)
             }
-            other => RequestFailure::new(format!("{} failed: {}", stage.label(), other), None),
+            other => RequestFailure::new(format!("{action} failed: {other}"), None),
         },
     }
 }
@@ -921,10 +1164,19 @@ fn map_broadcast(result: Result<BroadcastResponse, RpcCallError>) -> Message {
     Message::DraftBroadcast(result)
 }
 
+fn map_pending_locks(result: Result<ListPendingLocksResponse, RpcCallError>) -> Message {
+    Message::LocksLoaded(result)
+}
+
+fn map_release_locks(result: Result<ReleasePendingLocksResponse, RpcCallError>) -> Message {
+    Message::LocksReleased(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::wallet::PolicyTierHooks;
+    use crate::rpc::dto::{PendingLockDto, ReleasePendingLocksResponse};
     use crate::rpc::error::WalletRpcErrorCode;
     use std::time::Duration;
 
@@ -978,7 +1230,19 @@ mod tests {
                     proof_hash: Some("c0ffee".into()),
                 },
             },
-            locks: Vec::new(),
+            locks: vec![PendingLockDto {
+                utxo_txid: "aa".into(),
+                utxo_index: 0,
+                locked_at_ms: 123,
+                spending_txid: Some("bb".into()),
+                backend: "mock".into(),
+                witness_bytes: 64,
+                prove_duration_ms: 321,
+                proof_required: true,
+                proof_present: true,
+                proof_bytes: Some(42),
+                proof_hash: Some("dead".into()),
+            }],
         }
     }
 
@@ -1097,5 +1361,69 @@ mod tests {
         let _command = state.update(dummy_client(), Message::DraftBroadcast(Err(error)));
         assert!(matches!(state.broadcast, RequestState::Failure(_)));
         assert!(state.error_banner.is_some());
+    }
+
+    #[test]
+    fn lock_conflict_surfaces_contextual_detail() {
+        let mut state = State::default();
+        state.draft = RequestState::Success(sample_draft());
+        let error = RpcCallError::Client(WalletRpcClientError::Rpc {
+            code: WalletRpcErrorCode::PendingLockConflict,
+            message: "locks".into(),
+            json_code: WalletRpcErrorCode::PendingLockConflict.as_i32(),
+            details: None,
+        });
+        state.apply_signature_result(Err(error));
+
+        let banner = state.error_banner.expect("error banner set");
+        assert!(banner
+            .detail
+            .as_ref()
+            .expect("detail present")
+            .contains("Pending locks are blocking"));
+    }
+
+    #[test]
+    fn sign_success_populates_pending_locks() {
+        let mut state = State::default();
+        state.apply_signature_result(Ok(sample_signature()));
+
+        let locks = state
+            .pending_locks
+            .as_success()
+            .expect("pending locks recorded");
+        assert_eq!(locks.locks.len(), 1);
+        assert_eq!(locks.locks[0].backend, "mock");
+    }
+
+    #[test]
+    fn lock_release_updates_states() {
+        let mut state = State::default();
+        let _command = state.update(dummy_client(), Message::ReleaseLocks);
+        assert!(matches!(state.release_locks, RequestState::Loading));
+
+        state.apply_release_result(Ok(ReleasePendingLocksResponse { released: vec![] }));
+        assert!(matches!(state.release_locks, RequestState::Success(_)));
+        assert!(matches!(state.pending_locks, RequestState::Success(_)));
+    }
+
+    #[test]
+    fn node_rejected_banner_includes_context() {
+        let mut state = State::default();
+        state.signature = RequestState::Success(sample_signature());
+        let error = RpcCallError::Client(WalletRpcClientError::Rpc {
+            code: WalletRpcErrorCode::NodeRejected,
+            message: "reject".into(),
+            json_code: WalletRpcErrorCode::NodeRejected.as_i32(),
+            details: None,
+        });
+        state.apply_broadcast_result(Err(error));
+
+        let banner = state.error_banner.expect("banner set");
+        assert!(banner
+            .detail
+            .as_ref()
+            .expect("detail present")
+            .contains("node rejected"));
     }
 }
