@@ -593,7 +593,7 @@ fn wallet_toolchain_channel(workspace: &Path) -> Result<Option<String>> {
     Ok(channel)
 }
 
-fn reproducible_timestamp() -> Result<String> {
+pub(crate) fn reproducible_timestamp() -> Result<String> {
     if let Ok(epoch) = env::var("SOURCE_DATE_EPOCH") {
         let trimmed = epoch.trim();
         if !trimmed.is_empty() {

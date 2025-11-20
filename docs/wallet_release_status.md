@@ -45,11 +45,12 @@ coordination is required.【F:docs/release_checklist.md†L1-L62】【F:docs/wal
 
 ## Deferred items and limitations
 
-* **Hardware vendor packaging** – The repository ships generic HID/USB/TCP
-  transports for hardware signing, but per-vendor firmware packaging and
-  rollouts are deferred. Operators must stage devices manually and keep
-  `fallback_to_software` enabled until the vendor’s firmware attestation program
-  is complete.【F:docs/wallet_phase4_advanced.md†L140-L206】
+* **Hardware vendor packaging** – Firmware and bridge bundles are packaged and
+  attestiert via `cargo xtask wallet-firmware`, which signs manifests and
+  enforces SHA-256 checksums per vendor before rollout. Operators can still
+  stage devices manually when onboarding a new vendor but should keep
+  `fallback_to_software` enabled until the vendor’s attestation program is
+  promoted to production.【F:docs/wallet_phase4_advanced.md†L140-L237】
 * **External HSM configuration** – The runtime now exposes an HSM emulator that
   persists VRF material alongside `library_path`, but PKCS#11 integrations and
   vendor attestations are still pending before production-grade hardware

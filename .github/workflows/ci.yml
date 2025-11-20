@@ -1066,6 +1066,35 @@ PY
           name: simnet-smoke-${{ matrix.name }}
           path: artifacts/simnet-smoke/${{ matrix.name }}
 
+  wallet-firmware-bundles:
+    name: Wallet firmware bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-firmware
+      - name: Build and attest vendor firmware bundles
+        run: |
+          set -euo pipefail
+          cargo xtask wallet-firmware \
+            --signing-key deploy/firmware/test_firmware_signing.key \
+            --output dist/ci/firmware
+      - name: Verify firmware bundle signatures
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundles=(dist/ci/firmware/*/*.tar.gz)
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "::error::No firmware bundles produced" >&2
+            exit 1
+          fi
+          for bundle in "${bundles[@]}"; do
+            cargo xtask wallet-firmware --verify "$bundle"
+          done
+
   simnet-regression:
     name: Simnet regression sweep
     runs-on: ubuntu-latest
