@@ -659,6 +659,8 @@ PY
             xtask_features: "io-uring"
           - name: ethhash
             xtask_features: "ethhash"
+          - name: branch-factor-256-ethhash
+            xtask_features: "branch_factor_256,ethhash"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -703,6 +705,8 @@ PY
             features: "io-uring"
           - name: ethhash
             features: "ethhash"
+          - name: branch-factor-256-ethhash
+            features: "branch_factor_256,ethhash"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
