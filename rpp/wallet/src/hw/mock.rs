@@ -169,4 +169,24 @@ mod tests {
         request.zeroize();
         assert!(request.payload.iter().all(|byte| *byte == 0));
     }
+
+    #[test]
+    fn set_devices_replaces_unlocked_inventory() {
+        let signer = MockHardwareSigner::new(vec![HardwareDevice::new("abcd", "LockedSigner")]);
+        let initial = signer.enumerate().expect("initial enumerate");
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].fingerprint, "abcd");
+
+        signer.set_devices(vec![
+            HardwareDevice::new("beef", "UnlockedSigner").with_label("Primary"),
+            HardwareDevice::new("cafe", "UnlockedSigner"),
+        ]);
+
+        let refreshed = signer.enumerate().expect("refreshed enumerate");
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.iter().any(|device| {
+            device.fingerprint == "beef" && device.label.as_deref() == Some("Primary")
+        }));
+        assert!(refreshed.iter().any(|device| device.fingerprint == "cafe"));
+    }
 }

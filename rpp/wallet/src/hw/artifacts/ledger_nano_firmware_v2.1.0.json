@@ -1,0 +1,11 @@
+{
+  "vendor": "Ledger",
+  "product": "Nano X",
+  "version": "2.1.0",
+  "package": "firmware/ledger_nano_x_v2.1.0.bin",
+  "sha256": "6c58e6a8b810f25c021242b1f610af2c5a9f2b6c5e1c0ad2be4d41f4a7f6fb20",
+  "notes": [
+    "Enables PSBT blind signing for wallet_hw derivation paths",
+    "Marks the device as production unlocked once the attestation step succeeds"
+  ]
+}
