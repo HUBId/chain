@@ -12,7 +12,7 @@ use crate::db::{
 #[cfg(feature = "wallet_hw")]
 use crate::hw::HardwareSigner;
 #[cfg(feature = "wallet_multisig_hooks")]
-use crate::multisig::{load_cosigner_registry, load_scope, MultisigDraftMetadata, MultisigError};
+use crate::multisig::{MultisigCoordinator, MultisigDraftMetadata, MultisigError};
 use crate::node_client::NodeClient;
 
 pub mod addresses;
@@ -408,10 +408,11 @@ impl WalletEngine {
         )?;
         #[cfg(feature = "wallet_multisig_hooks")]
         {
-            let scope = load_scope(&self.store).map_err(MultisigError::from)?;
-            if let Some(scope) = scope {
-                let registry = load_cosigner_registry(&self.store).map_err(MultisigError::from)?;
-                let cosigners = registry
+            let coordinator = MultisigCoordinator::new(&self.store);
+            if let Some(scope) = coordinator.scope().map_err(MultisigError::from)? {
+                let cosigners = coordinator
+                    .cosigners()
+                    .map_err(MultisigError::from)?
                     .map(|registry| registry.to_vec())
                     .unwrap_or_default();
                 if scope.requires_collaboration() && cosigners.is_empty() {

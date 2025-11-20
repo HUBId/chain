@@ -54,10 +54,11 @@ coordination is required.【F:docs/release_checklist.md†L1-L62】【F:docs/wal
   persists VRF material alongside `library_path`, but PKCS#11 integrations and
   vendor attestations are still pending before production-grade hardware
   support ships.【F:docs/KEY_MANAGEMENT.md†L11-L32】
-* **Advanced multisig coordination** – The wallet exposes hook surfaces and CLI
-  plumbing when `wallet_multisig_hooks` is compiled, but end-to-end coordinator
-  automation still depends on site-specific scripts (`scripts/multisig/*`). Plan
-  manual testing for quorum reconciliation until vendor integrations land.【F:docs/wallet_phase4_advanced.md†L60-L109】
+* **Advanced multisig coordination** – The wallet now ships an integrated
+  coordinator behind the `wallet_multisig_hooks` feature. Operators manage
+  scopes, cosigners, and exports entirely through RPC/CLI flows instead of
+  bespoke `scripts/multisig/*` wrappers, with integration tests covering the
+  coordinator lifecycle.【F:rpp/wallet/src/multisig/coordinator.rs†L1-L168】【F:tests/wallet_multisig_coordinator.rs†L1-L64】
 * **Vendor Electrs telemetry opt-in** – Telemetry endpoints stay disabled by
   default; enabling them requires a reachable observability stack per the config
   sample. Operators who have not provisioned telemetry endpoints must keep the

@@ -99,12 +99,8 @@ compiling with the feature. When active, use the CLI helpers to manage state:
 * `rpp-wallet multisig scope get|set|clear` – inspect or update the active threshold scope.
 * `rpp-wallet multisig cosigners list|set|clear` – manage the local cosigner registry.
 * `rpp-wallet multisig export --draft <id>` – export draft metadata for external
-  coordinators.
-
-Hook integration remains environment-specific. Deployments can continue to implement
-scripts under `scripts/multisig/` that broker PSBT signing with their chosen coordinator.
-Ensure those scripts are only enabled when `[wallet.multisig].enabled` is true and the
-binary was produced with `wallet_multisig_hooks`.
+  coordinators. Exports are persisted by the built-in coordinator and can be
+  fetched via JSON-RPC without custom helper scripts.
 
 #### Multisig Troubleshooting
 

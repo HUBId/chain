@@ -1,6 +1,11 @@
+mod coordinator;
 mod cosigner_registry;
 mod scopes;
 
+pub use coordinator::{
+    clear_export, list_exports, load_export, store_export, MultisigCoordinator,
+    MultisigMetadataExport,
+};
 pub use cosigner_registry::{Cosigner, CosignerRegistry, CosignerRegistryError};
 pub use scopes::{MultisigScope, MultisigScopeError};
 
@@ -97,7 +102,7 @@ where
     Ok(Some(value))
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, MultisigStorageError> {
+pub(super) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, MultisigStorageError> {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
         .allow_trailing_bytes()
@@ -105,7 +110,7 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, MultisigStorageError> {
         .map_err(|err| MultisigStorageError::Codec(CodecError::Serialization(err)))
 }
 
-fn decode<'a, T>(bytes: &'a [u8]) -> Result<T, MultisigStorageError>
+pub(super) fn decode<'a, T>(bytes: &'a [u8]) -> Result<T, MultisigStorageError>
 where
     T: DeserializeOwned,
 {

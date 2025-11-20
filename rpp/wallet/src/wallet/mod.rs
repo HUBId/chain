@@ -28,10 +28,7 @@ use crate::hw::{
 use crate::indexer::IndexerClient;
 use crate::modes::watch_only::{WatchOnlyRecord, WatchOnlyStatus};
 #[cfg(feature = "wallet_multisig_hooks")]
-use crate::multisig::{
-    clear_cosigner_registry, clear_scope, load_cosigner_registry, load_scope,
-    store_cosigner_registry, store_scope, CosignerRegistry, MultisigError, MultisigScope,
-};
+use crate::multisig::{CosignerRegistry, MultisigCoordinator, MultisigError, MultisigScope};
 use crate::node_client::MempoolStatus;
 use crate::node_client::{BlockFeeSummary, ChainHead, MempoolInfo, NodeClient, NodeClientError};
 use crate::proof_backend::{
@@ -569,8 +566,8 @@ impl Wallet {
 
     #[cfg(feature = "wallet_multisig_hooks")]
     pub fn multisig_scope(&self) -> Result<Option<MultisigScope>, WalletError> {
-        load_scope(&self.store)
-            .map_err(MultisigError::from)
+        self.multisig_coordinator()
+            .scope()
             .map_err(WalletError::from)
     }
 
@@ -584,18 +581,9 @@ impl Wallet {
         &self,
         scope: Option<MultisigScope>,
     ) -> Result<Option<MultisigScope>, WalletError> {
-        let mut batch = self.store.batch().map_err(store_error)?;
-        let previous = self.multisig_scope()?;
-        match scope {
-            Some(scope) => {
-                store_scope(&mut batch, &scope)
-                    .map_err(MultisigError::from)
-                    .map_err(WalletError::from)?;
-            }
-            None => clear_scope(&mut batch),
-        }
-        batch.commit().map_err(store_error)?;
-        Ok(previous)
+        self.multisig_coordinator()
+            .set_scope(scope)
+            .map_err(WalletError::from)
     }
 
     #[cfg(not(feature = "wallet_multisig_hooks"))]
@@ -608,8 +596,8 @@ impl Wallet {
 
     #[cfg(feature = "wallet_multisig_hooks")]
     pub fn cosigner_registry(&self) -> Result<Option<CosignerRegistry>, WalletError> {
-        load_cosigner_registry(&self.store)
-            .map_err(MultisigError::from)
+        self.multisig_coordinator()
+            .cosigners()
             .map_err(WalletError::from)
     }
 
@@ -625,18 +613,9 @@ impl Wallet {
         &self,
         registry: Option<CosignerRegistry>,
     ) -> Result<Option<CosignerRegistry>, WalletError> {
-        let mut batch = self.store.batch().map_err(store_error)?;
-        let previous = self.cosigner_registry()?;
-        match registry {
-            Some(registry) => {
-                store_cosigner_registry(&mut batch, &registry)
-                    .map_err(MultisigError::from)
-                    .map_err(WalletError::from)?;
-            }
-            None => clear_cosigner_registry(&mut batch),
-        }
-        batch.commit().map_err(store_error)?;
-        Ok(previous)
+        self.multisig_coordinator()
+            .set_cosigners(registry)
+            .map_err(WalletError::from)
     }
 
     #[cfg(not(feature = "wallet_multisig_hooks"))]
@@ -649,6 +628,11 @@ impl Wallet {
 
     pub fn pending_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
         Ok(self.engine.pending_locks()?)
+    }
+
+    #[cfg(feature = "wallet_multisig_hooks")]
+    pub(crate) fn multisig_coordinator(&self) -> MultisigCoordinator<'_> {
+        MultisigCoordinator::new(&self.store)
     }
 
     pub fn release_stale_locks(&self) -> Result<Vec<PendingLock>, WalletError> {
