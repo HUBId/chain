@@ -515,7 +515,21 @@ fn run_firewood_feature_matrix() -> Result<()> {
         .arg("--locked")
         .arg("--features")
         .arg("ethhash");
-    run_command(ethhash, "firewood unit tests (ethhash)")
+    run_command(ethhash, "firewood unit tests (ethhash)")?;
+
+    let mut branch_factor_256_ethhash = Command::new("cargo");
+    branch_factor_256_ethhash
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("firewood")
+        .arg("--locked")
+        .arg("--features")
+        .arg("branch_factor_256,ethhash");
+    run_command(
+        branch_factor_256_ethhash,
+        "firewood unit tests (branch_factor_256 + ethhash)",
+    )
 }
 
 fn run_integration_workflows() -> Result<()> {
