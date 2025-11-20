@@ -12,6 +12,21 @@ while any failure records `result="fail"` together with the stage label, making
 persistent errors easy to isolate in queries such as
 `rpp_stark_stage_checks_total{stage="fri",result="fail"}`.【F:rpp/runtime/node.rs†L3770-L3850】【F:rpp/runtime/telemetry/metrics.rs†L473-L492】
 
+### Startup validation and supported flag combinations
+
+The node now validates compiled ZK backend flags during bootstrap so operators
+get actionable errors instead of tripping runtime panics later on. The checks
+reject binaries that:
+
+- Enable both `backend-plonky3` and `backend-plonky3-gpu` at the same time.
+- Omit every recognised backend feature (`prover-stwo`, `prover-stwo-simd`,
+  `backend-plonky3`, `backend-plonky3-gpu`, `backend-rpp-stark`,
+  `prover-mock`).
+
+Startups that hit these guardrails exit with descriptive `ChainError::Config`
+messages pointing at the offending flags, making misbuilt release artifacts
+easy to diagnose before rollout.【F:rpp/runtime/node.rs†L2068-L2101】
+
 Additional context for paging decisions is available through the
 `VerifierMetricsSnapshot` that powers `/status/node`:
 `backend_health.rpp-stark.verifier.rejected` increments on every rejected proof,
