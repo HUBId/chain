@@ -1029,6 +1029,23 @@ EOF
           name: snapshot_partition_report.json
           path: phasec-artifacts/chaos
           if-no-files-found: warn
+      - name: Validate collected Phase‑C artifacts
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for artifact in \
+            phasec-artifacts/worm/worm-retention-report.json \
+            phasec-artifacts/chaos/snapshot_partition_report.json; do
+            if [[ ! -f "$artifact" ]]; then
+              missing+=("$artifact")
+            fi
+          done
+
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            printf '::error::Fehlende Phase‑C-Artefakte: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
       - name: Generate nightly status summary
         run: |
           set -euo pipefail
@@ -1036,6 +1053,13 @@ EOF
             --retention-report phasec-artifacts/worm/worm-retention-report.json \
             --chaos-report phasec-artifacts/chaos/snapshot_partition_report.json \
             --phasec-status-file phaseC_status.md
+      - name: Ensure phaseC_status.md was updated
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- phaseC_status.md; then
+            echo "::error::phaseC_status.md wurde nicht aktualisiert – fehlen WORM-/Chaos-Outputs?" >&2
+            exit 1
+          fi
       - name: Stage nightly status changes
         run: |
           set -euo pipefail
