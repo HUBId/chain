@@ -4,37 +4,55 @@
       "uid": "pipeline-overview",
       "title": "Pipeline Overview",
       "output": "docs/dashboards/pipeline_overview.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "9c18f74ce47a18245e4f1105047fbab531a6898decfc5baee32d9494d91a0f1f"
     },
     {
       "uid": "pipeline-wallet-intake",
       "title": "Pipeline Wallet Intake",
       "output": "docs/dashboards/pipeline_wallet_intake.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "f7584db9b3540cbb0434f42f4cb6696853edf64c72ae85c6c1bafbcb81abb2f6"
     },
     {
       "uid": "pipeline-proof-validation",
       "title": "Pipeline Proof Validation",
       "output": "docs/dashboards/pipeline_proof_validation.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "afa3b7e9a67ec6fd29483f619e3407e424e349669518fddd5dfc798d71ad6788"
     },
     {
       "uid": "pipeline-consensus-finality",
       "title": "Pipeline Consensus Finality",
       "output": "docs/dashboards/pipeline_consensus_finality.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "f2a3c29bb2a7f6a01dbc5b357c8f31904f4407b7770b40c91c69140e9668e741"
     },
     {
       "uid": "pipeline-storage-commit",
       "title": "Pipeline Storage Commit",
       "output": "docs/dashboards/pipeline_storage_commit.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "c2576de10a5a4d1e84bd3310a2837c4cf45e00f093ba67d3b10cc0ecbee4c58f"
     },
     {
       "uid": "snapshot-resilience",
       "title": "Snapshot Resilience",
       "output": "docs/dashboards/snapshot_resilience.json",
-      "min_schema": 39
+      "min_schema": 39,
+      "version": 1,
+      "version_tag": "v2024-09-25",
+      "sha256": "5e14aa7dfaaeb3b42fb3a1a18ea60662ab545cca85a7603b8e0a1f936d9c2529"
     }
   ]
 }
