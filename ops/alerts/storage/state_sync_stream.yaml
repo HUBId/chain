@@ -1,0 +1,52 @@
+groups:
+  - name: state-sync-stream
+    interval: 1m
+    rules:
+      - alert: StateSyncChunkStreamLagWarning
+        expr: |
+          (rpp_runtime_state_sync_stream_last_chunk_age_seconds_sum
+            /
+          rpp_runtime_state_sync_stream_last_chunk_age_seconds_count) > 30
+        for: 5m
+        labels:
+          severity: warning
+          team: storage
+        annotations:
+          summary: State-sync chunk stream lagging
+          description: >-
+            The moving average gap between state-sync chunks exceeded thirty seconds
+            for five minutes. Inspect downstream consumers and snapshot store IO to
+            restore steady throughput before the session times out.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/state_sync.md#state-sync-stream-alerts
+      - alert: StateSyncChunkStreamLagCritical
+        expr: |
+          (rpp_runtime_state_sync_stream_last_chunk_age_seconds_sum
+            /
+          rpp_runtime_state_sync_stream_last_chunk_age_seconds_count) > 120
+        for: 5m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: State-sync chunk stream severely delayed
+          description: >-
+            The average time between state-sync chunks breached two minutes. Pause
+            client rollouts and drain stalled streams before attempting retries or
+            switching to a fresh snapshot producer.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/state_sync.md#state-sync-stream-alerts
+      - alert: StateSyncChunkStreamStalled
+        expr: |
+          (rpp_runtime_state_sync_stream_chunks_sent_sum > 0)
+          and
+          (sum(rate(rpp_runtime_state_sync_stream_chunks[10m])) < 0.1)
+        for: 10m
+        labels:
+          severity: critical
+          team: storage
+        annotations:
+          summary: Active state-sync streams have stopped delivering chunks
+          description: >-
+            State-sync chunk throughput dropped below the 0.1 chunk/sec floor for ten
+            minutes despite recent progress. Investigate RPC logs for stalled
+            consumers, bandwidth limits, or snapshot-store errors.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/state_sync.md#state-sync-stream-alerts

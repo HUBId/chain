@@ -113,8 +113,10 @@ pub struct RuntimeMetrics {
     reputation_penalties: Counter<u64>,
     state_sync_stream_starts: Counter<u64>,
     state_sync_stream_chunks: Counter<u64>,
+    state_sync_stream_chunks_sent: Histogram<u64>,
     state_sync_stream_backpressure: Counter<u64>,
     state_sync_active_streams: Histogram<u64>,
+    state_sync_stream_last_chunk_age: Histogram<f64>,
 }
 
 impl RuntimeMetrics {
@@ -322,6 +324,11 @@ impl RuntimeMetrics {
                 .with_description("Total number of state sync snapshot chunks streamed")
                 .with_unit("1")
                 .build(),
+            state_sync_stream_chunks_sent: meter
+                .u64_histogram("rpp.runtime.state_sync.stream.chunks_sent")
+                .with_description("Chunks delivered per state sync stream before completion")
+                .with_unit("1")
+                .build(),
             state_sync_stream_backpressure: meter
                 .u64_counter("rpp.runtime.state_sync.stream.backpressure")
                 .with_description(
@@ -333,6 +340,11 @@ impl RuntimeMetrics {
                 .u64_histogram("rpp.runtime.state_sync.stream.active")
                 .with_description("Active state sync stream count sampled on lifecycle changes")
                 .with_unit("1")
+                .build(),
+            state_sync_stream_last_chunk_age: meter
+                .f64_histogram("rpp.runtime.state_sync.stream.last_chunk_age.seconds")
+                .with_description("Elapsed seconds between consecutive state sync chunks")
+                .with_unit("s")
                 .build(),
         }
     }
@@ -693,8 +705,18 @@ impl RuntimeMetrics {
         self.state_sync_stream_chunks.add(1, &[]);
     }
 
+    pub fn record_state_sync_stream_progress(&self, chunks_served: u64) {
+        self.state_sync_stream_chunks_sent
+            .record(chunks_served, &[]);
+    }
+
     pub fn record_state_sync_stream_backpressure(&self) {
         self.state_sync_stream_backpressure.add(1, &[]);
+    }
+
+    pub fn record_state_sync_last_chunk_age(&self, age_seconds: f64) {
+        self.state_sync_stream_last_chunk_age
+            .record(age_seconds, &[]);
     }
 }
 

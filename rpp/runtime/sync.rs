@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use base64::{engine::general_purpose, Engine as _};
 use futures::Stream;
@@ -385,6 +386,8 @@ pub struct SnapshotStream {
     total: u32,
     finished: bool,
     metrics: Arc<RuntimeMetrics>,
+    chunks_served: u64,
+    last_chunk_at: Instant,
     permit: Option<OwnedSemaphorePermit>,
     active_streams: Arc<AtomicUsize>,
 }
@@ -407,6 +410,8 @@ impl SnapshotStream {
             total,
             finished: false,
             metrics,
+            chunks_served: 0,
+            last_chunk_at: Instant::now(),
             permit: Some(permit),
             active_streams,
         }
@@ -442,7 +447,20 @@ impl Stream for SnapshotStream {
 
         let result = self.node.state_sync_session_chunk(index);
         match &result {
-            Ok(_) => self.metrics.record_state_sync_chunk_served(),
+            Ok(_) => {
+                let now = Instant::now();
+                let age = now
+                    .checked_duration_since(self.last_chunk_at)
+                    .map(|duration| duration.as_secs_f64())
+                    .unwrap_or_default();
+                self.metrics.record_state_sync_last_chunk_age(age);
+                self.last_chunk_at = now;
+                self.chunks_served = self
+                    .chunks_served
+                    .checked_add(1)
+                    .expect("state sync stream chunk counter overflow");
+                self.metrics.record_state_sync_chunk_served();
+            }
             Err(_) => self.finished = true,
         }
         Poll::Ready(Some(result))
@@ -451,6 +469,8 @@ impl Stream for SnapshotStream {
 
 impl Drop for SnapshotStream {
     fn drop(&mut self) {
+        self.metrics
+            .record_state_sync_stream_progress(self.chunks_served);
         if let Some(_permit) = self.permit.take() {
             // releasing the permit on drop enforces concurrency bounds
         }
