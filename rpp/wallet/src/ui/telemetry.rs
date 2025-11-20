@@ -137,6 +137,10 @@ impl UiTelemetry {
         counter!("ui.rescan.triggered", "origin" => origin).increment(1);
     }
 
+    pub fn record_lock_outcome(&self, action: LockAction, outcome: TelemetryOutcome) {
+        self.record_action(action.label(), outcome);
+    }
+
     pub fn record_backup_outcome(&self, action: BackupAction, outcome: TelemetryOutcome) {
         self.record_action(action.label(), outcome);
     }
@@ -192,6 +196,21 @@ impl BackupAction {
             Self::Export => "backup.export",
             Self::Validate => "backup.validate",
             Self::Import => "backup.import",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LockAction {
+    RefreshPendingLocks,
+    ReleasePendingLocks,
+}
+
+impl LockAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RefreshPendingLocks => "locks.refresh",
+            Self::ReleasePendingLocks => "locks.release",
         }
     }
 }
@@ -580,6 +599,8 @@ mod tests {
         telemetry.record_zsi_outcome(ZsiAction::BindAccount, TelemetryOutcome::Error);
         #[cfg(feature = "wallet_hw")]
         telemetry.record_hardware_outcome(HardwareAction::Enumerate, TelemetryOutcome::Success);
+        telemetry.record_lock_outcome(LockAction::RefreshPendingLocks, TelemetryOutcome::Success);
+        telemetry.record_lock_outcome(LockAction::ReleasePendingLocks, TelemetryOutcome::Error);
 
         assert!(TestRecorder::counter_value(
             &inner,
@@ -609,6 +630,16 @@ mod tests {
             "ui.action.events{operation=hardware.enumerate,outcome=ok}"
         )
         .is_none());
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=locks.refresh,outcome=ok}"
+        )
+        .is_none());
+        assert!(TestRecorder::counter_value(
+            &inner,
+            "ui.action.events{operation=locks.release,outcome=err}"
+        )
+        .is_none());
 
         TestRecorder::reset(&inner);
         telemetry.set_opt_in(true);
@@ -633,6 +664,20 @@ mod tests {
             TestRecorder::counter_value(
                 &inner,
                 "ui.action.events{operation=watch_only.enable,outcome=err}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=locks.refresh,outcome=ok}"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            TestRecorder::counter_value(
+                &inner,
+                "ui.action.events{operation=locks.release,outcome=err}"
             ),
             Some(1)
         );
