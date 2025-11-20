@@ -17,6 +17,7 @@ pub enum WalletRpcErrorCode {
     FeeTooHigh,
     PendingLockConflict,
     ProverBackendDisabled,
+    ProverBackendMisconfigured,
     ProverTimeout,
     ProverBusy,
     ProverInternal,
@@ -56,6 +57,9 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::FeeTooHigh => Cow::Borrowed("FEE_TOO_HIGH"),
             WalletRpcErrorCode::PendingLockConflict => Cow::Borrowed("PENDING_LOCK_CONFLICT"),
             WalletRpcErrorCode::ProverBackendDisabled => Cow::Borrowed("PROVER_BACKEND_DISABLED"),
+            WalletRpcErrorCode::ProverBackendMisconfigured => {
+                Cow::Borrowed("PROVER_BACKEND_MISCONFIGURED")
+            }
             WalletRpcErrorCode::ProverTimeout => Cow::Borrowed("PROVER_TIMEOUT"),
             WalletRpcErrorCode::ProverBusy => Cow::Borrowed("PROVER_BUSY"),
             WalletRpcErrorCode::ProverInternal => Cow::Borrowed("PROVER_INTERNAL"),
@@ -95,6 +99,7 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::FeeTooHigh => -32012,
             WalletRpcErrorCode::PendingLockConflict => -32013,
             WalletRpcErrorCode::ProverBackendDisabled => -32014,
+            WalletRpcErrorCode::ProverBackendMisconfigured => -32022,
             WalletRpcErrorCode::ProverTimeout => -32015,
             WalletRpcErrorCode::ProverBusy => -32016,
             WalletRpcErrorCode::ProverInternal => -32017,
@@ -167,6 +172,7 @@ impl<'de> Deserialize<'de> for WalletRpcErrorCode {
             "FEE_TOO_HIGH" => WalletRpcErrorCode::FeeTooHigh,
             "PENDING_LOCK_CONFLICT" => WalletRpcErrorCode::PendingLockConflict,
             "PROVER_BACKEND_DISABLED" => WalletRpcErrorCode::ProverBackendDisabled,
+            "PROVER_BACKEND_MISCONFIGURED" => WalletRpcErrorCode::ProverBackendMisconfigured,
             "PROVER_TIMEOUT" => WalletRpcErrorCode::ProverTimeout,
             "PROVER_BUSY" => WalletRpcErrorCode::ProverBusy,
             "PROVER_INTERNAL" => WalletRpcErrorCode::ProverInternal,

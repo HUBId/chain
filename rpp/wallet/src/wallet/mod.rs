@@ -53,6 +53,8 @@ pub enum WalletError {
     Engine(#[from] EngineError),
     #[error("wallet prover backend disabled")]
     ProverBackendDisabled,
+    #[error("wallet prover backend misconfigured: {reason}")]
+    ProverBackendMisconfigured { reason: String },
     #[error("wallet prover job timed out after {timeout_secs} seconds")]
     ProverTimeout { timeout_secs: u64 },
     #[error("wallet prover job was cancelled")]
@@ -127,7 +129,9 @@ fn map_unsupported_backend(context: &'static str) -> WalletError {
     if context == BACKEND_DISABLED_REASON {
         WalletError::ProverBackendDisabled
     } else {
-        prover_internal(format!("unsupported prover backend: {context}"))
+        WalletError::ProverBackendMisconfigured {
+            reason: context.to_string(),
+        }
     }
 }
 
