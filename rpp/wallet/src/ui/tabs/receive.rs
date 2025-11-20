@@ -749,12 +749,17 @@ mod tests {
         }
     }
 
-    fn address(address: &str, label: Option<&str>, note: Option<&str>) -> WalletAddressDto {
+    fn address_with_status(
+        address: &str,
+        status: AddressStatusDto,
+        label: Option<&str>,
+        note: Option<&str>,
+    ) -> WalletAddressDto {
         WalletAddressDto {
             address: address.to_string(),
             branch: AddressBranchDto::Receive,
             index: 0,
-            status: AddressStatusDto::Unused,
+            status,
             label: label.map(|value| value.to_string()),
             note: note.map(|value| value.to_string()),
             derived_at_ms: None,
@@ -762,11 +767,19 @@ mod tests {
         }
     }
 
-    fn address_page(addresses: Vec<WalletAddressDto>) -> ListBranchAddressesResponse {
+    fn address(address: &str, label: Option<&str>, note: Option<&str>) -> WalletAddressDto {
+        address_with_status(address, AddressStatusDto::Unused, label, note)
+    }
+
+    fn address_page(
+        addresses: Vec<WalletAddressDto>,
+        next_cursor: Option<&str>,
+        prev_cursor: Option<&str>,
+    ) -> ListBranchAddressesResponse {
         ListBranchAddressesResponse {
             addresses,
-            next_cursor: None,
-            prev_cursor: None,
+            next_cursor: next_cursor.map(|cursor| cursor.to_string()),
+            prev_cursor: prev_cursor.map(|cursor| cursor.to_string()),
         }
     }
 
@@ -840,7 +853,7 @@ mod tests {
         let mut state = State::default();
         state.apply_address_page(
             PageCursor::root(),
-            address_page(vec![address("addr1", None, None)]),
+            address_page(vec![address("addr1", None, None)], None, None),
         );
 
         match &state.addresses {
@@ -858,7 +871,7 @@ mod tests {
         let mut state = State::default();
         state.apply_address_page(
             PageCursor::root(),
-            address_page(vec![address("addr1", None, None)]),
+            address_page(vec![address("addr1", None, None)], None, None),
         );
 
         state.update(
@@ -883,5 +896,172 @@ mod tests {
             }
             _ => panic!("addresses not loaded"),
         }
+    }
+
+    #[test]
+    fn pagination_tracks_cursor_bounds_and_renders_rows() {
+        let client = dummy_client();
+        let mut state = State::default();
+        state.apply_address_page(
+            PageCursor::root(),
+            address_page(
+                vec![address("addr1", Some("home"), None)],
+                Some("cursor-2"),
+                None,
+            ),
+        );
+
+        let command = state.update(client.clone(), Message::NextHistoryPage);
+        assert!(matches!(state.addresses, Snapshot::Loading));
+        let cursor = state.pending_cursor.as_ref().expect("pending cursor");
+        assert_eq!(cursor.cursor.as_deref(), Some("cursor-2"));
+        assert_eq!(cursor.page_number, 2);
+        assert!(!command.actions().is_empty());
+
+        state.update(
+            client.clone(),
+            Message::AddressesLoaded(Ok(address_page(
+                vec![
+                    address_with_status(
+                        "addr2",
+                        AddressStatusDto::Used,
+                        Some("office"),
+                        Some("work"),
+                    ),
+                    address_with_status("addr3", AddressStatusDto::Unused, None, None),
+                ],
+                None,
+                Some("cursor-1"),
+            ))),
+        );
+
+        match &state.addresses {
+            Snapshot::Loaded(page) => {
+                assert_eq!(page.page_number, 2);
+                assert_eq!(page.entries.len(), 2);
+                assert_eq!(page.prev_cursor.as_deref(), Some("cursor-1"));
+                assert!(page.next_cursor.is_none());
+                assert_eq!(page.entries[0].status, AddressStatus::Used);
+                assert_eq!(page.entries[0].label.as_deref(), Some("office"));
+                assert_eq!(page.entries[0].note.as_deref(), Some("work"));
+            }
+            _ => panic!("addresses not loaded"),
+        }
+
+        let history = format!("{:?}", state.history_view());
+        assert!(history.contains("Used"));
+        assert!(history.contains("office"));
+
+        let command = state.update(client, Message::PreviousHistoryPage);
+        assert!(matches!(state.addresses, Snapshot::Loading));
+        let cursor = state.pending_cursor.as_ref().expect("pending cursor");
+        assert_eq!(cursor.cursor.as_deref(), Some("cursor-1"));
+        assert_eq!(cursor.page_number, 1);
+        assert!(!command.actions().is_empty());
+    }
+
+    #[test]
+    fn empty_history_page_renders_hint() {
+        let mut state = State::default();
+        state.apply_address_page(PageCursor::root(), address_page(vec![], None, None));
+
+        match &state.addresses {
+            Snapshot::Loaded(page) => assert!(page.entries.is_empty()),
+            _ => panic!("addresses not loaded"),
+        }
+
+        let history = format!("{:?}", state.history_view());
+        assert!(history.contains("No derived addresses yet"));
+    }
+
+    #[test]
+    fn rpc_timeout_surfaces_error_without_breaking_clipboard() {
+        let client = dummy_client();
+        let mut state = State::default();
+        state.update(
+            client.clone(),
+            Message::CurrentAddressLoaded(Ok(response("addr1"))),
+        );
+
+        state.update(
+            client.clone(),
+            Message::AddressesLoaded(Err(RpcCallError::Timeout(Duration::from_secs(3)))),
+        );
+
+        assert!(matches!(state.addresses, Snapshot::Error(message) if message.contains("3")));
+        assert!(state
+            .addresses_error
+            .as_ref()
+            .expect("addresses error")
+            .contains("3"));
+
+        let history = format!("{:?}", state.history_view());
+        assert!(history.contains("Failed to load address history"));
+
+        let command = state.update(
+            client.clone(),
+            Message::CopyToClipboard(ClipboardTarget::Address),
+        );
+        assert!(state.pending_clipboard.is_some());
+        assert!(command.actions().is_empty());
+
+        let current = format!("{:?}", state.current_address_view());
+        assert!(current.contains("addr1"));
+    }
+
+    #[test]
+    fn label_edit_flow_dispatches_rpc_and_refreshes_state() {
+        let client = dummy_client();
+        let mut state = State::default();
+        state.apply_address_page(
+            PageCursor::root(),
+            address_page(
+                vec![address("addr1", Some("home"), Some("note"))],
+                None,
+                None,
+            ),
+        );
+
+        state.update(
+            client.clone(),
+            Message::LabelChanged {
+                address: "addr1".to_string(),
+                value: "new home".to_string(),
+            },
+        );
+
+        let command = state.update(client.clone(), Message::PersistLabel("addr1".to_string()));
+        match &state.addresses {
+            Snapshot::Loaded(page) => {
+                assert!(page.entries[0].saving);
+                assert_eq!(page.entries[0].label_input, "new home");
+            }
+            _ => panic!("addresses not loaded"),
+        }
+        assert!(!command.actions().is_empty());
+
+        state.addresses_error = Some("previous error".to_string());
+        state.update(
+            client,
+            Message::LabelUpdated(Ok(UpdateAddressMetadataResponse {
+                address: address_with_status(
+                    "addr1",
+                    AddressStatusDto::Used,
+                    Some("updated"),
+                    Some("refreshed"),
+                ),
+            })),
+        );
+
+        match &state.addresses {
+            Snapshot::Loaded(page) => {
+                assert_eq!(page.entries[0].label.as_deref(), Some("updated"));
+                assert_eq!(page.entries[0].note.as_deref(), Some("refreshed"));
+                assert_eq!(page.entries[0].label_input, "updated");
+                assert!(!page.entries[0].saving);
+            }
+            _ => panic!("addresses not loaded"),
+        }
+        assert!(state.addresses_error.is_none());
     }
 }
