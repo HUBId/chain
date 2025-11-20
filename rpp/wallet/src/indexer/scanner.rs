@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,15 +34,54 @@ pub struct WalletScanner {
     start_height: u64,
 }
 
+/// Cancellation primitive used to interrupt ongoing scans.
+#[derive(Clone, Default)]
+pub struct ScanAbortToken {
+    aborted: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct ScanAbortHandle {
+    token: ScanAbortToken,
+}
+
+impl ScanAbortToken {
+    pub fn new_pair() -> (ScanAbortHandle, ScanAbortToken) {
+        let token = ScanAbortToken {
+            aborted: Arc::new(AtomicBool::new(false)),
+        };
+        let handle = ScanAbortHandle {
+            token: token.clone(),
+        };
+        (handle, token)
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.aborted.load(Ordering::SeqCst)
+    }
+}
+
+impl ScanAbortHandle {
+    pub fn abort(&self) {
+        self.token.aborted.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Aggregated synchronisation status returned by scanning operations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SyncStatus {
     /// Latest chain height reported by the indexer backend.
     pub latest_height: u64,
+    /// Latest height processed by the scanner.
+    pub current_height: u64,
+    /// Target height the scanner is working towards.
+    pub target_height: u64,
     /// Mode executed during the scan.
     pub mode: SyncMode,
     /// Number of script hashes (addresses) visited during the scan.
     pub scanned_scripthashes: usize,
+    /// Number of transactions discovered during the scan.
+    pub discovered_transactions: usize,
     /// Optional pending height ranges associated with the scan.
     pub pending_ranges: Vec<(u64, u64)>,
     /// Snapshot of the persisted checkpoints after the scan.
@@ -88,6 +128,8 @@ pub enum ScannerError {
     Indexer(#[from] IndexerClientError),
     #[error("invalid wallet address encoding: {0}")]
     InvalidAddress(#[from] FromHexError),
+    #[error("RESCAN_ABORTED")]
+    Aborted,
 }
 
 impl WalletScanner {
@@ -106,21 +148,25 @@ impl WalletScanner {
     }
 
     /// Execute a full synchronisation starting from the configured birthday height.
-    pub fn sync_full(&self) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanIntent::Full)
+    pub fn sync_full(&self, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
+        self.scan(ScanIntent::Full, abort)
     }
 
     /// Resume synchronisation from the last stored checkpoint.
-    pub fn sync_resume(&self) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanIntent::Resume)
+    pub fn sync_resume(&self, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
+        self.scan(ScanIntent::Resume, abort)
     }
 
     /// Trigger an explicit rescan starting from `from_height`.
-    pub fn rescan_from(&self, from_height: u64) -> Result<SyncStatus, ScannerError> {
-        self.scan(ScanIntent::Rescan { from_height })
+    pub fn rescan_from(
+        &self,
+        from_height: u64,
+        abort: &ScanAbortToken,
+    ) -> Result<SyncStatus, ScannerError> {
+        self.scan(ScanIntent::Rescan { from_height }, abort)
     }
 
-    fn scan(&self, intent: ScanIntent) -> Result<SyncStatus, ScannerError> {
+    fn scan(&self, intent: ScanIntent, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
         let store = self.engine.store();
         let base_height = match intent {
             ScanIntent::Full => self.start_height,
@@ -134,8 +180,11 @@ impl WalletScanner {
         let latest_height = headers.latest_height;
 
         let mut scanned_scripthashes = 0usize;
+        let mut discovered_transactions = 0usize;
         for kind in [AddressKind::External, AddressKind::Internal] {
-            scanned_scripthashes += self.scan_address_space(kind, base_height, latest_height)?;
+            let (scanned, new_txs) = self.scan_address_space(kind, latest_height, abort)?;
+            scanned_scripthashes += scanned;
+            discovered_transactions += new_txs;
         }
 
         let existing_birthday = birthday_height(store)?;
@@ -167,8 +216,11 @@ impl WalletScanner {
 
         Ok(SyncStatus {
             latest_height,
+            current_height: checkpoints.resume_height.unwrap_or(base_height),
+            target_height: latest_height,
             mode,
             scanned_scripthashes,
+            discovered_transactions,
             pending_ranges,
             checkpoints,
             hints: Vec::new(),
@@ -179,29 +231,37 @@ impl WalletScanner {
     fn scan_address_space(
         &self,
         kind: AddressKind,
-        base_height: u64,
         latest_height: u64,
-    ) -> Result<usize, ScannerError> {
+        abort: &ScanAbortToken,
+    ) -> Result<(usize, usize), ScannerError> {
         let store = self.engine.store();
         let mut scanned = 0usize;
+        let mut discovered_transactions = 0usize;
         let mut queue: VecDeque<TrackedAddress> = self.load_known_addresses(kind)?.into();
 
         loop {
+            if abort.is_aborted() {
+                self.persist_progress_checkpoint(latest_height)?;
+                return Err(ScannerError::Aborted);
+            }
             if queue.is_empty() {
                 let derived = self.derive_batch(kind)?;
                 if derived.is_empty() {
                     break;
                 }
                 queue.extend(derived);
+                self.persist_progress_checkpoint(latest_height)?;
             }
 
             let Some(address) = queue.pop_front() else {
                 break;
             };
             scanned += 1;
-            if let Some(first_seen_height) =
-                self.scan_single_address(store, &address, latest_height)?
+            if let Some(outcome) =
+                self.scan_single_address(store, &address, latest_height, abort)?
             {
+                discovered_transactions += outcome.discovered_txs;
+                let first_seen_height = outcome.first_seen_height;
                 self.engine.address_manager().mark_address_used(
                     kind,
                     address.index,
@@ -210,7 +270,7 @@ impl WalletScanner {
             }
         }
 
-        Ok(scanned)
+        Ok((scanned, discovered_transactions))
     }
 
     fn scan_single_address(
@@ -218,7 +278,11 @@ impl WalletScanner {
         store: &Arc<WalletStore>,
         address: &TrackedAddress,
         latest_height: u64,
-    ) -> Result<Option<u64>, ScannerError> {
+        abort: &ScanAbortToken,
+    ) -> Result<Option<AddressScanOutcome>, ScannerError> {
+        if abort.is_aborted() {
+            return Err(ScannerError::Aborted);
+        }
         let scripthash = decode_address_scripthash(&address.address)?;
 
         let _status = self
@@ -288,7 +352,18 @@ impl WalletScanner {
         let observed_height = first_seen_height
             .or_else(|| (!new_utxos.is_empty() || !new_txs.is_empty()).then_some(latest_height));
 
-        Ok(observed_height)
+        Ok(observed_height.map(|height| AddressScanOutcome {
+            first_seen_height: height,
+            discovered_txs: new_txs.len(),
+        }))
+    }
+
+    fn persist_progress_checkpoint(&self, latest_height: u64) -> Result<(), ScannerError> {
+        let mut batch = self.engine.store().batch()?;
+        persist_resume_height(&mut batch, Some(latest_height))?;
+        persist_last_scan_ts(&mut batch, Some(current_timestamp_ms()))?;
+        batch.commit()?;
+        Ok(())
     }
 
     fn load_known_addresses(&self, kind: AddressKind) -> Result<Vec<TrackedAddress>, ScannerError> {
@@ -374,6 +449,11 @@ impl WalletScanner {
     }
 }
 
+struct AddressScanOutcome {
+    first_seen_height: u64,
+    discovered_txs: usize,
+}
+
 fn decode_address_scripthash(address: &str) -> Result<[u8; 32], FromHexError> {
     let bytes = hex::decode(address)?;
     let mut hash = [0u8; 32];
@@ -446,7 +526,8 @@ mod tests {
         );
 
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
-        let status = scanner.sync_full().expect("sync full");
+        let (_, abort) = ScanAbortToken::new_pair();
+        let status = scanner.sync_full(&abort).expect("sync full");
 
         assert_eq!(status.latest_height, latest_height);
         assert!(matches!(status.mode, SyncMode::Full { start_height: 0 }));
@@ -484,8 +565,9 @@ mod tests {
         );
 
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
-        scanner.sync_full().expect("first sync");
-        let resume_status = scanner.sync_resume().expect("resume sync");
+        let (_, abort) = ScanAbortToken::new_pair();
+        scanner.sync_full(&abort).expect("first sync");
+        let resume_status = scanner.sync_resume(&abort).expect("resume sync");
         assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
 
         let utxos = engine.store().iter_utxos().expect("utxos");
@@ -528,14 +610,15 @@ mod tests {
         mock.add_status(&addresses[0]);
 
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
+        let (_, abort) = ScanAbortToken::new_pair();
 
-        let full_status = scanner.sync_full().expect("full");
+        let full_status = scanner.sync_full(&abort).expect("full");
         let full_ts = full_status
             .checkpoints
             .last_full_rescan_ts
             .expect("full ts");
 
-        let resume_status = scanner.sync_resume().expect("resume");
+        let resume_status = scanner.sync_resume(&abort).expect("resume");
         assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
         let resume_ts = resume_status
             .checkpoints
@@ -543,7 +626,7 @@ mod tests {
             .expect("resume ts");
         assert!(resume_ts >= full_ts);
 
-        let rescan_status = scanner.rescan_from(5).expect("rescan");
+        let rescan_status = scanner.rescan_from(5, &abort).expect("rescan");
         assert!(matches!(
             rescan_status.mode,
             SyncMode::Rescan { from_height: 5 }

@@ -6,7 +6,9 @@ use tracing::{error, warn};
 
 use crate::engine::WalletEngine;
 use crate::indexer::client::IndexerClient;
-use crate::indexer::scanner::{ScannerError, SyncStatus, WalletScanner};
+use crate::indexer::scanner::{
+    ScanAbortHandle, ScanAbortToken, ScannerError, SyncStatus, WalletScanner,
+};
 use crate::node_client::NodeClientError;
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -32,6 +34,7 @@ struct StatusState {
     pending_rescan: Option<u64>,
     node_issue: Option<String>,
     node_hints: Vec<String>,
+    abort_handle: Option<ScanAbortHandle>,
 }
 
 pub struct WalletSyncCoordinator {
@@ -116,9 +119,10 @@ impl WalletSyncCoordinator {
                 let upper = status
                     .checkpoints
                     .resume_height
-                    .unwrap_or(status.latest_height)
+                    .unwrap_or(status.current_height)
                     .max(pending);
                 status.pending_ranges.push((pending, upper));
+                status.target_height = status.target_height.max(upper);
             }
             if let Some(issue) = &state.node_issue {
                 status.node_issue = Some(issue.clone());
@@ -139,12 +143,23 @@ impl WalletSyncCoordinator {
     }
 
     pub async fn shutdown(&self) -> Result<(), WalletSyncError> {
+        self.abort_active_scan();
         let _ = self.shutdown_tx.send(true);
         let mut task = self.task.lock().await;
         if let Some(handle) = task.take() {
             handle.await.map_err(|_| WalletSyncError::Stopped)?;
         }
         Ok(())
+    }
+
+    fn abort_active_scan(&self) {
+        let handle = {
+            let guard = lock_state(&self.state);
+            guard.abort_handle.clone()
+        };
+        if let Some(handle) = handle {
+            handle.abort();
+        }
     }
 
     pub fn record_node_failure(&self, error: &NodeClientError) {
@@ -197,13 +212,17 @@ async fn run_loop(
 
         match command {
             SyncCommand::Resume => {
+                let (abort_handle, abort_token) = ScanAbortToken::new_pair();
                 {
                     let mut guard = lock_state(&state);
                     guard.is_syncing = true;
                     guard.pending_resume = false;
                     guard.last_error = None;
+                    guard.abort_handle = Some(abort_handle);
                 }
-                let result = scanner.sync_resume().map_err(WalletSyncError::from);
+                let result = scanner
+                    .sync_resume(&abort_token)
+                    .map_err(WalletSyncError::from);
                 update_state(&state, &result);
                 if let Err(error) = &result {
                     error!(?error, "wallet resume synchronisation failed");
@@ -216,8 +235,13 @@ async fn run_loop(
                     guard.last_error = None;
                     guard.pending_rescan.take().unwrap_or_default()
                 };
+                let (abort_handle, abort_token) = ScanAbortToken::new_pair();
+                {
+                    let mut guard = lock_state(&state);
+                    guard.abort_handle = Some(abort_handle);
+                }
                 let result = scanner
-                    .rescan_from(from_height)
+                    .rescan_from(from_height, &abort_token)
                     .map_err(WalletSyncError::from);
                 update_state(&state, &result);
                 if let Err(error) = &result {
@@ -236,6 +260,7 @@ async fn run_loop(
 fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncStatus, WalletSyncError>) {
     let mut guard = lock_state(state);
     guard.is_syncing = false;
+    guard.abort_handle = None;
     match result {
         Ok(status) => {
             guard.last_status = Some(status.clone());
@@ -421,8 +446,11 @@ mod tests {
             let mut guard = coordinator.state.lock().unwrap();
             guard.last_status = Some(SyncStatus {
                 latest_height: 0,
+                current_height: 0,
+                target_height: 0,
                 mode: SyncMode::Resume { from_height: 0 },
                 scanned_scripthashes: 0,
+                discovered_transactions: 0,
                 pending_ranges: Vec::new(),
                 checkpoints: SyncCheckpoints::default(),
                 hints: Vec::new(),

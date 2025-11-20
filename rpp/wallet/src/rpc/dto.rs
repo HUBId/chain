@@ -503,7 +503,10 @@ mod tests {
             syncing: true,
             mode: Some(SyncModeDto::Rescan { from_height: 5 }),
             latest_height: Some(12),
+            current_height: Some(8),
+            target_height: Some(12),
             scanned_scripthashes: Some(4),
+            discovered_transactions: Some(2),
             pending_ranges: vec![(10, 12)],
             checkpoints: Some(SyncCheckpointDto {
                 resume_height: Some(12),
