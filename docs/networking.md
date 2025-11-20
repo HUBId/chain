@@ -49,6 +49,29 @@ The raw event stream is written to
 `target/simnet/partitioned-flood/summaries/partitioned_flood.json`, while the
 CSV export offers a condensed view suitable for dashboards.
 
+## Gossip bandwidth and queue controls
+
+Flood and backpressure scenarios hinge on the libp2p gossip limits baked into
+the configuration file resolved by the CLI or the `RPP_CONFIG` environment
+variable.【F:docs/configuration.md†L15-L20】 The same knobs apply to production
+deployments, so the defaults below double as a checklist for mirroring CI
+coverage in staging.
+
+| Key / env | Purpose | CI-ready default | Production default |
+| --- | --- | --- | --- |
+| `network.p2p.gossip_rate_limit_per_sec` | Per-peer publish cap enforced by the gossip rate limiter. | 128 msgs/s via the flood-safe template used in partitioned-flood drills.【F:config/examples/flood-safe.toml†L1-L124】 | 256 msgs/s via the validator template used by production meshes.【F:config/examples/high-throughput.toml†L1-L132】 |
+| `network.p2p.reputation_heuristics.gossip_backpressure_threshold` | Queue depth that triggers backpressure penalties and slow-peer scoring. | 4 (matched by CI drills).【F:config/examples/flood-safe.toml†L116-L124】 | 4 (matched by production validators).【F:config/examples/high-throughput.toml†L124-L132】 |
+| `network.p2p.reputation_heuristics.gossip_backpressure_penalty` | Weight applied to peers that exceed the threshold. | 0.25 (default penalty).【F:config/examples/flood-safe.toml†L116-L124】 | 0.25 (default penalty).【F:config/examples/high-throughput.toml†L124-L132】 |
+
+Recommended defaults:
+
+* **CI and chaos drills:** Use `config/examples/flood-safe.toml` to cap
+  per-peer gossip at 128 msgs/s and enforce the default queue threshold/policy
+  that the partitioned-flood simnet scenario expects.【F:config/examples/flood-safe.toml†L1-L124】
+* **Production meshes:** Use `config/examples/high-throughput.toml` to align
+  validators with the shipped 256 msgs/s cap while retaining the same
+  backpressure heuristics for consistent alerting.【F:config/examples/high-throughput.toml†L1-L132】
+
 ## Gossip Tuning Checklist
 
 Production incidents tied to gossip saturation generally fall into three

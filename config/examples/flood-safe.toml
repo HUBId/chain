@@ -1,0 +1,181 @@
+# Flood-safe node template tuned for simnet flood/backpressure drills.
+# Mirrors the CI-friendly gossip defaults (128 msgs/s cap, threshold 4) so
+# bandwidth ceilings and queue pressure look like the nightly partitioned-flood
+# scenario.
+#
+# Default RPP Chain configuration
+# NOTE: The runtime only reads this file during startup. Restart the node after making changes.
+
+config_version = "1.0"
+
+data_dir = "./data"
+key_path = "./keys/node.toml"
+p2p_key_path = "./keys/p2p.toml"
+vrf_key_path = "./keys/vrf.toml"
+
+[secrets]
+backend = "filesystem"
+
+snapshot_dir = "./data/snapshots"
+proof_cache_dir = "./data/proofs"
+block_time_ms = 5000
+max_block_transactions = 512
+max_block_identity_registrations = 32
+mempool_limit = 8192
+epoch_length = 1440
+target_validator_count = 100
+max_proof_size_bytes = 4194304
+
+[pruning]
+# Interval between automatic pruning cycles, measured in seconds.
+cadence_secs = 30
+# Number of most recent finalized blocks that are guaranteed to remain hydrated.
+retention_depth = 128
+# When true, scheduled pruning cycles are paused until manually resumed.
+emergency_pause = false
+
+[admission_reconciler]
+cadence_secs = 60
+drift_alert_threshold = 1
+max_audit_lag_secs = 300
+
+[network.rpc]
+listen = "127.0.0.1:7070"
+
+[network.limits]
+header_read_timeout_ms = 5000
+read_timeout_ms = 15000
+write_timeout_ms = 15000
+max_header_bytes = 16384
+max_body_bytes = 2097152
+
+[network.limits.per_ip_token_bucket]
+enabled = true
+burst = 120
+replenish_per_minute = 60
+
+[network.tls]
+enabled = false
+require_client_auth = false
+
+[network.admission]
+policy_path = "./data/p2p/admission_policies.json"
+audit_retention_days = 30
+
+[network.admission.signing]
+enabled = false
+key_path = "./secrets/admission_signing.toml"
+active_key = "admission_dev"
+
+[network.admission.signing.trust_store]
+admission_dev = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.admission.defaults.blocks]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.votes]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.proofs]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.vrf_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.snapshots]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.meta]
+subscribe = "tl0"
+publish = "tl0"
+
+[network.admission.defaults.vrf_meta]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.witness_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.witness_meta]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.p2p]
+listen_addr = "/ip4/0.0.0.0/tcp/7600"
+bootstrap_peers = []
+heartbeat_interval_ms = 5000
+gossip_enabled = true
+gossip_rate_limit_per_sec = 128
+replay_window_size = 1024
+peerstore_path = "./data/p2p/peerstore.json"
+gossip_path = "./data/p2p/gossip.json"
+
+[network.p2p.reputation_heuristics]
+vote_timeout_penalty = 0.4
+proof_relay_penalty = 0.6
+gossip_backpressure_penalty = 0.25
+gossip_backpressure_threshold = 4
+
+[queue_weights]
+priority = 0.7
+fee = 0.3
+
+[governance.timetoke_rewards]
+enabled = false
+leader_pool_weight = 0.6
+witness_pool_weight = 0.3
+minimum_balance_hours = 1
+
+[rollout]
+release_channel = "development"
+
+[rollout.feature_gates]
+pruning = true
+recursive_proofs = true
+reconstruction = true
+consensus_enforcement = true
+malachite_consensus = false
+timetoke_rewards = false
+witness_network = false
+
+[rollout.telemetry]
+enabled = false
+sample_interval_secs = 30
+
+# Uncomment to expose Prometheus metrics locally.
+# [rollout.telemetry.metrics]
+# listen = "127.0.0.1:9797"
+# auth_token = "change-me"
+
+[rollout.telemetry.vrf_thresholds]
+min_participation_rate = 0.66
+max_rejection_rate = 0.25
+max_fallback_ratio = 0.10
+
+[reputation.tier_thresholds]
+tier2_min_uptime_hours = 24
+tier3_min_consensus_success = 10
+tier4_min_consensus_success = 100
+tier5_min_score = 0.75
+
+[reputation.weights]
+# All reputation weights must be between 0.0 and 1.0 and sum to 1.0.
+validation = 0.4
+uptime = 0.2
+consensus = 0.2
+peer_feedback = 0.15
+decay = 0.05
+
+[genesis]
+chain_id = "rpp-local"
+
+[[genesis.accounts]]
+address = "GENESIS_ADDRESS_PLACEHOLDER"
+balance = 1000000000
+stake = "1000"
