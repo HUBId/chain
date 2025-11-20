@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: rpp-node
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:9797
+    # Uncomment to pass a bearer token:
+    # authorization:
+    #   credentials: Bearer change-me
+
+  - job_name: otlp-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - otel-collector:9464

@@ -18,8 +18,9 @@ services:
       RPP_NODE_RPC_PORT: ${RPP_NODE_RPC_PORT}
     ports:
       - "${RPP_NODE_RPC_PORT}:${RPP_NODE_RPC_PORT}"
+      - "${RPP_NODE_METRICS_PORT:-9797}:${RPP_NODE_METRICS_PORT:-9797}"
     volumes:
-      - ./config/node.toml:${RPP_NODE_CONFIG_PATH}:ro
+      - ${RPP_NODE_CONFIG_HOST_PATH:-./config/node.toml}:${RPP_NODE_CONFIG_PATH}:ro
       - rpp-node-data:/app/data
     restart: unless-stopped
 

@@ -1,0 +1,40 @@
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs: |
+      - job_name: rpp-node
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["rpp-node.default.svc.cluster.local:9797"]
+        # Uncomment to enable auth if rollout.telemetry.metrics.auth_token is set:
+        # authorization:
+        #   credentials: Bearer change-me
+      - job_name: otlp-collector
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["telemetry-collector-opentelemetry-collector.default.svc.cluster.local:9464"]
+
+  serviceAccount:
+    create: true
+
+  podSecurityContext:
+    fsGroup: 65534
+
+  securityContext:
+    runAsNonRoot: true
+
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: false
+alertmanager:
+  enabled: false
+
+# Provision a default Prometheus datasource for Grafana.
+grafana:
+  adminPassword: admin
+  additionalDataSources:
+    - name: rpp-prometheus
+      type: prometheus
+      access: proxy
+      url: http://telemetry-prometheus-kube-prometheus-prometheus:9090
+      isDefault: true

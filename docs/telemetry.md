@@ -97,6 +97,22 @@ scrape_configs:
 Die Registry führt automatisch Upkeep-Ticks aus, sodass Histogramme und Counter auch bei geringer
 Scrape-Frequenz konsistente Werte liefern.
 
+### Prometheus/Grafana/OTLP-Referenz-Stacks
+
+* **Docker Compose** – `telemetry/docker-compose.prom-grafana-otel.yml` startet einen OTLP-
+  Collector (OTLP gRPC/HTTP + Prometheus-Exporter), Prometheus und Grafana in einem lokalen
+  Stack. Passe `telemetry/prometheus.yml` an den gewünschten Scrape-Host an (z. B.
+  `host.docker.internal:9797` für den lokalen Node) und starte den Stack mit
+  `docker compose -f telemetry/docker-compose.prom-grafana-otel.yml up -d`. Der Collector
+  exportiert OTLP-Metriken auf 4317/4318 und hält die Prometheus-kompatible Ausgabe unter
+  `http://localhost:9464/metrics` bereit.【F:telemetry/docker-compose.prom-grafana-otel.yml†L1-L38】【F:telemetry/otel-collector.yaml†L1-L22】【F:telemetry/prometheus.yml†L1-L17】
+* **Helm (Kubernetes)** – `telemetry/helm/otel-collector-values.yaml` und
+  `telemetry/helm/prom-grafana-values.yaml` liefern Werte-Dateien für den
+  `opentelemetry-collector`-Chart sowie den `kube-prometheus-stack`. Die Werte aktivieren einen
+  Prometheus-Exporter (Port 9464) für OTLP-Metriken und fügen Scrape-Jobs für den rpp-Node hinzu.
+  Passe die Hostnamen und optional den Authorization-Block an deine Cluster-Topologie an und
+  installiere die Charts gemäß `telemetry/helm/README.md`.【F:telemetry/helm/README.md†L1-L21】【F:telemetry/helm/otel-collector-values.yaml†L1-L32】【F:telemetry/helm/prom-grafana-values.yaml†L1-L35】
+
 ## Wallet-spezifische Proof- und Lifecycle-Telemetrie
 
 Der Wallet-Stack meldet eigene Metriken und Events, sobald `[wallet.telemetry].metrics`
@@ -174,6 +190,12 @@ nutzt ausschließlich Loopback-Adressen und kurzlebige Volumes.
    #     authorization:
    #       credentials: Bearer dev-change-me
    ```
+
+   Ergänzend stehen vollständige OTLP/Prometheus/Grafana-Stacks unter
+   `telemetry/docker-compose.prom-grafana-otel.yml` sowie Kubernetes-Helm-Werte unter
+   `telemetry/helm/` bereit. Die Beispiele sind so vordefiniert, dass sie den Node-Metrik-Port
+   `9797` ohne Authentifizierung scrapen; setze bei Bedarf einen Bearer-Token in
+   `telemetry/prometheus.yml` bzw. `telemetry/helm/prom-grafana-values.yaml`.
 
 3. Stack starten und Smoke-Test ausführen:
 
