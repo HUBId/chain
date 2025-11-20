@@ -2070,6 +2070,7 @@ struct ActiveAuditFile {
 
 impl Node {
     pub fn new(config: NodeConfig, runtime_metrics: Arc<RuntimeMetrics>) -> ChainResult<Self> {
+        validate_zk_backend_support(&ZkBackendSupport::compiled())?;
         config.validate()?;
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
@@ -2367,6 +2368,94 @@ impl Node {
 
     pub fn network_identity_profile(&self) -> ChainResult<NetworkIdentityProfile> {
         self.inner.network_identity_profile()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ZkBackendSupport {
+    rpp_stark: bool,
+    plonky3_cpu: bool,
+    plonky3_gpu: bool,
+    stwo: bool,
+    mock: bool,
+}
+
+impl ZkBackendSupport {
+    fn compiled() -> Self {
+        Self {
+            rpp_stark: cfg!(feature = "backend-rpp-stark"),
+            plonky3_cpu: cfg!(feature = "backend-plonky3"),
+            plonky3_gpu: cfg!(feature = "backend-plonky3-gpu"),
+            stwo: cfg!(any(feature = "prover-stwo", feature = "prover-stwo-simd")),
+            mock: cfg!(feature = "prover-mock"),
+        }
+    }
+}
+
+fn validate_zk_backend_support(support: &ZkBackendSupport) -> ChainResult<()> {
+    if support.plonky3_cpu && support.plonky3_gpu {
+        return Err(ChainError::Config(
+            "`backend-plonky3` and `backend-plonky3-gpu` are mutually exclusive; enable only one"
+                .into(),
+        ));
+    }
+
+    if !(support.rpp_stark
+        || support.plonky3_cpu
+        || support.plonky3_gpu
+        || support.stwo
+        || support.mock)
+    {
+        return Err(ChainError::Config(
+            "no zk proof backend enabled; compile with at least one of `prover-stwo`, `prover-stwo-simd`, `backend-plonky3`, `backend-plonky3-gpu`, `backend-rpp-stark`, or `prover-mock`".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod zk_backend_validation_tests {
+    use super::*;
+
+    #[test]
+    fn plonky3_variants_are_exclusive() {
+        let support = ZkBackendSupport {
+            rpp_stark: false,
+            plonky3_cpu: true,
+            plonky3_gpu: true,
+            stwo: false,
+            mock: false,
+        };
+
+        let error = validate_zk_backend_support(&support).expect_err("plonky3 variants should conflict");
+        assert!(
+            matches!(error, ChainError::Config(message) if message.contains("mutually exclusive")),
+            "unexpected error: {error:?}",
+        );
+    }
+
+    #[test]
+    fn requires_at_least_one_backend() {
+        let support = ZkBackendSupport {
+            rpp_stark: false,
+            plonky3_cpu: false,
+            plonky3_gpu: false,
+            stwo: false,
+            mock: false,
+        };
+
+        let error = validate_zk_backend_support(&support).expect_err("missing backends should fail");
+        assert!(
+            matches!(error, ChainError::Config(message) if message.contains("no zk proof backend enabled")),
+            "unexpected error: {error:?}",
+        );
+    }
+
+    #[test]
+    fn compiled_feature_set_is_valid() {
+        validate_zk_backend_support(&ZkBackendSupport::compiled())
+            .expect("compiled zk backend set should be valid");
     }
 }
 
