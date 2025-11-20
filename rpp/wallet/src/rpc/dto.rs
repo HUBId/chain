@@ -105,6 +105,22 @@ impl From<AddressStatus> for AddressStatusDto {
     }
 }
 
+impl From<bool> for AddressBranchDto {
+    fn from(change: bool) -> Self {
+        if change {
+            AddressBranchDto::Change
+        } else {
+            AddressBranchDto::Receive
+        }
+    }
+}
+
+impl From<AddressBranchDto> for bool {
+    fn from(branch: AddressBranchDto) -> Self {
+        matches!(branch, AddressBranchDto::Change)
+    }
+}
+
 impl From<&AddressEntry> for AddressMetadataDto {
     fn from(entry: &AddressEntry) -> Self {
         Self {
@@ -115,6 +131,21 @@ impl From<&AddressEntry> for AddressMetadataDto {
             label: entry.label.clone(),
             note: entry.note.clone(),
             first_seen_height: entry.first_seen_height,
+        }
+    }
+}
+
+impl From<&AddressEntry> for WalletAddressDto {
+    fn from(entry: &AddressEntry) -> Self {
+        Self {
+            address: entry.address.clone(),
+            branch: entry.change.into(),
+            index: entry.index,
+            status: entry.status.into(),
+            label: entry.label.clone(),
+            note: entry.note.clone(),
+            derived_at_ms: None,
+            first_seen_at_ms: None,
         }
     }
 }
@@ -265,6 +296,55 @@ mod tests {
             page_size: 10,
             total: 1,
         };
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn list_branch_addresses_roundtrip() {
+        let address = WalletAddressDto {
+            address: "wallet1".to_string(),
+            branch: AddressBranchDto::Receive,
+            index: 0,
+            status: AddressStatusDto::Unused,
+            label: Some("primary".into()),
+            note: None,
+            derived_at_ms: Some(1_700_000_000_000),
+            first_seen_at_ms: None,
+        };
+        let params = ListBranchAddressesParams {
+            branch: AddressBranchDto::Change,
+            cursor: Some("cursor".into()),
+            page_size: Some(5),
+        };
+        let response = ListBranchAddressesResponse {
+            addresses: vec![address],
+            next_cursor: Some("next".into()),
+            prev_cursor: Some("prev".into()),
+        };
+        roundtrip(&params);
+        roundtrip(&response);
+    }
+
+    #[test]
+    fn update_address_metadata_roundtrip() {
+        let params = UpdateAddressMetadataParams {
+            address: "wallet1".into(),
+            label: None,
+            note: Some("note".into()),
+        };
+        let response = UpdateAddressMetadataResponse {
+            address: WalletAddressDto {
+                address: "wallet1".into(),
+                branch: AddressBranchDto::Change,
+                index: 2,
+                status: AddressStatusDto::Used,
+                label: Some("label".into()),
+                note: Some("note".into()),
+                derived_at_ms: None,
+                first_seen_at_ms: Some(1_600_000_000_000),
+            },
+        };
+        roundtrip(&params);
         roundtrip(&response);
     }
 

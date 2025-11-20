@@ -179,6 +179,29 @@ pub struct AddressMetadataDto {
     pub first_seen_height: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AddressBranchDto {
+    Receive,
+    Change,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WalletAddressDto {
+    pub address: String,
+    pub branch: AddressBranchDto,
+    pub index: u32,
+    pub status: AddressStatusDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derived_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_seen_at_ms: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListAddressesParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +231,38 @@ pub struct SetAddressLabelParams {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetAddressLabelResponse {
     pub address: AddressMetadataDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListBranchAddressesParams {
+    pub branch: AddressBranchDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListBranchAddressesResponse {
+    pub addresses: Vec<WalletAddressDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateAddressMetadataParams {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateAddressMetadataResponse {
+    pub address: WalletAddressDto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
