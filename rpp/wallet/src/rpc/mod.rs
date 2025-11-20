@@ -1815,6 +1815,9 @@ fn wallet_error_code(error: &WalletError) -> WalletRpcErrorCode {
     match error {
         WalletError::Engine(_) => WalletRpcErrorCode::EngineFailure,
         WalletError::ProverBackendDisabled => WalletRpcErrorCode::ProverBackendDisabled,
+        WalletError::ProverBackendMisconfigured { .. } => {
+            WalletRpcErrorCode::ProverBackendMisconfigured
+        }
         WalletError::ProverTimeout { .. } => WalletRpcErrorCode::ProverTimeout,
         WalletError::ProverCancelled => WalletRpcErrorCode::ProverCancelled,
         WalletError::ProverBusy => WalletRpcErrorCode::ProverBusy,
@@ -1951,6 +1954,11 @@ fn wallet_error_to_json(error: &WalletError) -> JsonRpcError {
             WalletRpcErrorCode::ProverBackendDisabled,
             error.to_string(),
             Some(json!({ "kind": "prover_backend_disabled" })),
+        ),
+        WalletError::ProverBackendMisconfigured { reason } => json_error(
+            WalletRpcErrorCode::ProverBackendMisconfigured,
+            error.to_string(),
+            Some(json!({ "kind": "prover_backend_config", "reason": reason })),
         ),
         WalletError::ProverTimeout { timeout_secs } => json_error(
             WalletRpcErrorCode::ProverTimeout,
@@ -2584,7 +2592,8 @@ mod tests {
     use super::error::WalletRpcErrorCode;
     use super::*;
     use crate::config::wallet::{
-        WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverConfig, WalletZsiConfig,
+        WalletFeeConfig, WalletHwConfig, WalletPolicyConfig, WalletProverBackend,
+        WalletProverConfig, WalletZsiConfig,
     };
     use crate::db::WalletStore;
     use crate::db::{PendingLock, PendingLockMetadata, UtxoOutpoint, UtxoRecord};
@@ -2601,6 +2610,7 @@ mod tests {
         NodeRejectionHint, StubNodeClient,
     };
     use crate::runtime::lifecycle::{EmbeddedNodeCommand, EmbeddedNodeLifecycle};
+    use crate::wallet::WalletError;
     use rpp_wallet_interface::runtime_config::WalletNodeRuntimeConfig;
     use serde_json::json;
     use std::borrow::Cow;
@@ -3290,6 +3300,62 @@ mod tests {
             data["details"]["hints"],
             json!(["Increase the fee rate to at least 15 sats/vB and retry."])
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "prover-stwo"))]
+    fn unsupported_prover_backend_surfaces_config_error() {
+        let dir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
+        let keystore = dir.path().join("keystore.toml");
+        let backup = dir.path().join("backups");
+        let telemetry = Arc::new(WalletActionTelemetry::new(false));
+
+        let mut prover_config = WalletProverConfig::default();
+        prover_config.backend = WalletProverBackend::Stwo;
+
+        let error = Wallet::new(
+            Arc::clone(&store),
+            WalletMode::Full {
+                root_seed: [7u8; 32],
+            },
+            WalletPolicyConfig::default(),
+            WalletFeeConfig::default(),
+            prover_config,
+            WalletHwConfig::default(),
+            WalletZsiConfig::default(),
+            None,
+            Arc::new(StubNodeClient::default()),
+            WalletPaths::new(keystore, backup),
+            telemetry,
+        )
+        .expect_err("unsupported prover backend should fail");
+
+        match error {
+            WalletError::ProverBackendMisconfigured { reason } => {
+                assert!(
+                    reason.contains("prover requested"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prover_config_error_maps_to_rpc_code() {
+        let error = WalletError::ProverBackendMisconfigured {
+            reason: "missing backend feature".into(),
+        };
+        let json_error = wallet_error_to_json(&error);
+
+        assert_eq!(
+            json_error.code,
+            WalletRpcErrorCode::ProverBackendMisconfigured.as_i32()
+        );
+        let data = json_error.data.expect("error data");
+        assert_eq!(data["code"], json!("PROVER_BACKEND_MISCONFIGURED"));
+        assert_eq!(data["details"]["reason"], json!("missing backend feature"));
     }
 
     #[test]
