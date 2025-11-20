@@ -15,8 +15,9 @@
 //! snapshot views without leaking internal locks.
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,6 +44,7 @@ use hex;
 use rpp_wallet_interface::runtime_config::MempoolStatus;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{self, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
@@ -1118,9 +1120,177 @@ pub(crate) enum StateSyncChunkError {
     ChunkIndexOutOfRange { index: u32, total: u32 },
     ChunkNotFound { index: u32, reason: String },
     SnapshotRootMismatch { expected: Hash, actual: Hash },
+    ManifestViolation { reason: String },
     Io(std::io::Error),
     IoProof { index: u32, message: String },
     Internal(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotChunkManifest {
+    #[serde(default)]
+    segments: Vec<ManifestSegment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestSegment {
+    #[serde(rename = "segment_name")]
+    name: Option<String>,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+#[derive(Debug)]
+enum SnapshotManifestError {
+    MissingChunkDirectory(PathBuf),
+    MissingChunk {
+        name: String,
+        path: PathBuf,
+    },
+    SizeMismatch {
+        name: String,
+        path: PathBuf,
+        expected: u64,
+        actual: u64,
+    },
+    ChecksumMismatch {
+        name: String,
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+    Decode(serde_json::Error),
+    Io(std::io::Error),
+}
+
+#[derive(Debug)]
+enum SnapshotPayloadError {
+    Io(std::io::Error),
+    Manifest(SnapshotManifestError),
+}
+
+impl From<std::io::Error> for SnapshotPayloadError {
+    fn from(err: std::io::Error) -> Self {
+        SnapshotPayloadError::Io(err)
+    }
+}
+
+impl fmt::Display for SnapshotManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SnapshotManifestError::MissingChunkDirectory(dir) => {
+                write!(f, "snapshot chunk directory missing at {}", dir.display())
+            }
+            SnapshotManifestError::MissingChunk { name, path } => {
+                write!(f, "snapshot chunk '{name}' missing at {}", path.display())
+            }
+            SnapshotManifestError::SizeMismatch {
+                name,
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "snapshot chunk '{name}' size mismatch at {} (expected {expected}, found {actual})",
+                path.display()
+            ),
+            SnapshotManifestError::ChecksumMismatch {
+                name,
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "snapshot chunk '{name}' checksum mismatch at {} (expected {expected}, found {actual})",
+                path.display()
+            ),
+            SnapshotManifestError::Decode(err) => {
+                write!(f, "snapshot manifest decode failed: {err}")
+            }
+            SnapshotManifestError::Io(err) => write!(f, "snapshot manifest I/O failed: {err}"),
+        }
+    }
+}
+
+impl fmt::Display for SnapshotPayloadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SnapshotPayloadError::Io(err) => write!(f, "{err}"),
+            SnapshotPayloadError::Manifest(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+fn log_manifest_error(manifest_path: &Path, err: &SnapshotManifestError) {
+    match err {
+        SnapshotManifestError::MissingChunkDirectory(dir) => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                chunk_dir = %dir.display(),
+                "snapshot manifest chunk directory missing",
+            );
+        }
+        SnapshotManifestError::MissingChunk { name, path } => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                segment = name,
+                chunk = %path.display(),
+                "snapshot manifest chunk missing",
+            );
+        }
+        SnapshotManifestError::SizeMismatch {
+            name,
+            path,
+            expected,
+            actual,
+        } => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                segment = name,
+                chunk = %path.display(),
+                expected_size = expected,
+                actual_size = actual,
+                "snapshot manifest chunk size mismatch",
+            );
+        }
+        SnapshotManifestError::ChecksumMismatch {
+            name,
+            path,
+            expected,
+            actual,
+        } => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                segment = name,
+                chunk = %path.display(),
+                expected_checksum = expected,
+                actual_checksum = actual,
+                "snapshot manifest chunk checksum mismatch",
+            );
+        }
+        SnapshotManifestError::Decode(err) => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                error = %err,
+                "snapshot manifest decode failed",
+            );
+        }
+        SnapshotManifestError::Io(err) => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                error = %err,
+                "snapshot manifest I/O failure",
+            );
+        }
+    }
 }
 
 pub(crate) struct NodeInner {
@@ -2428,7 +2598,8 @@ mod zk_backend_validation_tests {
             mock: false,
         };
 
-        let error = validate_zk_backend_support(&support).expect_err("plonky3 variants should conflict");
+        let error =
+            validate_zk_backend_support(&support).expect_err("plonky3 variants should conflict");
         assert!(
             matches!(error, ChainError::Config(message) if message.contains("mutually exclusive")),
             "unexpected error: {error:?}",
@@ -2445,7 +2616,8 @@ mod zk_backend_validation_tests {
             mock: false,
         };
 
-        let error = validate_zk_backend_support(&support).expect_err("missing backends should fail");
+        let error =
+            validate_zk_backend_support(&support).expect_err("missing backends should fail");
         assert!(
             matches!(error, ChainError::Config(message) if message.contains("no zk proof backend enabled")),
             "unexpected error: {error:?}",
@@ -4690,10 +4862,72 @@ impl NodeInner {
         message[start..end].trim().parse().ok()
     }
 
+    fn validate_snapshot_manifest(
+        &self,
+        manifest_bytes: &[u8],
+        chunk_root: &Path,
+    ) -> Result<(), SnapshotManifestError> {
+        let manifest: SnapshotChunkManifest =
+            serde_json::from_slice(manifest_bytes).map_err(SnapshotManifestError::Decode)?;
+
+        if !chunk_root.exists() {
+            return Err(SnapshotManifestError::MissingChunkDirectory(
+                chunk_root.to_path_buf(),
+            ));
+        }
+
+        for segment in manifest.segments.into_iter() {
+            let Some(name) = segment.name else { continue };
+            let Some(expected_size) = segment.size_bytes else {
+                continue;
+            };
+            let Some(expected_checksum) = segment.sha256 else {
+                continue;
+            };
+
+            let path = chunk_root.join(&name);
+            if !path.exists() {
+                return Err(SnapshotManifestError::MissingChunk { name, path });
+            }
+
+            let metadata = fs::metadata(&path).map_err(SnapshotManifestError::Io)?;
+            if metadata.len() != expected_size {
+                return Err(SnapshotManifestError::SizeMismatch {
+                    name,
+                    path,
+                    expected: expected_size,
+                    actual: metadata.len(),
+                });
+            }
+
+            let mut file = fs::File::open(&path).map_err(SnapshotManifestError::Io)?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 8 * 1024];
+            loop {
+                let read = file.read(&mut buffer).map_err(SnapshotManifestError::Io)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            let digest = hex::encode(hasher.finalize());
+            if digest != expected_checksum {
+                return Err(SnapshotManifestError::ChecksumMismatch {
+                    name,
+                    path,
+                    expected: expected_checksum,
+                    actual: digest,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn load_snapshot_payload(
         &self,
         root: &Hash,
-    ) -> Result<Option<(Vec<u8>, String)>, std::io::Error> {
+    ) -> Result<Option<(Vec<u8>, String)>, SnapshotPayloadError> {
         let base = self.config.snapshot_dir.clone();
         if base.as_os_str().is_empty() {
             return Ok(None);
@@ -4718,6 +4952,12 @@ impl NodeInner {
                 let payload_path = entry.path();
                 let payload = fs::read(&payload_path)?;
                 if &blake3::hash(&payload) == root {
+                    let manifest_root = self.config.snapshot_dir.join("chunks");
+                    if let Err(err) = self.validate_snapshot_manifest(&payload, &manifest_root) {
+                        log_manifest_error(&payload_path, &err);
+                        return Err(SnapshotPayloadError::Manifest(err));
+                    }
+
                     let mut signature_path = payload_path.clone();
                     let mut sig_name = entry.file_name();
                     sig_name.push(".sig");
@@ -4737,7 +4977,8 @@ impl NodeInner {
                                 "snapshot signature missing for {}",
                                 signature_path.display()
                             ),
-                        ));
+                        )
+                        .into());
                     }
                     let encoded = fs::read_to_string(&signature_path)?;
                     let trimmed = encoded.trim();
@@ -4758,7 +4999,8 @@ impl NodeInner {
                                     "invalid snapshot signature encoding at {}: {err}",
                                     signature_path.display()
                                 ),
-                            ));
+                            )
+                            .into());
                         }
                     };
                     let canonical = BASE64.encode(signature_bytes);
@@ -4813,7 +5055,12 @@ impl NodeInner {
                     );
                     return Err(StateSyncChunkError::ChunkNotFound { index, reason });
                 }
-                Err(err) => return Err(StateSyncChunkError::Io(err)),
+                Err(SnapshotPayloadError::Io(err)) => return Err(StateSyncChunkError::Io(err)),
+                Err(SnapshotPayloadError::Manifest(err)) => {
+                    return Err(StateSyncChunkError::ManifestViolation {
+                        reason: err.to_string(),
+                    })
+                }
             };
             let mut store = SnapshotStore::new(chunk_size);
             let actual_root = store.insert(payload, Some(signature));

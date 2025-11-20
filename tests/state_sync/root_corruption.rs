@@ -1,36 +1,28 @@
 //! Regression coverage for snapshot integrity failures during state sync.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use blake3::Hash;
 use parking_lot::RwLock;
 use rpp_chain::runtime::node::{StateSyncChunkError, StateSyncSessionCache};
 use rpp_p2p::SnapshotStore;
+use sha2::{Digest, Sha256};
 
 #[path = "support/mod.rs"]
 mod support;
 
 use support::StateSyncFixture;
 
-#[test]
-fn corrupted_snapshot_payload_yields_explicit_failure() {
-    let fixture = StateSyncFixture::new();
-    let handle = fixture.handle();
-
-    let chunk_size = fixture.chunk_size();
-    let total_chunks = fixture.chunk_count();
-    assert!(
-        total_chunks > 0,
-        "state sync fixture must produce at least one chunk"
-    );
-
-    let valid_payload = b"state-sync-snapshot-fixture";
-    let expected_root = blake3::hash(valid_payload);
-
-    let mut store = SnapshotStore::new(chunk_size);
-    let signature = BASE64.encode([0x11u8; 64]);
-    store.insert(valid_payload.to_vec(), Some(signature));
+fn configure_snapshot_session(
+    handle: &rpp_chain::node::NodeHandle,
+    expected_root: Hash,
+    chunk_size: usize,
+    total_chunks: usize,
+) {
+    let store = SnapshotStore::new(chunk_size);
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
@@ -46,25 +38,94 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
         Some(total_chunks),
         Some(expected_root),
     );
+}
 
-    let snapshot_dir = fixture.snapshot_dir();
-    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
-    let snapshot_path = snapshot_dir.join("fixture-snapshot.bin");
-    fs::write(&snapshot_path, valid_payload).expect("write original snapshot payload");
+#[derive(Debug)]
+struct SnapshotManifestFiles {
+    manifest_path: PathBuf,
+    signature_path: PathBuf,
+    chunk_path: PathBuf,
+    manifest_bytes: Vec<u8>,
+    root: Hash,
+}
 
-    let mut signature_path = snapshot_path.clone();
-    let mut sig_name = snapshot_path
+fn write_snapshot_manifest(
+    snapshot_dir: &Path,
+    chunk_name: &str,
+    chunk_bytes: &[u8],
+) -> SnapshotManifestFiles {
+    let chunk_dir = snapshot_dir.join("chunks");
+    fs::create_dir_all(&chunk_dir).expect("chunk directory");
+    let chunk_path = chunk_dir.join(chunk_name);
+    fs::write(&chunk_path, chunk_bytes).expect("write snapshot chunk");
+
+    let mut hasher = Sha256::new();
+    hasher.update(chunk_bytes);
+    let checksum = hex::encode(hasher.finalize());
+
+    let manifest = serde_json::json!({
+        "version": 1,
+        "generated_at": "1970-01-01T00:00:00Z",
+        "segments": [
+            {
+                "segment_name": chunk_name,
+                "size_bytes": chunk_bytes.len(),
+                "sha256": checksum,
+                "status": "available",
+            }
+        ],
+    });
+
+    let manifest_dir = snapshot_dir.join("manifest");
+    fs::create_dir_all(&manifest_dir).expect("manifest directory");
+    let manifest_path = manifest_dir.join("chunks.json");
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("encode manifest");
+    fs::write(&manifest_path, &manifest_bytes).expect("write snapshot manifest");
+
+    let mut signature_path = manifest_path.clone();
+    let mut sig_name = manifest_path
         .file_name()
-        .expect("payload file name")
+        .expect("manifest file name")
         .to_os_string();
     sig_name.push(".sig");
     signature_path.set_file_name(sig_name);
+
+    let root = blake3::hash(&manifest_bytes);
+
+    SnapshotManifestFiles {
+        manifest_path,
+        signature_path,
+        chunk_path,
+        manifest_bytes,
+        root,
+    }
+}
+
+#[test]
+fn corrupted_snapshot_payload_yields_explicit_failure() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
+    assert!(
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "fixture-snapshot.bin",
+        b"state-sync-snapshot-fixture",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+
     let signature_bytes = [0x24u8; 64];
     let signature_base64 = BASE64.encode(signature_bytes);
-    fs::write(&signature_path, &signature_base64).expect("write snapshot signature");
+    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
 
-    let corrupted_payload = b"corrupted-snapshot-payload";
-    fs::write(&snapshot_path, corrupted_payload)
+    fs::write(&files.manifest_path, b"corrupted-snapshot-payload")
         .expect("overwrite snapshot payload with corruption");
 
     let result = handle.state_sync_session_chunk(0);
@@ -92,40 +153,16 @@ fn state_sync_rejects_snapshot_without_signature() {
         "state sync fixture must produce at least one chunk"
     );
 
-    let payload = b"legacy-state-sync-snapshot";
-    let expected_root = blake3::hash(payload);
-
-    let store = SnapshotStore::new(chunk_size);
-    let cache = StateSyncSessionCache::verified_for_tests(
-        expected_root,
-        chunk_size,
-        total_chunks,
-        Arc::new(RwLock::new(store)),
-    );
-    handle.install_state_sync_session_cache_for_tests(cache);
-
-    let bogus_root = blake3::hash(b"bogus-state-sync-root");
-    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
-    handle.configure_state_sync_session_cache(
-        Some(chunk_size),
-        Some(total_chunks),
-        Some(expected_root),
-    );
-
     let snapshot_dir = fixture.snapshot_dir();
-    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
-    let payload_path = snapshot_dir.join("legacy-snapshot.bin");
-    fs::write(&payload_path, payload).expect("write snapshot payload");
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "legacy-snapshot.bin",
+        b"legacy-state-sync-snapshot",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
 
-    let mut signature_path = payload_path.clone();
-    let mut sig_name = payload_path
-        .file_name()
-        .expect("payload file name")
-        .to_os_string();
-    sig_name.push(".sig");
-    signature_path.set_file_name(sig_name);
-    if signature_path.exists() {
-        fs::remove_file(&signature_path).expect("remove pre-existing signature");
+    if files.signature_path.exists() {
+        fs::remove_file(&files.signature_path).expect("remove pre-existing signature");
     }
 
     let result = handle.state_sync_session_chunk(0);
@@ -154,39 +191,15 @@ fn state_sync_rejects_snapshot_with_invalid_signature() {
         "state sync fixture must produce at least one chunk"
     );
 
-    let payload = b"invalid-signature-state-sync-snapshot";
-    let expected_root = blake3::hash(payload);
-
-    let store = SnapshotStore::new(chunk_size);
-    let cache = StateSyncSessionCache::verified_for_tests(
-        expected_root,
-        chunk_size,
-        total_chunks,
-        Arc::new(RwLock::new(store)),
-    );
-    handle.install_state_sync_session_cache_for_tests(cache);
-
-    let bogus_root = blake3::hash(b"bogus-state-sync-root");
-    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
-    handle.configure_state_sync_session_cache(
-        Some(chunk_size),
-        Some(total_chunks),
-        Some(expected_root),
-    );
-
     let snapshot_dir = fixture.snapshot_dir();
-    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
-    let payload_path = snapshot_dir.join("invalid-signature-snapshot.bin");
-    fs::write(&payload_path, payload).expect("write snapshot payload");
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "invalid-signature-snapshot.bin",
+        b"invalid-signature-state-sync-snapshot",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
 
-    let mut signature_path = payload_path.clone();
-    let mut sig_name = payload_path
-        .file_name()
-        .expect("payload file name")
-        .to_os_string();
-    sig_name.push(".sig");
-    signature_path.set_file_name(sig_name);
-    fs::write(&signature_path, "not-base64").expect("write invalid signature");
+    fs::write(&files.signature_path, "not-base64").expect("write invalid signature");
 
     let result = handle.state_sync_session_chunk(0);
     let err = result.expect_err("invalid signature should error");
@@ -214,41 +227,19 @@ fn state_sync_normalizes_snapshot_signature_files() {
         "state sync fixture must produce at least one chunk"
     );
 
-    let payload = b"signed-state-sync-snapshot";
-    let expected_root = blake3::hash(payload);
-
-    let store = SnapshotStore::new(chunk_size);
-    let cache = StateSyncSessionCache::verified_for_tests(
-        expected_root,
-        chunk_size,
-        total_chunks,
-        Arc::new(RwLock::new(store)),
-    );
-    handle.install_state_sync_session_cache_for_tests(cache);
-
-    let bogus_root = blake3::hash(b"bogus-state-sync-root");
-    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
-    handle.configure_state_sync_session_cache(
-        Some(chunk_size),
-        Some(total_chunks),
-        Some(expected_root),
-    );
-
     let snapshot_dir = fixture.snapshot_dir();
-    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
-    let payload_path = snapshot_dir.join("signed-snapshot.bin");
-    fs::write(&payload_path, payload).expect("write snapshot payload");
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "signed-snapshot.bin",
+        b"signed-state-sync-snapshot",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+    let expected_root = files.root;
+    let payload = files.manifest_bytes.clone();
 
-    let mut signature_path = payload_path.clone();
-    let mut sig_name = payload_path
-        .file_name()
-        .expect("payload file name")
-        .to_os_string();
-    sig_name.push(".sig");
-    signature_path.set_file_name(sig_name);
     let signature_bytes = [0xA5u8; 64];
     let signature_base64 = BASE64.encode(signature_bytes);
-    fs::write(&signature_path, format!("{signature_base64}\n"))
+    fs::write(&files.signature_path, format!("{signature_base64}\n"))
         .expect("write snapshot signature payload");
 
     let chunk = handle
@@ -270,4 +261,80 @@ fn state_sync_normalizes_snapshot_signature_files() {
         .signature(&expected_root)
         .expect("signature lookup succeeds");
     assert_eq!(signature.as_deref(), Some(signature_base64.as_str()));
+}
+
+#[test]
+fn state_sync_rejects_manifest_with_chunk_checksum_mismatch() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
+    assert!(
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "tampered-snapshot.bin",
+        b"validator-snapshot-chunk",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+
+    let signature_base64 = BASE64.encode([0xBBu8; 64]);
+    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
+
+    fs::write(&files.chunk_path, b"tampered-chunk").expect("tamper snapshot chunk");
+
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("tampered manifest should fail");
+    match err {
+        StateSyncChunkError::ManifestViolation { reason } => {
+            assert!(
+                reason.contains("size mismatch") || reason.contains("checksum mismatch"),
+                "unexpected manifest validation message: {reason}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+#[test]
+fn state_sync_rejects_manifest_with_missing_chunk() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
+    assert!(
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "missing-snapshot.bin",
+        b"missing-snapshot-chunk",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+
+    let signature_base64 = BASE64.encode([0xCCu8; 64]);
+    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
+
+    fs::remove_file(&files.chunk_path).expect("remove snapshot chunk");
+
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("missing chunk should fail");
+    match err {
+        StateSyncChunkError::ManifestViolation { reason } => {
+            assert!(
+                reason.contains("missing"),
+                "unexpected manifest validation message: {reason}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }

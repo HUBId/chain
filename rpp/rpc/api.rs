@@ -3437,6 +3437,9 @@ fn chunk_error_to_state_sync(err: StateSyncChunkError) -> StateSyncError {
                 )),
             )
         }
+        StateSyncChunkError::ManifestViolation { reason } => {
+            StateSyncError::new(StateSyncErrorKind::Internal, Some(reason))
+        }
         StateSyncChunkError::Io(err) => {
             StateSyncError::new(StateSyncErrorKind::Internal, Some(err.to_string()))
         }

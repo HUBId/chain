@@ -10,6 +10,11 @@ from disk before chunks are served, so the runtime enforces two invariants:
 2. A detached Ed25519 signature (`<payload>.sig`) must exist alongside the
    payload. The signature is expected to be base64 encoded without trailing
    whitespace; invalid encoding is treated as corruption.
+3. Every chunk referenced in `manifest/chunks.json` must exist under
+   `<snapshot_dir>/chunks`, match the recorded size, and hash to the recorded
+   `sha256`. The runtime refuses to serve a snapshot when any manifest entry is
+   stale or tampered, returning a structured error instead of streaming
+   corrupted data.
 
 The validator runtime refuses to serve snapshots when the `.sig` companion is
 missing or malformed. Operators must publish both files together, keep their
