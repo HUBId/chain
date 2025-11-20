@@ -32,7 +32,7 @@ use crate::consensus_engine::governance::TimetokeRewardGovernance;
 use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
 use crate::crypto::{
     DynVrfKeyStore, FilesystemKeystoreConfig, FilesystemVrfKeyStore, HsmKeystoreConfig,
-    VaultKeystoreConfig, VaultVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
+    HsmVrfKeyStore, VaultKeystoreConfig, VaultVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
@@ -213,9 +213,7 @@ impl SecretsBackendConfig {
         match self {
             Self::Filesystem(config) => Ok(Arc::new(FilesystemVrfKeyStore::new(config.clone()))),
             Self::Vault(config) => Ok(Arc::new(VaultVrfKeyStore::new(config.clone())?)),
-            Self::Hsm(_) => Err(ChainError::Config(
-                "HSM secrets backend is not available in this build; configure `filesystem` or `vault`".into(),
-            )),
+            Self::Hsm(config) => Ok(Arc::new(HsmVrfKeyStore::new(config.clone())?)),
         }
     }
 
@@ -224,18 +222,7 @@ impl SecretsBackendConfig {
             Self::Filesystem(config) => {
                 Ok(VrfKeyIdentifier::filesystem(config.resolve(configured)))
             }
-            Self::Vault(_) | Self::Hsm(_) => {
-                let raw = configured.to_string_lossy();
-                let trimmed = raw.trim_matches('/');
-                if trimmed.is_empty() {
-                    Err(ChainError::Config(
-                        "secrets backend requires `vrf_key_path` to define a non-empty identifier"
-                            .into(),
-                    ))
-                } else {
-                    Ok(VrfKeyIdentifier::remote(trimmed.to_string()))
-                }
-            }
+            Self::Vault(_) | Self::Hsm(_) => self.remote_identifier(configured),
         }
     }
 
@@ -248,7 +235,12 @@ impl SecretsBackendConfig {
                 }
                 Ok(())
             }
-            Self::Vault(_) | Self::Hsm(_) => Ok(()),
+            Self::Vault(_) => Ok(()),
+            Self::Hsm(config) => {
+                let root = config.storage_root();
+                fs::create_dir_all(root)?;
+                Ok(())
+            }
         }
     }
 
@@ -266,9 +258,31 @@ impl SecretsBackendConfig {
                 }
                 Ok(())
             }
-            Self::Hsm(_) => Err(ChainError::Config(
-                "HSM secrets backend is not implemented; configure `filesystem` or `vault`".into(),
-            )),
+            Self::Hsm(config) => {
+                config.validate()?;
+                self.remote_identifier(configured)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn remote_identifier(&self, configured: &Path) -> ChainResult<VrfKeyIdentifier> {
+        let trimmed = configured.to_string_lossy();
+        let raw_key_id = match self {
+            Self::Hsm(config) => config
+                .key_id
+                .as_ref()
+                .map(|value| value.trim())
+                .unwrap_or(trimmed.trim_matches('/')),
+            _ => trimmed.trim_matches('/'),
+        };
+
+        if raw_key_id.is_empty() {
+            Err(ChainError::Config(
+                "secrets backend requires `vrf_key_path` to define a non-empty identifier".into(),
+            ))
+        } else {
+            Ok(VrfKeyIdentifier::remote(raw_key_id.to_string()))
         }
     }
 }
@@ -3014,21 +3028,66 @@ target_validator_count = 77
     }
 
     #[test]
-    fn hsm_secrets_backend_reports_unavailable_error() {
-        let backend = SecretsBackendConfig::Hsm(HsmKeystoreConfig::default());
-        let error = backend
-            .build_keystore()
-            .expect_err("HSM backend should not be available by default");
+    fn hsm_secrets_backend_round_trips_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vrf_key_path = PathBuf::from("/vrf/key");
+        let mut hsm_config = HsmKeystoreConfig::default();
+        hsm_config.library_path = Some(temp.path().join("libhsm-emulator.so"));
+        hsm_config.slot = Some(0);
+        hsm_config.key_id = Some("validator-key".to_string());
 
+        let backend = SecretsBackendConfig::Hsm(hsm_config.clone());
+        backend
+            .validate_with_path(&vrf_key_path)
+            .expect("validation should succeed");
+        backend
+            .ensure_directories(&vrf_key_path)
+            .expect("directories should be created");
+
+        let identifier = backend
+            .vrf_identifier(&vrf_key_path)
+            .expect("identifier from key id");
+        assert_eq!(
+            identifier,
+            VrfKeyIdentifier::remote("validator-key"),
+            "key_id should override vrf_key_path"
+        );
+
+        let keystore = backend.build_keystore().expect("hsm keystore");
+        let generated = keystore
+            .load_or_generate(&identifier)
+            .expect("store generated key");
+        let reloaded = keystore
+            .load(&identifier)
+            .expect("load cached key")
+            .expect("key should persist");
+        assert_eq!(generated.public.to_bytes(), reloaded.public.to_bytes());
+
+        let expected_path = hsm_config.storage_root().join("validator-key.toml");
+        assert!(
+            expected_path.exists(),
+            "hsm backend should persist keys on disk"
+        );
+    }
+
+    #[test]
+    fn hsm_secrets_backend_rejects_blank_identifiers() {
+        let backend = SecretsBackendConfig::Hsm(HsmKeystoreConfig {
+            key_id: Some("   ".to_string()),
+            ..Default::default()
+        });
+
+        let error = backend
+            .validate_with_path(Path::new("/"))
+            .expect_err("blank identifiers should be rejected");
         match error {
             ChainError::Config(message) => {
                 assert!(
-                    message.contains("HSM secrets backend is not available"),
-                    "unexpected message: {}",
-                    message
+                    message.contains("non-empty"),
+                    "unexpected message: {message}"
                 );
             }
-            other => panic!("unexpected error: {:?}", other),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 
@@ -3070,9 +3129,9 @@ pub use rpp_wallet_interface::runtime_config::{
     WalletAuthTlsConfig, WalletBudgetsConfig, WalletConfig, WalletEngineSettings,
     WalletFeeSettings, WalletGuiConfig, WalletGuiTheme, WalletHwSettings, WalletHwTransport,
     WalletKeysConfig, WalletNodeRuntimeConfig, WalletPolicySettings, WalletProverBackend,
-    WalletProverSettings,
-    WalletRescanConfig, WalletRpcConfig, WalletRpcSecurityBinding, WalletRpcSecurityCaFingerprint,
-    WalletRpcSecurityConfig, WalletSecurityConfig, WalletServiceConfig,
+    WalletProverSettings, WalletRescanConfig, WalletRpcConfig, WalletRpcSecurityBinding,
+    WalletRpcSecurityCaFingerprint, WalletRpcSecurityConfig, WalletSecurityConfig,
+    WalletServiceConfig,
 };
 use rpp_wallet_interface::runtime_config::{
     RuntimeConfigError, WalletIdentity as InterfaceWalletIdentity,

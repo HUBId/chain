@@ -8,15 +8,16 @@ operator-facing tooling bundled with the runtime.
 ## Secrets backends and storage
 
 Validator configurations declare a `vrf_key_path` and the backing secrets
-backend. The default template uses filesystem storage but Vault is also
-supported; the HSM backend is intentionally disabled at build time until the
-hardware integration is finished.【F:config/validator.toml†L1-L48】【F:rpp/runtime/config.rs†L36-L177】
+backend. The default template uses filesystem storage, Vault remains supported,
+and the HSM backend now ships with a file-backed emulator keyed by
+`library_path`/`key_id` until the PKCS#11 plumbing is wired to real
+hardware.【F:config/validator.toml†L1-L48】【F:rpp/runtime/config.rs†L36-L310】
 
 | Backend | Description | Operational notes |
 | --- | --- | --- |
 | `filesystem` | Stores the VRF keypair alongside other node secrets. | The runtime creates parent directories on startup and expects the host to lock down file permissions (`600`/`700`).【F:rpp/runtime/config.rs†L82-L117】 |
 | `vault` | Reads and writes the VRF keypair to a Vault KV path. | Empty identifiers are rejected; ensure the configured path resolves to an existing KV secret engine before launch.【F:rpp/runtime/config.rs†L130-L160】 |
-| `hsm` | Placeholder for future hardware-backed keys. | Not available in current builds; configuring it returns a validation error so operators must provision filesystem or Vault instead.【F:rpp/runtime/config.rs†L58-L177】 |
+| `hsm` | Emulator that persists VRF material under the configured library path using `key_id` or `vrf_key_path` as the handle. | Validation requires a non-empty identifier, creates a writable keystore root alongside `library_path`, and reuses the unified secrets loader so CLI flows work without hardware present.【F:rpp/runtime/config.rs†L74-L191】【F:rpp/runtime/config.rs†L3002-L3058】 |
 
 All backends expose a unified `DynVrfKeyStore` interface so runtime components
 (such as the validator RPC handlers) can load, rotate, or export key material
