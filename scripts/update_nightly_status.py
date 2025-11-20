@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -386,6 +387,7 @@ def build_phasec_status(
         summarise_retention(retention_report),
         summarise_snapshot_partition(chaos_report),
     ]
+    _validate_phasec_status(statuses)
     generated_at = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         f"### Phase‑C Kontrollen — {generated_at}",
@@ -411,11 +413,56 @@ def build_phasec_status(
     if notes:
         lines.extend(["", "#### Hinweise", "", *notes])
 
+    artifact_hashes = _render_artifact_hashes(
+        {
+            "worm-retention-report.json": retention_report,
+            "snapshot_partition_report.json": chaos_report,
+        }
+    )
+    if artifact_hashes:
+        lines.extend(["", "#### Artefakte", "", *artifact_hashes])
+
     return "\n".join(lines)
 
 
 def write_status_file(path: pathlib.Path, content: str) -> None:
     path.write_text(content + "\n", encoding="utf-8")
+
+
+def _validate_phasec_status(statuses: Sequence[ControlStatus]) -> None:
+    failures = [s for s in statuses if s.icon == "❌"]
+    if failures:
+        failing_labels = ", ".join(f"{s.name}: {s.label}" for s in failures)
+        raise NightlyStatusError(
+            f"Phase‑C Drill fehlgeschlagen: {failing_labels}"
+        )
+
+
+def _hash_file(path: pathlib.Path) -> str:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8192), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except FileNotFoundError:
+        return "n/a"
+    except OSError as exc:  # pragma: no cover - I/O errors bubble up
+        raise NightlyStatusError(f"Konnte Hash für {path} nicht berechnen: {exc}") from exc
+
+
+def _render_artifact_hashes(paths: dict[str, Optional[pathlib.Path]]) -> List[str]:
+    lines: List[str] = []
+    for name, path in paths.items():
+        if path is None:
+            lines.append(f"- `{name}`: fehlt (kein Pfad übergeben)")
+            continue
+        hash_value = _hash_file(path)
+        if hash_value == "n/a":
+            lines.append(f"- `{name}`: Report fehlt – Hash nicht verfügbar")
+        else:
+            lines.append(f"- `{name}`: SHA256 `{hash_value}`")
+    return lines
 
 
 def _replace_marker(text: str, marker: str, payload: str, path: pathlib.Path) -> str:
