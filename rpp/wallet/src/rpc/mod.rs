@@ -1115,7 +1115,10 @@ impl WalletRpcRouter {
         let (
             mode,
             latest_height,
+            current_height,
+            target_height,
             scanned_scripthashes,
+            discovered_transactions,
             pending_ranges,
             checkpoints,
             last_rescan_timestamp,
@@ -1129,7 +1132,10 @@ impl WalletRpcRouter {
                     SyncMode::Rescan { from_height } => SyncModeDto::Rescan { from_height },
                 }),
                 Some(status.latest_height),
+                Some(status.current_height),
+                Some(status.target_height),
                 Some(status.scanned_scripthashes),
+                Some(status.discovered_transactions),
                 status.pending_ranges.clone(),
                 Some(SyncCheckpointDto {
                     resume_height: status.checkpoints.resume_height,
@@ -1144,14 +1150,29 @@ impl WalletRpcRouter {
                 status.hints.clone(),
             )
         } else {
-            (None, None, None, Vec::new(), None, None, None, Vec::new())
+            (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+                None,
+                None,
+                Vec::new(),
+            )
         };
         let last_error = sync.last_error().map(|error| error.to_string());
         let response = SyncStatusResponse {
             syncing: sync.is_syncing(),
             mode,
             latest_height,
+            current_height,
+            target_height,
             scanned_scripthashes,
+            discovered_transactions,
             pending_ranges,
             checkpoints,
             last_rescan_timestamp,
@@ -3014,8 +3035,11 @@ mod tests {
     fn router_rejects_out_of_range_rescan() {
         let status = SyncStatus {
             latest_height: 10,
+            current_height: 10,
+            target_height: 10,
             mode: SyncMode::Resume { from_height: 10 },
             scanned_scripthashes: 2,
+            discovered_transactions: 0,
             pending_ranges: Vec::new(),
             checkpoints: SyncCheckpoints {
                 resume_height: Some(10),
@@ -3048,8 +3072,11 @@ mod tests {
     fn router_reports_rescan_in_progress() {
         let status = SyncStatus {
             latest_height: 24,
+            current_height: 18,
+            target_height: 24,
             mode: SyncMode::Rescan { from_height: 12 },
             scanned_scripthashes: 4,
+            discovered_transactions: 1,
             pending_ranges: vec![(6, 12)],
             checkpoints: SyncCheckpoints {
                 resume_height: Some(20),

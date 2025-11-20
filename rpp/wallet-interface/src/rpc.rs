@@ -1456,8 +1456,17 @@ pub struct SyncStatusResponse {
     /// Latest height observed by the sync worker.
     pub latest_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Current height reached by the ongoing scan.
+    pub current_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Target height for the current scan.
+    pub target_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// Number of script hashes processed so far.
     pub scanned_scripthashes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Number of transactions discovered during the scan.
+    pub discovered_transactions: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     /// Pending height ranges waiting to be scanned.
     pub pending_ranges: Vec<(u64, u64)>,
@@ -1634,7 +1643,10 @@ mod tests {
             syncing: false,
             mode: Some(SyncModeDto::Full { start_height: 0 }),
             latest_height: Some(10),
+            current_height: Some(3),
+            target_height: Some(10),
             scanned_scripthashes: Some(5),
+            discovered_transactions: Some(1),
             pending_ranges: vec![(0, 1)],
             checkpoints: Some(SyncCheckpointDto {
                 resume_height: Some(1),
