@@ -1,0 +1,16 @@
+{
+  "name": "compound-partitioned-backpressure",
+  "description": "Partitioned mesh flood that exercises rate limits, backpressure, and recovery",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/compound_partitioned_backpressure.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/compound_partitioned_backpressure.json"
+  },
+  "consensus": null
+}
