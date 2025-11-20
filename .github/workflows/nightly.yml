@@ -777,6 +777,10 @@ EOF
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: true
+          - name: wallet-hsm
+            features: "wallet_hw"
+            no_default_features: ""
+            experimental: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

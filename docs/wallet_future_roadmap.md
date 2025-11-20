@@ -14,10 +14,11 @@ open issues quickly.
    deferred.【F:docs/wallet_release_status.md†L30-L48】 Track the SDK evaluation
    and packaging tasks under the `wallet-hw` label in the issue tracker:
    <https://github.com/ava-labs/chain/issues?q=is%3Aopen+label%3Awallet-hw>.
-2. **HSM-backed key management** – `KEY_MANAGEMENT.md` documents the planned HSM
-   backend, but configuring `hsm` today errors out, forcing filesystem or Vault
-   stores even for validator-grade keys.【F:docs/KEY_MANAGEMENT.md†L11-L20】 The
-   `wallet-hsm` issue list (<https://github.com/ava-labs/chain/issues?q=is%3Aopen+label%3Awallet-hsm>)
+2. **HSM-backed key management** – `KEY_MANAGEMENT.md` now exposes an HSM
+   emulator so CLI flows can persist VRF material without hard dependencies on
+   filesystem or Vault backends, but PKCS#11 drivers and vendor attestation still
+   need to be wired up for hardware-backed signing.【F:docs/KEY_MANAGEMENT.md†L11-L32】
+   The `wallet-hsm` issue list (<https://github.com/ava-labs/chain/issues?q=is%3Aopen+label%3Awallet-hsm>)
    tracks SDK prototyping, key wrap policies, and audit export formats.
 3. **Telemetry adoption during rollouts** – New monitoring guidance needs to be
    linked from every deployment ticket so on-call responders follow the same

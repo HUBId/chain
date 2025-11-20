@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::StatusCode;
 use rpp_chain::config::{NodeConfig, SecretsBackendConfig};
+use rpp_chain::crypto::HsmKeystoreConfig;
 use rpp_node::RuntimeMode;
 use rpp_node::{validator_setup, ValidatorSetupError, ValidatorSetupOptions, ValidatorSetupReport};
 use tempfile::TempDir;
@@ -110,5 +112,39 @@ async fn validator_setup_skips_probe_when_requested() -> Result<()> {
     assert!(telemetry.enabled);
     assert!(telemetry.skipped);
     assert!(telemetry.http_status.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn validator_setup_handles_hsm_backend() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = validator_template(&temp);
+
+    config.vrf_key_path = PathBuf::from("/hsm/key");
+    config.secrets.backend = SecretsBackendConfig::Hsm(HsmKeystoreConfig {
+        library_path: Some(temp.path().join("libhsm-emulator.so")),
+        slot: Some(0),
+        key_id: Some("validator-hsm".to_string()),
+    });
+
+    let options = ValidatorSetupOptions {
+        telemetry_probe_timeout: Duration::from_secs(1),
+        skip_telemetry_probe: true,
+    };
+
+    let report = validator_setup(&config, options).await?;
+    assert!(matches!(
+        report.secrets_backend,
+        SecretsBackendConfig::Hsm(_)
+    ));
+    assert_eq!(report.public_key.len(), 64);
+
+    let keystore_root = match &config.secrets.backend {
+        SecretsBackendConfig::Hsm(config) => config.storage_root(),
+        _ => unreachable!("hsm backend required"),
+    };
+    let expected = keystore_root.join("validator-hsm.toml");
+    assert!(expected.exists(), "hsm backend should persist vrf keys");
+
     Ok(())
 }

@@ -258,6 +258,43 @@ pub struct HsmKeystoreConfig {
     pub key_id: Option<String>,
 }
 
+impl HsmKeystoreConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if let Some(path) = &self.library_path {
+            if path.as_os_str().is_empty() {
+                return Err(ChainError::Config(
+                    "HSM backend requires a non-empty library_path".into(),
+                ));
+            }
+        }
+
+        if let Some(key_id) = &self.key_id {
+            if key_id.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "HSM backend requires non-empty key identifiers".into(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn storage_root(&self) -> PathBuf {
+        if let Some(path) = &self.library_path {
+            if path.is_dir() {
+                path.clone()
+            } else {
+                path.parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("hsm-keystore")
+            }
+        } else {
+            env::temp_dir().join("rpp-hsm-keystore")
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum VrfKeyIdentifier {
     Filesystem(PathBuf),
@@ -317,6 +354,68 @@ impl Default for FilesystemVrfKeyStore {
 }
 
 impl VrfKeyStore for FilesystemVrfKeyStore {
+    fn load(&self, identifier: &VrfKeyIdentifier) -> ChainResult<Option<VrfKeypair>> {
+        let path = self.resolve_path(identifier)?;
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                let stored: StoredVrfKeypair = toml::from_str(&raw).map_err(|err| {
+                    ChainError::Config(format!("failed to decode VRF keypair: {err}"))
+                })?;
+                decode_stored_vrf_keypair(&stored).map(Some)
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn store(&self, identifier: &VrfKeyIdentifier, keypair: &VrfKeypair) -> ChainResult<()> {
+        let path = self.resolve_path(identifier)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let stored = encode_stored_vrf_keypair(keypair);
+        let encoded = toml::to_string_pretty(&stored)
+            .map_err(|err| ChainError::Config(format!("failed to encode VRF keypair: {err}")))?;
+        fs::write(path, encoded)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HsmVrfKeyStore {
+    config: HsmKeystoreConfig,
+}
+
+impl HsmVrfKeyStore {
+    pub fn new(config: HsmKeystoreConfig) -> ChainResult<Self> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    fn resolve_path(&self, identifier: &VrfKeyIdentifier) -> ChainResult<PathBuf> {
+        match identifier {
+            VrfKeyIdentifier::Remote(key) => {
+                let trimmed = key.trim_matches('/');
+                if trimmed.is_empty() {
+                    return Err(ChainError::Config(
+                        "hsm secrets backend requires a non-empty remote key identifier".into(),
+                    ));
+                }
+
+                Ok(self
+                    .config
+                    .storage_root()
+                    .join(trimmed)
+                    .with_extension("toml"))
+            }
+            _ => Err(ChainError::Config(
+                "hsm secrets backend must be used with remote key identifiers".into(),
+            )),
+        }
+    }
+}
+
+impl VrfKeyStore for HsmVrfKeyStore {
     fn load(&self, identifier: &VrfKeyIdentifier) -> ChainResult<Option<VrfKeypair>> {
         let path = self.resolve_path(identifier)?;
         match fs::read_to_string(&path) {

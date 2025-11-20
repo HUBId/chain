@@ -50,10 +50,10 @@ coordination is required.【F:docs/release_checklist.md†L1-L62】【F:docs/wal
   rollouts are deferred. Operators must stage devices manually and keep
   `fallback_to_software` enabled until the vendor’s firmware attestation program
   is complete.【F:docs/wallet_phase4_advanced.md†L140-L206】
-* **External HSM configuration** – The runtime does not yet expose an HSM
-  backend in `KEY_MANAGEMENT.md`; selecting `hsm` currently errors out, so the
-  filesystem or Vault providers remain mandatory for validator/wallet keys until
-  the hardware integration is finished.【F:docs/KEY_MANAGEMENT.md†L11-L20】
+* **External HSM configuration** – The runtime now exposes an HSM emulator that
+  persists VRF material alongside `library_path`, but PKCS#11 integrations and
+  vendor attestations are still pending before production-grade hardware
+  support ships.【F:docs/KEY_MANAGEMENT.md†L11-L32】
 * **Advanced multisig coordination** – The wallet exposes hook surfaces and CLI
   plumbing when `wallet_multisig_hooks` is compiled, but end-to-end coordinator
   automation still depends on site-specific scripts (`scripts/multisig/*`). Plan
