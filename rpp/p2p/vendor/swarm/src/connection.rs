@@ -116,6 +116,10 @@ pub(crate) struct Connection<THandler>
 where
     THandler: ConnectionHandler,
 {
+    /// The peer associated with the connection.
+    peer_id: PeerId,
+    /// The current remote address for the connection.
+    remote_address: Multiaddr,
     /// Node that handles the muxing.
     muxing: StreamMuxerBox,
     /// The underlying handler.
@@ -192,6 +196,8 @@ where
         substream_upgrade_protocol_override: Option<upgrade::Version>,
         max_negotiating_inbound_streams: usize,
         idle_timeout: Duration,
+        peer_id: PeerId,
+        remote_address: Multiaddr,
     ) -> Self {
         let initial_protocols = gather_supported_protocols(&handler);
         let mut buffer = Vec::new();
@@ -206,6 +212,8 @@ where
         }
 
         Connection {
+            peer_id,
+            remote_address,
             muxing: muxer,
             handler,
             negotiating_in: Default::default(),
@@ -255,6 +263,8 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<Event<THandler::ToBehaviour>, ConnectionError>> {
         let Self {
+            peer_id,
+            remote_address,
             requested_substreams,
             muxing,
             handler,
@@ -401,9 +411,16 @@ where
                 *shutdown = Shutdown::None;
             }
 
-            match muxing.poll_unpin(cx)? {
+            match muxing
+                .poll_unpin(cx)
+                .map_err(|err| {
+                    ConnectionError::from(err)
+                        .with_peer_id(peer_id.clone())
+                        .with_remote_address(remote_address.clone())
+                })? {
                 Poll::Pending => {}
                 Poll::Ready(StreamMuxerEvent::AddressChange(address)) => {
+                    *remote_address = address.clone();
                     handler.on_connection_event(ConnectionEvent::AddressChange(AddressChange {
                         new_address: &address,
                     }));
@@ -412,7 +429,13 @@ where
             }
 
             if let Some(requested_substream) = requested_substreams.iter_mut().next() {
-                match muxing.poll_outbound_unpin(cx)? {
+                match muxing
+                    .poll_outbound_unpin(cx)
+                    .map_err(|err| {
+                        ConnectionError::from(err)
+                            .with_peer_id(peer_id.clone())
+                            .with_remote_address(remote_address.clone())
+                    })? {
                     Poll::Pending => {}
                     Poll::Ready(substream) => {
                         let (user_data, timeout, upgrade) = requested_substream.extract();
@@ -434,7 +457,13 @@ where
             }
 
             if negotiating_in.len() < *max_negotiating_inbound_streams {
-                match muxing.poll_inbound_unpin(cx)? {
+                match muxing
+                    .poll_inbound_unpin(cx)
+                    .map_err(|err| {
+                        ConnectionError::from(err)
+                            .with_peer_id(peer_id.clone())
+                            .with_remote_address(remote_address.clone())
+                    })? {
                     Poll::Pending => {}
                     Poll::Ready(substream) => {
                         let protocol = handler.listen_protocol();

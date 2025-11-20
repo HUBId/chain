@@ -253,6 +253,25 @@ mod tests {
     }
 
     #[test]
+    fn metadata_accessors_expose_endpoint_details() {
+        let peer_id = PeerId::random();
+        let remote_address: Multiaddr =
+            "/ip4/10.1.1.9/tcp/30333".parse().expect("valid multiaddr");
+
+        let error = ConnectionError::from(io::Error::new(io::ErrorKind::Other, "disconnected"))
+            .with_peer_id(peer_id.clone())
+            .with_remote_address(remote_address.clone());
+
+        match error {
+            ConnectionError::IO(io_error) => {
+                assert_eq!(io_error.peer_id(), Some(&peer_id));
+                assert_eq!(io_error.remote_address(), Some(&remote_address));
+            }
+            ConnectionError::KeepAliveTimeout => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
     fn connection_io_error_into_inner() {
         let io_error = io::Error::new(io::ErrorKind::ConnectionReset, "oops");
         let wrapped = ConnectionIoError::from(io_error);
