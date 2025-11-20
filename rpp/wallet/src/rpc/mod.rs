@@ -1060,11 +1060,25 @@ impl WalletRpcRouter {
             }
         };
         drop(drafts);
+        let export = match self
+            .wallet
+            .multisig_coordinator()
+            .export_metadata(&draft_id, metadata.clone())
+        {
+            Ok(export) => export,
+            Err(error) => {
+                self.record_action(
+                    WalletTelemetryAction::MultisigExport,
+                    TelemetryOutcome::Error,
+                );
+                return Err(RouterError::Wallet(WalletError::Multisig(error)));
+            }
+        };
         self.record_action(
             WalletTelemetryAction::MultisigExport,
             TelemetryOutcome::Success,
         );
-        let metadata = metadata.as_ref().map(MultisigDraftMetadataDto::from);
+        let metadata = export.metadata.as_ref().map(MultisigDraftMetadataDto::from);
         to_value(MultisigExportResponse { draft_id, metadata })
     }
 
