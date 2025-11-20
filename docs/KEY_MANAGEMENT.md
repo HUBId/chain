@@ -35,6 +35,10 @@ files manually:
 - `cargo run -p rpp-chain -- validator vrf export --output <path>` writes the keypair as JSON and
   can feed external backup workflows.【F:rpp/node/src/main.rs†L54-L199】
 
+The CLI surface ships behind the `runtime-cli` feature. Default builds include it, but if you disable
+defaults (for example, `--no-default-features --features prod,prover-stwo`) re-enable `runtime-cli` to
+retain VRF and HSM management commands: `cargo run -p rpp-chain --no-default-features --features "runtime-cli,prod,prover-stwo" -- validator vrf rotate`.【F:rpp/chain/Cargo.toml†L11-L52】
+
 All commands accept `--config` to point at non-default validator configuration
 files. The CLI reuses `RuntimeOptions`, meaning secrets-related overrides (for
 example, `--data-dir` or telemetry tokens) remain available during rotation or

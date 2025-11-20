@@ -250,6 +250,10 @@ name = "observability_otlp_failures"
 path = "../../tests/observability_otlp_failures.rs"
 
 [[test]]
+name = "vrf_keystore"
+path = "../../tests/vrf_keystore.rs"
+
+[[test]]
 name = "mempool"
 path = "../../tests/mempool/mod.rs"
 

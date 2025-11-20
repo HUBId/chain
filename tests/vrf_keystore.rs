@@ -8,9 +8,10 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rpp_chain::config::{SecretsAdapter, SecretsBackendConfig, SecretsConfig};
 use rpp_chain::crypto::{
-    FilesystemKeystoreConfig, FilesystemVrfKeyStore, StoredVrfKeypair, VaultKeystoreConfig,
-    VaultVrfKeyStore, VrfKeyIdentifier, VrfKeyStore,
+    FilesystemKeystoreConfig, FilesystemVrfKeyStore, HsmKeystoreConfig, StoredVrfKeypair,
+    VaultKeystoreConfig, VaultVrfKeyStore, VrfKeyIdentifier, VrfKeyStore,
 };
 use rpp_chain::errors::ChainError;
 use serde::{Deserialize, Serialize};
@@ -196,4 +197,42 @@ fn vault_keystore_missing_token_rejected() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn secrets_adapter_supports_hsm_backend() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let secrets = SecretsConfig {
+        backend: SecretsBackendConfig::Hsm(HsmKeystoreConfig {
+            library_path: Some(temp.path().join("libhsm-emulator.so")),
+            slot: Some(0),
+            key_id: Some("adapter-hsm".into()),
+        }),
+    };
+
+    let adapter = SecretsAdapter::new(&secrets, std::path::Path::new("/vrf/adapter"));
+    adapter.validate().expect("validation should pass");
+    adapter
+        .ensure_directories()
+        .expect("directories should be created");
+
+    let identifier = adapter.identifier().expect("identifier should resolve");
+    let store = adapter.keystore().expect("keystore should build");
+    let generated = store
+        .load_or_generate(&identifier)
+        .expect("store should persist hsm key");
+    let reloaded = store
+        .load(&identifier)
+        .expect("reload should work")
+        .expect("key should exist");
+
+    assert_eq!(generated.public.to_bytes(), reloaded.public.to_bytes());
+
+    let keystore_root = match &secrets.backend {
+        SecretsBackendConfig::Hsm(config) => config.storage_root(),
+        _ => unreachable!("hsm backend required"),
+    };
+    let expected = keystore_root.join("adapter-hsm.toml");
+    assert!(expected.exists(), "hsm adapter should persist vrf keys");
 }

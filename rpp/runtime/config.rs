@@ -163,6 +163,10 @@ pub struct SecretsConfig {
 }
 
 impl SecretsConfig {
+    pub fn adapter<'a>(&'a self, vrf_key_path: &'a Path) -> SecretsAdapter<'a> {
+        SecretsAdapter::new(self, vrf_key_path)
+    }
+
     pub fn build_keystore(&self) -> ChainResult<DynVrfKeyStore> {
         self.backend.build_keystore()
     }
@@ -191,6 +195,43 @@ impl Default for SecretsConfig {
         Self {
             backend: SecretsBackendConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SecretsAdapter<'a> {
+    secrets: &'a SecretsConfig,
+    vrf_key_path: &'a Path,
+}
+
+impl<'a> SecretsAdapter<'a> {
+    pub fn new(secrets: &'a SecretsConfig, vrf_key_path: &'a Path) -> Self {
+        Self {
+            secrets,
+            vrf_key_path,
+        }
+    }
+
+    pub fn validate(&self) -> ChainResult<()> {
+        self.secrets.validate_with_path(self.vrf_key_path)
+    }
+
+    pub fn ensure_directories(&self) -> ChainResult<()> {
+        self.secrets.ensure_directories(self.vrf_key_path)
+    }
+
+    pub fn identifier(&self) -> ChainResult<VrfKeyIdentifier> {
+        self.secrets.vrf_identifier(self.vrf_key_path)
+    }
+
+    pub fn keystore(&self) -> ChainResult<DynVrfKeyStore> {
+        self.secrets.build_keystore()
+    }
+
+    pub fn load_or_generate(&self) -> ChainResult<VrfKeypair> {
+        let identifier = self.identifier()?;
+        let store = self.keystore()?;
+        store.load_or_generate(&identifier)
     }
 }
 
