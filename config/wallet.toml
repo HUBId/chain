@@ -91,6 +91,13 @@ crash_reports = false
 endpoint = ""
 machine_id_salt = ""
 
+[wallet.telemetry.fallback]
+enabled = false
+prometheus_listen = "127.0.0.1:9797"
+auth_token = ""
+otlp_grpc = "0.0.0.0:4317"
+otlp_http = "0.0.0.0:4318"
+
 # Encrypted backup and recovery controls. Automatic exports stay disabled by default
 # and exports land in an operator-managed directory. Rotate passphrases as described in
 # docs/wallet_phase4_advanced.md#backuprecovery-formats-and-rotation.
