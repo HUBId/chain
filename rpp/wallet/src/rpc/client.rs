@@ -18,14 +18,15 @@ use super::dto::{
     ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
     ListUtxosResponse, MempoolInfoResponse, MultisigExportParams, MultisigExportResponse,
     MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse,
-    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
-    SecurityAssignParams, SecurityCertificateUploadParams, SecurityCertificateUploadResponse,
-    SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetCosignersParams,
-    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
-    SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse,
-    UpdateAddressMetadataParams, UpdateAddressMetadataResponse, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse, ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse,
-    ZsiProofParams, ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
+    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanAbortResponse, RescanParams,
+    RescanResponse, RescanStatusResponse, SecurityAssignParams, SecurityCertificateUploadParams,
+    SecurityCertificateUploadResponse, SecurityMtlsUpdateParams, SecurityRemoveParams,
+    SecuritySnapshotResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
+    SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncStatusResponse, TelemetryCountersResponse, UpdateAddressMetadataParams,
+    UpdateAddressMetadataResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
+    ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
+    ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_hw")]
 use super::dto::{HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse};
@@ -523,6 +524,16 @@ impl WalletRpcClient {
         params: &RescanParams,
     ) -> Result<RescanResponse, WalletRpcClientError> {
         self.call("rescan", Some(params)).await
+    }
+
+    /// Returns status information about the currently scheduled rescan, if any.
+    pub async fn rescan_status(&self) -> Result<RescanStatusResponse, WalletRpcClientError> {
+        self.call("rescan.status", Option::<Value>::None).await
+    }
+
+    /// Attempts to abort the active or pending rescan.
+    pub async fn rescan_abort(&self) -> Result<RescanAbortResponse, WalletRpcClientError> {
+        self.call("rescan.abort", Option::<Value>::None).await
     }
 
     /// Toggles telemetry sampling for forthcoming GUI workflows.

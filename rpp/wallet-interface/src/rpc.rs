@@ -1248,8 +1248,10 @@ pub enum WalletRpcErrorCode {
     WitnessTooLarge,
     SyncUnavailable,
     SyncError,
+    IndexerUnavailable,
     RescanOutOfRange,
     RescanInProgress,
+    RescanAborted,
     DraftNotFound,
     DraftUnsigned,
     NodeUnavailable,
@@ -1294,12 +1296,16 @@ impl WalletRpcErrorCode {
             WalletRpcErrorCode::WitnessTooLarge => std::borrow::Cow::Borrowed("WITNESS_TOO_LARGE"),
             WalletRpcErrorCode::SyncUnavailable => std::borrow::Cow::Borrowed("SYNC_UNAVAILABLE"),
             WalletRpcErrorCode::SyncError => std::borrow::Cow::Borrowed("SYNC_ERROR"),
+            WalletRpcErrorCode::IndexerUnavailable => {
+                std::borrow::Cow::Borrowed("INDEXER_UNAVAILABLE")
+            }
             WalletRpcErrorCode::RescanOutOfRange => {
                 std::borrow::Cow::Borrowed("RESCAN_OUT_OF_RANGE")
             }
             WalletRpcErrorCode::RescanInProgress => {
                 std::borrow::Cow::Borrowed("RESCAN_IN_PROGRESS")
             }
+            WalletRpcErrorCode::RescanAborted => std::borrow::Cow::Borrowed("RESCAN_ABORTED"),
             WalletRpcErrorCode::DraftNotFound => std::borrow::Cow::Borrowed("DRAFT_NOT_FOUND"),
             WalletRpcErrorCode::DraftUnsigned => std::borrow::Cow::Borrowed("DRAFT_UNSIGNED"),
             WalletRpcErrorCode::NodeUnavailable => std::borrow::Cow::Borrowed("NODE_UNAVAILABLE"),
@@ -1362,8 +1368,10 @@ impl<'de> Deserialize<'de> for WalletRpcErrorCode {
             "WITNESS_TOO_LARGE" => WalletRpcErrorCode::WitnessTooLarge,
             "SYNC_UNAVAILABLE" => WalletRpcErrorCode::SyncUnavailable,
             "SYNC_ERROR" => WalletRpcErrorCode::SyncError,
+            "INDEXER_UNAVAILABLE" => WalletRpcErrorCode::IndexerUnavailable,
             "RESCAN_OUT_OF_RANGE" => WalletRpcErrorCode::RescanOutOfRange,
             "RESCAN_IN_PROGRESS" => WalletRpcErrorCode::RescanInProgress,
+            "RESCAN_ABORTED" => WalletRpcErrorCode::RescanAborted,
             "DRAFT_NOT_FOUND" => WalletRpcErrorCode::DraftNotFound,
             "DRAFT_UNSIGNED" => WalletRpcErrorCode::DraftUnsigned,
             "NODE_UNAVAILABLE" => WalletRpcErrorCode::NodeUnavailable,
@@ -1540,6 +1548,35 @@ pub struct RescanResponse {
     pub scheduled: bool,
     /// Height the rescan will start from.
     pub from_height: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Status returned by `rescan.status`.
+pub struct RescanStatusResponse {
+    /// Pending rescan start height, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduled_from: Option<u64>,
+    /// Whether a rescan is actively running.
+    pub active: bool,
+    /// Current scan height while active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_height: Option<u64>,
+    /// Target scan height while active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_height: Option<u64>,
+    /// Latest indexed height reported by the backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_height: Option<u64>,
+    /// Last error reported by the scanner, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Response returned by `rescan.abort`.
+pub struct RescanAbortResponse {
+    /// True if an active or pending rescan was cancelled.
+    pub aborted: bool,
 }
 
 #[cfg(test)]

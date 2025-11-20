@@ -134,6 +134,10 @@ impl WalletSyncCoordinator {
         })
     }
 
+    pub fn pending_rescan_from(&self) -> Option<u64> {
+        lock_state(&self.state).pending_rescan
+    }
+
     pub fn last_error(&self) -> Option<WalletSyncError> {
         lock_state(&self.state).last_error.clone()
     }
@@ -150,6 +154,23 @@ impl WalletSyncCoordinator {
             handle.await.map_err(|_| WalletSyncError::Stopped)?;
         }
         Ok(())
+    }
+
+    pub fn abort_rescan(&self) -> bool {
+        let pending = {
+            let mut guard = lock_state(&self.state);
+            let pending = guard.pending_rescan.take();
+            let handle = guard.abort_handle.clone();
+            (pending, handle)
+        };
+
+        let aborted_pending = pending.0.is_some();
+        if let Some(handle) = pending.1 {
+            handle.abort();
+            true
+        } else {
+            aborted_pending
+        }
     }
 
     fn abort_active_scan(&self) {

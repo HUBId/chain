@@ -58,10 +58,14 @@ pub fn describe_rpc_error(code: &WalletRpcErrorCode, details: Option<&Value>) ->
             "The daemon is not tracking chain sync progress right now."
         }
         WalletRpcErrorCode::SyncError => "The daemon could not determine the current sync status.",
+        WalletRpcErrorCode::IndexerUnavailable => {
+            "The wallet indexer backend is currently unavailable."
+        }
         WalletRpcErrorCode::RescanOutOfRange => {
             "Requested rescan range is outside the indexed history."
         }
         WalletRpcErrorCode::RescanInProgress => "A rescan is already in progress.",
+        WalletRpcErrorCode::RescanAborted => "The rescan was aborted before completion.",
         WalletRpcErrorCode::DraftNotFound => "The referenced draft transaction could not be found.",
         WalletRpcErrorCode::DraftUnsigned => {
             if let Some(details) = details {

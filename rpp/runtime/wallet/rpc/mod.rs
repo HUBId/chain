@@ -737,6 +737,18 @@ const JSON_RPC_METHODS: &[(&str, WalletRpcMethod, Option<u64>, &'static [WalletR
         Some(6),
         ROLES_OPERATOR,
     ),
+    (
+        "rescan.status",
+        WalletRpcMethod::JsonRescanStatus,
+        Some(60),
+        ROLES_OPERATOR,
+    ),
+    (
+        "rescan.abort",
+        WalletRpcMethod::JsonRescanAbort,
+        Some(6),
+        ROLES_OPERATOR,
+    ),
 ];
 
 #[cfg(feature = "wallet_zsi")]
