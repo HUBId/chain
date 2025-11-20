@@ -11,9 +11,10 @@ use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{area_size_iter, AreaIndex};
 use crate::nodestore::NodeAllocator;
 use crate::{
-    CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
-    ReadableStorage, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    firewood_counter, firewood_gauge, CheckerError, Committed, FileIoError, HashType,
+    HashedNodeReader, ImmutableProposal, IntoHashType, LinearAddress, MutableProposal, Node,
+    NodeReader, NodeStore, Path, ReadableStorage, RootReader, StoredAreaParent, TrieNodeParent,
+    WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -225,8 +226,20 @@ where
             progress_bar.set_message("Checking leaked areas...");
         }
         let leaked_ranges = visited.complement();
+        #[allow(clippy::cast_precision_loss)]
+        firewood_gauge!(
+            "firewood.checker.leaked_ranges",
+            "current number of leaked storage ranges detected by the checker"
+        )
+        .set(leaked_ranges.len() as f64);
         if !leaked_ranges.is_empty() {
             warn!("Found leaked ranges: {leaked_ranges}");
+            #[allow(clippy::cast_possible_truncation)]
+            firewood_counter!(
+                "firewood.checker.leaked_ranges.detected",
+                "count of leaked storage ranges observed during checker runs"
+            )
+            .increment(leaked_ranges.len() as u64);
             errors.push(CheckerError::AreaLeaks(leaked_ranges));
         }
 
@@ -642,9 +655,20 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                 CheckerError::AreaLeaks(ranges) => {
                     let leaked_areas: Vec<_> =
                         self.split_all_leaked_ranges(&ranges, None).collect();
+                    #[allow(clippy::cast_possible_truncation)]
+                    firewood_gauge!(
+                        "firewood.checker.leaked_areas.detected",
+                        "current number of leaked areas detected while scanning storage"
+                    )
+                    .set(leaked_areas.len() as f64);
                     if leaked_areas.is_empty() {
                         // Nothing to enqueue; keep reporting the leak so operators can
                         // investigate why the checker produced an empty range set.
+                        firewood_counter!(
+                            "firewood.checker.leaked_areas.failed_to_fix",
+                            "count of leaked areas the checker could not enqueue into free lists"
+                        )
+                        .increment(1);
                         unfixable.push((CheckerError::AreaLeaks(ranges), None));
                         continue;
                     }
@@ -664,8 +688,21 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                     }
 
                     if io_errors.is_empty() {
+                        #[allow(clippy::cast_possible_truncation)]
+                        firewood_counter!(
+                            "firewood.checker.leaked_areas.fixed",
+                            "count of leaked areas successfully enqueued back into free lists"
+                        )
+                        .increment(leaked_areas.len() as u64);
                         fixed.push(CheckerError::AreaLeaks(ranges));
                     } else {
+                        let failed = io_errors.len().max(1);
+                        #[allow(clippy::cast_possible_truncation)]
+                        firewood_counter!(
+                            "firewood.checker.leaked_areas.failed_to_fix",
+                            "count of leaked areas the checker could not enqueue into free lists"
+                        )
+                        .increment(failed as u64);
                         for io_error in io_errors {
                             unfixable
                                 .push((CheckerError::AreaLeaks(ranges.clone()), Some(io_error)));
