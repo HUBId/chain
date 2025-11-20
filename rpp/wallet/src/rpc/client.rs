@@ -14,17 +14,18 @@ use super::dto::{
     CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams,
     EstimateFeeResponse, GetCosignersResponse, GetMultisigScopeResponse, GetPolicyResponse,
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, LifecycleStatusResponse,
-    ListPendingLocksResponse, ListTransactionsPageResponse, ListTransactionsParams,
-    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, MultisigExportParams,
-    MultisigExportResponse, MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams,
-    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
-    RescanResponse, SecurityAssignParams, SecurityCertificateUploadParams,
-    SecurityCertificateUploadResponse, SecurityMtlsUpdateParams, SecurityRemoveParams,
-    SecuritySnapshotResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
-    SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
-    ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
-    ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
+    ListBranchAddressesParams, ListBranchAddressesResponse, ListPendingLocksResponse,
+    ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
+    ListUtxosResponse, MempoolInfoResponse, MultisigExportParams, MultisigExportResponse,
+    MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse,
+    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
+    SecurityAssignParams, SecurityCertificateUploadParams, SecurityCertificateUploadResponse,
+    SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetCosignersParams,
+    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
+    SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse,
+    UpdateAddressMetadataParams, UpdateAddressMetadataResponse, WatchOnlyEnableParams,
+    WatchOnlyStatusResponse, ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse,
+    ZsiProofParams, ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_hw")]
 use super::dto::{HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse};
@@ -160,6 +161,22 @@ impl WalletRpcClient {
     ) -> Result<DeriveAddressResponse, WalletRpcClientError> {
         let params = DeriveAddressParams { change };
         self.call("derive_address", Some(&params)).await
+    }
+
+    /// Lists derived addresses for a specific branch using cursor-based pagination.
+    pub async fn list_branch_addresses(
+        &self,
+        params: &ListBranchAddressesParams,
+    ) -> Result<ListBranchAddressesResponse, WalletRpcClientError> {
+        self.call("addresses.list", Some(params)).await
+    }
+
+    /// Updates the label and/or note associated with a derived address.
+    pub async fn update_address_metadata(
+        &self,
+        params: &UpdateAddressMetadataParams,
+    ) -> Result<UpdateAddressMetadataResponse, WalletRpcClientError> {
+        self.call("addresses.update_metadata", Some(params)).await
     }
 
     /// Builds a draft transaction using the provided parameters.
