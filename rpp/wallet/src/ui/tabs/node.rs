@@ -1,5 +1,8 @@
 use iced::widget::{button, column, container, row, text, text_input, Column, Rule};
 use iced::{Alignment, Command, Element, Length};
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use crate::config::WalletConfig;
 use crate::rpc::client::{WalletRpcClient, WalletRpcClientError};
@@ -8,6 +11,7 @@ use crate::rpc::dto::{
     RecentBlocksResponse, ReleasePendingLocksResponse, RescanParams, RescanResponse, SyncModeDto,
     SyncStatusResponse, TelemetryCountersResponse,
 };
+use crate::rpc::dto::{LifecycleStateDto, LifecycleStatusResponse};
 #[cfg(feature = "wallet_zsi")]
 use crate::rpc::dto::{
     ZsiArtifactDto, ZsiBindResponse, ZsiBindingDto, ZsiDeleteParams, ZsiDeleteResponse,
@@ -16,7 +20,7 @@ use crate::rpc::dto::{
 
 use crate::telemetry::TelemetryOutcome;
 use crate::ui::commands::{self, RpcCallError};
-use crate::ui::components::{modal, ConfirmDialog};
+use crate::ui::components::{error_banner, modal, ConfirmDialog, ErrorBannerState};
 use crate::ui::error_map::{describe_rpc_error, technical_details};
 use crate::ui::telemetry;
 #[cfg(feature = "wallet_zsi")]
@@ -75,6 +79,12 @@ impl<T> Snapshot<T> {
 enum RescanPrompt {
     Birthday { height: u64 },
     Explicit { height: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleAction {
+    Start,
+    Stop,
 }
 
 impl RescanPrompt {
@@ -204,6 +214,13 @@ pub struct State {
     recent_blocks: Snapshot<Vec<BlockFeeSummaryDto>>,
     pending_locks: Snapshot<Vec<PendingLockDto>>,
     telemetry: Snapshot<TelemetryCountersResponse>,
+    node_status: Snapshot<LifecycleStatusResponse>,
+    node_log_tail: Vec<String>,
+    lifecycle_inflight: bool,
+    start_inflight: bool,
+    stop_inflight: bool,
+    lifecycle_prompt: Option<LifecycleAction>,
+    lifecycle_error: Option<String>,
     #[cfg(feature = "wallet_zsi")]
     zsi_artifacts: Snapshot<Vec<ZsiArtifactDto>>,
     #[cfg(feature = "wallet_zsi")]
@@ -237,6 +254,17 @@ pub struct State {
 pub enum Message {
     Refresh,
     SyncStatusUpdated(SyncStatusResponse),
+    LifecycleStatusLoaded(Result<LifecycleStatusResponse, RpcCallError>),
+    RequestNodeStart,
+    ConfirmNodeStart,
+    RequestNodeStop,
+    ConfirmNodeStop,
+    LifecycleStartSubmitted(Result<LifecycleStatusResponse, RpcCallError>),
+    LifecycleStopSubmitted(Result<LifecycleStatusResponse, RpcCallError>),
+    CancelLifecycleAction,
+    OpenLogsFolder,
+    LogsFolderOpened(Result<(), String>),
+    DismissLifecycleError,
     PendingLocksLoaded(Result<Vec<PendingLockDto>, RpcCallError>),
     MempoolInfoLoaded(Result<MempoolInfoResponse, RpcCallError>),
     RecentBlocksLoaded(Result<Vec<BlockFeeSummaryDto>, RpcCallError>),
@@ -288,6 +316,13 @@ impl State {
         self.recent_blocks = Snapshot::Idle;
         self.pending_locks = Snapshot::Idle;
         self.telemetry = Snapshot::Idle;
+        self.node_status = Snapshot::Idle;
+        self.node_log_tail.clear();
+        self.lifecycle_inflight = false;
+        self.start_inflight = false;
+        self.stop_inflight = false;
+        self.lifecycle_prompt = None;
+        self.lifecycle_error = None;
         #[cfg(feature = "wallet_zsi")]
         {
             self.zsi_artifacts = Snapshot::Idle;
@@ -332,6 +367,97 @@ impl State {
             Message::Refresh => self.refresh(client),
             Message::SyncStatusUpdated(status) => {
                 self.sync_status = Some(status);
+                Command::none()
+            }
+            Message::LifecycleStatusLoaded(result) => {
+                self.lifecycle_inflight = false;
+                self.handle_lifecycle_result(result);
+                Command::none()
+            }
+            Message::RequestNodeStart => {
+                if self.lifecycle_transitioning() {
+                    return Command::none();
+                }
+                self.lifecycle_prompt = Some(LifecycleAction::Start);
+                self.lifecycle_error = None;
+                Command::none()
+            }
+            Message::ConfirmNodeStart => {
+                if self.lifecycle_transitioning() {
+                    return Command::none();
+                }
+                self.lifecycle_prompt = None;
+                self.lifecycle_error = None;
+                self.node_status.set_loading();
+                self.start_inflight = true;
+                self.lifecycle_inflight = true;
+                commands::rpc(
+                    "lifecycle.start",
+                    client,
+                    |client| async move { client.lifecycle_start().await },
+                    Message::LifecycleStartSubmitted,
+                )
+            }
+            Message::RequestNodeStop => {
+                if self.lifecycle_transitioning() {
+                    return Command::none();
+                }
+                self.lifecycle_prompt = Some(LifecycleAction::Stop);
+                self.lifecycle_error = None;
+                Command::none()
+            }
+            Message::ConfirmNodeStop => {
+                if self.lifecycle_transitioning() {
+                    return Command::none();
+                }
+                self.lifecycle_prompt = None;
+                self.lifecycle_error = None;
+                self.node_status.set_loading();
+                self.stop_inflight = true;
+                self.lifecycle_inflight = true;
+                commands::rpc(
+                    "lifecycle.stop",
+                    client,
+                    |client| async move { client.lifecycle_stop().await },
+                    Message::LifecycleStopSubmitted,
+                )
+            }
+            Message::LifecycleStartSubmitted(result) => {
+                self.lifecycle_inflight = false;
+                self.start_inflight = false;
+                self.handle_lifecycle_result(result);
+                Command::none()
+            }
+            Message::LifecycleStopSubmitted(result) => {
+                self.lifecycle_inflight = false;
+                self.stop_inflight = false;
+                self.handle_lifecycle_result(result);
+                Command::none()
+            }
+            Message::CancelLifecycleAction => {
+                self.lifecycle_prompt = None;
+                Command::none()
+            }
+            Message::OpenLogsFolder => {
+                let path = self.logs_dir();
+                Command::perform(
+                    async move { open_logs_folder(path) },
+                    Message::LogsFolderOpened,
+                )
+            }
+            Message::LogsFolderOpened(result) => {
+                match result {
+                    Ok(()) => {
+                        let path = self.logs_dir();
+                        self.feedback = Some(format!("Opened logs folder at {}", path.display()));
+                        self.lifecycle_error = None;
+                    }
+                    Err(error) => self.lifecycle_error = Some(error),
+                }
+                Command::none()
+            }
+            Message::DismissLifecycleError => {
+                self.lifecycle_error = None;
                 Command::none()
             }
             Message::PendingLocksLoaded(result) => {
@@ -746,6 +872,32 @@ impl State {
             return modal(column![dialog.view()]);
         }
 
+        if let Some(prompt) = &self.lifecycle_prompt {
+            let (title, body, confirm, action) = match prompt {
+                LifecycleAction::Start => (
+                    "Start embedded node",
+                    "Start the embedded node process? Ensure no other node instance is running on the same ports.",
+                    "Start",
+                    Message::ConfirmNodeStart,
+                ),
+                LifecycleAction::Stop => (
+                    "Stop embedded node",
+                    "Stopping the embedded node will pause consensus and mempool processing until it is restarted.",
+                    "Stop",
+                    Message::ConfirmNodeStop,
+                ),
+            };
+            let dialog = ConfirmDialog {
+                title,
+                body: body.to_string(),
+                confirm_label: confirm,
+                cancel_label: "Cancel",
+                on_confirm: action,
+                on_cancel: Message::CancelLifecycleAction,
+            };
+            return modal(column![dialog.view()]);
+        }
+
         if self.release_confirmation {
             let dialog = ConfirmDialog {
                 title: "Release pending locks",
@@ -766,7 +918,19 @@ impl State {
             content = content.push(container(text(feedback).size(16)).width(Length::Fill));
         }
 
+        if let Some(error) = &self.lifecycle_error {
+            content = content.push(error_banner(
+                ErrorBannerState {
+                    message: "Node lifecycle request failed",
+                    detail: Some(error.as_str()),
+                },
+                Message::DismissLifecycleError,
+            ));
+        }
+
         content = content
+            .push(self.lifecycle_section())
+            .push(Rule::horizontal(1))
             .push(self.zsi_section())
             .push(Rule::horizontal(1))
             .push(self.pending_locks_view())
@@ -862,9 +1026,13 @@ impl State {
             .spacing(16)
             .width(Length::Fill);
 
-        let mut bottom = row![self.zsi_summary_card(), self.prover_summary_card()]
-            .spacing(16)
-            .width(Length::Fill);
+        let mut bottom = row![
+            self.lifecycle_summary_card(),
+            self.zsi_summary_card(),
+            self.prover_summary_card(),
+        ]
+        .spacing(16)
+        .width(Length::Fill);
 
         bottom = bottom.push(self.hardware_summary_card());
 
@@ -912,6 +1080,30 @@ impl State {
         }
 
         row.push(release_button).into()
+    }
+
+    fn lifecycle_summary_card(&self) -> Element<Message> {
+        let body = match &self.node_status {
+            Snapshot::Idle | Snapshot::Loading => column![text("Status pending")],
+            Snapshot::Error(error) => {
+                column![text("Status unavailable"), text(error.as_str()).size(14)]
+            }
+            Snapshot::Loaded(status) => {
+                let mut lines = vec![format!("Status: {}", lifecycle_state_label(status.status))];
+                if let Some(pid) = status.pid {
+                    lines.push(format!("PID: {pid}"));
+                }
+                if let Some(port) = &status.port_in_use {
+                    lines.push(format!("Port in use: {port}"));
+                }
+                if let Some(error) = &status.error {
+                    lines.push(format!("Last error: {error}"));
+                }
+                column_from(lines)
+            }
+        };
+
+        summary_card("Node lifecycle", body)
     }
 
     #[cfg(feature = "wallet_zsi")]
@@ -1194,6 +1386,69 @@ impl State {
         .into()
     }
 
+    fn lifecycle_section(&self) -> Element<Message> {
+        let mut header = row![text("Node lifecycle").size(18)]
+            .spacing(8)
+            .align_items(Alignment::Center);
+
+        let status_badge: Element<'_, Message> = match &self.node_status {
+            Snapshot::Idle => text("Status pending").size(14).into(),
+            Snapshot::Loading => text("Checking status…").size(14).into(),
+            Snapshot::Error(error) => text(format!("Status unavailable: {error}")).size(14).into(),
+            Snapshot::Loaded(status) => {
+                text(format!("Status: {}", lifecycle_state_label(status.status)))
+                    .size(14)
+                    .into()
+            }
+        };
+        header = header.push(status_badge);
+
+        let mut start_button = button(text("Start node")).padding(8);
+        if !self.start_disabled() {
+            start_button = start_button.on_press(Message::RequestNodeStart);
+        }
+
+        let mut stop_button = button(text("Stop node")).padding(8);
+        if !self.stop_disabled() {
+            stop_button = stop_button.on_press(Message::RequestNodeStop);
+        }
+
+        header = header.push(start_button).push(stop_button);
+
+        let mut log_lines: Column<'_, Message> = if self.node_log_tail.is_empty() {
+            column![text("No logs captured yet.").size(14)]
+        } else {
+            self.node_log_tail
+                .iter()
+                .fold(column![], |col, line| col.push(text(line).size(14)))
+        };
+
+        if let Some(status) = self.node_status.as_loaded() {
+            if let Some(error) = &status.error {
+                log_lines = log_lines.push(text(format!("Last error: {error}")).size(14));
+            }
+        }
+
+        let logs = container(log_lines.spacing(4))
+            .style(iced::theme::Container::Box)
+            .padding(12)
+            .width(Length::Fill);
+
+        let logs_row = row![
+            logs,
+            button(text("Open Logs Folder"))
+                .padding(8)
+                .on_press(Message::OpenLogsFolder)
+        ]
+        .spacing(12)
+        .align_items(Alignment::Start);
+
+        column![header, logs_row]
+            .spacing(12)
+            .width(Length::Fill)
+            .into()
+    }
+
     fn pending_locks_view(&self) -> Element<Message> {
         match &self.pending_locks {
             Snapshot::Idle | Snapshot::Loading => container(text("Loading pending locks..."))
@@ -1307,6 +1562,30 @@ impl State {
     }
 
     fn refresh(&mut self, client: WalletRpcClient) -> Command<Message> {
+        let lifecycle = self.poll_lifecycle_status(client.clone());
+        let panels = self.refresh_panels(client);
+        Command::batch(vec![lifecycle, panels])
+    }
+
+    fn poll_lifecycle_status(&mut self, client: WalletRpcClient) -> Command<Message> {
+        if self.lifecycle_inflight {
+            return Command::none();
+        }
+
+        if matches!(self.node_status, Snapshot::Idle) {
+            self.node_status.set_loading();
+        }
+
+        self.lifecycle_inflight = true;
+        commands::rpc(
+            "lifecycle.status",
+            client,
+            |client| async move { client.lifecycle_status().await },
+            Message::LifecycleStatusLoaded,
+        )
+    }
+
+    fn refresh_panels(&mut self, client: WalletRpcClient) -> Command<Message> {
         if self.refresh_inflight {
             return Command::none();
         }
@@ -1411,6 +1690,58 @@ impl State {
         if self.refresh_pending == 0 {
             self.refresh_inflight = false;
         }
+    }
+
+    fn lifecycle_state(&self) -> Option<LifecycleStateDto> {
+        self.node_status.as_loaded().map(|status| status.status)
+    }
+
+    fn lifecycle_transitioning(&self) -> bool {
+        self.start_inflight || self.stop_inflight
+    }
+
+    fn lifecycle_busy(&self) -> bool {
+        self.lifecycle_inflight || self.lifecycle_transitioning()
+    }
+
+    fn start_disabled(&self) -> bool {
+        self.lifecycle_busy()
+            || matches!(
+                self.lifecycle_state(),
+                Some(LifecycleStateDto::Running | LifecycleStateDto::AlreadyRunning)
+            )
+    }
+
+    fn stop_disabled(&self) -> bool {
+        self.lifecycle_busy()
+            || matches!(self.node_status, Snapshot::Idle | Snapshot::Loading)
+            || matches!(
+                self.lifecycle_state(),
+                Some(LifecycleStateDto::Stopped | LifecycleStateDto::PortInUse)
+            )
+    }
+
+    fn logs_dir(&self) -> PathBuf {
+        self.config
+            .as_ref()
+            .map(|config| config.engine.data_dir.join("logs"))
+            .unwrap_or_else(|| PathBuf::from("logs"))
+    }
+
+    fn handle_lifecycle_result(&mut self, result: Result<LifecycleStatusResponse, RpcCallError>) {
+        match result {
+            Ok(status) => {
+                self.node_log_tail = sanitize_log_tail(status.log_tail.clone());
+                self.node_status.set_loaded(status);
+                self.lifecycle_error = None;
+            }
+            Err(error) => {
+                self.node_status.set_error(&error);
+                self.lifecycle_error = Some(format_rpc_error(&error));
+            }
+        }
+        self.start_inflight = false;
+        self.stop_inflight = false;
     }
 
     fn rescan_blocked(&self) -> bool {
@@ -1609,6 +1940,16 @@ fn bool_label(value: bool) -> &'static str {
     }
 }
 
+fn lifecycle_state_label(state: LifecycleStateDto) -> &'static str {
+    match state {
+        LifecycleStateDto::Running => "running",
+        LifecycleStateDto::Stopped => "stopped",
+        LifecycleStateDto::AlreadyRunning => "already running",
+        LifecycleStateDto::PortInUse => "port in use",
+        LifecycleStateDto::Error => "error",
+    }
+}
+
 fn summary_card(title: &str, body: Column<'_, Message>) -> Element<Message> {
     container(
         column![text(title).size(18), body.spacing(4)]
@@ -1619,6 +1960,35 @@ fn summary_card(title: &str, body: Column<'_, Message>) -> Element<Message> {
     .style(iced::theme::Container::Box)
     .padding(12)
     .into()
+}
+
+fn sanitize_log_tail(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .map(|line| line.replace('\0', "").trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn open_logs_folder(path: PathBuf) -> Result<(), String> {
+    fs::create_dir_all(&path).map_err(|err| err.to_string())?;
+
+    let status = if cfg!(target_os = "windows") {
+        ProcessCommand::new("explorer")
+    } else if cfg!(target_os = "macos") {
+        ProcessCommand::new("open")
+    } else {
+        ProcessCommand::new("xdg-open")
+    }
+    .arg(&path)
+    .status()
+    .map_err(|err| err.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Opening logs folder failed with status: {status}"))
+    }
 }
 
 fn parse_height(input: &str) -> Result<u64, String> {
@@ -1733,6 +2103,79 @@ mod tests {
         assert!(!state.release_inflight);
         // Ensure a command was produced to drive the refresh RPCs.
         let _ = command;
+    }
+
+    #[test]
+    fn lifecycle_start_and_stop_flow_updates_status() {
+        let mut state = State::default();
+        let client = dummy_client();
+
+        let _ = state.update(client.clone(), Message::RequestNodeStart);
+        assert!(matches!(
+            state.lifecycle_prompt,
+            Some(LifecycleAction::Start)
+        ));
+
+        let _ = state.update(client.clone(), Message::ConfirmNodeStart);
+        assert!(state.start_inflight);
+        assert!(state.lifecycle_inflight);
+
+        let running = LifecycleStatusResponse {
+            status: LifecycleStateDto::Running,
+            pid: Some(42),
+            port_in_use: None,
+            error: None,
+            log_tail: vec!["started".into()],
+        };
+        let _ = state.update(
+            client.clone(),
+            Message::LifecycleStartSubmitted(Ok(running.clone())),
+        );
+
+        let loaded = state.node_status.as_loaded().expect("lifecycle status");
+        assert_eq!(loaded.status, LifecycleStateDto::Running);
+        assert_eq!(state.node_log_tail, sanitize_log_tail(running.log_tail));
+
+        let _ = state.update(client.clone(), Message::RequestNodeStop);
+        assert!(matches!(
+            state.lifecycle_prompt,
+            Some(LifecycleAction::Stop)
+        ));
+
+        let _ = state.update(client.clone(), Message::ConfirmNodeStop);
+        assert!(state.stop_inflight);
+
+        let stopped = LifecycleStatusResponse {
+            status: LifecycleStateDto::Stopped,
+            pid: None,
+            port_in_use: None,
+            error: None,
+            log_tail: vec!["stopped".into()],
+        };
+        let _ = state.update(client, Message::LifecycleStopSubmitted(Ok(stopped.clone())));
+
+        let loaded = state
+            .node_status
+            .as_loaded()
+            .expect("updated lifecycle status");
+        assert_eq!(loaded.status, LifecycleStateDto::Stopped);
+        assert_eq!(state.node_log_tail, sanitize_log_tail(stopped.log_tail));
+        assert!(!state.lifecycle_transitioning());
+    }
+
+    #[test]
+    fn lifecycle_errors_surface_in_state() {
+        let mut state = State::default();
+        state.start_inflight = true;
+
+        let _ = state.update(
+            dummy_client(),
+            Message::LifecycleStartSubmitted(Err(RpcCallError::Timeout(Duration::from_secs(1)))),
+        );
+
+        assert!(!state.start_inflight);
+        assert!(matches!(state.node_status, Snapshot::Error(_)));
+        assert!(state.lifecycle_error.is_some());
     }
 
     #[test]

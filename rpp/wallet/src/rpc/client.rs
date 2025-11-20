@@ -13,18 +13,18 @@ use super::dto::{
     BroadcastRawParams, BroadcastRawResponse, BroadcastResponse, CosignerDto, CreateTxParams,
     CreateTxResponse, DeriveAddressParams, DeriveAddressResponse, EstimateFeeParams,
     EstimateFeeResponse, GetCosignersResponse, GetMultisigScopeResponse, GetPolicyResponse,
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListPendingLocksResponse,
-    ListTransactionsPageResponse, ListTransactionsParams, ListTransactionsResponse,
-    ListUtxosResponse, MempoolInfoResponse, MultisigExportParams, MultisigExportResponse,
-    MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams, RecentBlocksResponse,
-    ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams, RescanResponse,
-    SecurityAssignParams, SecurityCertificateUploadParams, SecurityCertificateUploadResponse,
-    SecurityMtlsUpdateParams, SecurityRemoveParams, SecuritySnapshotResponse, SetCosignersParams,
-    SetCosignersResponse, SetMultisigScopeParams, SetMultisigScopeResponse, SetPolicyParams,
-    SetPolicyResponse, SignTxParams, SignTxResponse, SyncStatusResponse, TelemetryCountersResponse,
-    WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse, ZsiDeleteParams,
-    ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse, ZsiVerifyParams,
-    ZsiVerifyResponse, JSONRPC_VERSION,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, LifecycleStatusResponse,
+    ListPendingLocksResponse, ListTransactionsPageResponse, ListTransactionsParams,
+    ListTransactionsResponse, ListUtxosResponse, MempoolInfoResponse, MultisigExportParams,
+    MultisigExportResponse, MultisigScopeDto, PolicyPreviewResponse, RecentBlocksParams,
+    RecentBlocksResponse, ReleasePendingLocksParams, ReleasePendingLocksResponse, RescanParams,
+    RescanResponse, SecurityAssignParams, SecurityCertificateUploadParams,
+    SecurityCertificateUploadResponse, SecurityMtlsUpdateParams, SecurityRemoveParams,
+    SecuritySnapshotResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
+    SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
+    SyncStatusResponse, TelemetryCountersResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse,
+    ZsiBindResponse, ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams,
+    ZsiProveResponse, ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_hw")]
 use super::dto::{HardwareEnumerateResponse, HardwareSignParams, HardwareSignResponse};
@@ -433,6 +433,21 @@ impl WalletRpcClient {
     ) -> Result<ReleasePendingLocksResponse, WalletRpcClientError> {
         self.call("release_pending_locks", Some(ReleasePendingLocksParams))
             .await
+    }
+
+    /// Retrieves the current embedded node lifecycle status.
+    pub async fn lifecycle_status(&self) -> Result<LifecycleStatusResponse, WalletRpcClientError> {
+        self.call("lifecycle.status", Option::<Value>::None).await
+    }
+
+    /// Attempts to start the embedded node runtime.
+    pub async fn lifecycle_start(&self) -> Result<LifecycleStatusResponse, WalletRpcClientError> {
+        self.call("lifecycle.start", Option::<Value>::None).await
+    }
+
+    /// Attempts to stop the embedded node runtime.
+    pub async fn lifecycle_stop(&self) -> Result<LifecycleStatusResponse, WalletRpcClientError> {
+        self.call("lifecycle.stop", Option::<Value>::None).await
     }
 
     /// Exports an encrypted wallet backup archive.
