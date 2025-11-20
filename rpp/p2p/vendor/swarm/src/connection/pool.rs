@@ -513,6 +513,8 @@ where
         let conns = self.established.entry(obtained_peer_id).or_default();
         self.counters.inc_established(endpoint);
 
+        let remote_address = endpoint.get_remote_address().clone();
+
         let (command_sender, command_receiver) = mpsc::channel(self.task_command_buffer_size);
         let (event_sender, event_receiver) = mpsc::channel(self.per_connection_event_buffer_size);
 
@@ -534,6 +536,8 @@ where
             self.substream_upgrade_protocol_override,
             self.max_negotiating_inbound_streams,
             self.idle_connection_timeout,
+            obtained_peer_id.clone(),
+            remote_address,
         );
 
         let span = tracing::debug_span!(parent: tracing::Span::none(), "new_established_connection", remote_addr = %endpoint.get_remote_address(), %id, peer = %obtained_peer_id);
@@ -612,6 +616,14 @@ where
                     err.with_peer_id(peer_id.clone())
                         .with_remote_address(remote_address.clone())
                 });
+
+                tracing::debug!(
+                    peer=%peer_id,
+                    connection=%id,
+                    remote_addr=%remote_address,
+                    error=?error,
+                    "connection closed"
+                );
 
                 return Poll::Ready(PoolEvent::ConnectionClosed {
                     id,
