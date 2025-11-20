@@ -202,6 +202,30 @@ The wallet can delegate signing to hardware devices, such as Ledger or FIDO-base
 * **Stalled signing** – Ensure the hardware firmware version meets the minimum specified in
   release notes. Ledger devices require blind signing to be enabled for PSBT flows.
 
+### Firmware-Bundles, Signaturen und Deployment
+
+Vendor-spezifische Firmware und Bridges werden gebündelt, signiert und attestiert, bevor
+Hardware-Sessions freigeschaltet werden.
+
+1. **Bundles erzeugen** – Führe `cargo xtask wallet-firmware --signing-key
+   deploy/firmware/test_firmware_signing.key --output dist/wallet/firmware` aus. Der Task
+   sammelt alle JSON-Manifeste unter `rpp/wallet/src/hw/artifacts/`, kopiert die referenzierten
+   Artefakte (z. B. `firmware/ledger_nano_x_v2.1.0.bin`) und erstellt ein tarball pro Vendor mit
+   `manifest.json`, `attestation.json` (Ed25519-Signatur und Public Key) und
+   `SHA256SUMS.txt`.
+2. **Attestation prüfen** – Verifiziere die Ausgaben offline mit
+   `cargo xtask wallet-firmware --verify dist/wallet/firmware/<vendor>/*.tar.gz`. Der Task
+   berechnet die Hashes neu, prüft Signatur und Manifest-Daten und bricht bei Abweichungen ab.
+3. **Deployment** – Entpacke das geprüfte Bundle auf den Zielhost (z. B. unter
+   `/opt/rpp/firmware/<vendor>/`) und injiziere den Paketpfad in die Release-Pipeline. Vor dem
+   Laden der Bridge/Firmware muss `SHA256SUMS.txt` gegen das entpackte Verzeichnis geprüft und
+   der Public-Key-Fingerabdruck (`deploy/firmware/test_firmware_signing.pub` oder der produktive
+   Schlüssel) in den Deploy-Logs dokumentiert werden.
+4. **Rollback und Rotation** – Behalte mindestens eine Vorgängerversion des Bundles auf einem
+   Offline-Medium. Bei Firmware-Rotation zuerst das neue Bundle bauen/attestieren, dann die
+   Hardware-Sessions in Staging freischalten und erst nach erfolgreichem `wallet_hw`-Smoke-Test
+   in Produktion ausrollen.
+
 ### Security Considerations
 
 * Enforce strong passphrases and track custody via dual control logs.

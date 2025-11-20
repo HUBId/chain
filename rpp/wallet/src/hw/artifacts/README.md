@@ -15,3 +15,13 @@ verified during the release checklist. The artifacts double as fixtures for the
 
 When new vendor revisions are added, update the digest, stage the package under
 `firmware/` or `packages/`, and link the change in the release checklist.
+
+Signed, attested bundles can be generated with:
+
+```
+cargo xtask wallet-firmware --signing-key deploy/firmware/test_firmware_signing.key
+```
+
+The command copies each package referenced by the manifest, recalculates the
+checksum, and emits a signed `attestation.json` alongside the manifest and
+SHA256SUMS file for every vendor bundle.

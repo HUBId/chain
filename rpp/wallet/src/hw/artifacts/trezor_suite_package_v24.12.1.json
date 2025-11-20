@@ -3,7 +3,7 @@
   "product": "Model T",
   "version": "24.12.1",
   "package": "packages/trezor_suite_24.12.1.tar.gz",
-  "sha256": "5f1c43d77f2a0d3ef0b6e46a59841e187cc4f2f6220fc17bd3c6a8cc49b2d3b7",
+  "sha256": "95fd0859228baa2e00df706adec5ff5fd8d0999cd6ea6b152daebd79069c8b4e",
   "notes": [
     "Bundled bridge driver enables hardware sessions after unlock",
     "Test matrix covers PSBT signing and address export via wallet_hw feature"
