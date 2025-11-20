@@ -72,13 +72,16 @@ Treat validation errors as actionable hints—the exact field name is embedded i
 ## Secrets handling
 
 Validators rely on the `secrets` block to manage VRF key material. The runtime supports filesystem and
-Vault backends (HSM is stubbed out in this build) and automatically derives identifiers, creates
-parent directories, and loads or generates keypairs through the configured backend.【F:rpp/runtime/config.rs†L34-L120】 CLI VRF subcommands reuse this configuration for rotation/inspection.【F:rpp/node/src/main.rs†L57-L178】
+Vault backends as well as the HSM emulator and automatically derives identifiers, creates
+parent directories, and loads or generates keypairs through the configured backend.【F:rpp/runtime/config.rs†L34-L159】【F:rpp/runtime/config.rs†L199-L282】 CLI VRF subcommands reuse this configuration for rotation/inspection.【F:rpp/node/src/main.rs†L57-L178】
 
 * Filesystem backends resolve relative paths under the configured directory and create missing parent
   folders.【F:rpp/runtime/config.rs†L117-L123】
 * Vault backends require non-empty logical paths and validate the remote connection settings before
   use.【F:rpp/runtime/config.rs†L97-L114】
+* HSM backends accept optional `key_id` overrides, validate non-empty identifiers, and persist VRF
+  material alongside the configured library path to keep CLI flows hardware-agnostic during local
+  development.【F:rpp/runtime/config.rs†L199-L282】【F:tests/vrf_keystore.rs†L123-L185】
 
 Use the wallet or validator templates as references for placing `vrf_key_path` alongside the secrets
 backend.
