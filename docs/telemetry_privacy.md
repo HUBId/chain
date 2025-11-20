@@ -15,15 +15,20 @@ contains only the following normalized fields:
 | --- | --- |
 | `session` | `phase` (`start` or `stop`) |
 | `rpc` | `method`, `latency_ms`, `outcome` (`ok`/`err`), optional `code` derived from the Phase 2 RPC error catalog |
-| `send_stage` | `stage` (`draft`, `sign`, `broadcast`), `outcome` |
+| `send_stage` | `stage` (`draft`, `sign`, `broadcast`), `outcome`, `proof_required` |
+| `prover` | `backend` (`mock`/`stwo`), `require_proof`, `allow_broadcast_without_proof`, `outcome`, optional `timeout_ms` |
 | `rescan` | `stage` (`reschedule`), optional `latency_ms`, `outcome` |
+| `lifecycle` | `event` (`auto_lock`, `hybrid_start`), optional `height`/`reason` |
 | `error` | `code`, optional human-readable `context` |
 
 Sensitive material such as addresses, node hints, and transaction amounts never
-leave the device. Telemetry batches are tagged with the wallet build version,
-the optional `GIT_COMMIT_SHA`, and a salted machine identifier computed via
-`sha256(machine_id_salt || hostname)` so installations cannot be correlated
-across operators.
+leave the device. Proof enforcement toggles (`require_proof`/
+`allow_broadcast_without_proof`) and lifecycle controls (rescan scheduling,
+auto-lock, hybrid runner launch) are only reported as booleans/labels so policy
+choices are visible without leaking payment data.【F:config/wallet.toml†L69-L132】【F:docs/wallet_phase3_gui.md†L148-L162】 Telemetry
+batches are tagged with the wallet build version, the optional `GIT_COMMIT_SHA`,
+and a salted machine identifier computed via `sha256(machine_id_salt ||
+hostname)` so installations cannot be correlated across operators.
 
 ## Local retention and upload policy
 
