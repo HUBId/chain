@@ -45,6 +45,20 @@ to the change record.
    Windows runner or WSL) to capture the feature gating evidence required by the
    operator runbook.
 
+## Proof enforcement and lifecycle controls
+
+1. Follow the CLI/GUI flow in [`docs/quickstart_wallet.md`](quickstart_wallet.md)
+   to capture init → sync → receive → send evidence with STWO enforcement turned
+   on. Include GUI wireframes or screenshots for each tab.
+2. Validate `[wallet.prover]` fail-closed behaviour by toggling
+   `require_proof = true` and `allow_broadcast_without_proof = false`, then
+   recording the error banner/action mapping from
+   [`docs/wallet_error_matrix.md`](wallet_error_matrix.md).【F:config/wallet.toml†L125-L132】【F:docs/wallet_error_matrix.md†L7-L26】
+3. Exercise lifecycle controls by triggering a rescan (manual and auto) and
+   noting the `[wallet.rescan]` tuning used in your test profile. Capture the
+   hybrid runner output from `scripts/run_hybrid_mode.sh` when staging combined
+   node+wallet runs.【F:config/wallet.toml†L95-L102】【F:scripts/run_hybrid_mode.sh†L1-L55】
+
 ## Signature, SBOM, and provenance verification
 
 1. Download all wallet artifacts from the CI run and compute `sha256sum` locally.

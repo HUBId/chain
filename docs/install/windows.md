@@ -39,6 +39,36 @@ paths use the same signed binaries, hooks, and documentation described below.
 3. Launch `rpp-wallet-gui.exe`, unlock the keystore, and capture screenshots of
    the History, Send, Receive, and Node tabs for the deployment log using the
    training callouts as a reference.【F:docs/training/wallet_operator_training.md†L58-L140】
+4. Enforce proof and lifecycle controls before releasing the MSI/zip to users:
+   * Set `[wallet.prover].backend = "stwo"`, `require_proof = true`, and
+     `allow_broadcast_without_proof = false` so sends remain fail-closed; restart
+     the Windows service or GUI after editing because live reload is disabled.【F:config/wallet.toml†L1-L3】【F:config/wallet.toml†L125-L132】
+   * Update `[wallet.rescan]` with your retention window and record `chunk_size`
+     alongside the rollout ticket so reschedules are deterministic.【F:config/wallet.toml†L95-L102】
+   * Use `scripts\run_hybrid_mode.sh` from WSL (or PowerShell via Git Bash) when
+     staging hybrid demos so `/health/*` probes remain aligned with the GUI lifecycle.【F:scripts/run_hybrid_mode.sh†L1-L55】
+
+5. Add lightweight GUI wireframes to the deployment record (one per tab):
+
+   ```
+   +---------------------------+    +---------------------------+
+   | Overview                  |    | Receive                   |
+   | Sync: height 12345  ✔     |    | Address: wallet1...       |
+   | Balances: confirmed 1.2   |    | [Copy] [New address]      |
+   | Pending ops: 0            |    | Tooltip: rotate per use   |
+   | [Refresh] [Rescan]        |    +---------------------------+
+   +---------------------------+
+
+   +---------------------------+    +---------------------------+
+   | Send                      |    | Prover                    |
+   | To: [_____________]       |    | Queue: 0 pending          |
+   | Amount: [______] sats     |    | Backend: STWO (required)  |
+   | Fee slider [---|----]     |    | [Retry] [View logs]       |
+   | Proof: STWO (required)    |    | Progress table rows       |
+   | [Preview] [Sign] [Send]   |    +---------------------------+
+   | Error banner slot         |
+   +---------------------------+
+   ```
 
 ## 4. Health checks and GUI validation
 

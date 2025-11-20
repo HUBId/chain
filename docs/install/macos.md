@@ -39,6 +39,36 @@ capture it for audit logs.
 3. Document screenshots of the GUI tabs the first time you unlock the wallet on
    a host, following the callouts in the training guide (Send, Receive, and Node
    tabs are required for compliance evidence).【F:docs/training/wallet_operator_training.md†L58-L140】
+4. Turn on proof enforcement and lifecycle controls before distributing the app:
+   * Set `[wallet.prover].backend = "stwo"` plus `require_proof = true` and
+     `allow_broadcast_without_proof = false` to keep sends fail-closed; restart
+     the GUI/runtime after editing because live reload is unavailable.【F:config/wallet.toml†L1-L3】【F:config/wallet.toml†L125-L132】
+   * Tune `[wallet.rescan]` for your lookback window and note the `chunk_size`
+     in the rollout ticket so operators can replay history deterministically.【F:config/wallet.toml†L95-L102】
+   * Use `scripts/run_hybrid_mode.sh` when staging hybrid demos so `/health/*`
+     probes align with the GUI lifecycle.【F:scripts/run_hybrid_mode.sh†L1-L55】
+
+5. Attach the lightweight GUI wireframes to the deployment log (one per tab):
+
+   ```
+   +---------------------------+    +---------------------------+
+   | Overview                  |    | Receive                   |
+   | Sync: height 12345  ✔     |    | Address: wallet1...       |
+   | Balances: confirmed 1.2   |    | [Copy] [New address]      |
+   | Pending ops: 0            |    | Tooltip: rotate per use   |
+   | [Refresh] [Rescan]        |    +---------------------------+
+   +---------------------------+
+
+   +---------------------------+    +---------------------------+
+   | Send                      |    | Prover                    |
+   | To: [_____________]       |    | Queue: 0 pending          |
+   | Amount: [______] sats     |    | Backend: STWO (required)  |
+   | Fee slider [---|----]     |    | [Retry] [View logs]       |
+   | Proof: STWO (required)    |    | Progress table rows       |
+   | [Preview] [Sign] [Send]   |    +---------------------------+
+   | Error banner slot         |
+   +---------------------------+
+   ```
 
 ## 4. Post-install validation
 

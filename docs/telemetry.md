@@ -96,3 +96,24 @@ scrape_configs:
 
 Die Registry führt automatisch Upkeep-Ticks aus, sodass Histogramme und Counter auch bei geringer
 Scrape-Frequenz konsistente Werte liefern.
+
+## Wallet-spezifische Proof- und Lifecycle-Telemetrie
+
+Der Wallet-Stack meldet eigene Metriken und Events, sobald `[wallet.telemetry].metrics`
+aktiviert ist und die GUI/CLI mit Telemetrie-Feature gebaut werden:
+
+- Runtime-Metriken wie `rpp.runtime.wallet.rpc_latency` und
+  `rpp.runtime.wallet.sync.active` decken RPC-Latenzen, Proof-/Sync-Liveness und
+  Budget-Exhaustion ab.【F:docs/wallet_phase1_minimal.md†L271-L285】
+- Die GUI sendet Events wie `wallet.gui.send_attempt`, `wallet.gui.prover_retry`
+  und `wallet.gui.error`, sobald Tabs gewechselt oder Prover-Recoveries
+  ausgelöst werden.【F:docs/wallet_phase3_gui.md†L148-L162】
+- Lifecycle-Kontrollen wie Rescans (`[wallet.rescan]`) und Auto-Lock greifen
+  ebenfalls auf dieselbe Telemetrie-Senke zu, sodass Proof-Enforcement und
+  Replay-Jobs in Dashboards korrelierbar bleiben.【F:config/wallet.toml†L69-L102】
+
+Die Wallet-Ereignisse nutzen dieselben OTLP-/Prometheus-Pfade wie die
+Validator-Telemetrie, sodass Betreiber keine zusätzlichen Exporter konfigurieren
+müssen. Aktivieren Sie die Opt-ins in `config/wallet.toml` und verifizieren Sie
+die neuen Events über den Telemetrie-Collector oder lokale JSON-Spools, bevor
+Sie sie an zentrale Backends weiterleiten.

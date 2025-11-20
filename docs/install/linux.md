@@ -57,6 +57,37 @@ Edit `/etc/rpp-wallet/wallet.toml` after installation:
 3. For GUI rollouts, update the monitoring ticket with screenshots of the Send
    and Receive tabs following the textual overlays in the training guide so
    reviewers can compare the rendered components with the documented state.【F:docs/training/wallet_operator_training.md†L58-L110】
+4. Enforce proof and lifecycle policies before handing the host to operators:
+   * Set `[wallet.prover].backend = "stwo"`, `require_proof = true`, and
+     `allow_broadcast_without_proof = false` for fail-closed sends; restart the
+     service after editing because live reload is disabled.【F:config/wallet.toml†L1-L3】【F:config/wallet.toml†L125-L132】
+   * Pin `[wallet.rescan]` to your lookback window and log the chosen
+     `chunk_size` in the deployment ticket so reschedules stay predictable.【F:config/wallet.toml†L95-L102】
+   * Use `scripts/run_hybrid_mode.sh` when staging hybrid node+wallet rollouts so
+     readiness probes align with the wallet lifecycle controls.【F:scripts/run_hybrid_mode.sh†L1-L55】
+
+5. Attach lightweight GUI wireframes to the change record for acceptance (one
+   snapshot per tab):
+
+   ```
+   +---------------------------+    +---------------------------+
+   | Overview                  |    | Receive                   |
+   | Sync: height 12345  ✔     |    | Address: wallet1...       |
+   | Balances: confirmed 1.2   |    | [Copy] [New address]      |
+   | Pending ops: 0            |    | Tooltip: rotate per use   |
+   | [Refresh] [Rescan]        |    +---------------------------+
+   +---------------------------+
+
+   +---------------------------+    +---------------------------+
+   | Send                      |    | Prover                    |
+   | To: [_____________]       |    | Queue: 0 pending          |
+   | Amount: [______] sats     |    | Backend: STWO (required)  |
+   | Fee slider [---|----]     |    | [Retry] [View logs]       |
+   | Proof: STWO (required)    |    | Progress table rows       |
+   | [Preview] [Sign] [Send]   |    +---------------------------+
+   | Error banner slot         |
+   +---------------------------+
+   ```
 
 Restart the wallet service after changing the configuration because live reload
 is not supported.【F:config/wallet.toml†L1-L3】
