@@ -41,6 +41,32 @@ material, endpoint reachability, or collector availability triggered the issue.
 Once the exporter configuration is corrected and a successful initialisation
 occurs, the counter remains flat and the alert automatically clears.
 
+### Chaos artifacts
+
+The telemetry chaos harness writes every run to a timestamped directory under
+`rpp/chain/artifacts/telemetry-chaos/<epoch-seconds>` (override with the
+`TELEMETRY_CHAOS_ARTIFACT_DIR` environment variable).【F:tests/observability_otlp_failures.rs†L24-L176】
+Each directory contains:
+
+- `node.log`: combined stdout and stderr from the chaos node.【F:tests/observability_otlp_failures.rs†L99-L134】【F:tests/observability_otlp_failures.rs†L178-L216】
+- `metrics.prom`: the Prometheus scrape retrieved after the exporters fail to
+  start.【F:tests/observability_otlp_failures.rs†L59-L93】【F:tests/observability_otlp_failures.rs†L218-L235】
+- `alert_payload.json`: the synthetic Alertmanager payload that summarises the
+  firing `OtlpExporterFailure` alert for the captured metrics.【F:tests/observability_otlp_failures.rs†L136-L176】【F:tests/observability_otlp_failures.rs†L224-L235】
+
+You can inspect the latest chaos output locally with:
+
+```bash
+ls rpp/chain/artifacts/telemetry-chaos
+tail -n 50 rpp/chain/artifacts/telemetry-chaos/<run>/node.log
+grep telemetry_otlp_failures_total rpp/chain/artifacts/telemetry-chaos/<run>/metrics.prom
+jq . rpp/chain/artifacts/telemetry-chaos/<run>/alert_payload.json
+```
+
+CI automatically uploads the `telemetry-chaos` artifact bundle whenever the
+chaos test fails so responders can download and review the run without
+reproducing it locally.【F:.github/workflows/nightly.yml†L92-L110】
+
 ## Telemetry schema allowlist
 
 Runtime metrics exported by the node are validated against an allowlist stored
