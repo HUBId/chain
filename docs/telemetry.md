@@ -117,3 +117,73 @@ Validator-Telemetrie, sodass Betreiber keine zusätzlichen Exporter konfiguriere
 müssen. Aktivieren Sie die Opt-ins in `config/wallet.toml` und verifizieren Sie
 die neuen Events über den Telemetrie-Collector oder lokale JSON-Spools, bevor
 Sie sie an zentrale Backends weiterleiten.
+
+## Fallback-/Localhost-Stack
+
+Für isolierte Tests steht ein geprüfter Localhost-Stack bereit, der ohne
+Netzwerkanbindung Prometheus, Grafana und einen Wallet-Scrape-Endpunkt startet.
+Er orientiert sich an den Wallet-Voreinstellungen aus `config/wallet.toml` und
+nutzt ausschließlich Loopback-Adressen und kurzlebige Volumes.
+
+1. Telemetrie im Wallet lokal einschalten (Prometheus-Port, Auth-Token, OTLP-
+   Fallback):
+
+   ```toml
+   [wallet.telemetry]
+   metrics = true
+   crash_reports = false
+   endpoint = "http://localhost:4317"   # OTLP (optional, Collector im Compose-Stack)
+   machine_id_salt = "dev-local"
+
+   [wallet.telemetry.fallback]
+   enabled = true
+   prometheus_listen = "127.0.0.1:9797"
+   auth_token = "dev-change-me"
+   otlp_grpc = "0.0.0.0:4317"
+   otlp_http = "0.0.0.0:4318"
+   ```
+
+2. Beispiel-Compose-Datei (Prometheus-Grafana-Fallback) unter `telemetry/docker-compose.local.yml`:
+
+   ```yaml
+   version: "3.9"
+   services:
+     prometheus:
+       image: prom/prometheus:v2.52.0
+       command:
+         - --config.file=/etc/prometheus/prometheus.yml
+         - --web.listen-address=:9090
+       volumes:
+         - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+       ports:
+         - "9090:9090"
+
+     grafana:
+       image: grafana/grafana:10.4.2
+       environment:
+         - GF_SECURITY_ADMIN_PASSWORD=admin
+       ports:
+         - "3000:3000"
+   
+   # `prometheus.yml` im selben Verzeichnis:
+   # scrape_configs:
+   #   - job_name: rpp-wallet
+   #     metrics_path: /metrics
+   #     static_configs:
+   #       - targets: ["host.docker.internal:9797"]
+   #     authorization:
+   #       credentials: Bearer dev-change-me
+   ```
+
+3. Stack starten und Smoke-Test ausführen:
+
+   ```bash
+   docker compose -f telemetry/docker-compose.local.yml up -d
+   curl -H "Authorization: Bearer dev-change-me" http://localhost:9797/metrics | head -n 5
+   curl http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {health,labels}'
+   curl http://localhost:3000/api/health
+   ```
+
+   *Ein erfolgreicher Smoke-Test liefert HTTP-Status 200 für alle drei Aufrufe,
+   meldet Prometheus-Targets im `up`-Zustand und zeigt einen `database`-Status
+   `ok` von Grafana an.*
