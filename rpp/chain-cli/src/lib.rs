@@ -22,6 +22,7 @@ use rpp_chain::runtime::config::{
 use rpp_chain::runtime::{RuntimeMetrics, TelemetryExporterBuilder};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
+use rpp_node_runtime_api::{BootstrapError, BootstrapResult, RuntimeMode, RuntimeOptions};
 use rpp_p2p::{
     AdmissionPolicyLogEntry, PolicySignature, PolicySignatureVerifier, PolicyTrustStore, TierLevel,
 };
@@ -34,7 +35,6 @@ use snapshot_verify::{
     VerifyArgs as SnapshotVerifyArgs,
 };
 use tokio::task;
-use rpp_node_runtime_api::{BootstrapError, BootstrapResult, RuntimeMode, RuntimeOptions};
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
 const DEFAULT_WALLET_CONFIG: &str = "config/wallet.toml";
@@ -251,6 +251,14 @@ struct SnapshotConnectionArgs {
     /// Override the RPC bearer token; defaults to the configured token when omitted
     #[arg(long, value_name = "TOKEN")]
     auth_token: Option<String>,
+
+    /// Total request attempts before surfacing a snapshot download error
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_SNAPSHOT_RETRY_ATTEMPTS)]
+    retry_attempts: u32,
+
+    /// Initial backoff delay (ms) used when retrying snapshot downloads
+    #[arg(long, value_name = "MILLIS", default_value_t = DEFAULT_SNAPSHOT_RETRY_BACKOFF_MS)]
+    retry_backoff_ms: u64,
 }
 
 #[derive(Subcommand)]
@@ -735,6 +743,8 @@ struct SnapshotRpcClient {
     client: Client,
     base_url: String,
     auth_token: Option<String>,
+    retry_attempts: u32,
+    retry_backoff: Duration,
 }
 
 impl AdmissionRpcClient {
@@ -896,6 +906,9 @@ struct ResumeMarker<'a> {
     plan_id: &'a str,
 }
 
+const DEFAULT_SNAPSHOT_RETRY_ATTEMPTS: u32 = 3;
+const DEFAULT_SNAPSHOT_RETRY_BACKOFF_MS: u64 = 200;
+
 impl SnapshotRpcClient {
     fn new(args: &SnapshotConnectionArgs) -> Result<Self> {
         let config = load_validator_config(&args.config.config)?;
@@ -927,6 +940,8 @@ impl SnapshotRpcClient {
             client,
             base_url,
             auth_token,
+            retry_attempts: args.retry_attempts.max(1),
+            retry_backoff: Duration::from_millis(args.retry_backoff_ms.max(1)),
         })
     }
 
@@ -941,6 +956,38 @@ impl SnapshotRpcClient {
             request
         }
     }
+
+    async fn send_with_retry<F>(&self, label: &str, mut build: F) -> Result<reqwest::Response>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+    {
+        let mut delay = self.retry_backoff;
+        for attempt in 1..=self.retry_attempts {
+            let response = build().send().await;
+            match response {
+                Ok(resp) if resp.status().is_server_error() => {
+                    if attempt == self.retry_attempts {
+                        anyhow::bail!(
+                            "snapshot RPC returned {} after {attempt} attempts",
+                            resp.status()
+                        );
+                    }
+                }
+                Ok(resp) => return Ok(resp),
+                Err(err) => {
+                    if attempt == self.retry_attempts {
+                        return Err(err)
+                            .context(format!("failed to {label} after {attempt} attempts"));
+                    }
+                }
+            }
+
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2);
+        }
+
+        anyhow::bail!("failed to {label}: retries exhausted")
+    }
 }
 
 async fn start_snapshot_session(args: SnapshotStartCommand) -> Result<()> {
@@ -950,14 +997,15 @@ async fn start_snapshot_session(args: SnapshotStartCommand) -> Result<()> {
         chunk_size: args.chunk_size,
         resume: None,
     };
-    let mut builder = client
-        .client
-        .post(client.endpoint("/p2p/snapshots"))
-        .json(&request);
-    builder = client.with_auth(builder);
-
-    let response = builder
-        .send()
+    let response = client
+        .send_with_retry("start snapshot session", || {
+            let mut builder = client
+                .client
+                .post(client.endpoint("/p2p/snapshots"))
+                .json(&request);
+            builder = client.with_auth(builder);
+            builder
+        })
         .await
         .context("failed to start snapshot session")?;
     let status = response.status();
@@ -977,13 +1025,14 @@ async fn start_snapshot_session(args: SnapshotStartCommand) -> Result<()> {
 
 async fn fetch_snapshot_status(args: SnapshotStatusCommand) -> Result<()> {
     let client = SnapshotRpcClient::new(&args.connection)?;
-    let mut builder = client
-        .client
-        .get(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
-    builder = client.with_auth(builder);
-
-    let response = builder
-        .send()
+    let response = client
+        .send_with_retry("query snapshot status", || {
+            let mut builder = client
+                .client
+                .get(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
+            builder = client.with_auth(builder);
+            builder
+        })
         .await
         .context("failed to query snapshot status")?;
     let status = response.status();
@@ -1011,14 +1060,15 @@ async fn resume_snapshot_session(args: SnapshotResumeCommand) -> Result<()> {
             plan_id: &args.plan_id,
         }),
     };
-    let mut builder = client
-        .client
-        .post(client.endpoint("/p2p/snapshots"))
-        .json(&request);
-    builder = client.with_auth(builder);
-
-    let response = builder
-        .send()
+    let response = client
+        .send_with_retry("resume snapshot session", || {
+            let mut builder = client
+                .client
+                .post(client.endpoint("/p2p/snapshots"))
+                .json(&request);
+            builder = client.with_auth(builder);
+            builder
+        })
         .await
         .context("failed to resume snapshot session")?;
     let status = response.status();
@@ -1038,13 +1088,14 @@ async fn resume_snapshot_session(args: SnapshotResumeCommand) -> Result<()> {
 
 async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
     let client = SnapshotRpcClient::new(&args.connection)?;
-    let mut builder = client
-        .client
-        .delete(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
-    builder = client.with_auth(builder);
-
-    let response = builder
-        .send()
+    let response = client
+        .send_with_retry("cancel snapshot session", || {
+            let mut builder = client
+                .client
+                .delete(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
+            builder = client.with_auth(builder);
+            builder
+        })
         .await
         .context("failed to cancel snapshot session")?;
     let status = response.status();
