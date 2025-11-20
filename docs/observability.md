@@ -79,6 +79,25 @@ same pull request. Schema updates require review from the Observability/SRE
 owners to confirm the new telemetry surfaces align with the documented
 cardinality guarantees.
 
+## Dashboard review and update process
+
+Grafana dashboards are treated as versioned artifacts. Each export listed in
+`docs/performance_dashboards.json` records the expected Grafana `version`, a
+human-readable `version_tag`, and the SHA-256 checksum of the committed JSON.
+CI reruns `scripts/verify_dashboard_manifest.py` to compare those expectations
+against the repository and fails if any export changes without a manifest
+update.
+
+When you refresh a dashboard:
+
+1. Pull the latest export from Grafana with `tools/perf_dashboard_check.sh --write`
+   (requires `PERF_GRAFANA_URL` and `PERF_GRAFANA_API_KEY`).
+2. Bump the corresponding `version_tag` in `docs/performance_dashboards.json`
+   to match the Grafana revision or change ticket, and update the `sha256`
+   field to the checksum of the new export.
+3. Run `python3 scripts/verify_dashboard_manifest.py` to confirm the manifest
+   matches the refreshed files and commit the manifest and JSON together.
+
 ## Telemetry alert response procedures
 
 On-call engineers manage production telemetry alerts through Alertmanager and

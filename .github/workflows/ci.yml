@@ -226,13 +226,18 @@ for path in files:
                     )
                     error = True
 
-if error:
-    sys.exit(1)
+          if error:
+              sys.exit(1)
 PY
           if [[ ${missing} -ne 0 ]]; then
-          echo "One or more dashboard exports are missing."
-          exit 1
-        fi
+            echo "One or more dashboard exports are missing."
+            exit 1
+          fi
+
+      - name: Enforce dashboard manifest versions
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_dashboard_manifest.py
 
   wallet-windows-build:
     name: Wallet Windows build

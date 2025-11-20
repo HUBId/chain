@@ -55,8 +55,11 @@ sync with the Grafana instance. The check uses
 [`tools/perf_dashboard_check.sh`](../tools/perf_dashboard_check.sh) together with
 the manifest in [`docs/performance_dashboards.json`](./performance_dashboards.json)
 to download each dashboard and compare the exported `schemaVersion` and
-`version` fields against the committed JSON. If Grafana is unreachable or a
-dashboard drifts, the workflow fails to surface the issue.
+`version` fields against the committed JSON. The manifest also stores a
+human-readable `version_tag` and SHA-256 checksum per export; CI revalidates
+those values so that dashboard changes cannot merge without explicit review.
+If Grafana is unreachable or a dashboard drifts, the workflow fails to surface
+the issue.
 
 To refresh the exports after editing a dashboard in Grafana:
 
