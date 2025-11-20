@@ -30,6 +30,10 @@ impl<T: Clone + Ord + Debug> RangeSet<T> {
         Self(BTreeMap::new())
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     // returns disjoint ranges that will coalesce with the given range in ascending order
     // We look at all ranges whose end is greater than or equal to the given range's start
     // For each range, there are 5 cases:
@@ -318,6 +322,10 @@ impl LinearAddressRangeSet {
 
     pub(super) fn is_empty(&self) -> bool {
         self.range_set.is_empty()
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.range_set.len()
     }
 
     pub(super) const fn bytes_in_set(&self) -> u64 {

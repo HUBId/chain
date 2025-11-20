@@ -655,13 +655,14 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                 CheckerError::AreaLeaks(ranges) => {
                     let leaked_areas: Vec<_> =
                         self.split_all_leaked_ranges(&ranges, None).collect();
+                    let leaked_area_count = leaked_areas.len();
                     #[allow(clippy::cast_possible_truncation)]
                     firewood_gauge!(
                         "firewood.checker.leaked_areas.detected",
                         "current number of leaked areas detected while scanning storage"
                     )
-                    .set(leaked_areas.len() as f64);
-                    if leaked_areas.is_empty() {
+                    .set(leaked_area_count as f64);
+                    if leaked_area_count == 0 {
                         // Nothing to enqueue; keep reporting the leak so operators can
                         // investigate why the checker produced an empty range set.
                         firewood_counter!(
@@ -693,7 +694,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                             "firewood.checker.leaked_areas.fixed",
                             "count of leaked areas successfully enqueued back into free lists"
                         )
-                        .increment(leaked_areas.len() as u64);
+                        .increment(leaked_area_count as u64);
                         fixed.push(CheckerError::AreaLeaks(ranges));
                     } else {
                         let failed = io_errors.len().max(1);
