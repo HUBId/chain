@@ -226,7 +226,9 @@ Artefakte für die Erstdiagnose.
 > (`sha256` `76c8f0c99a8be379fc5a18d28288fd4099dc41f47ea70e0cd950e18b9e8f12f4` /
 > `8e2c1a6fb2df5cd0bfdf66c75dd8fa24cbe2a3ed56bfec4d3c19d67b2c4a9e11`).
 
-### Finale Hinweise Phase‑C Sign-off
+### Finale Hinweise Phase-C Sign-off
+
+<a id="phase-c-kontrollen"></a>
 
 - **Evidence Bundle & Manifest:** Aktueller Ablageort siehe
   [`docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json`](../status/artifacts/phase3_evidence_bundle_2026-08-21.json);
