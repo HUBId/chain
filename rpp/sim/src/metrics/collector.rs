@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{
     calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, RecoveryMetrics,
-    SimulationSummary,
+    ResourceUsageMetrics, SimulationSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -98,6 +98,7 @@ pub struct Collector {
     slow_peer_forward_failures: usize,
     slow_peer_queue_full: usize,
     slow_peer_timeouts: usize,
+    resource_usage: Option<ResourceUsageMetrics>,
 }
 
 impl Collector {
@@ -120,6 +121,7 @@ impl Collector {
             slow_peer_forward_failures: 0,
             slow_peer_queue_full: 0,
             slow_peer_timeouts: 0,
+            resource_usage: None,
         }
     }
 
@@ -223,6 +225,10 @@ impl Collector {
         }
     }
 
+    pub fn record_resource_usage(&mut self, usage: ResourceUsageMetrics) {
+        self.resource_usage = Some(usage);
+    }
+
     pub fn finalize(mut self) -> SimulationSummary {
         self.latencies_ms
             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
@@ -286,6 +292,7 @@ impl Collector {
             bandwidth,
             gossip_backpressure,
             slow_peer_records: self.slow_peer_records,
+            resource_usage: self.resource_usage,
             comparison: None,
         }
     }

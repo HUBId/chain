@@ -121,6 +121,10 @@ mod tests {
                 max_resume_latency_ms: Some(1400.0),
                 mean_resume_latency_ms: Some(1300.0),
             }),
+            bandwidth: None,
+            gossip_backpressure: None,
+            slow_peer_records: Vec::new(),
+            resource_usage: None,
             comparison: None,
         };
 
@@ -175,6 +179,10 @@ mod tests {
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
+            bandwidth: None,
+            gossip_backpressure: None,
+            slow_peer_records: Vec::new(),
+            resource_usage: None,
             comparison: Some(comparison),
         };
 

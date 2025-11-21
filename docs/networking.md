@@ -42,6 +42,24 @@ summaries. It also enforces thresholds that align with the nightly workflow.
   resume-latency samples so the report captures backpressure mitigation and
   recovery once the partition heals.【F:scripts/analyze_simnet.py†L186-L202】
 
+### Resource budgets and tuning knobs
+
+* **CPU/RSS guardrails:** the simnet summaries now contain a `resource_usage`
+  block (average CPU over the wall-clock duration plus the peak RSS of the
+  orchestrator). The analyzer fails `partitioned-flood` and
+  `compound-partitioned-backpressure` runs once the average CPU exceeds
+  320% or RSS breaches 3.5 GiB; adjust `--max-cpu-percent` or
+  `--max-memory-mib` when running on smaller machines.【F:scripts/analyze_simnet.py†L130-L159】【F:rpp/sim/src/harness.rs†L323-L355】
+* **Capture artefacts on breach:** pass `--capture-dir <path>` to
+  `scripts/analyze_simnet.py` to copy the run’s `logs/`, `profiles/`, and
+  `summaries/` directories for debugging whenever a threshold is violated.
+  This mirrors the CI workflow that publishes those artefacts on failures.
+  【F:scripts/analyze_simnet.py†L205-L223】
+* **Load-shedding knobs:** if a local machine is starved, reduce the Poisson
+  rate in the flood phases (`lambda_per_sec`) or shorten
+  `duration_ms`/`duration_secs` in the scenario files before re-running the
+  analyzer.【F:scenarios/partitioned_flood.toml†L25-L44】【F:scenarios/compound_partitioned_backpressure.toml†L26-L48】
+
 ## Metrics of Interest
 
 * **Peer recovery** &mdash; `resume_events`, `max_resume_ms`, and `mean_resume_ms`

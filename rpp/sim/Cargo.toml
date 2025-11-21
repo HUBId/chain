@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tempfile = "3.10"
 sha2 = "0.10"
+libc = "0.2"
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["json"] }

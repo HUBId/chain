@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,7 +15,9 @@ use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::faults::PartitionFault;
-use crate::metrics::{exporters, Collector, FaultEvent, SimEvent, SimulationSummary};
+use crate::metrics::{
+    exporters, Collector, FaultEvent, ResourceUsageMetrics, SimEvent, SimulationSummary,
+};
 use crate::multiprocess;
 use crate::node_adapter::{spawn_node, Node, NodeHandle};
 use crate::scenario::{LinkParams, Scenario, TopologyType};
@@ -93,7 +96,8 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     }
     drop(event_tx);
 
-    let collector = Arc::new(Mutex::new(Collector::new(Instant::now())));
+    let collector_start = Instant::now();
+    let collector = Arc::new(Mutex::new(Collector::new(collector_start)));
     let collector_task = {
         let collector = Arc::clone(&collector);
         tokio::spawn(async move {
@@ -335,9 +339,14 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
 
     collector_task.await.context("collector task failed")?;
 
-    let collector = Arc::try_unwrap(collector)
+    let end_time = Instant::now();
+
+    let mut collector = Arc::try_unwrap(collector)
         .map_err(|_| anyhow!("collector still in use"))?
         .into_inner();
+    if let Some(resource_usage) = capture_resource_usage(collector_start, end_time) {
+        collector.record_resource_usage(resource_usage);
+    }
     let summary = collector.finalize();
 
     let metrics_outputs = scenario.metrics_outputs();
@@ -492,6 +501,35 @@ fn link_crosses_partition(
     let region_a = regions.get(link.a).map(|s| s.as_str()).unwrap_or("");
     let region_b = regions.get(link.b).map(|s| s.as_str()).unwrap_or("");
     partition.affects(region_a, region_b)
+}
+
+fn capture_resource_usage(start: Instant, end: Instant) -> Option<ResourceUsageMetrics> {
+    let mut usage = MaybeUninit::<libc::rusage>::uninit();
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        tracing::warn!(target = "rpp::sim::harness", "getrusage failed: {result}");
+        return None;
+    }
+    let usage = unsafe { usage.assume_init() };
+    let cpu_time_secs = timeval_to_secs(usage.ru_utime) + timeval_to_secs(usage.ru_stime);
+    let wall_time_secs = end.duration_since(start).as_secs_f64();
+    let avg_cpu_percent = if wall_time_secs > 0.0 {
+        (cpu_time_secs / wall_time_secs) * 100.0
+    } else {
+        0.0
+    };
+    let max_rss_bytes = usage.ru_maxrss.saturating_mul(1024) as u64;
+
+    Some(ResourceUsageMetrics {
+        cpu_time_secs,
+        wall_time_secs,
+        avg_cpu_percent,
+        max_rss_bytes,
+    })
+}
+
+fn timeval_to_secs(value: libc::timeval) -> f64 {
+    value.tv_sec as f64 + f64::from(value.tv_usec) / 1_000_000.0
 }
 
 #[cfg(test)]
