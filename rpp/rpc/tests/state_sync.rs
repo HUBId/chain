@@ -15,7 +15,7 @@ use hyper::body::HttpBody;
 use parking_lot::RwLock;
 use rpp_chain::api::{
     state_sync_chunk_by_id, state_sync_head_stream, state_sync_session_status, ApiContext,
-    StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
+    RpcErrorCode, StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
 };
 use rpp_chain::node::{LightClientVerificationEvent, DEFAULT_STATE_SYNC_CHUNK};
 use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
@@ -34,6 +34,7 @@ struct FakeStateSyncApi {
     session: RwLock<Option<StateSyncSessionInfo>>,
     chunk_size: RwLock<Option<usize>>,
     chunks: HashMap<u32, SnapshotChunk>,
+    ensure_error: RwLock<Option<StateSyncError>>,
 }
 
 fn auth_context(api: Arc<dyn StateSyncApi>) -> ApiContext {
@@ -69,6 +70,7 @@ async fn state_sync_session_respects_auth() {
         Some(session),
         Some(DEFAULT_STATE_SYNC_CHUNK),
         HashMap::new(),
+        None,
     ));
     let context = auth_context(api);
 
@@ -134,6 +136,7 @@ impl FakeStateSyncApi {
         session: Option<StateSyncSessionInfo>,
         chunk_size: Option<usize>,
         chunks: HashMap<u32, SnapshotChunk>,
+        ensure_error: Option<StateSyncError>,
     ) -> Self {
         Self {
             sender,
@@ -141,6 +144,7 @@ impl FakeStateSyncApi {
             session: RwLock::new(session),
             chunk_size: RwLock::new(chunk_size),
             chunks,
+            ensure_error: RwLock::new(ensure_error),
         }
     }
 
@@ -162,6 +166,9 @@ impl StateSyncApi for FakeStateSyncApi {
     }
 
     fn ensure_state_sync_session(&self) -> Result<(), StateSyncError> {
+        if let Some(error) = self.ensure_error.read().clone() {
+            return Err(error);
+        }
         if self
             .session
             .read()
@@ -250,6 +257,7 @@ async fn state_sync_head_stream_emits_events() {
         None,
         None,
         HashMap::new(),
+        None,
     ));
     let context = test_context(api.clone());
     let app = Router::new()
@@ -324,6 +332,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
         Some(session),
         None,
         chunks,
+        None,
     ));
     let context = test_context(api.clone());
     let app = Router::new()
@@ -400,6 +409,7 @@ async fn state_sync_session_status_returns_details() {
         Some(session),
         None,
         HashMap::new(),
+        None,
     ));
     let context = test_context(api);
     let app = Router::new()
@@ -445,6 +455,7 @@ async fn state_sync_session_status_returns_service_unavailable_without_session()
         None,
         None,
         HashMap::new(),
+        None,
     ));
     let context = test_context(api);
     let app = Router::new()
@@ -480,6 +491,7 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         Some(session),
         None,
         HashMap::new(),
+        None,
     ));
     let context = test_context(api.clone());
     let app = Router::new()
@@ -496,6 +508,47 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
     let info = api.state_sync_active_session().unwrap();
     assert!(info.verified);
     assert_eq!(info.total_chunks, Some(1));
+}
+
+#[tokio::test]
+async fn state_sync_chunk_failure_surfaces_structured_code() {
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let error = StateSyncError::with_code(
+        StateSyncErrorKind::BuildFailed,
+        RpcErrorCode::StateSyncProofEncodingInvalid,
+        Some("failed to decode proof chunk".into()),
+    );
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        None,
+        Some(DEFAULT_STATE_SYNC_CHUNK),
+        HashMap::new(),
+        Some(error),
+    ));
+    let context = test_context(api);
+    let app = Router::new()
+        .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
+        .with_state(context);
+
+    let request = Request::builder()
+        .uri("/state-sync/chunk/0")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        json["code"],
+        Value::String("state_sync_proof_encoding_invalid".into())
+    );
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("decode proof chunk"));
 }
 
 #[tokio::test]
@@ -517,6 +570,7 @@ async fn state_sync_session_reset_on_new_plan_metadata() {
         Some(session),
         Some(DEFAULT_STATE_SYNC_CHUNK),
         HashMap::new(),
+        None,
     ));
 
     assert!(api.ensure_state_sync_session().is_ok());

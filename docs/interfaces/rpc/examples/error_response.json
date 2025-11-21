@@ -1,3 +1,4 @@
 {
-  "error": "node runtime not started"
+  "error": "state sync verification failed: failed to decode proof chunk",
+  "code": "state_sync_proof_encoding_invalid"
 }

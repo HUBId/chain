@@ -178,6 +178,10 @@ name = "server_limits"
 path = "../rpc/tests/server_limits.rs"
 
 [[test]]
+name = "state_sync"
+path = "../rpc/tests/state_sync.rs"
+
+[[test]]
 name = "pruning"
 path = "../rpc/tests/pruning.rs"
 
