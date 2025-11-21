@@ -109,6 +109,18 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
         ProofVerificationStage::Fri,
         ProofVerificationOutcome::Fail,
     );
+    proofs.observe_verification_stage_duration(
+        ProofVerificationBackend::RppStark,
+        ProofVerificationKind::Transaction,
+        ProofVerificationStage::Merkle,
+        Duration::from_millis(7),
+    );
+    proofs.observe_verification_stage_duration(
+        ProofVerificationBackend::Stwo,
+        ProofVerificationKind::Transaction,
+        ProofVerificationStage::Parse,
+        Duration::from_millis(4),
+    );
 
     provider
         .force_flush()
@@ -157,10 +169,10 @@ fn zk_metric_labels_allow_stage_variants() -> Result<()> {
     let allowed_sets = expected
         .get(metric)
         .context("load zk verification metric from schema")?;
-    assert!(allowed_sets
-        .iter()
-        .any(|labels| labels.contains("stage")),
-        "schema should list a stage-bearing variant for zk metrics");
+    assert!(
+        allowed_sets.iter().any(|labels| labels.contains("stage")),
+        "schema should list a stage-bearing variant for zk metrics"
+    );
 
     let mut actual = BTreeMap::new();
     actual.insert(

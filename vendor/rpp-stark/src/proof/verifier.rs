@@ -33,13 +33,14 @@ use crate::proof::ser::{
 use crate::proof::transcript::{Transcript, TranscriptBlockContext, TranscriptHeader};
 use crate::proof::types::{
     FriVerifyIssue, MerkleSection, OutOfDomainOpening, Proof, ProofHandles, VerifyError,
-    VerifyReport, PROOF_ALPHA_VECTOR_LEN, PROOF_MAX_FRI_LAYERS, PROOF_MAX_QUERY_COUNT,
-    PROOF_MIN_OOD_POINTS, PROOF_TELEMETRY_MAX_CAP_DEGREE, PROOF_TELEMETRY_MAX_CAP_SIZE,
-    PROOF_TELEMETRY_MAX_QUERY_BUDGET, PROOF_VERSION,
+    VerifyReport, VerifyTelemetry, PROOF_ALPHA_VECTOR_LEN, PROOF_MAX_FRI_LAYERS,
+    PROOF_MAX_QUERY_COUNT, PROOF_MIN_OOD_POINTS, PROOF_TELEMETRY_MAX_CAP_DEGREE,
+    PROOF_TELEMETRY_MAX_CAP_SIZE, PROOF_TELEMETRY_MAX_QUERY_BUDGET, PROOF_VERSION,
 };
 use crate::utils::serialization::{DigestBytes, ProofBytes};
 use std::collections::BTreeMap;
 use std::convert::TryInto;
+use std::time::Instant;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct VerificationStages {
@@ -58,6 +59,8 @@ fn verify_impl(
     config: &ProofSystemConfig,
     context: &VerifierContext,
 ) -> VerifyReport {
+    let started = Instant::now();
+    let mut telemetry = VerifyTelemetry::zeroed();
     let total_len = proof_bytes.as_slice().len();
     let total_bytes = total_len as u64;
     let mut stages = VerificationStages::default();
@@ -71,6 +74,7 @@ fn verify_impl(
                 actual: config.proof_version.0 as u16,
             }),
             None,
+            telemetry,
         );
     }
     if config.param_digest != context.param_digest {
@@ -79,13 +83,16 @@ fn verify_impl(
             total_bytes,
             Some(VerifyError::ParamsHashMismatch),
             None,
+            telemetry,
         );
     }
 
+    let parse_started = Instant::now();
     let proof = match Proof::from_bytes(proof_bytes.as_slice()) {
         Ok(proof) => proof,
         Err(error) => {
-            return build_report(stages, total_bytes, Some(error), None);
+            telemetry.record_parse(started.elapsed());
+            return build_report(stages, total_bytes, Some(error), None, telemetry);
         }
     };
     match precheck_decoded_proof(
@@ -98,19 +105,26 @@ fn verify_impl(
             total_bytes: total_len,
             block_context: None,
         },
+        parse_started,
+        &mut telemetry,
         &mut stages,
     ) {
         Ok(prechecked) => {
             let handles = prechecked.handles.clone();
-            match execute_fri_stage(&prechecked) {
+            let fri_started = Instant::now();
+            let fri_result = execute_fri_stage(&prechecked);
+            telemetry.record_fri(fri_started.elapsed());
+            match fri_result {
                 Ok(()) => {
                     stages.fri_ok = true;
-                    build_report(stages, total_bytes, None, Some(handles))
+                    build_report(stages, total_bytes, None, Some(handles), telemetry)
                 }
-                Err(error) => build_report(stages, total_bytes, Some(error), Some(handles)),
+                Err(error) => {
+                    build_report(stages, total_bytes, Some(error), Some(handles), telemetry)
+                }
             }
         }
-        Err(error) => build_report(stages, total_bytes, Some(error), None),
+        Err(error) => build_report(stages, total_bytes, Some(error), None, telemetry),
     }
 }
 
@@ -145,6 +159,8 @@ struct DecodedProofEnv<'ctx, 'pi> {
 fn precheck_decoded_proof(
     proof: Proof,
     env: DecodedProofEnv<'_, '_>,
+    parse_started: Instant,
+    telemetry: &mut VerifyTelemetry,
     stages: &mut VerificationStages,
 ) -> Result<PrecheckedProof, VerifyError> {
     validate_header(
@@ -155,6 +171,8 @@ fn precheck_decoded_proof(
         env.context,
         stages,
     )?;
+    telemetry.record_parse(parse_started.elapsed());
+    let merkle_started = Instant::now();
     let prechecked = precheck_body(
         &proof,
         env.public_inputs,
@@ -164,6 +182,7 @@ fn precheck_decoded_proof(
         env.block_context,
         stages,
     )?;
+    telemetry.record_merkle(merkle_started.elapsed());
     let handles = proof.into_handles();
     Ok(PrecheckedProof {
         handles,
@@ -194,6 +213,7 @@ pub(crate) fn precheck_proof_bytes(
     let proof = Proof::from_bytes(proof_bytes.as_slice())?;
     let total_len = proof_bytes.as_slice().len();
     let mut stages = VerificationStages::default();
+    let mut telemetry = VerifyTelemetry::zeroed();
     precheck_decoded_proof(
         proof,
         DecodedProofEnv {
@@ -204,6 +224,8 @@ pub(crate) fn precheck_proof_bytes(
             total_bytes: total_len,
             block_context,
         },
+        Instant::now(),
+        &mut telemetry,
         &mut stages,
     )
 }
@@ -1127,6 +1149,7 @@ fn build_report(
     total_bytes: u64,
     error: Option<VerifyError>,
     proof: Option<ProofHandles>,
+    telemetry: VerifyTelemetry,
 ) -> VerifyReport {
     VerifyReport {
         params_ok: stages.params_ok,
@@ -1137,6 +1160,7 @@ fn build_report(
         total_bytes,
         proof,
         error,
+        telemetry: Some(telemetry),
     }
 }
 

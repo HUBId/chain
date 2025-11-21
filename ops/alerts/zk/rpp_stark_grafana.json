@@ -60,6 +60,32 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage latency p95 (per stage)",
+      "description": "Rolling p95 verifier latency grouped by stage for the RPP-STARK backend",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend=\"rpp-stark\",stage!=\"\"}[5m])) by (le, stage))",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1.0 },
+              { "color": "red", "value": 1.6 }
+            ]
+          }
+        },
+        "overrides": []
+      }
     }
   ]
 }

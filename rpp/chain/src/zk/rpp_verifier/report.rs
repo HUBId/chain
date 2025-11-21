@@ -4,6 +4,8 @@ use core::fmt;
 use std::vec::Vec;
 
 use rpp_stark::proof::types::VerifyReport;
+use rpp_stark::proof::types::VerifyTelemetry;
+use std::time::Duration;
 
 /// Boolean verification stages bundled for convenient assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +79,7 @@ pub struct RppStarkVerificationReport {
     verified: bool,
     notes: Option<&'static str>,
     trace_query_indices: Option<Vec<u32>>,
+    telemetry: Option<VerifyTelemetry>,
 }
 
 impl RppStarkVerificationReport {
@@ -93,6 +96,7 @@ impl RppStarkVerificationReport {
             verified: false,
             notes: Some(notes),
             trace_query_indices: None,
+            telemetry: None,
         }
     }
 
@@ -113,6 +117,7 @@ impl RppStarkVerificationReport {
             verified: report.error.is_none(),
             notes: None,
             trace_query_indices,
+            telemetry: report.telemetry.clone(),
         }
     }
 
@@ -176,6 +181,17 @@ impl RppStarkVerificationReport {
     pub fn trace_query_indices(&self) -> Option<&[u32]> {
         self.trace_query_indices.as_deref()
     }
+
+    /// Returns the optional per-stage timing telemetry captured by the verifier.
+    pub fn stage_timings(&self) -> Option<RppStarkStageTimings> {
+        self.telemetry
+            .as_ref()
+            .map(|telemetry| RppStarkStageTimings {
+                parse: Duration::from_nanos(telemetry.parse_duration_ns),
+                merkle: Duration::from_nanos(telemetry.merkle_duration_ns),
+                fri: Duration::from_nanos(telemetry.fri_duration_ns),
+            })
+    }
 }
 
 impl fmt::Display for RppStarkVerificationReport {
@@ -196,5 +212,19 @@ impl fmt::Display for RppStarkVerificationReport {
             write!(f, " notes={notes}")?;
         }
         Ok(())
+    }
+}
+
+/// Per-stage timing telemetry surfaced by the RPP-STARK verifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RppStarkStageTimings {
+    pub parse: Duration,
+    pub merkle: Duration,
+    pub fri: Duration,
+}
+
+impl RppStarkStageTimings {
+    pub fn total(&self) -> Duration {
+        self.parse + self.merkle + self.fri
     }
 }

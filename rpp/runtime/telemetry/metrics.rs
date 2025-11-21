@@ -841,6 +841,18 @@ impl ProofMetrics {
             .record(duration.as_secs_f64(), &attributes);
     }
 
+    pub fn observe_verification_stage_duration(
+        &self,
+        backend: ProofVerificationBackend,
+        kind: ProofVerificationKind,
+        stage: ProofVerificationStage,
+        duration: Duration,
+    ) {
+        let attributes = verification_attributes_with_stage(backend, kind, stage);
+        self.verification_duration
+            .record(duration.as_secs_f64(), &attributes);
+    }
+
     pub fn observe_verification_total_bytes(
         &self,
         backend: ProofVerificationBackend,
@@ -906,6 +918,18 @@ fn verification_attributes(
     [
         KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+    ]
+}
+
+fn verification_attributes_with_stage(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    stage: ProofVerificationStage,
+) -> [KeyValue; 3] {
+    [
+        KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(ProofVerificationStage::KEY, stage.as_str()),
     ]
 }
 
@@ -1423,6 +1447,7 @@ pub enum ProofKind {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ProofVerificationBackend {
+    Stwo,
     RppStark,
 }
 
@@ -1431,6 +1456,7 @@ impl ProofVerificationBackend {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Stwo => "stwo",
             Self::RppStark => "rpp-stark",
         }
     }
@@ -1461,6 +1487,7 @@ impl ProofVerificationKind {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ProofVerificationStage {
+    Parse,
     Params,
     Public,
     Merkle,
@@ -1474,6 +1501,7 @@ impl ProofVerificationStage {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Parse => "parse",
             Self::Params => "params",
             Self::Public => "public",
             Self::Merkle => "merkle",
