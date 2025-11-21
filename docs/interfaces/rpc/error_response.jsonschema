@@ -5,7 +5,19 @@
   "type": "object",
   "required": ["error"],
   "properties": {
-    "error": {"type": "string"}
+    "error": {"type": "string"},
+    "code": {
+      "type": "string",
+      "enum": [
+        "state_sync_plan_invalid",
+        "state_sync_proof_encoding_invalid",
+        "state_sync_metadata_mismatch",
+        "state_sync_verification_incomplete",
+        "state_sync_verifier_io",
+        "state_sync_pipeline_error",
+        "state_sync_pruner_state_error"
+      ]
+    }
   },
   "additionalProperties": false
 }

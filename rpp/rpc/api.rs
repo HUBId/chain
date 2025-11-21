@@ -212,6 +212,7 @@ pub enum StateSyncErrorKind {
 pub struct StateSyncError {
     pub kind: StateSyncErrorKind,
     pub message: Option<String>,
+    pub code: Option<RpcErrorCode>,
 }
 
 impl StateSyncError {
@@ -219,6 +220,19 @@ impl StateSyncError {
         Self {
             kind,
             message: message.into(),
+            code: None,
+        }
+    }
+
+    pub fn with_code(
+        kind: StateSyncErrorKind,
+        code: RpcErrorCode,
+        message: impl Into<Option<String>>,
+    ) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            code: Some(code),
         }
     }
 }
@@ -785,18 +799,16 @@ impl ApiContext {
         }
         let wallet = self.require_wallet()?;
         let summary = wallet.account_summary().map_err(to_http_error)?;
-        if summary.tier < minimum {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: format!(
+            if summary.tier < minimum {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse::new(format!(
                         "validator tier {} does not meet required tier {}",
                         summary.tier.name(),
                         minimum.name()
-                    ),
-                }),
-            ));
-        }
+                    ))),
+                ));
+            }
         Ok(())
     }
 
@@ -846,9 +858,39 @@ impl ApiSecurity {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcErrorCode {
+    StateSyncPlanInvalid,
+    StateSyncProofEncodingInvalid,
+    StateSyncMetadataMismatch,
+    StateSyncVerificationIncomplete,
+    StateSyncVerifierIo,
+    StateSyncPipelineError,
+    StateSyncPrunerStateError,
+}
+
+#[derive(Serialize, Deserialize, Default)]
 struct ErrorResponse {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<RpcErrorCode>,
+}
+
+impl ErrorResponse {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            error: message.into(),
+            ..Default::default()
+        }
+    }
+
+    fn with_code(message: impl Into<String>, code: RpcErrorCode) -> Self {
+        Self {
+            error: message.into(),
+            code: Some(code),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -2663,9 +2705,7 @@ async fn update_mempool_limits(
     {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "no mempool updates provided".into(),
-            }),
+            Json(ErrorResponse::new("no mempool updates provided")),
         ));
     }
     let node = state.require_node()?;
@@ -2779,9 +2819,7 @@ fn decode_hex_array<const N: usize>(
 fn invalid_vrf_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::BAD_REQUEST,
-        Json(ErrorResponse {
-            error: message.into(),
-        }),
+        Json(ErrorResponse::new(message.into())),
     )
 }
 
@@ -3274,12 +3312,7 @@ fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {
         | ChainError::SnapshotReplayFailed(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (
-        status,
-        Json(ErrorResponse {
-            error: err.to_string(),
-        }),
-    )
+    (status, Json(ErrorResponse::new(err.to_string())))
 }
 
 fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorResponse>) {
@@ -3297,42 +3330,36 @@ fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorRespo
         StateSyncErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
         StateSyncErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (status, Json(ErrorResponse { error: message }))
+    let error = match err.code {
+        Some(code) => ErrorResponse::with_code(message, code),
+        None => ErrorResponse::new(message),
+    };
+    (status, Json(error))
 }
 
 fn node_error_to_http(error: P2pNodeError) -> (StatusCode, Json<ErrorResponse>) {
     match error {
         P2pNodeError::SnapshotStreamNotFound => (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "snapshot stream not found".into(),
-            }),
+            Json(ErrorResponse::new("snapshot stream not found")),
         ),
         P2pNodeError::GossipDisabled => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "gossip propagation disabled".into(),
-            }),
+            Json(ErrorResponse::new("gossip propagation disabled")),
         ),
         P2pNodeError::CommandChannelClosed => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "node runtime unavailable".into(),
-            }),
+            Json(ErrorResponse::new("node runtime unavailable")),
         ),
         P2pNodeError::NetworkSetup(err)
         | P2pNodeError::Network(err)
         | P2pNodeError::Peerstore(err) => (
             StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse {
-                error: err.to_string(),
-            }),
+            Json(ErrorResponse::new(err.to_string())),
         ),
         P2pNodeError::Pipeline(err) => (
             StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse {
-                error: err.to_string(),
-            }),
+            Json(ErrorResponse::new(err.to_string())),
         ),
     }
 }
@@ -3344,48 +3371,35 @@ pub(crate) fn snapshot_runtime_error_to_http(
         SnapshotStreamRuntimeError::Runtime(err) => node_error_to_http(err),
         SnapshotStreamRuntimeError::SessionNotFound(session) => (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("snapshot session {session} not found"),
-            }),
+            Json(ErrorResponse::new(format!("snapshot session {session} not found"))),
         ),
     }
 }
 
 fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorResponse {
-            error: message.into(),
-        }),
-    )
+    (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message.into())))
 }
 
 fn unavailable(component: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: format!("{component} runtime disabled"),
-        }),
+        Json(ErrorResponse::new(format!("{component} runtime disabled"))),
     )
 }
 
 fn not_started(component: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: format!(
-                "{component} runtime not started; restart with a profile that enables it"
-            ),
-        }),
+        Json(ErrorResponse::new(format!(
+            "{component} runtime not started; restart with a profile that enables it"
+        ))),
     )
 }
 
 fn pruning_service_not_configured() -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "pruning service not configured".into(),
-        }),
+        Json(ErrorResponse::new("pruning service not configured")),
     )
 }
 
@@ -3394,11 +3408,11 @@ fn pruning_service_error_to_http(error: PruningServiceError) -> (StatusCode, Jso
         PruningServiceError::Unavailable => pruning_service_not_configured(),
         PruningServiceError::InvalidRequest(message) => (
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: message }),
+            Json(ErrorResponse::new(message)),
         ),
         PruningServiceError::Internal(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: message }),
+            Json(ErrorResponse::new(message)),
         ),
     }
 }
@@ -3407,18 +3421,14 @@ fn pruning_service_error_to_http(error: PruningServiceError) -> (StatusCode, Jso
 fn tracker_sync_pending() -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ErrorResponse {
-            error: "tracker synchronisation pending".to_string(),
-        }),
+        Json(ErrorResponse::new("tracker synchronisation pending")),
     )
 }
 
 fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::NOT_FOUND,
-        Json(ErrorResponse {
-            error: message.to_string(),
-        }),
+        Json(ErrorResponse::new(message.to_string())),
     )
 }
 
@@ -3434,16 +3444,39 @@ fn chain_error_to_state_sync(err: ChainError) -> StateSyncError {
     }
 }
 
-fn verification_error_to_state_sync(kind: Option<&VerificationErrorKind>) -> StateSyncErrorKind {
+fn verification_error_to_state_sync(
+    kind: Option<&VerificationErrorKind>,
+) -> (StateSyncErrorKind, Option<RpcErrorCode>) {
     match kind {
-        Some(VerificationErrorKind::Plan(_))
-        | Some(VerificationErrorKind::Encoding(_))
-        | Some(VerificationErrorKind::Metadata(_))
-        | Some(VerificationErrorKind::Incomplete(_)) => StateSyncErrorKind::BuildFailed,
-        Some(VerificationErrorKind::Pipeline(_))
-        | Some(VerificationErrorKind::PrunerState(_))
-        | Some(VerificationErrorKind::Io(_)) => StateSyncErrorKind::Internal,
-        None => StateSyncErrorKind::Internal,
+        Some(VerificationErrorKind::Plan(_)) => (
+            StateSyncErrorKind::BuildFailed,
+            Some(RpcErrorCode::StateSyncPlanInvalid),
+        ),
+        Some(VerificationErrorKind::Encoding(_)) => (
+            StateSyncErrorKind::BuildFailed,
+            Some(RpcErrorCode::StateSyncProofEncodingInvalid),
+        ),
+        Some(VerificationErrorKind::Metadata(_)) => (
+            StateSyncErrorKind::BuildFailed,
+            Some(RpcErrorCode::StateSyncMetadataMismatch),
+        ),
+        Some(VerificationErrorKind::Incomplete(_)) => (
+            StateSyncErrorKind::BuildFailed,
+            Some(RpcErrorCode::StateSyncVerificationIncomplete),
+        ),
+        Some(VerificationErrorKind::Pipeline(_)) => (
+            StateSyncErrorKind::Internal,
+            Some(RpcErrorCode::StateSyncPipelineError),
+        ),
+        Some(VerificationErrorKind::PrunerState(_)) => (
+            StateSyncErrorKind::Internal,
+            Some(RpcErrorCode::StateSyncPrunerStateError),
+        ),
+        Some(VerificationErrorKind::Io(_)) => (
+            StateSyncErrorKind::Internal,
+            Some(RpcErrorCode::StateSyncVerifierIo),
+        ),
+        None => (StateSyncErrorKind::Internal, None),
     }
 }
 
@@ -3492,15 +3525,17 @@ mod tests {
     #[test]
     fn verification_error_to_state_sync_preserves_io_classification() {
         let io_kind = VerificationErrorKind::Io("ProofError::IO(failure)".into());
-        assert_eq!(
-            super::verification_error_to_state_sync(Some(&io_kind)),
-            StateSyncErrorKind::Internal
-        );
+        let (io_code, io_error_code) = super::verification_error_to_state_sync(Some(&io_kind));
+        assert_eq!(io_code, StateSyncErrorKind::Internal);
+        assert_eq!(io_error_code, Some(RpcErrorCode::StateSyncVerifierIo));
 
         let build_kind = VerificationErrorKind::Metadata("mismatch".into());
+        let (build_code, build_error_code) =
+            super::verification_error_to_state_sync(Some(&build_kind));
+        assert_eq!(build_code, StateSyncErrorKind::BuildFailed);
         assert_eq!(
-            super::verification_error_to_state_sync(Some(&build_kind)),
-            StateSyncErrorKind::BuildFailed
+            build_error_code,
+            Some(RpcErrorCode::StateSyncMetadataMismatch)
         );
     }
 }
@@ -3533,8 +3568,12 @@ impl StateSyncApi for NodeHandle {
                     .and_then(|report| report.summary.failure.clone())
                     .or(cache.error.clone())
                     .unwrap_or_else(|| "state sync verification failed".to_string());
-                let kind = verification_error_to_state_sync(cache.error_kind.as_ref());
-                Err(StateSyncError::new(kind, Some(message)))
+                let (kind, code) = verification_error_to_state_sync(cache.error_kind.as_ref());
+                let error = match code {
+                    Some(code) => StateSyncError::with_code(kind, code, Some(message)),
+                    None => StateSyncError::new(kind, Some(message)),
+                };
+                Err(error)
             }
             _ => Err(StateSyncError::new(
                 StateSyncErrorKind::Internal,
