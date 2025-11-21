@@ -1,0 +1,34 @@
+groups:
+  - name: zk-stwo-prover
+    interval: 1m
+    rules:
+      - alert: ZkStwoProverFailuresWarning
+        expr: increase(rpp_runtime_wallet_prover_failures{backend="stwo"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO prover is rejecting wallet proof generation requests
+          description: >-
+            The STWO wallet prover reported at least one failure in the last
+            10 minutes. Inspect the prover logs and the wallet runtime to
+            confirm whether witnesses are invalid or the backend is
+            misconfigured, then retry the failing drafts.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
+      - alert: ZkStwoProverFailuresCritical
+        expr: increase(rpp_runtime_wallet_prover_failures{backend="stwo"}[10m]) > 3
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO prover is repeatedly failing wallet proof generation
+          description: >-
+            More than three STWO wallet prover failures were observed in the
+            last 10 minutes. Expect drafts to stall or be rejected until the
+            backend recovers; triage the backend logs and consider a temporary
+            backend switch if retries cannot succeed.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
