@@ -27,6 +27,8 @@ struct MetricEntry {
     name: String,
     #[serde(default)]
     labels: Vec<String>,
+    #[serde(default)]
+    alternate_labels: Vec<Vec<String>>,
 }
 
 #[test]
@@ -129,25 +131,90 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
         }
     }
 
+    let expected = load_schema()?;
+
+    let mut failures = Vec::new();
+
+    failures.extend(validate_label_sets(&actual, &expected));
+
+    provider
+        .shutdown()
+        .context("shutdown runtime telemetry metrics provider")?;
+    global::set_meter_provider(NoopMeterProvider::new());
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(failures.join("\n")))
+    }
+}
+
+#[test]
+fn zk_metric_labels_allow_stage_variants() -> Result<()> {
+    let expected = load_schema()?;
+    let metric = "rpp_stark_verify_duration_seconds";
+
+    let allowed_sets = expected
+        .get(metric)
+        .context("load zk verification metric from schema")?;
+    assert!(allowed_sets
+        .iter()
+        .any(|labels| labels.contains("stage")),
+        "schema should list a stage-bearing variant for zk metrics");
+
+    let mut actual = BTreeMap::new();
+    actual.insert(
+        metric.to_string(),
+        BTreeSet::from_iter([
+            "proof_backend".to_string(),
+            "proof_kind".to_string(),
+            "stage".to_string(),
+        ]),
+    );
+
+    let failures = validate_label_sets(&actual, &expected);
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(failures.join("\n")))
+    }
+}
+
+fn load_schema() -> Result<BTreeMap<String, Vec<BTreeSet<String>>>> {
     let schema_path = workspace_root().join("telemetry/schema.yaml");
     let schema_contents = fs::read_to_string(&schema_path)
         .with_context(|| format!("read telemetry schema from {}", schema_path.display()))?;
     let schema: TelemetrySchema = serde_yaml::from_str(&schema_contents)
         .with_context(|| format!("parse telemetry schema at {}", schema_path.display()))?;
 
-    let mut expected: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut expected: BTreeMap<String, Vec<BTreeSet<String>>> = BTreeMap::new();
     for entry in schema.metrics {
-        expected.insert(entry.name, entry.labels.into_iter().collect());
+        let mut label_sets = Vec::new();
+        label_sets.push(entry.labels.into_iter().collect());
+
+        for alternate in entry.alternate_labels {
+            label_sets.push(alternate.into_iter().collect());
+        }
+
+        expected.insert(entry.name, label_sets);
     }
 
+    Ok(expected)
+}
+
+fn validate_label_sets(
+    actual: &BTreeMap<String, BTreeSet<String>>,
+    expected: &BTreeMap<String, Vec<BTreeSet<String>>>,
+) -> Vec<String> {
     let mut failures = Vec::new();
 
-    for (name, labels) in &expected {
+    for (name, label_sets) in expected {
         if let Some(actual_labels) = actual.get(name) {
-            if actual_labels != labels {
+            let matches = label_sets.iter().any(|labels| labels == actual_labels);
+            if !matches {
                 failures.push(format!(
-                    "metric '{}' labels mismatch: expected {:?}, found {:?}",
-                    name, labels, actual_labels
+                    "metric '{}' labels mismatch: expected one of {:?}, found {:?}",
+                    name, label_sets, actual_labels
                 ));
             }
         }
@@ -162,16 +229,7 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
         }
     }
 
-    provider
-        .shutdown()
-        .context("shutdown runtime telemetry metrics provider")?;
-    global::set_meter_provider(NoopMeterProvider::new());
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow!(failures.join("\n")))
-    }
+    failures
 }
 
 fn collect_histogram_labels<T>(histogram: &Histogram<T>, sink: &mut BTreeSet<String>) {
