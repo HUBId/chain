@@ -74,6 +74,25 @@ controlled per invocation:
 Tune these flags when scripting against unstable links so transient failures do
 not abort snapshot downloads, while still surfacing permanent errors promptly.
 
+### Resume semantics
+
+Snapshot downloads can be resumed without re-transferring verified chunks. The
+`POST /p2p/snapshots` RPC accepts a `resume` payload containing the persisted
+`session` identifier and the last known `plan_id` advertised by the provider
+(`plan_id` falls back to the snapshot root when the plan has not rotated). When
+`resume` is present the server replays a resume request against the snapshot
+provider using the stored chunk and update indices; if the supplied `plan_id`
+differs from the persisted session metadata the call fails with a 500 and an
+error string containing "plan id" so clients can refresh the session status
+before retrying.
+
+After sending the resume request, poll `GET /p2p/snapshots/<session>` until
+`verified=true` to confirm all chunks and light-client updates have been fetched
+and re-verified. Consumers should restart the download with the same session
+and plan identifier after restarts or transport interruptions; the runtime
+maintains the offsets on disk and will reject regressed or skipped ranges while
+continuing from the next expected chunk.
+
 ## Snapshot download authentication
 
 Snapshot download and status endpoints reuse the validator RPC surface, so the

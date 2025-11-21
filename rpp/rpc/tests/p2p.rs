@@ -19,8 +19,10 @@ use tower::ServiceExt;
 
 struct FakeSnapshotRuntime {
     start_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
+    resume_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
     statuses: Mutex<HashMap<u64, SnapshotStreamStatus>>,
     started: Mutex<Vec<(u64, NetworkPeerId)>>,
+    resumed: Mutex<Vec<(u64, String)>>,
 }
 
 impl FakeSnapshotRuntime {
@@ -30,13 +32,19 @@ impl FakeSnapshotRuntime {
     ) -> Self {
         Self {
             start_result: Mutex::new(Some(start)),
+            resume_result: Mutex::new(None),
             statuses: Mutex::new(statuses),
             started: Mutex::new(Vec::new()),
+            resumed: Mutex::new(Vec::new()),
         }
     }
 
     fn record(&self) -> Vec<(u64, NetworkPeerId)> {
         self.started.lock().expect("start log lock").clone()
+    }
+
+    fn resume_record(&self) -> Vec<(u64, String)> {
+        self.resumed.lock().expect("resume log lock").clone()
     }
 }
 
@@ -61,6 +69,24 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
                 .expect("status lock")
                 .get(&session)
                 .cloned()
+                .ok_or(SnapshotStreamRuntimeError::SessionNotFound(session))
+        }
+    }
+
+    async fn resume_snapshot_stream(
+        &self,
+        session: u64,
+        plan_id: String,
+    ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
+        self.resumed
+            .lock()
+            .expect("resume log lock")
+            .push((session, plan_id));
+        let mut result = self.resume_result.lock().expect("resume result lock");
+        if let Some(outcome) = result.take() {
+            outcome
+        } else {
+            self.snapshot_stream_status(session)
                 .ok_or(SnapshotStreamRuntimeError::SessionNotFound(session))
         }
     }
@@ -103,6 +129,7 @@ fn sample_status(session: u64, peer: &NetworkPeerId) -> SnapshotStreamStatus {
         session: SnapshotSessionId::new(session),
         peer: peer.clone(),
         root: "root-hash".to_string(),
+        plan_id: Some("plan-id".to_string()),
         last_chunk_index: Some(4),
         last_update_index: Some(7),
         last_update_height: Some(128),
@@ -155,6 +182,59 @@ async fn start_snapshot_stream_returns_status() {
     assert_eq!(starts.len(), 1);
     assert_eq!(starts[0].0, session);
     assert_eq!(starts[0].1, peer);
+}
+
+#[tokio::test]
+async fn resume_snapshot_stream_returns_status() {
+    let peer = NetworkPeerId::random();
+    let session = 17u64;
+    let status = sample_status(session, &peer);
+    let runtime = Arc::new(FakeSnapshotRuntime::new(
+        Err(SnapshotStreamRuntimeError::SessionNotFound(session)),
+        HashMap::from([(session, status.clone())]),
+    ));
+    *runtime.resume_result.lock().expect("resume result lock") = Some(Ok(status.clone()));
+
+    let context = test_context(runtime.clone());
+    let app = Router::new()
+        .route("/p2p/snapshots", post(api::start_snapshot_stream))
+        .with_state(context);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/p2p/snapshots")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "peer": peer.to_string(),
+                "chunk_size": 16,
+                "resume": {
+                    "session": session,
+                    "plan_id": status.plan_id.clone().unwrap(),
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body()).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["session"], session);
+    assert_eq!(payload["peer"], peer.to_string());
+    assert_eq!(payload["root"], status.root);
+    assert_eq!(payload["plan_id"], status.plan_id.unwrap());
+    assert_eq!(payload["last_chunk_index"], 4);
+    assert_eq!(payload["last_update_index"], 7);
+    assert_eq!(payload["last_update_height"], 128);
+    assert_eq!(payload["verified"], true);
+    assert!(payload["error"].is_null());
+
+    let starts = runtime.record();
+    assert!(starts.is_empty(), "start should not be invoked for resume");
+    let resumes = runtime.resume_record();
+    assert_eq!(resumes, vec![(session, "plan-id".to_string())]);
 }
 
 #[tokio::test]

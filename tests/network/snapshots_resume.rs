@@ -440,6 +440,143 @@ async fn snapshot_resume_enforces_plan_bounds() -> Result<()> {
     result
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_resume_recovers_after_consumer_restart() -> Result<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut cluster = start_snapshot_cluster().await?;
+
+    let result = async {
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh")?;
+
+        tokio::time::sleep(SNAPSHOT_BUILD_DELAY).await;
+
+        let client = http_client()?;
+        let (session, provider_peer, base_url, plan_id) =
+            start_stream_via_http(&mut cluster, &client).await?;
+
+        let consumer_handle = cluster.nodes()[1].node_handle.clone();
+        let progress = wait_for_snapshot_status(
+            &consumer_handle,
+            session,
+            SNAPSHOT_POLL_TIMEOUT,
+            |status| status.last_chunk_index.is_some(),
+        )
+        .await
+        .context("wait for initial snapshot progress")?;
+
+        drop(progress);
+
+        cluster.nodes_mut()[1]
+            .restart()
+            .await
+            .context("restart consumer to interrupt stream")?;
+
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after consumer restart")?;
+
+        let resume_request = StartSnapshotStreamRequest {
+            peer: provider_peer.clone(),
+            chunk_size: default_chunk_size(),
+            resume: Some(ResumeMarker {
+                session: session.get(),
+                plan_id: plan_id.clone(),
+            }),
+        };
+
+        let mut status: snapshots_common::SnapshotStreamStatusResponse = client
+            .post(format!("{base_url}/p2p/snapshots"))
+            .json(&resume_request)
+            .send()
+            .await
+            .context("resume snapshot stream")?
+            .error_for_status()
+            .context("resume snapshot HTTP status")?
+            .json()
+            .await
+            .context("decode resume snapshot response")?;
+
+        let poll_url = format!("{base_url}/p2p/snapshots/{}", session.get());
+        let deadline = Instant::now() + SNAPSHOT_POLL_TIMEOUT;
+
+        loop {
+            if let Some(error) = status.error.clone() {
+                anyhow::bail!("snapshot stream reported error after resume: {error}");
+            }
+            if status.verified == Some(true) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for resumed snapshot verification");
+            }
+
+            tokio::time::sleep(POLL_INTERVAL).await;
+            status = client
+                .get(&poll_url)
+                .send()
+                .await
+                .context("poll resumed snapshot status")?
+                .error_for_status()
+                .context("resumed snapshot status HTTP status")?
+                .json()
+                .await
+                .context("decode resumed snapshot status response")?;
+        }
+
+        let record = read_session_record(&cluster.nodes()[0], session)
+            .await
+            .context("read provider snapshot session record")?;
+        let total_chunks = record
+            .get("total_chunks")
+            .and_then(Value::as_u64)
+            .context("missing total chunk count")?;
+        let total_updates = record
+            .get("total_updates")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+
+        if total_chunks > 0 {
+            let expected_last_chunk = total_chunks.saturating_sub(1);
+            let observed = status
+                .last_chunk_index
+                .context("missing resumed chunk index")?;
+            if observed != expected_last_chunk {
+                anyhow::bail!(
+                    "resumed stream did not download all chunks: expected {}, observed {}",
+                    expected_last_chunk,
+                    observed
+                );
+            }
+        }
+
+        if total_updates > 0 {
+            let expected_last_update = total_updates.saturating_sub(1);
+            let observed = status
+                .last_update_index
+                .context("missing resumed update index")?;
+            if observed != expected_last_update {
+                anyhow::bail!(
+                    "resumed stream did not download all updates: expected {}, observed {}",
+                    expected_last_update,
+                    observed
+                );
+            }
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    cluster.shutdown().await.context("cluster shutdown")?;
+
+    result
+}
+
 fn http_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(10))
