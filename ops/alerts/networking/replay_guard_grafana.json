@@ -9,8 +9,8 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum by (instance) (rate(network_replay_guard_drops_total[5m]))",
-          "legendFormat": "{{instance}}"
+          "expr": "sum by (instance, peer_class) (rate(network_replay_guard_drops_total[5m]))",
+          "legendFormat": "{{instance}} ({{peer_class}})"
         }
       ],
       "fieldConfig": {
@@ -42,9 +42,9 @@
       },
       "targets": [
         {
-          "expr": "max(network_replay_guard_window_fill_ratio)",
+          "expr": "max by (peer_class) (network_replay_guard_window_fill_ratio)",
           "instant": true,
-          "legendFormat": "fill ratio"
+          "legendFormat": "{{peer_class}}"
         }
       ],
       "fieldConfig": {

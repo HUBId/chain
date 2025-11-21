@@ -23,6 +23,7 @@ use crate::policy_log::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
     AdmissionPolicyLogError, AdmissionPolicyLogOptions, PolicyAllowlistState,
 };
+use crate::peerstore::peer_class::PeerClass;
 use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
 use crate::worm_export::WormExportSettings;
@@ -395,6 +396,23 @@ pub struct ReputationSnapshot {
     pub reputation: f64,
     pub tier: TierLevel,
     pub banned_until: Option<SystemTime>,
+}
+
+pub mod peer_class {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PeerClass {
+        Trusted,
+        Untrusted,
+    }
+
+    impl PeerClass {
+        pub fn label(self) -> &'static str {
+            match self {
+                PeerClass::Trusted => "trusted",
+                PeerClass::Untrusted => "untrusted",
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -783,6 +801,15 @@ impl Peerstore {
         store.apply_access_control()?;
         store.persist_access_lists(false)?;
         Ok(store)
+    }
+
+    pub fn peer_class(&self, peer_id: &PeerId) -> PeerClass {
+        let allowlist = self.allowlist.read();
+        if allowlist.iter().any(|entry| entry.peer == *peer_id) {
+            PeerClass::Trusted
+        } else {
+            PeerClass::Untrusted
+        }
     }
 
     pub fn admission_policies(&self) -> AdmissionPolicies {
@@ -2313,6 +2340,25 @@ mod tests {
             .find(|record| record.peer_id == peer)
             .expect("record");
         assert!(entry.addresses.contains(&addr));
+    }
+
+    #[test]
+    fn peer_class_reports_allowlist_membership() {
+        let mut allowlist = Vec::new();
+        let trusted_peer = PeerId::random();
+        allowlist.push(AllowlistedPeer {
+            peer: trusted_peer.clone(),
+            tier: TierLevel::Tl3,
+        });
+
+        let store = Peerstore::open(
+            PeerstoreConfig::memory().with_allowlist(allowlist.clone()),
+        )
+        .expect("open");
+
+        assert_eq!(store.peer_class(&trusted_peer), PeerClass::Trusted);
+        let unknown_peer = PeerId::random();
+        assert_eq!(store.peer_class(&unknown_peer), PeerClass::Untrusted);
     }
 
     #[test]
