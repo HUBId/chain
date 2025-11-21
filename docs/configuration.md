@@ -61,11 +61,18 @@ configuration reviews.
 
 * **Node configuration:** `NodeConfig::validate` enforces `config_version`, non-zero runtime limits,
   telemetry field correctness, and P2P/secrets validation. Violations return configuration errors that
-  map to exit code 2.【F:rpp/runtime/config.rs†L979-L1054】【F:rpp/node/src/lib.rs†L48-L120】
+  map to exit code 2.【F:rpp/runtime/config.rs†L979-L1054】【F:rpp/node/src/lib.rs†L48-L120】 Strict parsing
+  rejects unknown keys anywhere in the file and reports the offending paths (for example,
+  `unknown configuration key(s): network.rpc.typo_listen`).【F:rpp/runtime/config.rs†L41-L68】【F:rpp/runtime/config.rs†L188-L230】
 * **Malachite blueprint:** `MalachiteConfig::validate` checks that `config_version` satisfies the
   `>=1.0.0,<2.0.0` requirement before validating nested sections.【F:rpp/runtime/config.rs†L185-L210】
 * **Wallet configuration:** Wallet profiles ensure gossip endpoints are provided when the embedded
   node is disabled and verify Electrs feature combinations when enabled.【F:rpp/runtime/config.rs†L1468-L1539】
+
+Experimental or temporary settings must be registered in the schema (for example, by adding a
+field to `FeatureGates` or the relevant config block) before they will be accepted. There is no
+escape hatch for arbitrary keys; keep experiments behind explicit booleans so operators can tell
+when a non-standard flag is in use.【F:rpp/runtime/config.rs†L363-L387】【F:rpp/runtime/config.rs†L188-L230】
 
 Treat validation errors as actionable hints—the exact field name is embedded in each message.
 

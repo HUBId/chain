@@ -10,6 +10,7 @@ use std::time::Duration;
 use hex;
 use http::Uri;
 use semver::{Version, VersionReq};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use rpp_p2p::{
@@ -52,6 +53,25 @@ const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
 const MALACHITE_CONFIG_VERSION_DEFAULT: &str = "1.0.0";
 const MALACHITE_CONFIG_FILE: &str = "malachite.toml";
 const DEFAULT_MALACHITE_CONFIG_PATH: &str = "config/malachite.toml";
+
+fn parse_strict_toml<T: DeserializeOwned>(content: &str, label: &str) -> ChainResult<T> {
+    let mut unknown_keys = Vec::new();
+    let mut deserializer = toml::de::Deserializer::new(content);
+
+    let value = serde_ignored::deserialize(&mut deserializer, |path| {
+        unknown_keys.push(path.to_string());
+    })
+    .map_err(|err| ChainError::Config(format!("{label}: {err}")))?;
+
+    if !unknown_keys.is_empty() {
+        return Err(ChainError::Config(format!(
+            "{label}: unknown configuration key(s): {}",
+            unknown_keys.join(", ")
+        )));
+    }
+
+    Ok(value)
+}
 
 #[cfg(not(feature = "wallet-integration"))]
 mod wallet_runtime_placeholders {
@@ -343,9 +363,8 @@ impl MalachiteConfig {
     pub fn load_from_path(path: &Path) -> ChainResult<Self> {
         match fs::read_to_string(path) {
             Ok(content) => {
-                let mut config: Self = toml::from_str(&content).map_err(|err| {
-                    ChainError::Config(format!("unable to parse malachite config: {err}"))
-                })?;
+                let mut config: Self =
+                    parse_strict_toml(&content, "malachite configuration parse error")?;
                 config.validate()?;
                 Ok(config)
             }
@@ -1897,8 +1916,7 @@ impl NodeConfig {
 
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
-        let mut config: Self = toml::from_str(&content)
-            .map_err(|err| ChainError::Config(format!("unable to parse config: {err}")))?;
+        let mut config: Self = parse_strict_toml(&content, "node configuration parse error")?;
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         let malachite_path = base.join(MALACHITE_CONFIG_FILE);
         config.malachite = MalachiteConfig::load_from_path(&malachite_path)?;
@@ -2260,6 +2278,8 @@ impl Default for SnapshotValidatorConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn pruning_config_defaults_are_valid() {
@@ -2305,6 +2325,54 @@ mod tests {
             .snapshot_validator
             .validate()
             .expect("defaults should validate");
+    }
+
+    #[test]
+    fn node_config_rejects_unknown_keys() {
+        let temp_dir = tempdir().expect("temp dir");
+        let config_path = temp_dir.path().join("node.toml");
+
+        let mut config = NodeConfig::default();
+        let mut value = toml::Value::try_from(&config).expect("serialize default config");
+
+        value
+            .as_table_mut()
+            .expect("root table")
+            .insert("unknown_root".to_string(), toml::Value::Integer(1));
+
+        if let Some(network) = value
+            .get_mut("network")
+            .and_then(|entry| entry.as_table_mut())
+        {
+            if let Some(rpc) = network
+                .get_mut("rpc")
+                .and_then(|entry| entry.as_table_mut())
+            {
+                rpc.insert(
+                    "typo_listen".to_string(),
+                    toml::Value::String("0.0.0.0:0".to_string()),
+                );
+            }
+        }
+
+        let encoded = toml::to_string(&value).expect("encode with typo");
+        fs::write(&config_path, encoded).expect("write config");
+
+        let err = NodeConfig::load(&config_path).expect_err("load should fail");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("unknown configuration key(s):"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("unknown_root"),
+            "missing root key in message: {message}"
+        );
+        assert!(
+            message.contains("network.rpc.typo_listen"),
+            "missing nested key in message: {message}"
+        );
     }
 }
 
@@ -3280,8 +3348,7 @@ impl WalletConfigExt for WalletConfig {
     fn load_with_capabilities(path: &Path) -> ChainResult<(Self, WalletCapabilityHints)> {
         let content = fs::read_to_string(path)?;
         let hints = WalletCapabilityHints::detect(&content);
-        let config: Self = toml::from_str(&content)
-            .map_err(|err| ChainError::Config(format!("unable to parse wallet config: {err}")))?;
+        let config: Self = parse_strict_toml(&content, "wallet configuration parse error")?;
         config.validate().map_err(runtime_config_error)?;
         Ok((config, hints))
     }
