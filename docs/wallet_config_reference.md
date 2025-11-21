@@ -15,6 +15,8 @@ wallet guides when building environment-specific profiles.
 | `[wallet.prover].allow_broadcast_without_proof` | Leave `false` to block broadcasts if a proof is missing or times out.|
 | `[wallet.prover].timeout_secs`, `max_concurrency`, `max_witness_bytes` | Bound per-job execution and memory before retrying or surfacing RPC errors.|
 
+Unknown keys inside `[wallet.prover]` are rejected so operators can rely on the documented defaults: the mock backend is selected, proofs are optional, and fail-open broadcasts stay disabled until explicitly enabled.
+
 These fields gate the send pipeline described in Phase 2 and feed the GUI error
 banners documented in the Phase 3 dictionary.【F:config/wallet.toml†L125-L132】【F:docs/wallet_phase3_gui.md†L74-L113】 Restart the runtime after
 changing any prover setting; live reload is not supported.【F:config/wallet.toml†L1-L3】
