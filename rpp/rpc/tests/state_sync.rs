@@ -18,12 +18,14 @@ use rpp_chain::api::{
     StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
 };
 use rpp_chain::node::{LightClientVerificationEvent, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
 use blake3::Hash as Blake3Hash;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::watch;
+use std::net::SocketAddr;
+use tokio::sync::{oneshot, watch};
 use tower::ServiceExt;
 
 struct FakeStateSyncApi {
@@ -32,6 +34,97 @@ struct FakeStateSyncApi {
     session: RwLock<Option<StateSyncSessionInfo>>,
     chunk_size: RwLock<Option<usize>>,
     chunks: HashMap<u32, SnapshotChunk>,
+}
+
+fn auth_context(api: Arc<dyn StateSyncApi>) -> ApiContext {
+    ApiContext::new(
+        Arc::new(RwLock::new(RuntimeMode::Node)),
+        None,
+        None,
+        None,
+        None,
+        true,
+        None,
+        None,
+        false,
+    )
+    .with_state_sync_api(api)
+}
+
+#[tokio::test]
+async fn state_sync_session_respects_auth() {
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let session = StateSyncSessionInfo {
+        root: Some(Blake3Hash::from([0u8; 32])),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: None,
+        served_chunks: Vec::new(),
+        progress_log: Vec::new(),
+    };
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        Some(DEFAULT_STATE_SYNC_CHUNK),
+        HashMap::new(),
+    ));
+    let context = auth_context(api);
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+    let addr = probe.local_addr().expect("probe listener address");
+    drop(probe);
+    let auth_token = Some("super-secret".to_string());
+    let server = rpp_chain::api::serve_with_shutdown(
+        context,
+        addr,
+        auth_token.clone(),
+        None,
+        NetworkLimitsConfig::default(),
+        NetworkTlsConfig::default(),
+        async move {
+            let _ = shutdown_rx.await;
+        },
+        Some(ready_tx),
+    );
+
+    let handle = tokio::spawn(server);
+    ready_rx
+        .await
+        .expect("server ready channel")
+        .expect("server start");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("client");
+    let url = format!("http://{addr}/state-sync/session");
+
+    let unauthorized = client
+        .get(&url)
+        .send()
+        .await
+        .expect("unauthorized response");
+    assert_eq!(StatusCode::UNAUTHORIZED, unauthorized.status());
+
+    let authorized = client
+        .get(&url)
+        .bearer_auth(auth_token.as_deref().unwrap())
+        .send()
+        .await
+        .expect("authorized response");
+    assert_eq!(StatusCode::OK, authorized.status());
+
+    shutdown_tx
+        .send(())
+        .expect("send shutdown signal for state-sync auth test");
+    handle
+        .await
+        .expect("join state-sync auth server")
+        .expect("state-sync auth server result");
 }
 
 impl FakeStateSyncApi {

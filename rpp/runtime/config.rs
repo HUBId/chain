@@ -1461,10 +1461,16 @@ pub struct NetworkRpcConfig {
     pub auth_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_origin: Option<String>,
+    pub require_auth: bool,
 }
 
 impl NetworkRpcConfig {
     fn validate(&self) -> ChainResult<()> {
+        if self.require_auth && self.auth_token.is_none() {
+            return Err(ChainError::Config(
+                "network.rpc.require_auth is set but network.rpc.auth_token is missing".into(),
+            ));
+        }
         if let Some(token) = &self.auth_token {
             if token.trim().is_empty() {
                 return Err(ChainError::Config(
@@ -1489,6 +1495,7 @@ impl Default for NetworkRpcConfig {
             listen: default_network_rpc_listen(),
             auth_token: None,
             allowed_origin: None,
+            require_auth: false,
         }
     }
 }
@@ -2772,6 +2779,23 @@ mod tests {
             ChainError::Config(message) => {
                 assert!(
                     message.contains("network.rpc.auth_token"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_requires_auth_token_when_required() {
+        let mut config = NodeConfig::default();
+        config.network.rpc.require_auth = true;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.rpc.require_auth"),
                     "unexpected message: {}",
                     message
                 );

@@ -436,6 +436,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
     let mut rpc_auth: Option<String> = None;
+    let mut rpc_auth_required = false;
     let mut rpc_origin: Option<String> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
@@ -530,6 +531,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             "p2p endpoint configured"
         );
         rpc_auth = config.network.rpc.auth_token.clone();
+        rpc_auth_required = config.network.rpc.require_auth;
         rpc_origin = config.network.rpc.allowed_origin.clone();
         if config.network.limits.per_ip_token_bucket.enabled {
             rpc_requests_per_minute = NonZeroU64::new(
@@ -594,6 +596,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         if rpc_auth.is_none() && wallet_config.wallet.auth.enabled {
             rpc_auth = wallet_config.wallet.auth.token.clone();
         }
+        if wallet_config.wallet.auth.enabled {
+            rpc_auth_required = true;
+        }
         if rpc_origin.is_none() {
             rpc_origin = wallet_config.wallet.rpc.allowed_origin.clone();
         }
@@ -624,7 +629,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             wallet_instance.clone(),
             orchestrator_instance.clone(),
             rpc_requests_per_minute,
-            rpc_auth.is_some(),
+            rpc_auth_required || rpc_auth.is_some(),
             pruning_status_stream.clone(),
             pruning_api.clone(),
             false,
@@ -687,7 +692,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             Some(Arc::clone(wallet)),
             orchestrator_instance.clone(),
             rpc_requests_per_minute,
-            rpc_auth.is_some(),
+            rpc_auth_required || rpc_auth.is_some(),
             pruning_status_stream.clone(),
             pruning_api.clone(),
             wallet_runtime_active,

@@ -470,6 +470,10 @@ impl ApiContext {
         *self.mode.read()
     }
 
+    fn auth_token_enabled(&self) -> bool {
+        self.auth_token_enabled
+    }
+
     #[cfg(feature = "wallet-integration")]
     fn wallet_node_running(&self) -> bool {
         self.wallet
@@ -1591,6 +1595,11 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let security = ApiSecurity::new(auth_token, allowed_origin)?;
+    if context.auth_token_enabled() && !security.auth_enabled() {
+        return Err(ChainError::Config(
+            "rpc authentication required by configuration but no token configured".into(),
+        ));
+    }
     let request_limit_per_minute = context.request_limit_per_minute();
     let metrics = context.metrics();
     let enable_wallet_routes = context.wallet_routes_enabled();
