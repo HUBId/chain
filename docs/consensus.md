@@ -5,9 +5,20 @@ operators can confirm whether validators are finalizing new blocks in time. This
 page summarises the alerting thresholds, validation drills, and remediation
 playbooks that accompany those signals.
 
-## Alert expectations
+## Finality lag metrics, alerts, and dashboards {#finality-lag}
 
-### `finality_lag_slots`
+### Metric primers
+
+* `finality_lag_slots` measures how many slots the last finalized block lags the
+  accepted tip. Sustained growth means validators are not completing rounds fast
+  enough.
+* `finalized_height_gap` measures the block height difference between the
+  finalized head and the accepted head. Height gaps often grow more slowly than
+  slot lags but are easier to cross-check with explorer views.
+
+### Alert expectations
+
+#### `finality_lag_slots`
 
 * **Warning (`ConsensusFinalityLagWarning`):** fires when the maximum observed
   lag over five minutes exceeds twelve slots.
@@ -19,7 +30,7 @@ Both alerts read from `ops/alerts/consensus/finality.yaml` and rely on the
 Investigate recent proposer rotations, ensure the active validator set is
 healthy, and confirm that witnesses continue to sign new rounds.
 
-### `finalized_height_gap`
+#### `finalized_height_gap`
 
 * **Warning (`ConsensusFinalizedHeightGapWarning`):** triggers when the finalized
   height trails the accepted head by more than four blocks for five minutes.
@@ -31,6 +42,37 @@ would otherwise stall pipeline consumers.【F:ops/alerts/consensus/finality.yaml
 When they fire, correlate the panel with `finality_lag_slots` and prepare to
 execute the failover checklist.
 
+### Example dashboards
+
+Embed the metrics in two Grafana rows so operators can jump from alerts to a
+shared view:
+
+* **Finality lag slots panel:** graph `max_over_time(finality_lag_slots[5m])`
+  with warning/critical thresholds at 12 and 24 slots. Add a stat panel showing
+  the current max lag and a table breaking down lag by validator ID to spot a
+  single slow proposer.
+* **Finalized height gap panel:** graph `max_over_time(finalized_height_gap[5m])`
+  with alert thresholds at 4 and 8. Pair with a bar chart of finalized vs.
+  accepted heights per region or AZ to expose regional stalls.
+* **Corollary panels:** include `validator_peer_connectivity` and CPU load for
+  consensus nodes to correlate infrastructure health with lag spikes. Link
+  drilldowns to the incident log for faster post-mortems.
+
+### Typical remediation steps
+
+1. Confirm the alert source. Open the Grafana finality dashboard and verify the
+   lag or gap persisted for at least two evaluation windows.
+2. Check proposer health. Ensure the active validator set is connected, has
+   sufficient peers, and is not throttled by CPU or disk I/O. Restart isolated
+   nodes that stopped signing rounds.
+3. Compare against network upgrades or backend switches. If lag followed a
+   backend change, follow the [Zero-data-loss backend switch procedure](./zk_backends.md#zero-data-loss-backend-switch-procedure)
+   to revert or complete the rollout safely.
+4. Execute the [network snapshot failover runbook](runbooks/network_snapshot_failover.md)
+   to shift traffic away from degraded validators and restore proposer rotation.
+5. Document the timeline, Grafana snapshots, and mitigations in the incident log
+   and attach them to the alert ticket.
+
 ## Validation drills
 
 `cargo test --test finality_alert_probe` replays the alert thresholds and
@@ -38,12 +80,3 @@ verifies that the warning/critical levels escalate correctly for both metrics.
 Run the probe after modifying alert rules to prove that simulated delayed
 finality raises the expected signals.【F:tests/consensus/finality_alert_probe.rs†L1-L89】
 
-## Remediation
-
-1. Collect Grafana snapshots for the finality lag and finalized height panels.
-2. Follow the [network snapshot failover runbook](runbooks/network_snapshot_failover.md)
-   to reroute traffic away from unhealthy validators and recover block
-   production.【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
-3. Document the remediation in the incident log alongside the alert drill output
-   from the validation probe to close the loop with the failover procedures.
-4. Wenn die Alerts im Zuge eines Backend-Wechsels ausgelöst wurden, folge der [Zero-data-loss backend switch procedure](./zk_backends.md#zero-data-loss-backend-switch-procedure), um das alternative ZK-Backend kontrolliert und ohne Proof-Verluste auszurollen.
