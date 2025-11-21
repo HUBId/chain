@@ -23,3 +23,14 @@ converted to underscores).
 Pair these thresholds with the sample Alertmanager rules under `ops/alerts/storage/` and the
 observability runbook sections referenced below. Alert annotations should link to the relevant
 runbook anchors (`docs/runbooks/observability.md`).
+
+## Updating the telemetry schema
+
+The storage metrics surfaced here are validated in CI against `telemetry/schema.yaml`. When adding a
+new counter, histogram, or gauge:
+
+1. Append the metric name and any labels it emits to `telemetry/schema.yaml`.
+2. Run `cargo test --test observability_metrics telemetry_metrics_match_allowlist -- --nocapture`
+   to confirm the allowlist covers the updated label set.
+3. Commit the schema change alongside the instrumentation patch so downstream pipelines can ingest
+   the new timeseries without breaking the schema gate.
