@@ -46,3 +46,4 @@ finality raises the expected signals.【F:tests/consensus/finality_alert_probe.r
    production.【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
 3. Document the remediation in the incident log alongside the alert drill output
    from the validation probe to close the loop with the failover procedures.
+4. Wenn die Alerts im Zuge eines Backend-Wechsels ausgelöst wurden, folge der [Zero-data-loss backend switch procedure](./zk_backends.md#zero-data-loss-backend-switch-procedure), um das alternative ZK-Backend kontrolliert und ohne Proof-Verluste auszurollen.
