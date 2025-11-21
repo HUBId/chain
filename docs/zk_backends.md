@@ -108,6 +108,33 @@
 - **Backend-Switch vorbereiten:** Baue alternative Artefakte mit `RPP_RELEASE_BASE_FEATURES="prod,backend-plonky3" scripts/build_release.sh` oder `cargo build --features backend-plonky3`. Deployments übernehmen den Wechsel nach einem kontrollierten Neustart; dokumentiere den Feature-Flip im Incident-Log.【F:scripts/build_release.sh†L10-L118】【F:scripts/build_release.sh†L204-L214】
 - **Runtime-Parameter anpassen:** Passe `max_proof_size_bytes` oder `rollout.feature_gates.consensus_enforcement` in `config/node.toml` an und starte den Dienst neu, um neue Limits bzw. temporäre Enforcement-Ausnahmen zu übernehmen. Setze Schalter nach der Störung zurück und bestätige die Wirkung über `/status/node` (`backend_health.*`).【F:config/node.toml†L5-L71】【F:rpp/runtime/node.rs†L5043-L5164】【F:rpp/runtime/node.rs†L5416-L5460】
 
+### Zero-data-loss backend switch procedure
+
+**Prerequisites**
+
+- Stelle sicher, dass der alternative Backend-Build mit den richtigen Feature-Flags vorliegt (z. B. `backend-plonky3` oder `backend-rpp-stark`) und ein Integrationslauf (`scripts/test.sh --backend <target> --unit --integration`) ohne Fehlermeldungen durchläuft.
+- Prüfe, dass die aktiven Limits (`max_proof_size_bytes`, `rollout.feature_gates.consensus_enforcement`) in `config/node.toml` mit den Ziel-Artefakten kompatibel sind und dokumentiere den aktuellen Wert im Incident-Log, um spätere Rollbacks nachvollziehen zu können.【F:config/node.toml†L5-L71】
+- Stelle sicher, dass Validatoren finalisiert haben und keine ungeprüften Proofs im Mempool hängen, indem du `/status/mempool` und `backend_health.*` prüfst. So vermeidest du, dass unbestätigte Artefakte während des Wechsels verworfen werden.【F:rpp/rpc/api.rs†L1440-L2406】【F:rpp/runtime/node.rs†L5416-L5460】
+
+**Schritte für kontrollierten Neustart**
+
+1. **Konfigurationsänderung vorbereiten:** Passe den Backend-Feature-Flip in der Build- oder Deployment-Pipeline an (z. B. `RPP_RELEASE_BASE_FEATURES="prod,backend-plonky3"`) und lege eine Kopie der aktuellen `config/node.toml` mit Versions-Hash im Change-/Incident-Log ab.【F:scripts/build_release.sh†L10-L118】
+2. **Node sauber stoppen:** Stoppe den Validator nach Abschluss des aktuellen Slots/Heights (z. B. via Service-Manager), damit gepufferte Proofs persistiert sind.
+3. **Binary/Container austauschen:** Rolle das neue Artefakt aus und stelle sicher, dass der Dienst mit den aktualisierten Feature-Flags startet.
+4. **Konfiguration anwenden:** Lade die angepasste `config/node.toml` (inkl. aktualisiertem `max_proof_size_bytes` falls nötig) und führe einen Neustart durch. Verifiziere unmittelbar nach dem Start, dass `backend_health.<target>.verifier.accepted` ansteigt und `valid=true`-Logs für neue Proofs erscheinen.【F:rpp/runtime/node.rs†L5416-L5460】
+5. **Post-Checks & Dokumentation:** Erfasse `GET /status/node` und relevante Telemetrie-Panels als Artefakte, notiere die Slot-/Height-Marke des Wechsels und aktualisiere das Incident-Log mit dem erfolgreichen Flip.
+
+**Rolling Deploy ohne Datenverlust**
+
+1. **Canary-Knoten aktualisieren:** Wähle einen Validator oder ein kleines Shard-Subset, deploye das neue Backend und verifiziere Proof-Akzeptanz (`backend_health.<target>.verifier.accepted` steigt, keine `valid=false`-Spitzen).
+2. **Staggered rollout:** Aktualisiere die übrigen Nodes in kleinen Batches; zwischen den Batches sicherstellen, dass Finality-Gaps stabil bleiben und keine Mempool-Drops auftreten (Monitor `finality_lag_slots` und `backend_health.*`).
+3. **Cluster-weite Bestätigung:** Nach Abschluss bestätigen, dass alle Nodes denselben Backend-Status melden und die Telemetrie-Histogramme (`*_proof_total_bytes`, `*_verify_duration_seconds`) keine Regressionen zeigen.
+
+**Rollback**
+
+- Halte den vorherigen Build und die gesicherte `config/node.toml` bereit. Wenn Proof-Rejections oder Finality-Gaps nach dem Flip auftreten, stelle den vorherigen Binary-Stand wieder her, setze die Konfiguration zurück und starte den Dienst neu. Validere, dass `backend_health.<previous>.verifier.accepted` erneut steigt und dokumentiere den Zeitpunkt des Rollbacks im Incident-Log.
+- Bei Rolling Deployments sofort zum letzten stabilen Backend zurückkehren, falls der Canary Fehler zeigt; stoppe weitere Batches und verwirf nur den canary-spezifischen Proof-Cache, um Datenverlust zu vermeiden.
+
 ### Incident Runbook: rpp-stark verification failures
 
 #### Detection

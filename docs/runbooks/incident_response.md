@@ -16,6 +16,7 @@ Snapshot-Kette bündelt.
 
 - **First action:** Öffne das [ZK-Backend-Playbook](../zk_backends.md#incident-runbook-rpp-stark-verification-failures) und folge der Stage-Flag-Tabelle, um den fehlerhaften Schritt zu identifizieren und die passende Gegenmaßnahme auszuwählen.【F:docs/zk_backends.md†L74-L135】
 - **CLI & Konfiguration:** Nutze die im Playbook dokumentierten Proof-Replay-Befehle (`cargo test --features backend-rpp-stark --test interop_rpp_stark ...`) sowie die Feature-/Konfigurationsschalter für Backend-Wechsel oder temporäre Enforcement-Ausnahmen, bevor du Änderungen im Incident-Log dokumentierst.【F:docs/zk_backends.md†L137-L156】
+- **Backend-Wechsel ohne Datenverlust:** Wenn der Incident einen Backend-Flip erfordert, folge der [Zero-data-loss backend switch procedure](../zk_backends.md#zero-data-loss-backend-switch-procedure), bevor du Nodes neu startest oder Rolling Deployments auslöst. Dokumentiere Prerequisites, Proof-Drain und die gewählte Rollout-/Rollback-Strategie im Incident-Log.【F:docs/zk_backends.md†L137-L192】
 - **Escalation:** Falls Stage-Flags trotz Replay und Konfigurationsanpassungen fehlschlagen, eskaliere gemäß dem Abschnitt „Fallback paths“ des Playbooks und protokolliere Build-/Feature-Flips sowie erneute `/status/node`-Abfragen im Incident-Ticket.【F:docs/zk_backends.md†L185-L207】
 
 ## Einsatzvorbereitung
