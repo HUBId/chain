@@ -1,0 +1,43 @@
+name: Nightly Firewood storage fuzzing
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  firewood-storage-fuzz:
+    name: Firewood storage fuzz (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: branch-factor-256
+            features: "branch_factor_256"
+          - name: ethhash
+            features: "ethhash"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ffi/tests/firewood/go.mod
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: firewood-storage-fuzz-${{ matrix.name }}
+
+      - name: Run storage fuzz target
+        env:
+          FIREWOOD_RS_FEATURES: ${{ matrix.features }}
+          FIREWOOD_FUZZTIME: 2m
+        run: ./scripts/firewood-fuzz.sh
