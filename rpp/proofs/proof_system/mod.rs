@@ -507,15 +507,22 @@ impl RppStarkProofVerifier {
         proof: &ChainProof,
         kind: &'static str,
     ) -> ChainResult<RppStarkVerificationReport> {
-        let artifact = proof.expect_rpp_stark()?;
-        self.inner
-            .verify(
-                artifact.params(),
-                artifact.public_inputs(),
-                artifact.proof(),
-                self.max_proof_size_bytes,
-            )
+        self.verify_with_report_raw(proof, kind)
             .map_err(|err| self.map_error(kind, err))
+    }
+
+    fn verify_with_report_raw(
+        &self,
+        proof: &ChainProof,
+        kind: &'static str,
+    ) -> Result<RppStarkVerificationReport, RppStarkVerifierError> {
+        let artifact = proof.expect_rpp_stark()?;
+        self.inner.verify(
+            artifact.params(),
+            artifact.public_inputs(),
+            artifact.proof(),
+            self.max_proof_size_bytes,
+        )
     }
 
     fn verify_block_bundle(&self, bundle: &BlockProofBundle) -> ChainResult<()> {
@@ -626,15 +633,38 @@ impl ProofVerifierRegistry {
         proof: &ChainProof,
         proof_kind: &'static str,
     ) -> ChainResult<RppStarkVerificationReport> {
+        self.verify_rpp_stark_with_report_raw(proof, proof_kind)
+            .map_err(|err| self.map_rpp_stark_error(proof_kind, err))
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn verify_rpp_stark_with_report_raw(
+        &self,
+        proof: &ChainProof,
+        proof_kind: &'static str,
+    ) -> Result<RppStarkVerificationReport, RppStarkVerifierError> {
         if proof.system() != ProofSystemKind::RppStark {
-            return Err(ChainError::Crypto(format!(
-                "expected RPP-STARK proof, received {:?}",
-                proof.system()
-            )));
+            return Err(RppStarkVerifierError::BackendUnavailable(
+                "expected RPP-STARK proof",
+            ));
         }
-        self.record_backend(ProofSystemKind::RppStark, "rpp-stark-report", || {
-            self.rpp_stark.verify_with_report(proof, proof_kind)
-        })
+        let mut failure = None;
+        let result =
+            self.record_backend(ProofSystemKind::RppStark, "rpp-stark-report", || match self
+                .rpp_stark
+                .verify_with_report_raw(proof, proof_kind)
+            {
+                Ok(report) => Ok(report),
+                Err(err) => {
+                    failure = Some(err.clone());
+                    Err(self.map_rpp_stark_error(proof_kind, err))
+                }
+            });
+
+        match result {
+            Ok(report) => Ok(report),
+            Err(_) => Err(failure.expect("rpp-stark error captured during metrics recording")),
+        }
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -642,6 +672,15 @@ impl ProofVerifierRegistry {
         self.record_backend(ProofSystemKind::RppStark, "rpp-stark-block-bundle", || {
             self.rpp_stark.verify_block_bundle(bundle)
         })
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn map_rpp_stark_error(
+        &self,
+        kind: &'static str,
+        error: RppStarkVerifierError,
+    ) -> ChainError {
+        self.rpp_stark.map_error(kind, error)
     }
 
     fn ensure_bundle_system(

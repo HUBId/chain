@@ -1465,6 +1465,7 @@ pub enum ProofVerificationStage {
     Public,
     Merkle,
     Fri,
+    Adapter,
     Composition,
 }
 
@@ -1477,6 +1478,7 @@ impl ProofVerificationStage {
             Self::Public => "public",
             Self::Merkle => "merkle",
             Self::Fri => "fri",
+            Self::Adapter => "adapter",
             Self::Composition => "composition",
         }
     }
