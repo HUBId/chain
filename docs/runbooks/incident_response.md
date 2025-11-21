@@ -7,6 +7,10 @@ Genehmigungen verlangt. Jede Sektion beginnt mit einer "First Action"-Checkliste
 die die wichtigsten CLI-Aufrufe, Dashboards und Audit-Trails verlinkt, damit
 Auditor:innen die Dokumentation lückenlos nachverfolgen können.
 
+Wenn ein CI-Chaostest fehlschlägt, folge dem Abschnitt
+[„CI failure response for chaos drills“](../observability.md#ci-failure-response-for-chaos-drills)
+für die Eskalationskette, Artefakt-Downloads und die zu prüfenden Dashboards.
+
 Für Replay-Störungen in der Timetoke-Pipeline verweist dieses Playbook auf das
 [Timetoke-Failover-Runbook](./timetoke_failover.md), das Detection-Signale,
 Recovery-Schritte und Troubleshooting-Tipps für die Wiederanbindung der
