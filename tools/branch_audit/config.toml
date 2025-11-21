@@ -1,0 +1,3 @@
+# Default configuration for the branch audit tooling.
+# The canonical branch is the single source of truth that new work should branch from.
+canonical_branch = "main"
