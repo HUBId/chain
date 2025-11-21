@@ -288,7 +288,8 @@ impl WalletRpcRouter {
         self.metrics.record_wallet_prover_backend(backend, false);
         self.metrics
             .record_wallet_prover_job_duration(backend, false, duration);
-        self.metrics.record_wallet_prover_failure(code.as_str());
+        self.metrics
+            .record_wallet_prover_failure(backend, code.as_str());
         self.telemetry.record_prover_job(
             backend,
             duration,

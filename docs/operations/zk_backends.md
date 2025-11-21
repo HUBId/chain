@@ -12,6 +12,12 @@ while any failure records `result="fail"` together with the stage label, making
 persistent errors easy to isolate in queries such as
 `rpp_stark_stage_checks_total{stage="fri",result="fail"}`.【F:rpp/runtime/node.rs†L3770-L3850】【F:rpp/runtime/telemetry/metrics.rs†L473-L492】
 
+All zk-related runtime and wallet metrics now carry an explicit `backend`
+label so dashboards and alerts can slice data per prover/verifier. The stable
+values are `backend="stwo"` for proof generation and wallet prover surfaces
+and `proof_backend="rpp-stark"` for verifier signals; alerts in this guide are
+scoped to those labels to keep mixed-backend deployments separate.【F:rpp/runtime/telemetry/metrics.rs†L380-L459】【F:ops/alerts/zk/rpp_stark.yaml†L6-L35】
+
 ### Startup validation and supported flag combinations
 
 The node now validates compiled ZK backend flags during bootstrap so operators

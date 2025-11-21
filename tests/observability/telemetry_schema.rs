@@ -50,7 +50,7 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     metrics.record_wallet_prover_job_duration("mock", true, Duration::from_millis(33));
     metrics.record_wallet_prover_witness_bytes("mock", 2048);
     metrics.record_wallet_prover_backend("mock", true);
-    metrics.record_wallet_prover_failure("PROVER_INTERNAL");
+    metrics.record_wallet_prover_failure("mock", "PROVER_INTERNAL");
     metrics.record_wal_flush_duration(WalFlushOutcome::Retried, Duration::from_millis(13));
     metrics.record_wal_flush_bytes(WalFlushOutcome::Retried, 8192);
     metrics.increment_wal_flushes(WalFlushOutcome::Retried);
@@ -199,6 +199,12 @@ fn merge_attribute_keys(
     for (key, _) in attributes.iter() {
         sink.insert(key.as_str().to_string());
     }
+}
+
+#[test]
+fn zk_backend_labels_are_stable() {
+    assert_eq!(ProofKind::Stwo.as_str(), "stwo");
+    assert_eq!(ProofVerificationBackend::RppStark.as_str(), "rpp-stark");
 }
 
 fn workspace_root() -> PathBuf {

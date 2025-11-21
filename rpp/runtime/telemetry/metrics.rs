@@ -457,14 +457,17 @@ impl RuntimeMetrics {
 
     /// Record a wallet prover failure grouped by error code.
     #[cfg(feature = "wallet-integration")]
-    pub fn record_wallet_prover_failure(&self, code: &str) {
-        let attributes = [KeyValue::new("code", code.to_string())];
+    pub fn record_wallet_prover_failure(&self, backend: &str, code: &str) {
+        let attributes = [
+            KeyValue::new("backend", backend.to_string()),
+            KeyValue::new("code", code.to_string()),
+        ];
         self.wallet_prover_failures.add(1, &attributes);
     }
 
     #[cfg(not(feature = "wallet-integration"))]
     #[allow(unused_variables)]
-    pub fn record_wallet_prover_failure(&self, _code: &str) {}
+    pub fn record_wallet_prover_failure(&self, _backend: &str, _code: &str) {}
 
     /// Record the time taken to schedule a wallet rescan along with its outcome.
     #[cfg(feature = "wallet-integration")]
@@ -733,8 +736,8 @@ impl WalletRuntimeMetrics for RuntimeMetrics {
         RuntimeMetrics::record_wallet_prover_witness_bytes(self, backend, bytes);
     }
 
-    fn record_wallet_prover_failure(&self, code: &str) {
-        RuntimeMetrics::record_wallet_prover_failure(self, code);
+    fn record_wallet_prover_failure(&self, backend: &str, code: &str) {
+        RuntimeMetrics::record_wallet_prover_failure(self, backend, code);
     }
 }
 
@@ -1661,7 +1664,7 @@ mod tests {
         metrics.record_wallet_prover_job_duration("mock", true, Duration::from_millis(22));
         metrics.record_wallet_prover_witness_bytes("mock", 1024);
         metrics.record_wallet_prover_backend("mock", true);
-        metrics.record_wallet_prover_failure("PROVER_INTERNAL");
+        metrics.record_wallet_prover_failure("mock", "PROVER_INTERNAL");
         metrics.record_wallet_rescan_duration(true, Duration::from_millis(23));
         metrics.record_wallet_broadcast_rejected("NODE_REJECTED");
         metrics.record_wal_flush_duration(WalFlushOutcome::Success, Duration::from_millis(30));

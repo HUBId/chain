@@ -93,6 +93,7 @@ metrics:
       - result
   - name: rpp.runtime.wallet.prover.failures
     labels:
+      - backend
       - code
   - name: rpp_stark_params_bytes
     labels:
