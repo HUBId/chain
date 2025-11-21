@@ -18,3 +18,5 @@ Exit codes:
   2 - configuration validation failed
   3 - runtime startup failed
   4 - unexpected runtime error
+
+Cleanup runbook: docs/mempool_cleanup.md
