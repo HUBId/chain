@@ -1,0 +1,17 @@
+[sim]
+seed = 11
+duration_ms = 1500
+
+[topology]
+type = "erdos_renyi"
+n = 6
+p = 0.25
+
+[traffic.tx]
+[[traffic.tx.phases]]
+duration_ms = 1500
+model = "poisson"
+lambda_per_sec = 2.0
+
+[links]
+default = { delay_ms = 5, jitter_ms = 1, loss = -0.1 }

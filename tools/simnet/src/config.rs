@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::from_str;
 use tokio::time::Duration;
@@ -129,6 +129,40 @@ impl SimnetConfig {
             .with_context(|| format!("failed to parse scenario {}", path.display()))?;
         config.source_path = Some(path.to_path_buf());
         Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        for process in self.nodes.iter().chain(self.wallets.iter()) {
+            if process.label.trim().is_empty() {
+                bail!("process labels must not be empty");
+            }
+            if process.startup_timeout_ms == 0 {
+                bail!("startup_timeout_ms for {} must be positive", process.label);
+            }
+        }
+
+        if let Some(p2p) = &self.p2p {
+            let scenario_path = self.resolve_relative_path(&p2p.scenario_path);
+            rpp_sim::scenario::Scenario::from_path(&scenario_path)
+                .with_context(|| format!("invalid p2p scenario {}", scenario_path.display()))?;
+        }
+
+        if let Some(consensus) = &self.consensus {
+            if consensus.runs == 0 {
+                bail!("consensus.runs must be greater than zero");
+            }
+            if consensus.validators == 0 {
+                bail!("consensus.validators must be greater than zero");
+            }
+            if consensus.witness_commitments == 0 {
+                bail!("consensus.witness_commitments must be greater than zero");
+            }
+            if consensus.tamper.every_n == 0 {
+                bail!("consensus tamper.every_n must be greater than zero");
+            }
+        }
+
+        Ok(())
     }
 
     pub fn resolve_artifacts_dir(&self, override_dir: Option<&Path>) -> Result<PathBuf> {

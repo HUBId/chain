@@ -226,6 +226,9 @@ async fn ensure_artifacts_root(args: &Args, started_at: DateTime<Utc>) -> Result
 async fn execute_scenario(artifacts_root: &Path, scenario_path: &Path) -> Result<ScenarioReport> {
     let config = SimnetConfig::from_path(scenario_path)
         .with_context(|| format!("load scenario {}", scenario_path.display()))?;
+    config
+        .validate()
+        .with_context(|| format!("invalid scenario {}", scenario_path.display()))?;
     let slug = scenario_slug(scenario_path);
     let scenario_dir = artifacts_root.join(&slug);
     fs::create_dir_all(&scenario_dir)

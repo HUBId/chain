@@ -31,6 +31,25 @@ cargo xtask simnet --scenario tools/simnet/scenarios/ring_latency_profile.ron
 Use `--artifacts-dir` to control where logs and outputs are written and
 `--keep-alive` to leave the harness processes up for inspection.
 
+## Scenario configuration
+
+Simnet scenarios are RON files that point at p2p traffic profiles or
+consensus load settings. The orchestrator enforces the following defaults and
+validations before starting any processes:
+
+- Global parameters: `duration_secs` defaults to `0`, and `artifacts_dir`
+  defaults to `target/simnet/<scenario-slug>` when not provided.
+- Process entries (`nodes`/`wallets`): `startup_timeout_ms` defaults to
+  `30000` and must be positive. Relative `working_dir` values are resolved from
+  the scenario file location, and labels must be non-empty.
+- P2p section: `scenario_path` points to a TOML simulation profile consumed by
+  `rpp-sim`. Simnet validates the profile up front, rejecting zero-peer
+  topologies, degree values greater than or equal to the node count, and link
+  loss rates outside the `0.0..=1.0` range.
+- Consensus section: defaults are `runs = 64`, `validators = 64`,
+  `witness_commitments = 192`, and tamper `every_n = 8`. All consensus counts
+  must be greater than zero.
+
 ## CI and nightly parity
 
 The `cargo xtask test-simnet` entry point used in CI and nightly workflows calls
