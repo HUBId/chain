@@ -27,6 +27,7 @@ mod hashednode;
 mod hashers;
 /// Identity commitment tree compatibility re-exports.
 pub mod identity_tree;
+mod io_uring;
 mod iter;
 mod linear;
 mod metrics;
@@ -55,6 +56,7 @@ pub use identity_tree::{
     IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
     IDENTITY_TREE_DEPTH,
 };
+pub use io_uring::{detect_io_uring_capability, IoUringCapability, IO_URING_FORCE_UNSUPPORTED_ENV};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use metrics::{
     noop as noop_storage_metrics, StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
