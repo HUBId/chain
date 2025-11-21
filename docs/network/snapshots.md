@@ -9,7 +9,10 @@ feature to operators.
 Snapshot data is exchanged over the `/rpp/snapshots/1.0.0` request/response
 protocol. Each session is keyed by a `SnapshotSessionId` and transports several
 artefact types (`plan`, `chunk`, `light_client_update`, `resume`, `ack`,
-`error`).【F:rpp/p2p/src/behaviour/snapshots.rs†L36-L139】 Providers implement the
+`error`).【F:rpp/p2p/src/behaviour/snapshots.rs†L36-L158】 Plan/Resume requests
+can optionally advertise a preferred `chunk_size` together with capability
+bounds so providers can tailor the payload size; plan responses mirror the
+offered sizing when available.【F:rpp/p2p/src/behaviour/snapshots.rs†L91-L139】 Providers implement the
 `SnapshotProvider` trait to serve plans, chunks, and recursive proof updates, to
 surface resume offsets, and to record acknowledgements from the consumer.【F:rpp/p2p/src/behaviour/snapshots.rs†L141-L175】
 
