@@ -6,6 +6,7 @@ use anyhow::Context;
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH};
 use hex::FromHexError;
+use metrics::counter;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -39,6 +40,7 @@ pub struct VerifyArgs {
     pub signature: PathBuf,
     pub public_key: DataSource,
     pub chunk_root: Option<PathBuf>,
+    pub verbose_progress: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,7 +229,7 @@ pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> E
         }
     }
 
-    let (segments, summary) = verify_segments(&manifest, &chunk_root);
+    let (segments, summary) = verify_segments(&manifest, &chunk_root, args.verbose_progress);
     if summary.metadata_incomplete > 0
         || summary.missing_files > 0
         || summary.size_mismatches > 0
@@ -328,6 +330,7 @@ fn verify_signature(
 fn verify_segments(
     manifest: &SnapshotManifest,
     chunk_root: &Path,
+    verbose_progress: bool,
 ) -> (Vec<SegmentReport>, SegmentSummary) {
     let mut reports = Vec::new();
     let mut metadata_incomplete = 0;
@@ -368,7 +371,7 @@ fn verify_segments(
                 if size != expected_size.unwrap() {
                     (SegmentStatus::SizeMismatch, Some(size), None, None)
                 } else {
-                    match compute_sha256(&path) {
+                    match compute_sha256(&path, expected_size, verbose_progress) {
                         Ok(actual_hash) => {
                             if actual_hash == expected_checksum.as_deref().unwrap() {
                                 (SegmentStatus::Verified, Some(size), Some(actual_hash), None)
@@ -428,22 +431,127 @@ fn verify_segments(
     (reports, summary)
 }
 
-fn compute_sha256(path: &Path) -> Result<String, String> {
-    let mut file =
-        fs::File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?;
+fn compute_sha256(
+    path: &Path,
+    expected_size: Option<u64>,
+    verbose_progress: bool,
+) -> Result<String, String> {
+    let progress: Option<ProgressReporter<io::StderrLock<'static>>> = if verbose_progress {
+        Some(ProgressReporter::stderr(
+            expected_size,
+            PROGRESS_LOG_INTERVAL,
+        ))
+    } else {
+        None
+    };
+
+    compute_sha256_from_reader(
+        fs::File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?,
+        path,
+        progress,
+    )
+}
+
+fn compute_sha256_from_reader<R: Read, W: Write>(
+    mut reader: R,
+    path: &Path,
+    mut progress: Option<ProgressReporter<W>>,
+) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
-        match file.read(&mut buffer) {
+        match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(len) => {
                 hasher.update(&buffer[..len]);
+                counter!(SNAPSHOT_CHECKSUM_BYTES_METRIC, "file" => path.display().to_string())
+                    .increment(len as u64);
+                if let Some(reporter) = progress.as_mut() {
+                    reporter
+                        .record(len as u64)
+                        .map_err(|err| format!("failed to log progress: {err}"))?;
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => return Err(format!("failed to read {}: {err}", path.display())),
         }
     }
+
+    if let Some(reporter) = progress.as_mut() {
+        reporter
+            .finish()
+            .map_err(|err| format!("failed to log progress: {err}"))?;
+    }
+
     Ok(hex::encode(hasher.finalize()))
+}
+
+const SNAPSHOT_CHECKSUM_BYTES_METRIC: &str = "snapshot_client_checksum_bytes_total";
+
+#[cfg(test)]
+const PROGRESS_LOG_INTERVAL: u64 = 1024;
+
+#[cfg(not(test))]
+const PROGRESS_LOG_INTERVAL: u64 = 8 * 1024 * 1024;
+
+struct ProgressReporter<W: Write> {
+    writer: W,
+    expected_size: Option<u64>,
+    interval: u64,
+    bytes_read: u64,
+    next_log: u64,
+}
+
+impl ProgressReporter<io::StderrLock<'static>> {
+    fn stderr(
+        expected_size: Option<u64>,
+        interval: u64,
+    ) -> ProgressReporter<io::StderrLock<'static>> {
+        ProgressReporter::new(io::stderr().lock(), expected_size, interval)
+    }
+}
+
+impl<W: Write> ProgressReporter<W> {
+    fn new(writer: W, expected_size: Option<u64>, interval: u64) -> Self {
+        Self {
+            writer,
+            expected_size,
+            interval: interval.max(1),
+            bytes_read: 0,
+            next_log: interval.max(1),
+        }
+    }
+
+    fn record(&mut self, delta: u64) -> io::Result<()> {
+        self.bytes_read = self.bytes_read.saturating_add(delta);
+        while self.bytes_read >= self.next_log {
+            self.log_progress()?;
+            self.next_log = self.next_log.saturating_add(self.interval);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> io::Result<()> {
+        if self.bytes_read > 0 {
+            self.log_progress()?;
+        }
+        Ok(())
+    }
+
+    fn log_progress(&mut self) -> io::Result<()> {
+        match self.expected_size {
+            Some(total) if total > 0 => {
+                let percent = (self.bytes_read as f64 / total as f64 * 100.0).min(100.0);
+                writeln!(
+                    self.writer,
+                    "checksum progress: {} / {} bytes ({percent:.1}%)",
+                    self.bytes_read,
+                    total
+                )
+            }
+            _ => writeln!(self.writer, "checksum progress: {} bytes read", self.bytes_read),
+        }
+    }
 }
 
 fn decode_data(value: &str) -> Result<Vec<u8>, DecodeError> {
@@ -475,6 +583,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use ed25519_dalek::{Signer, SigningKey};
+    use std::io::Cursor;
     use serde_json::json;
     use std::convert::TryFrom;
     use tempfile::TempDir;
@@ -544,6 +653,7 @@ mod tests {
                 data: hex::encode(verifying_key.to_bytes()),
             },
             chunk_root: Some(chunk_dir.clone()),
+            verbose_progress: false,
         };
         let mut report = VerificationReport::new(&args);
         let result = run_verification(&args, &mut report);
@@ -580,6 +690,7 @@ mod tests {
                 data: hex::encode(verifying_key.to_bytes()),
             },
             chunk_root: Some(chunk_dir.clone()),
+            verbose_progress: false,
         };
         let mut report = VerificationReport::new(&args);
         let result = run_verification(&args, &mut report);
@@ -592,5 +703,63 @@ mod tests {
         let summary = report.summary.unwrap();
         assert_eq!(summary.checksum_mismatches, 1);
         assert!(report.signature.unwrap().signature_valid);
+    }
+
+    #[test]
+    fn streams_progress_with_expected_size() {
+        let data = vec![0u8; (3 * PROGRESS_LOG_INTERVAL as usize) + 512];
+        let mut log_buffer = Vec::new();
+        let expected = Sha256::digest(&data);
+
+        let reporter = ProgressReporter::new(
+            &mut log_buffer,
+            Some(data.len() as u64),
+            PROGRESS_LOG_INTERVAL,
+        );
+
+        let digest = compute_sha256_from_reader(
+            Cursor::new(&data),
+            Path::new("mock.bin"),
+            Some(reporter),
+        )
+        .expect("checksum succeeds");
+
+        assert_eq!(digest, hex::encode(expected));
+
+        let output = String::from_utf8(log_buffer).expect("utf8 log");
+        let lines: Vec<_> = output.lines().collect();
+        assert!(lines.len() >= 3);
+        assert!(lines.iter().all(|line| line.starts_with("checksum progress:")));
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!(
+                "checksum progress: {} / {} bytes (100.0%)",
+                data.len(),
+                data.len()
+            )
+        );
+    }
+
+    #[test]
+    fn streams_progress_without_known_size() {
+        let data = vec![1u8; (2 * PROGRESS_LOG_INTERVAL as usize) + 128];
+        let mut log_buffer = Vec::new();
+
+        let reporter = ProgressReporter::new(&mut log_buffer, None, PROGRESS_LOG_INTERVAL);
+
+        let digest = compute_sha256_from_reader(
+            Cursor::new(&data),
+            Path::new("mock.bin"),
+            Some(reporter),
+        )
+        .expect("checksum succeeds");
+
+        assert_eq!(digest, hex::encode(Sha256::digest(&data)));
+
+        let output = String::from_utf8(log_buffer).expect("utf8 log");
+        assert!(output
+            .lines()
+            .all(|line| line.starts_with("checksum progress: ") && line.contains("bytes read")));
+        assert!(output.contains(&(data.len().to_string())));
     }
 }
