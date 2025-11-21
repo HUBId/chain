@@ -1,5 +1,8 @@
 use std::num::NonZero;
 
+#[cfg(feature = "io-uring")]
+use io_uring::{cqueue, squeue};
+
 /// Environment variable that forces io-uring to be treated as unsupported.
 ///
 /// This is primarily intended for tests and diagnostics so that capability
@@ -44,7 +47,7 @@ pub fn detect_io_uring_capability(entries: NonZero<u32>) -> IoUringCapability {
     #[cfg(feature = "io-uring")]
     {
         const IDLETIME_MS: u32 = 1000;
-        match io_uring::IoUring::builder()
+        match io_uring::IoUring::<squeue::Entry, cqueue::Entry>::builder()
             .dontfork()
             .setup_single_issuer()
             .setup_cqsize(entries.get() * 2)

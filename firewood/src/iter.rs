@@ -682,8 +682,6 @@ mod tests {
         }
     }
 
-    impl TrieReader for InMemoryTrie {}
-
     #[test_case(&[]; "empty key")]
     #[test_case(&[1]; "non-empty key")]
     fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
