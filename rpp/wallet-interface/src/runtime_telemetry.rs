@@ -72,8 +72,8 @@ pub trait RuntimeMetrics: Send + Sync {
     /// Record the witness size emitted by the prover grouped by backend.
     fn record_wallet_prover_witness_bytes(&self, backend: &str, bytes: u64);
 
-    /// Record a prover failure grouped by error code.
-    fn record_wallet_prover_failure(&self, code: &str);
+    /// Record a prover failure grouped by backend and error code.
+    fn record_wallet_prover_failure(&self, backend: &str, code: &str);
 }
 
 /// No-op telemetry handle used when runtime metrics are unavailable.
@@ -87,7 +87,7 @@ impl RuntimeMetrics for NoopRuntimeMetrics {
 
     fn record_wallet_prover_witness_bytes(&self, _backend: &str, _bytes: u64) {}
 
-    fn record_wallet_prover_failure(&self, _code: &str) {}
+    fn record_wallet_prover_failure(&self, _backend: &str, _code: &str) {}
 }
 
 /// Shared handle type used by wallet RPC components.

@@ -8,6 +8,7 @@ groups:
         labels:
           severity: warning
           team: zk
+          backend: rpp-stark
         annotations:
           summary: RPP-STARK verifier observed repeated stage failures
           description: >-
@@ -22,6 +23,7 @@ groups:
         labels:
           severity: critical
           team: zk
+          backend: rpp-stark
         annotations:
           summary: RPP-STARK verifier is rejecting multiple proofs
           description: >-
@@ -35,6 +37,7 @@ groups:
         labels:
           severity: critical
           team: zk
+          backend: rpp-stark
         annotations:
           summary: RPP-STARK verifier p95 latency above 3.2s
           description: >-
