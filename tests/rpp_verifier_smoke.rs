@@ -1,24 +1,17 @@
 #![cfg(feature = "backend-rpp-stark")]
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
 use rpp_stark::backend::params_limit_to_node_bytes;
 use rpp_stark::params::deserialize_params;
 
-const VECTORS_DIR: &str = "vendor/rpp-stark/vectors/stwo/mini";
-
-fn vector_path(name: &str) -> PathBuf {
-    Path::new(VECTORS_DIR).join(name)
-}
-
-fn load_bytes(name: &str) -> std::io::Result<Vec<u8>> {
-    fs::read(vector_path(name))
-}
+#[path = "rpp_vectors.rs"]
+mod rpp_vectors;
+use rpp_vectors::{load_bytes, log_vector_checksums};
 
 #[test]
 fn verify_smoke_ok_with_golden_vector() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let params = load_bytes("params.bin")?;
     let public_inputs = load_bytes("public_inputs.bin")?;
     let proof = load_bytes("proof.bin")?;
@@ -43,6 +36,8 @@ fn verify_smoke_ok_with_golden_vector() -> anyhow::Result<()> {
 
 #[test]
 fn size_gate_mismatch_surfaces_from_library() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let params = load_bytes("params.bin")?;
     let public_inputs = load_bytes("public_inputs.bin")?;
     let proof = load_bytes("proof.bin")?;
@@ -72,6 +67,8 @@ fn size_gate_mismatch_surfaces_from_library() -> anyhow::Result<()> {
 
 #[test]
 fn error_mapping_is_stable_display() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let params = load_bytes("params.bin")?;
     let public_inputs = load_bytes("public_inputs.bin")?;
     let mut proof = load_bytes("proof.bin")?;

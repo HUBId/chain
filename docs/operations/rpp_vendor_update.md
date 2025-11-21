@@ -82,6 +82,16 @@
    Both scripts rely on `sha256sum`; they fail if any artefact diverges from
    the recorded digest.
 
+3. Golden-vector regression tests now emit a concise checksum ledger for the
+   STWO mini bundle at `logs/rpp_golden_vector_checksums.log` whenever they run
+   with `--features backend-rpp-stark`. CI archives the `logs/` directory, so
+   you can diff two runs locally for drift:
+
+   ```bash
+   diff -u logs/rpp_golden_vector_checksums.log \
+     /path/to/previous/run/logs/rpp_golden_vector_checksums.log
+   ```
+
 ## 4. Run interoperability tests
 
 Execute the workspace-level interop harness to ensure the updated vendor tree

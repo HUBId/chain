@@ -1,32 +1,20 @@
 #![cfg(feature = "backend-rpp-stark")]
 
-use hex::FromHex;
+use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use rpp_chain::zk::rpp_adapter::{compute_public_digest, Digest32};
 use rpp_chain::zk::rpp_verifier::{self, RppStarkVerifier};
 
-const VECTORS_DIR: &str = "vendor/rpp-stark/vectors/stwo/mini";
-
-fn vector_path(name: &str) -> PathBuf {
-    Path::new(VECTORS_DIR).join(name)
-}
-
-fn load_bytes(name: &str) -> std::io::Result<Vec<u8>> {
-    let contents = fs::read_to_string(vector_path(name))?;
-    Vec::from_hex(contents.trim())
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
-}
-
-fn load_hex_digest(name: &str) -> std::io::Result<String> {
-    let contents = fs::read_to_string(vector_path(name))?;
-    Ok(contents.trim().to_lowercase())
-}
+#[path = "rpp_vectors.rs"]
+mod rpp_vectors;
+use rpp_vectors::{load_bytes, load_hex_digest, log_vector_checksums, vector_path};
 
 #[test]
 fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let params = load_bytes("params.bin")?;
     let public_inputs = load_bytes("public_inputs.bin")?;
     let proof = load_bytes("proof.bin")?;
@@ -69,6 +57,8 @@ fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
 
 #[test]
 fn interop_indices_match_and_are_sorted_unique() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let indices_contents = fs::read_to_string(vector_path("indices.json"))?;
     let indices: Vec<u64> = serde_json::from_str(&indices_contents)?;
     assert!(!indices.is_empty(), "indices.json should contain entries");
@@ -81,7 +71,7 @@ fn interop_indices_match_and_are_sorted_unique() -> anyhow::Result<()> {
         );
     }
 
-    let unique: std::collections::BTreeSet<_> = indices.iter().copied().collect();
+    let unique: BTreeSet<_> = indices.iter().copied().collect();
     assert_eq!(unique.len(), indices.len(), "indices must be unique");
 
     let params = load_bytes("params.bin")?;
@@ -111,6 +101,8 @@ fn interop_indices_match_and_are_sorted_unique() -> anyhow::Result<()> {
 
 #[test]
 fn interop_repeatability_is_deterministic() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
     let proof_first = load_bytes("proof.bin")?;
     let proof_second = load_bytes("proof.bin")?;
     assert_eq!(
