@@ -24,6 +24,17 @@ Continuous integration runs Firewood's unit, FFI, and giant-node suites with
 `XTASK_FEATURES=io-uring`, ensuring regressions in the async storage backend are
 flagged automatically before release.
 
+## io-uring capability checks and fallbacks
+
+At bootstrap the node probes the kernel using the configured ring size and logs
+`storage_io_uring_ring_entries` alongside any capability issues. When the
+binary lacks io-uring support (for example on non-Linux platforms) the probe
+emits a warning and the storage backend falls back to synchronous file I/O.
+If the binary was built with io-uring enabled but the kernel refuses to create
+the ring (or `FIREWOOD_IO_URING_FORCE_UNSUPPORTED=1` is set for testing), the
+bootstrap logs a warning and aborts so operators can upgrade the kernel or
+rebuild without io-uring before the database is opened.
+
 ## WAL crash-recovery chaos drill
 
 Nightly CI exercises abrupt termination of the Firewood write-ahead log to

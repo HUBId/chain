@@ -20,7 +20,7 @@ use std::fs;
 use std::future::Future;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -70,6 +70,9 @@ use rpp_chain::runtime::{
 };
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
+use storage::{
+    detect_io_uring_capability, FileBacked, IoUringCapability, IO_URING_FORCE_UNSUPPORTED_ENV,
+};
 
 use crate::pipeline::PipelineHookGuard;
 use crate::services::admission_reconciler::{AdmissionReconciler, AdmissionReconcilerSettings};
@@ -330,6 +333,10 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         .map(|handles| Arc::clone(&handles.runtime_metrics))
         .unwrap_or_else(RuntimeMetrics::noop);
     let _telemetry_guard = telemetry.map(|handles| handles.guard);
+
+    if mode.includes_node() {
+        ensure_io_uring_support(tracing_config.storage.ring_size)?;
+    }
 
     info!(
         target = "bootstrap",
@@ -1500,6 +1507,42 @@ fn ensure_capabilities_supported(
     Err(BootstrapError::configuration(ChainError::Config(message)))
 }
 
+fn ensure_io_uring_support(ring_size: u32) -> BootstrapResult<()> {
+    let entries = NonZeroU32::new(ring_size)
+        .unwrap_or_else(|| NonZeroU32::new(FileBacked::DEFAULT_RING_ENTRIES).expect("non-zero"));
+    let capability = detect_io_uring_capability(entries);
+    handle_io_uring_capability(capability, ring_size)
+}
+
+fn handle_io_uring_capability(
+    capability: IoUringCapability,
+    ring_size: u32,
+) -> BootstrapResult<()> {
+    match capability {
+        IoUringCapability::Supported => Ok(()),
+        IoUringCapability::Disabled { reason } => {
+            warn!(
+                target = "storage",
+                storage_io_uring_ring_entries = ring_size,
+                %reason,
+                "io-uring unavailable; using synchronous file I/O"
+            );
+            Ok(())
+        }
+        IoUringCapability::Unsupported { reason } => {
+            warn!(
+                target = "storage",
+                storage_io_uring_ring_entries = ring_size,
+                %reason,
+                "io-uring is enabled but unsupported on this kernel"
+            );
+            Err(BootstrapError::startup(ChainError::Config(format!(
+                "io-uring support requested but unavailable: {reason}"
+            ))))
+        }
+    }
+}
+
 fn node_capability_errors(config: &NodeConfig) -> Vec<String> {
     let mut errors = Vec::new();
 
@@ -2387,6 +2430,7 @@ mod tests {
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{self, SimpleSpanProcessor};
     use std::collections::HashMap;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -2430,6 +2474,61 @@ mod tests {
                 std::env::remove_var("RPP_CONFIG");
             }
         }
+    }
+
+    struct IoUringEnvGuard {
+        previous: Option<String>,
+    }
+
+    impl IoUringEnvGuard {
+        fn force_unsupported() -> Self {
+            let previous = std::env::var(IO_URING_FORCE_UNSUPPORTED_ENV).ok();
+            std::env::set_var(IO_URING_FORCE_UNSUPPORTED_ENV, "1");
+            Self { previous }
+        }
+    }
+
+    impl Drop for IoUringEnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.take() {
+                std::env::set_var(IO_URING_FORCE_UNSUPPORTED_ENV, value);
+            } else {
+                std::env::remove_var(IO_URING_FORCE_UNSUPPORTED_ENV);
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct BufferWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for BufferWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.buffer.lock().expect("buffer").write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.buffer.lock().expect("buffer").flush()
+        }
+    }
+
+    fn capture_logs<F, R>(callback: F) -> (R, String)
+    where
+        F: FnOnce() -> R,
+    {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer = BufferWriter {
+            buffer: Arc::clone(&buffer),
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let result = tracing::subscriber::with_default(subscriber, callback);
+        let output = String::from_utf8(buffer.lock().expect("buffer").clone()).expect("utf8 logs");
+        (result, output)
     }
 
     fn base_bootstrap_options() -> BootstrapOptions {
@@ -2786,6 +2885,49 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn handle_io_uring_capability_warns_when_disabled() {
+        let (_result, logs) = capture_logs(|| {
+            handle_io_uring_capability(
+                IoUringCapability::Disabled {
+                    reason: "feature disabled".into(),
+                },
+                FileBacked::DEFAULT_RING_ENTRIES,
+            )
+            .expect("disabled capability should not error");
+        });
+
+        assert!(
+            logs.contains("io-uring unavailable"),
+            "io-uring warning missing from logs: {logs}"
+        );
+        assert!(
+            logs.contains("feature disabled"),
+            "reason missing from logs: {logs}"
+        );
+    }
+
+    #[test]
+    fn ensure_io_uring_support_errors_when_forced_unsupported() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = IoUringEnvGuard::force_unsupported();
+
+        let (result, logs) =
+            capture_logs(|| ensure_io_uring_support(FileBacked::DEFAULT_RING_ENTRIES));
+        let error = result.expect_err("forced unsupported environment should error");
+
+        assert!(
+            logs.contains("io-uring is enabled but unsupported"),
+            "kernel warning missing from logs: {logs}"
+        );
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("io-uring support requested but unavailable"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
