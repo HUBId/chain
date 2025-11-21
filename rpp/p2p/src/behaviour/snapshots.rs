@@ -31,6 +31,8 @@ use prometheus_client::metrics::family::Family;
 #[cfg(all(feature = "metrics", feature = "request-response"))]
 use prometheus_client::metrics::gauge::Gauge;
 #[cfg(all(feature = "metrics", feature = "request-response"))]
+use prometheus_client::metrics::histogram::{exponential_buckets, Histogram};
+#[cfg(all(feature = "metrics", feature = "request-response"))]
 use prometheus_client::registry::{Registry, Unit};
 #[cfg(all(feature = "metrics", feature = "request-response"))]
 use std::sync::atomic::AtomicU64;
@@ -463,6 +465,8 @@ struct SnapshotStreamMetrics {
     bytes_transferred: Family<Vec<(String, String)>, Counter>,
     lag_seconds: Gauge<f64, AtomicU64>,
     failures: Family<Vec<(String, String)>, Counter>,
+    chunk_send_latency_seconds: Histogram,
+    chunk_send_queue_depth: Gauge<u64, AtomicU64>,
 }
 
 #[cfg(all(feature = "metrics", feature = "request-response"))]
@@ -491,10 +495,27 @@ impl SnapshotStreamMetrics {
             failures.clone(),
         );
 
+        let chunk_send_latency_seconds = Histogram::new(exponential_buckets(0.001, 2.0, 16));
+        registry.register_with_unit(
+            "snapshot_chunk_send_latency_seconds",
+            "Time in seconds for snapshot chunk responses to flush to the consumer",
+            Unit::Seconds,
+            chunk_send_latency_seconds.clone(),
+        );
+
+        let chunk_send_queue_depth = Gauge::<u64, AtomicU64>::default();
+        registry.register(
+            "snapshot_chunk_send_queue_depth",
+            "Number of snapshot chunk responses waiting to flush to consumers",
+            chunk_send_queue_depth.clone(),
+        );
+
         Self {
             bytes_transferred,
             lag_seconds,
             failures,
+            chunk_send_latency_seconds,
+            chunk_send_queue_depth,
         }
     }
 
@@ -535,6 +556,17 @@ impl SnapshotStreamMetrics {
             self.failures.get_or_create(&labels).inc();
         }
     }
+
+    fn observe_send_latency(&self, kind: SnapshotItemKind, latency: Duration) {
+        if matches!(kind, SnapshotItemKind::Chunk) {
+            self.chunk_send_latency_seconds
+                .observe(latency.as_secs_f64());
+        }
+    }
+
+    fn record_queue_depth(&self, depth: usize) {
+        self.chunk_send_queue_depth.set(depth as u64);
+    }
 }
 
 /// Behaviour managing snapshot-related networking logic.
@@ -547,6 +579,14 @@ pub struct SnapshotsBehaviour<P: SnapshotProvider> {
     sessions: HashMap<SnapshotSessionId, SessionState>,
     #[cfg(feature = "metrics")]
     metrics: Option<SnapshotStreamMetrics>,
+    #[cfg(feature = "metrics")]
+    response_timers: HashMap<RequestResponseInboundId, ResponseInFlight>,
+}
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+struct ResponseInFlight {
+    kind: SnapshotItemKind,
+    started_at: Instant,
 }
 
 #[cfg(feature = "request-response")]
@@ -563,6 +603,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             requests: HashMap::new(),
             sessions: HashMap::new(),
             metrics: registry.map(SnapshotStreamMetrics::register),
+            response_timers: HashMap::new(),
         }
     }
 
@@ -576,6 +617,41 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+        }
+    }
+
+    #[cfg(feature = "metrics")]
+    fn track_response(&mut self, request_id: RequestResponseInboundId, kind: SnapshotItemKind) {
+        if let Some(metrics) = &self.metrics {
+            if matches!(kind, SnapshotItemKind::Chunk) {
+                self.response_timers.insert(
+                    request_id,
+                    ResponseInFlight {
+                        kind,
+                        started_at: Instant::now(),
+                    },
+                );
+                metrics.record_queue_depth(self.response_timers.len());
+            }
+        }
+    }
+
+    #[cfg(feature = "metrics")]
+    fn record_response_sent(&mut self, request_id: RequestResponseInboundId) {
+        if let Some(metrics) = &self.metrics {
+            if let Some(in_flight) = self.response_timers.remove(&request_id) {
+                metrics.observe_send_latency(in_flight.kind, in_flight.started_at.elapsed());
+                metrics.record_queue_depth(self.response_timers.len());
+            }
+        }
+    }
+
+    #[cfg(feature = "metrics")]
+    fn clear_response_timer(&mut self, request_id: RequestResponseInboundId) {
+        if let Some(metrics) = &self.metrics {
+            if self.response_timers.remove(&request_id).is_some() {
+                metrics.record_queue_depth(self.response_timers.len());
+            }
         }
     }
 
@@ -812,15 +888,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     });
                 }
             }
-            RequestResponseEvent::InboundFailure { .. } => {}
-            RequestResponseEvent::ResponseSent { .. } => {}
+            RequestResponseEvent::InboundFailure { request_id, .. } => {
+                #[cfg(feature = "metrics")]
+                self.clear_response_timer(request_id);
+            }
+            RequestResponseEvent::ResponseSent { request_id, .. } => {
+                #[cfg(feature = "metrics")]
+                self.record_response_sent(request_id);
+            }
         }
     }
 
     fn handle_inbound_request(
         &mut self,
         peer: PeerId,
-        _request_id: RequestResponseInboundId,
+        request_id: RequestResponseInboundId,
         request: SnapshotsRequest,
         channel: RequestResponseChannel<SnapshotsResponse>,
     ) {
@@ -855,9 +937,14 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(plan) => match serde_json::to_vec(&plan) {
                     Ok(plan) => {
                         self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
-                        let _ = self
+                        if self
                             .inner
-                            .send_response(channel, SnapshotsResponse::Plan { session_id, plan });
+                            .send_response(channel, SnapshotsResponse::Plan { session_id, plan })
+                            .is_ok()
+                        {
+                            #[cfg(feature = "metrics")]
+                            self.track_response(request_id, SnapshotItemKind::Plan);
+                        }
                     }
                     Err(err) => {
                         let message = format!("encode plan: {err}");
@@ -900,14 +987,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(chunk) => match serde_json::to_vec(&chunk) {
                     Ok(chunk) => {
                         self.record_bytes("outbound", SnapshotItemKind::Chunk, chunk.len());
-                        let _ = self.inner.send_response(
-                            channel,
-                            SnapshotsResponse::Chunk {
-                                session_id,
-                                chunk_index,
-                                chunk,
-                            },
-                        );
+                        if self
+                            .inner
+                            .send_response(
+                                channel,
+                                SnapshotsResponse::Chunk {
+                                    session_id,
+                                    chunk_index,
+                                    chunk,
+                                },
+                            )
+                            .is_ok()
+                        {
+                            #[cfg(feature = "metrics")]
+                            self.track_response(request_id, SnapshotItemKind::Chunk);
+                        }
                     }
                     Err(err) => {
                         let message = format!("encode chunk: {err}");
@@ -954,14 +1048,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             SnapshotItemKind::LightClientUpdate,
                             update.len(),
                         );
-                        let _ = self.inner.send_response(
-                            channel,
-                            SnapshotsResponse::LightClientUpdate {
-                                session_id,
-                                update_index,
-                                update,
-                            },
-                        );
+                        if self
+                            .inner
+                            .send_response(
+                                channel,
+                                SnapshotsResponse::LightClientUpdate {
+                                    session_id,
+                                    update_index,
+                                    update,
+                                },
+                            )
+                            .is_ok()
+                        {
+                            #[cfg(feature = "metrics")]
+                            self.track_response(request_id, SnapshotItemKind::LightClientUpdate);
+                        }
                     }
                     Err(err) => {
                         let message = format!("encode update: {err}");
@@ -1007,14 +1108,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 .resume_session(session_id, &plan_id, chunk_index, update_index)
             {
                 Ok(resume) => {
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::Resume {
-                            session_id,
-                            chunk_index: resume.next_chunk_index,
-                            update_index: resume.next_update_index,
-                        },
-                    );
+                    if self
+                        .inner
+                        .send_response(
+                            channel,
+                            SnapshotsResponse::Resume {
+                                session_id,
+                                chunk_index: resume.next_chunk_index,
+                                update_index: resume.next_update_index,
+                            },
+                        )
+                        .is_ok()
+                    {
+                        #[cfg(feature = "metrics")]
+                        self.track_response(request_id, SnapshotItemKind::Resume);
+                    }
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -1038,14 +1146,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 index,
             } => match self.provider.acknowledge(session_id, kind, index) {
                 Ok(()) => {
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::Ack {
-                            session_id,
-                            kind,
-                            index,
-                        },
-                    );
+                    if self
+                        .inner
+                        .send_response(
+                            channel,
+                            SnapshotsResponse::Ack {
+                                session_id,
+                                kind,
+                                index,
+                            },
+                        )
+                        .is_ok()
+                    {
+                        #[cfg(feature = "metrics")]
+                        self.track_response(request_id, kind);
+                    }
                 }
                 Err(err) => {
                     let message = err.to_string();
@@ -1072,14 +1187,21 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     session_id,
                     error: SnapshotProtocolError::Remote(message),
                 });
-                let _ = self.inner.send_response(
-                    channel,
-                    SnapshotsResponse::Ack {
-                        session_id,
-                        kind: SnapshotItemKind::Error,
-                        index: 0,
-                    },
-                );
+                if self
+                    .inner
+                    .send_response(
+                        channel,
+                        SnapshotsResponse::Ack {
+                            session_id,
+                            kind: SnapshotItemKind::Error,
+                            index: 0,
+                        },
+                    )
+                    .is_ok()
+                {
+                    #[cfg(feature = "metrics")]
+                    self.track_response(request_id, SnapshotItemKind::Error);
+                }
             }
         }
     }
@@ -1363,5 +1485,80 @@ impl<P: SnapshotProvider> NetworkBehaviour for SnapshotsBehaviour<P> {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "request-response"))]
+mod tests {
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    use prometheus_client::encoding::text::encode;
+    use prometheus_client::registry::Registry;
+
+    use super::*;
+
+    fn inbound_request_id(id: u64) -> RequestResponseInboundId {
+        // `InboundRequestId` does not expose a public constructor; this is only used in tests.
+        unsafe { std::mem::transmute(id) }
+    }
+
+    fn metric_value(metrics: &str, name: &str) -> Option<f64> {
+        metrics.lines().find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                return None;
+            }
+            if trimmed.starts_with(name) {
+                trimmed
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse::<f64>().ok())
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn chunk_send_metrics_capture_backpressure() {
+        let mut registry = Registry::default();
+        let mut behaviour =
+            SnapshotsBehaviour::new(NullSnapshotProvider::default(), Some(&mut registry));
+
+        let request_id = inbound_request_id(7);
+        behaviour.track_response(request_id, SnapshotItemKind::Chunk);
+        assert_eq!(
+            behaviour
+                .metrics
+                .as_ref()
+                .unwrap()
+                .chunk_send_queue_depth
+                .get(),
+            1
+        );
+
+        sleep(Duration::from_millis(25));
+        behaviour.record_response_sent(request_id);
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        assert_eq!(
+            behaviour
+                .metrics
+                .as_ref()
+                .unwrap()
+                .chunk_send_queue_depth
+                .get(),
+            0
+        );
+
+        let latency_sum = metric_value(&buffer, "snapshot_chunk_send_latency_seconds_sum")
+            .expect("latency sum recorded");
+        assert!(
+            latency_sum > 0.0,
+            "latency histogram updated: {latency_sum}"
+        );
     }
 }

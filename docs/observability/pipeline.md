@@ -184,6 +184,14 @@ bespoke variants or extending panel coverage.
   [`alerts/snapshot_stream.yaml`](alerts/snapshot_stream.yaml)). Pair with a
   throughput check on `rate(snapshot_bytes_sent_total{kind="chunk"}[5m])` to
   reduce noise when no sessions are active.
+- **Snapshot Send Backpressure** – raise a warning when
+  `max_over_time(snapshot_chunk_send_queue_depth[5m])` crosses 10 buffered
+  chunks and page when it exceeds 25. This captures consumers that stop reading
+  responses or links that throttle providers.
+- **Snapshot Send Latency** – alert when the 5-minute average derived from
+  `snapshot_chunk_send_latency_seconds_sum`/`snapshot_chunk_send_latency_seconds_count`
+  is above 2 seconds (warning) or 8 seconds (critical), indicating receivers are
+  applying sustained backpressure.
 - **Snapshot Failure Spike** – trigger when
   `increase(light_client_chunk_failures_total{kind="chunk",direction="outbound"}[10m])`
   exceeds three or inbound failures rise above one per 10 minutes, indicating
