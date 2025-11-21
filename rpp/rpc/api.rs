@@ -293,6 +293,12 @@ pub trait SnapshotStreamRuntime: Send + Sync {
         root: String,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
 
+    async fn resume_snapshot_stream(
+        &self,
+        session: u64,
+        plan_id: String,
+    ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
+
     fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus>;
 
     async fn cancel_snapshot_stream(&self, session: u64) -> Result<(), SnapshotStreamRuntimeError>;
@@ -320,6 +326,20 @@ impl SnapshotStreamRuntime for NodeSnapshotStreamRuntime {
         let session_id = SnapshotSessionId::new(session);
         self.handle
             .start_snapshot_stream(session_id, peer, root)
+            .await
+            .map_err(SnapshotStreamRuntimeError::Runtime)?;
+        self.snapshot_stream_status(session)
+            .ok_or(SnapshotStreamRuntimeError::SessionNotFound(session))
+    }
+
+    async fn resume_snapshot_stream(
+        &self,
+        session: u64,
+        plan_id: String,
+    ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
+        let session_id = SnapshotSessionId::new(session);
+        self.handle
+            .resume_snapshot_stream(session_id, plan_id)
             .await
             .map_err(SnapshotStreamRuntimeError::Runtime)?;
         self.snapshot_stream_status(session)
@@ -799,16 +819,16 @@ impl ApiContext {
         }
         let wallet = self.require_wallet()?;
         let summary = wallet.account_summary().map_err(to_http_error)?;
-            if summary.tier < minimum {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(ErrorResponse::new(format!(
-                        "validator tier {} does not meet required tier {}",
-                        summary.tier.name(),
-                        minimum.name()
-                    ))),
-                ));
-            }
+        if summary.tier < minimum {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse::new(format!(
+                    "validator tier {} does not meet required tier {}",
+                    summary.tier.name(),
+                    minimum.name()
+                ))),
+            ));
+        }
         Ok(())
     }
 
@@ -3371,13 +3391,18 @@ pub(crate) fn snapshot_runtime_error_to_http(
         SnapshotStreamRuntimeError::Runtime(err) => node_error_to_http(err),
         SnapshotStreamRuntimeError::SessionNotFound(session) => (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new(format!("snapshot session {session} not found"))),
+            Json(ErrorResponse::new(format!(
+                "snapshot session {session} not found"
+            ))),
         ),
     }
 }
 
 fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
-    (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message.into())))
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse::new(message.into())),
+    )
 }
 
 fn unavailable(component: &str) -> (StatusCode, Json<ErrorResponse>) {
@@ -3406,10 +3431,9 @@ fn pruning_service_not_configured() -> (StatusCode, Json<ErrorResponse>) {
 fn pruning_service_error_to_http(error: PruningServiceError) -> (StatusCode, Json<ErrorResponse>) {
     match error {
         PruningServiceError::Unavailable => pruning_service_not_configured(),
-        PruningServiceError::InvalidRequest(message) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(message)),
-        ),
+        PruningServiceError::InvalidRequest(message) => {
+            (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message)))
+        }
         PruningServiceError::Internal(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse::new(message)),

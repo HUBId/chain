@@ -344,10 +344,16 @@ pub(super) async fn start_snapshot_stream(
     let root_hint = plan_id.clone().unwrap_or_default();
 
     let runtime = state.require_snapshot_runtime()?;
-    let status = runtime
-        .start_snapshot_stream(session, peer, root_hint)
-        .await
-        .map_err(snapshot_runtime_error_to_http)?;
+    let status = match plan_id {
+        Some(plan_id) => runtime
+            .resume_snapshot_stream(session, plan_id)
+            .await
+            .map_err(snapshot_runtime_error_to_http)?,
+        None => runtime
+            .start_snapshot_stream(session, peer, root_hint)
+            .await
+            .map_err(snapshot_runtime_error_to_http)?,
+    };
 
     Ok(Json(SnapshotStreamStatusResponse::from(status)))
 }
