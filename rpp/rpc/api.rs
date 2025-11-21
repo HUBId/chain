@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use axum::body::Body;
-use axum::error_handling::HandleErrorLayer;
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::header;
@@ -46,7 +45,6 @@ use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use tower::layer::Layer;
-use tower::limit::RateLimitLayer;
 use tower::Service;
 use tower::ServiceBuilder;
 use tower::ServiceExt;
@@ -1510,13 +1508,28 @@ impl<S> Layer<S> for PerIpTokenBucketLayer {
     }
 }
 
-struct PerIpTokenBucketState {
-    buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
+#[derive(Clone, Hash, PartialEq, Eq)]
+enum ApiKey {
+    Provided(String),
+    Anonymous,
+}
+
+impl Default for ApiKey {
+    fn default() -> Self {
+        Self::Anonymous
+    }
+}
+
+struct TokenBucketState<K> {
+    buckets: Mutex<HashMap<K, TokenBucket>>,
     burst: f64,
     replenish_per_second: f64,
 }
 
-impl PerIpTokenBucketState {
+impl<K> TokenBucketState<K>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
     fn new(burst: u64, replenish_per_minute: u64) -> Self {
         let replenish_per_second = replenish_per_minute as f64 / 60.0;
         Self {
@@ -1526,9 +1539,9 @@ impl PerIpTokenBucketState {
         }
     }
 
-    fn try_acquire(&self, ip: IpAddr) -> Result<(), RateLimitSnapshot> {
+    fn try_acquire(&self, key: K) -> Result<(), RateLimitSnapshot> {
         let mut buckets = self.buckets.lock();
-        let bucket = buckets.entry(ip).or_insert_with(|| TokenBucket {
+        let bucket = buckets.entry(key).or_insert_with(|| TokenBucket {
             tokens: self.burst,
             last_refill: Instant::now(),
         });
@@ -1562,6 +1575,9 @@ impl PerIpTokenBucketState {
     }
 }
 
+type PerIpTokenBucketState = TokenBucketState<IpAddr>;
+type ApiKeyTokenBucketState = TokenBucketState<ApiKey>;
+
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
@@ -1571,6 +1587,93 @@ struct RateLimitSnapshot {
     limit: u64,
     remaining: u64,
     reset_seconds: u64,
+}
+
+fn extract_api_key(request: &Request<Body>) -> ApiKey {
+    if let Some(value) = request
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+    {
+        return ApiKey::Provided(value.to_owned());
+    }
+
+    if let Some(value) = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        return ApiKey::Provided(value.to_owned());
+    }
+
+    ApiKey::Anonymous
+}
+
+#[derive(Clone)]
+struct PerApiKeyTokenBucketLayer {
+    state: Arc<ApiKeyTokenBucketState>,
+}
+
+impl PerApiKeyTokenBucketLayer {
+    fn new(burst: u64) -> Self {
+        Self {
+            state: Arc::new(ApiKeyTokenBucketState::new(burst, burst)),
+        }
+    }
+}
+
+impl<S> Layer<S> for PerApiKeyTokenBucketLayer {
+    type Service = PerApiKeyTokenBucketService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PerApiKeyTokenBucketService {
+            inner,
+            state: self.state.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PerApiKeyTokenBucketService<S> {
+    inner: S,
+    state: Arc<ApiKeyTokenBucketState>,
+}
+
+impl<S> Service<Request<Body>> for PerApiKeyTokenBucketService<S>
+where
+    S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let api_key = extract_api_key(&request);
+        let mut inner = self.inner.clone();
+        let state = self.state.clone();
+
+        Box::pin(async move {
+            match state.try_acquire(api_key) {
+                Ok(()) => inner.call(request).await,
+                Err(snapshot) => {
+                    let response = Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .header("X-RateLimit-Limit", snapshot.limit.to_string())
+                        .header("X-RateLimit-Remaining", snapshot.remaining.to_string())
+                        .header("X-RateLimit-Reset", snapshot.reset_seconds.to_string())
+                        .body(Body::from("rate limit exceeded"))
+                        .unwrap();
+
+                    Ok(response)
+                }
+            }
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -1827,22 +1930,15 @@ where
             auth_middleware,
         ));
     }
-    if let Some(limit) = request_limit_per_minute {
-        router = router.layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|_: BoxError| async move {
-                    StatusCode::TOO_MANY_REQUESTS
-                }))
-                .layer(RateLimitLayer::new(limit.get(), Duration::from_secs(60))),
-        );
-    }
-
     let header_timeout = Duration::from_millis(limits.header_read_timeout_ms);
     let read_timeout = Duration::from_millis(limits.read_timeout_ms);
     let write_timeout = Duration::from_millis(limits.write_timeout_ms);
     let max_header_bytes = limits.max_header_bytes;
 
     let mut service_builder = ServiceBuilder::new();
+    if let Some(limit) = request_limit_per_minute {
+        service_builder = service_builder.layer(PerApiKeyTokenBucketLayer::new(limit.get()));
+    }
     if limits.per_ip_token_bucket.enabled {
         service_builder = service_builder.layer(PerIpTokenBucketLayer::new(
             limits.per_ip_token_bucket.burst,

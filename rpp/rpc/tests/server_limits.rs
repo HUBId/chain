@@ -1,18 +1,19 @@
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rcgen::{
-    BasicConstraints, Certificate as RcgenCertificate, CertificateParams, DistinguishedName, DnType,
-    IsCa, KeyUsagePurpose, SanType,
+    BasicConstraints, Certificate as RcgenCertificate, CertificateParams, DistinguishedName,
+    DnType, IsCa, KeyUsagePurpose, SanType,
 };
 use reqwest::{Client, Identity};
+use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
-use tempfile::tempdir;
 
 use rpp::api::{self, ApiContext};
 use rpp::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
@@ -29,6 +30,7 @@ async fn spawn_server(
     addr: SocketAddr,
     limits: NetworkLimitsConfig,
     tls: NetworkTlsConfig,
+    request_limit_per_minute: Option<NonZeroU64>,
 ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -37,7 +39,7 @@ async fn spawn_server(
         None,
         None,
         None,
-        None,
+        request_limit_per_minute,
         false,
         None,
         None,
@@ -73,7 +75,7 @@ async fn oversized_body_is_rejected() {
     limits.max_body_bytes = 16;
     limits.per_ip_token_bucket.enabled = false;
 
-    let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default()).await;
+    let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default(), None).await;
 
     let client = Client::builder().build().expect("client");
     let response = client
@@ -96,7 +98,7 @@ async fn read_timeout_closes_stalled_body() {
     limits.read_timeout_ms = 50;
     limits.per_ip_token_bucket.enabled = false;
 
-    let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default()).await;
+    let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default(), None).await;
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let request = format!(
@@ -119,6 +121,69 @@ async fn read_timeout_closes_stalled_body() {
 }
 
 #[tokio::test]
+async fn api_keys_are_rate_limited_independently() {
+    let addr = random_loopback();
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.enabled = false;
+
+    let rate_limit = NonZeroU64::new(1).expect("non-zero rate limit");
+    let (shutdown_tx, handle) =
+        spawn_server(addr, limits, NetworkTlsConfig::default(), Some(rate_limit)).await;
+
+    let client = Client::builder().build().expect("client");
+    let url = format!("http://{addr}/health");
+
+    let first_tenant_a = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-a")
+        .send()
+        .await
+        .expect("first tenant A request");
+    assert!(first_tenant_a.status().is_success());
+
+    let limited_tenant_a = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-a")
+        .send()
+        .await
+        .expect("second tenant A request");
+    assert_eq!(
+        limited_tenant_a.status(),
+        reqwest::StatusCode::TOO_MANY_REQUESTS
+    );
+    let headers = limited_tenant_a.headers();
+    assert_eq!(
+        headers
+            .get("x-ratelimit-limit")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    assert_eq!(
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok()),
+        Some("0")
+    );
+    let reset = headers
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("reset header present");
+    assert!(reset >= 1 && reset <= 60);
+
+    let first_tenant_b = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-b")
+        .send()
+        .await
+        .expect("first tenant B request");
+    assert!(first_tenant_b.status().is_success());
+
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+}
+
+#[tokio::test]
 async fn tls_requires_client_certificate() {
     let addr = random_loopback();
     let temp = tempdir().expect("tempdir");
@@ -128,8 +193,14 @@ async fn tls_requires_client_certificate() {
     let client = build_tls_cert(&ca, vec![SanType::DnsName("client".into())]);
 
     let ca_path = write_pem(temp.path().join("ca.pem"), ca.serialize_pem().unwrap());
-    let server_cert_path = write_pem(temp.path().join("server.pem"), server.certificate_pem.clone());
-    let server_key_path = write_pem(temp.path().join("server.key"), server.private_key_pem.clone());
+    let server_cert_path = write_pem(
+        temp.path().join("server.pem"),
+        server.certificate_pem.clone(),
+    );
+    let server_key_path = write_pem(
+        temp.path().join("server.key"),
+        server.private_key_pem.clone(),
+    );
 
     let mut tls = NetworkTlsConfig::default();
     tls.enabled = true;
@@ -141,14 +212,14 @@ async fn tls_requires_client_certificate() {
     let mut limits = NetworkLimitsConfig::default();
     limits.per_ip_token_bucket.enabled = false;
 
-    let (shutdown_tx, handle) = spawn_server(addr, limits, tls).await;
+    let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
 
     let client_identity = Identity::from_pem(
         format!("{}{}", client.certificate_pem, client.private_key_pem).as_bytes(),
     )
     .expect("identity");
-    let ca_cert = reqwest::Certificate::from_pem(ca.serialize_pem().unwrap().as_bytes())
-        .expect("ca cert");
+    let ca_cert =
+        reqwest::Certificate::from_pem(ca.serialize_pem().unwrap().as_bytes()).expect("ca cert");
     let https_client = Client::builder()
         .add_root_certificate(ca_cert)
         .identity(client_identity)
@@ -201,13 +272,10 @@ struct GeneratedCert {
 fn build_tls_cert(ca: &RcgenCertificate, san: Vec<SanType>) -> GeneratedCert {
     let mut params = CertificateParams::new(vec![]);
     params.subject_alt_names = san;
-    params.distinguished_name = DistinguishedName::from_rdn_sequence(vec![
-        (DnType::CommonName, "rpp-test".into()),
-    ]);
+    params.distinguished_name =
+        DistinguishedName::from_rdn_sequence(vec![(DnType::CommonName, "rpp-test".into())]);
     let cert = RcgenCertificate::from_params(params).expect("cert");
-    let certificate_pem = cert
-        .serialize_pem_with_signer(ca)
-        .expect("serialize cert");
+    let certificate_pem = cert.serialize_pem_with_signer(ca).expect("serialize cert");
     let private_key_pem = cert.serialize_private_key_pem();
     GeneratedCert {
         certificate_pem,
