@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use hex;
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use rpp_chain::crypto::{
@@ -249,8 +249,30 @@ struct SnapshotConnectionArgs {
     rpc_url: Option<String>,
 
     /// Override the RPC bearer token; defaults to the configured token when omitted
-    #[arg(long, value_name = "TOKEN")]
+    #[arg(long, value_name = "TOKEN", env = "RPP_SNAPSHOT_AUTH_TOKEN")]
     auth_token: Option<String>,
+
+    /// Path to an additional CA certificate used to verify the snapshot RPC server
+    #[arg(long, value_name = "PATH", env = "RPP_SNAPSHOT_CA_CERT")]
+    tls_ca_certificate: Option<PathBuf>,
+
+    /// Client certificate used when the snapshot RPC server enforces mTLS
+    #[arg(long, value_name = "PATH", env = "RPP_SNAPSHOT_CLIENT_CERT")]
+    tls_client_certificate: Option<PathBuf>,
+
+    /// Private key paired with the provided snapshot RPC client certificate
+    #[arg(long, value_name = "PATH", env = "RPP_SNAPSHOT_CLIENT_KEY")]
+    tls_client_private_key: Option<PathBuf>,
+
+    /// Skip TLS certificate verification when downloading snapshots
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        env = "RPP_SNAPSHOT_INSECURE_TLS",
+        alias = "snapshot-insecure-tls",
+        help = "Bypass TLS verification for snapshot downloads (useful for tests)"
+    )]
+    tls_insecure_skip_verify: bool,
 
     /// Total request attempts before surfacing a snapshot download error
     #[arg(long, value_name = "N", default_value_t = DEFAULT_SNAPSHOT_RETRY_ATTEMPTS)]
@@ -936,7 +958,39 @@ impl SnapshotRpcClient {
             .and_then(normalize_cli_bearer_token);
         let auth_token = cli_token.or(config_token);
 
-        let client = Client::builder()
+        let mut builder = Client::builder();
+        if args.tls_insecure_skip_verify {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        if let Some(ca) = args.tls_ca_certificate.as_ref() {
+            let pem = fs::read(ca).with_context(|| {
+                format!("failed to read snapshot CA certificate {}", ca.display())
+            })?;
+            let certificate =
+                Certificate::from_pem(&pem).context("failed to parse snapshot CA certificate")?;
+            builder = builder.add_root_certificate(certificate);
+        }
+
+        if let (Some(cert), Some(key)) = (
+            args.tls_client_certificate.as_ref(),
+            args.tls_client_private_key.as_ref(),
+        ) {
+            let mut identity_bytes = fs::read(cert).with_context(|| {
+                format!(
+                    "failed to read snapshot client certificate {}",
+                    cert.display()
+                )
+            })?;
+            let key_bytes = fs::read(key)
+                .with_context(|| format!("failed to read snapshot client key {}", key.display()))?;
+            identity_bytes.extend_from_slice(&key_bytes);
+            let identity = Identity::from_pem(&identity_bytes)
+                .context("failed to parse snapshot client identity")?;
+            builder = builder.identity(identity);
+        }
+
+        let client = builder
             .build()
             .context("failed to build snapshot RPC client")?;
 

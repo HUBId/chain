@@ -73,3 +73,19 @@ controlled per invocation:
 
 Tune these flags when scripting against unstable links so transient failures do
 not abort snapshot downloads, while still surfacing permanent errors promptly.
+
+## Snapshot download authentication
+
+Snapshot download and status endpoints reuse the validator RPC surface, so the
+same authentication settings apply. When operators set
+`network.rpc.require_auth = true` the runtime refuses to start unless a matching
+`network.rpc.auth_token` is configured, ensuring that download endpoints are
+never exposed without credentials. Deployments that need mutual TLS can also
+enable `network.tls.require_client_auth` and provide the CA bundle under
+`network.tls.client_ca`.
+
+Clients can supply the bearer token through the `RPP_SNAPSHOT_AUTH_TOKEN`
+environment variable or the `--auth-token` flag. For TLS-protected endpoints,
+use `--snapshot-ca-certificate`, `--snapshot-client-certificate`, and
+`--snapshot-client-key` (or their `RPP_SNAPSHOT_*` environment variables) to
+trust custom roots and present a client identity.
