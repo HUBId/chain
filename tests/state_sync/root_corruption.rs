@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use blake3::Hash;
+use ed25519_dalek::Signer;
 use parking_lot::RwLock;
+use rpp_chain::config::SnapshotSigningKey;
 use rpp_chain::runtime::node::{StateSyncChunkError, StateSyncSessionCache};
 use rpp_p2p::SnapshotStore;
 use sha2::{Digest, Sha256};
@@ -47,6 +49,22 @@ struct SnapshotManifestFiles {
     chunk_path: PathBuf,
     manifest_bytes: Vec<u8>,
     root: Hash,
+}
+
+fn write_signature(signature_path: &Path, signing_key: &SnapshotSigningKey, payload: &[u8]) {
+    write_signature_with_version(signature_path, signing_key, payload, signing_key.version);
+}
+
+fn write_signature_with_version(
+    signature_path: &Path,
+    signing_key: &SnapshotSigningKey,
+    payload: &[u8],
+    version: u32,
+) {
+    let signature = signing_key.signing_key.sign(payload);
+    let encoded = BASE64.encode(signature.to_bytes());
+    let versioned = format!("{version}:{encoded}");
+    fs::write(signature_path, versioned).expect("write snapshot signature");
 }
 
 fn write_snapshot_manifest(
@@ -105,6 +123,7 @@ fn write_snapshot_manifest(
 fn corrupted_snapshot_payload_yields_explicit_failure() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
 
     let chunk_size = fixture.chunk_size();
     let total_chunks = fixture.chunk_count();
@@ -121,9 +140,7 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
     );
     configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
 
-    let signature_bytes = [0x24u8; 64];
-    let signature_base64 = BASE64.encode(signature_bytes);
-    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
+    write_signature(&files.signature_path, &signing_key, &files.manifest_bytes);
 
     fs::write(&files.manifest_path, b"corrupted-snapshot-payload")
         .expect("overwrite snapshot payload with corruption");
@@ -219,6 +236,7 @@ fn state_sync_rejects_snapshot_with_invalid_signature() {
 fn state_sync_normalizes_snapshot_signature_files() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
 
     let chunk_size = fixture.chunk_size();
     let total_chunks = fixture.chunk_count();
@@ -236,10 +254,11 @@ fn state_sync_normalizes_snapshot_signature_files() {
     configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
     let expected_root = files.root;
     let payload = files.manifest_bytes.clone();
+    let signature_base64 = BASE64.encode(signing_key.signing_key.sign(&payload).to_bytes());
 
-    let signature_bytes = [0xA5u8; 64];
-    let signature_base64 = BASE64.encode(signature_bytes);
-    fs::write(&files.signature_path, format!("{signature_base64}\n"))
+    write_signature(&files.signature_path, &signing_key, &payload);
+    let versioned = fs::read_to_string(&files.signature_path).expect("read signature");
+    fs::write(&files.signature_path, format!("{versioned}\n"))
         .expect("write snapshot signature payload");
 
     let chunk = handle
@@ -264,9 +283,66 @@ fn state_sync_normalizes_snapshot_signature_files() {
 }
 
 #[test]
+fn state_sync_rejects_stale_snapshot_signature_version() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
+    assert!(
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    let files = write_snapshot_manifest(
+        snapshot_dir,
+        "stale-signature-snapshot.bin",
+        b"stale-signature-snapshot",
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+
+    let stale_version = signing_key.version.saturating_sub(1);
+    let mismatched_version = if stale_version == signing_key.version {
+        signing_key.version.saturating_add(1)
+    } else {
+        stale_version
+    };
+    write_signature_with_version(
+        &files.signature_path,
+        &signing_key,
+        &files.manifest_bytes,
+        mismatched_version,
+    );
+
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("stale signature version should fail");
+    match err {
+        StateSyncChunkError::Io(inner) => {
+            let message = inner.to_string();
+            assert!(
+                message.contains("version"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    write_signature(&files.signature_path, &signing_key, &files.manifest_bytes);
+
+    let chunk = handle
+        .state_sync_session_chunk(0)
+        .expect("chunk served with rotated signature");
+    assert_eq!(chunk.root, files.root);
+    assert_eq!(chunk.index, 0);
+}
+
+#[test]
 fn state_sync_rejects_manifest_with_chunk_checksum_mismatch() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
 
     let chunk_size = fixture.chunk_size();
     let total_chunks = fixture.chunk_count();
@@ -283,8 +359,7 @@ fn state_sync_rejects_manifest_with_chunk_checksum_mismatch() {
     );
     configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
 
-    let signature_base64 = BASE64.encode([0xBBu8; 64]);
-    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
+    write_signature(&files.signature_path, &signing_key, &files.manifest_bytes);
 
     fs::write(&files.chunk_path, b"tampered-chunk").expect("tamper snapshot chunk");
 
@@ -305,6 +380,7 @@ fn state_sync_rejects_manifest_with_chunk_checksum_mismatch() {
 fn state_sync_rejects_manifest_with_missing_chunk() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
 
     let chunk_size = fixture.chunk_size();
     let total_chunks = fixture.chunk_count();
@@ -321,8 +397,7 @@ fn state_sync_rejects_manifest_with_missing_chunk() {
     );
     configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
 
-    let signature_base64 = BASE64.encode([0xCCu8; 64]);
-    fs::write(&files.signature_path, &signature_base64).expect("write snapshot signature");
+    write_signature(&files.signature_path, &signing_key, &files.manifest_bytes);
 
     fs::remove_file(&files.chunk_path).expect("remove snapshot chunk");
 

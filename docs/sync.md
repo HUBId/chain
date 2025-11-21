@@ -8,8 +8,10 @@ from disk before chunks are served, so the runtime enforces two invariants:
 1. The payload on disk must hash to the session root; any mismatch aborts the
    request and surfaces `SnapshotRootMismatch` to the caller.
 2. A detached Ed25519 signature (`<payload>.sig`) must exist alongside the
-   payload. The signature is expected to be base64 encoded without trailing
-   whitespace; invalid encoding is treated as corruption.
+   payload. The signature is expected to be prefixed with the signing key
+   version (for example, `1:<base64>` with the current key version `1`) and
+   base64 encoded without trailing whitespace; invalid encoding or a stale key
+   version is treated as corruption.
 3. Every chunk referenced in `manifest/chunks.json` must exist under
    `<snapshot_dir>/chunks`, match the recorded size, and hash to the recorded
    `sha256`. The runtime refuses to serve a snapshot when any manifest entry is
@@ -26,8 +28,9 @@ an unsigned or stale manifest.
 * Write the manifest payload to disk (canonical JSON) and compute its Blake3
   digest. This digest becomes the session root that clients use to resume.
 * Sign the raw manifest bytes with the configured Timetoke snapshot signing key
-  (`timetoke_snapshot_key_path`). Encode the signature as base64, trim it, and
-  write it to `<manifest>.sig`.
+  (`timetoke_snapshot_key_path`). Encode the signature as base64, prefix it with
+  the signing key version from the key file (for example `1:<base64>`), trim
+  it, and write it to `<manifest>.sig`.
 * Atomically rotate the pair—either by writing to a staging directory and
   renaming, or by writing both files under a temporary name before swapping the
   parent directory. Never publish a payload without its signature.
@@ -50,7 +53,11 @@ cargo run --locked --package snapshot-verify -- \
 
 The verifier reports signature validity, per-chunk checksum status, and exits
 non-zero if any mismatch is detected. Incorporate this command into deployment
-pipelines and post-incident audits.
+pipelines and post-incident audits. Rotate signing keys by bumping the
+`version` field in `timetoke_snapshot_key_path`, regenerating the signature with
+the new key, and republishing the `{manifest, manifest.sig}` pair; the runtime
+rejects snapshots signed with older key versions so stale signatures cannot be
+served once the version changes.
 
 ## Snapshot download retries
 

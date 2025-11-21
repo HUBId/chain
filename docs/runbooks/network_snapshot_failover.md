@@ -41,7 +41,9 @@ playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/obser
 4. Ensure the published snapshot payload has a matching `.sig` file. The
    runtime now refuses to stream snapshots when the signature is missing or
    malformed; unsigned payloads surface as `snapshot signature missing` I/O
-   errors in `state_sync_session_chunk` responses. Stage replacements in a
+   errors in `state_sync_session_chunk` responses. Signatures must include the
+   active key version prefix (for example, `1:<base64>`); stale versions are
+   rejected even when the signature bytes decode. Stage replacements in a
    temporary directory and rotate the manifest + signature pair atomically.
 
 All snapshot RPC calls require the `Authorization: Bearer` header whenever RPC

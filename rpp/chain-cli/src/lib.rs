@@ -1225,7 +1225,7 @@ async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
         let signing_key = config
             .load_timetoke_snapshot_signing_key()
             .map_err(|err| anyhow!(err))?;
-        let verifying_key = signing_key.verifying_key();
+        let verifying_key = signing_key.signing_key.verifying_key();
         SnapshotVerifySource::Inline {
             label: config.timetoke_snapshot_key_path.display().to_string(),
             data: hex::encode(verifying_key.to_bytes()),

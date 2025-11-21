@@ -1997,12 +1997,14 @@ impl NodeConfig {
             .load_or_generate_vrf_keypair(&self.vrf_key_path)
     }
 
-    pub fn load_timetoke_snapshot_signing_key(&self) -> ChainResult<SigningKey> {
+    pub fn load_timetoke_snapshot_signing_key(&self) -> ChainResult<SnapshotSigningKey> {
         read_signing_key(&self.timetoke_snapshot_key_path)
             .map_err(|err| ChainError::Config(format!("timetoke snapshot signing key: {err}")))
     }
 
-    pub fn load_or_generate_timetoke_snapshot_signing_key(&self) -> ChainResult<SigningKey> {
+    pub fn load_or_generate_timetoke_snapshot_signing_key(
+        &self,
+    ) -> ChainResult<SnapshotSigningKey> {
         if self.timetoke_snapshot_key_path.exists() {
             return self.load_timetoke_snapshot_signing_key();
         }
@@ -2012,6 +2014,7 @@ impl NodeConfig {
         let stored = StoredSigningKey {
             secret_key: hex::encode(signing.to_bytes()),
             public_key: Some(hex::encode(verifying.to_bytes())),
+            version: Some(DEFAULT_SIGNING_KEY_VERSION),
         };
         let encoded = toml::to_string(&stored).map_err(|err| {
             ChainError::Config(format!(
@@ -2024,7 +2027,10 @@ impl NodeConfig {
             }
         }
         fs::write(&self.timetoke_snapshot_key_path, encoded)?;
-        Ok(signing)
+        Ok(SnapshotSigningKey::new(
+            signing,
+            DEFAULT_SIGNING_KEY_VERSION,
+        ))
     }
 
     pub fn validate(&self) -> ChainResult<()> {
@@ -2107,13 +2113,32 @@ impl NodeConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub const DEFAULT_SIGNING_KEY_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotSigningKey {
+    pub signing_key: SigningKey,
+    pub version: u32,
+}
+
+impl SnapshotSigningKey {
+    pub fn new(signing_key: SigningKey, version: u32) -> Self {
+        Self {
+            signing_key,
+            version,
+        }
+    }
+}
+
 struct StoredSigningKey {
     secret_key: String,
     #[allow(dead_code)]
     public_key: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
 }
 
-fn read_signing_key(path: &Path) -> Result<SigningKey, String> {
+fn read_signing_key(path: &Path) -> Result<SnapshotSigningKey, String> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("unable to read signing key from {}: {err}", path.display()))?;
     let stored: StoredSigningKey = toml::from_str(&raw)
@@ -2137,7 +2162,8 @@ fn read_signing_key(path: &Path) -> Result<SigningKey, String> {
             return Err("signing keypair mismatch between secret and public key".into());
         }
     }
-    Ok(signing)
+    let version = stored.version.unwrap_or(0);
+    Ok(SnapshotSigningKey::new(signing, version))
 }
 
 impl Default for NodeConfig {
