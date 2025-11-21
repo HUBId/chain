@@ -1680,7 +1680,7 @@ fn init_tracing(
         .context("failed to initialise Prometheus recorder")?;
     let resource = telemetry_resource(config, metadata, mode, config_source, &instance_id);
     let mut metrics_config = telemetry_config.clone();
-    let (runtime_metrics, metrics_guard) =
+    let (runtime_metrics, metrics_guard, metrics_failover) =
         match init_runtime_metrics(&metrics_config, resource.clone()) {
             Ok(metrics) => metrics,
             Err(error) => {
@@ -1695,10 +1695,26 @@ fn init_tracing(
                 metrics_config.enabled = false;
                 metrics_config.endpoint = None;
                 metrics_config.http_endpoint = None;
-                init_runtime_metrics(&metrics_config, resource.clone())
-                    .context("failed to initialise runtime metrics fallback")?
+                metrics_config.failover_enabled = false;
+                metrics_config.secondary_endpoint = None;
+                metrics_config.secondary_http_endpoint = None;
+                let (metrics, guard, _) =
+                    init_runtime_metrics(&metrics_config, resource.clone())
+                        .context("failed to initialise runtime metrics fallback")?;
+                (metrics, guard, false)
             }
         };
+    if metrics_failover {
+        metrics::counter!(TELEMETRY_FAILURE_METRIC, "sink" => "metrics", "phase" => "init_failover")
+            .increment(1);
+        warn!(
+            target = "telemetry",
+            sink = "metrics",
+            phase = "init",
+            "failed over to secondary OTLP metrics endpoint"
+        );
+    }
+
     let mut guard = OtelGuard::new(metrics_guard);
     if let Some(prometheus_guard) = prometheus_guard {
         guard = guard.with_prometheus_guard(prometheus_guard);
@@ -2326,14 +2342,8 @@ fn resolved_telemetry_config(config: &NodeConfig) -> Result<TelemetryConfig> {
 fn build_otlp_layer(telemetry: &TelemetryConfig, resource: Resource) -> Result<Option<OtlpLayer>> {
     let builder = TelemetryExporterBuilder::new(telemetry);
 
-    let exporter = match builder.build_span_exporter() {
-        Ok(Some(exporter)) => exporter,
-        Ok(None) => {
-            if telemetry.enabled {
-                anyhow::bail!("telemetry endpoint required when OTLP is enabled");
-            }
-            return Ok(None);
-        }
+    let exporter_outcome = match builder.build_span_exporter() {
+        Ok(outcome) => outcome,
         Err(error) => {
             record_otlp_failure("traces", "init");
             warn!(
@@ -2347,12 +2357,43 @@ fn build_otlp_layer(telemetry: &TelemetryConfig, resource: Resource) -> Result<O
         }
     };
 
+    let exporter = match exporter_outcome.exporter {
+        Some(exporter) => exporter,
+        None => {
+            if telemetry.enabled {
+                anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+            }
+            return Ok(None);
+        }
+    };
+
     let batch_config = builder.build_trace_batch_config();
     let sampler = builder.trace_sampler();
     let endpoint = builder
         .grpc_endpoint()
+        .or_else(|| {
+            exporter_outcome
+                .failover_used
+                .then(|| builder.secondary_grpc_endpoint())
+                .flatten()
+        })
         .map(str::to_string)
         .unwrap_or_default();
+
+    if exporter_outcome.failover_used {
+        metrics::counter!(
+            TELEMETRY_FAILURE_METRIC,
+            "sink" => "traces",
+            "phase" => "init_failover"
+        )
+        .increment(1);
+        warn!(
+            target = "telemetry",
+            sink = "traces",
+            phase = "init",
+            "failed over to secondary OTLP traces endpoint"
+        );
+    }
 
     let provider = trace::TracerProvider::builder()
         .with_config(

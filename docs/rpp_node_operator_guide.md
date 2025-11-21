@@ -379,6 +379,14 @@ cargo run -p rpp-chain -- validator uptime submit --wallet-config config/wallet.
 cargo run -p rpp-chain -- validator uptime status --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --json
 ```
 
+**OTLP failover:** Set `rollout.telemetry.failover_enabled = true` and populate
+`secondary_endpoint`/`secondary_http_endpoint` to keep exporters online when the
+primary collector is misconfigured. The runtime logs `failed over to secondary`
+per sink and increments `telemetry_otlp_failures_total{phase="init_failover"}`
+so dashboards can distinguish successful failovers from hard failures. TLS
+material is validated before attempting the primary endpoint; malformed
+certificates trigger the failover path while keeping the node running.【F:rpp/runtime/config.rs†L3633-L3699】【F:rpp/node/src/lib.rs†L1644-L1725】【F:tests/observability_otlp_failures.rs†L109-L212】
+
 Verwende für `/state-sync`-Operationen die Snapshot-Subcommands statt ad-hoc
 `curl`-Aufrufen. `cargo run -p rpp-chain -- validator snapshot status --session <id>` spiegelt die
 Light-Client-SSE-Header, sodass Du den Ablauf direkt in der CLI nachvollziehen

@@ -1826,9 +1826,14 @@ async fn probe_telemetry_endpoints(
     }
 
     let builder = TelemetryExporterBuilder::new(telemetry);
-    builder
+    let outcome = builder
         .build_metric_exporter()
         .map_err(ValidatorSetupError::configuration)?;
+    if outcome.exporter.is_none() {
+        return Err(ValidatorSetupError::configuration(
+            "telemetry enabled but metrics exporter could not be constructed",
+        ));
+    }
 
     let endpoint = builder.http_endpoint().map(str::to_string).ok_or_else(|| {
         ValidatorSetupError::configuration("telemetry enabled but no HTTP endpoint configured")

@@ -2644,6 +2644,28 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_config_validation_rejects_missing_failover_endpoint() {
+        let mut config = TelemetryConfig::default();
+        config.enabled = true;
+        config.failover_enabled = true;
+        config.endpoint = Some("http://127.0.0.1:4317".to_string());
+
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail without secondary endpoint");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("telemetry failover requires a secondary endpoint"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
     fn telemetry_config_validation_rejects_partial_tls_identity() {
         let mut config = TelemetryConfig::default();
         config.grpc_tls = Some(TelemetryTlsConfig {
@@ -3664,6 +3686,9 @@ pub struct TelemetryConfig {
     pub enabled: bool,
     pub endpoint: Option<String>,
     pub http_endpoint: Option<String>,
+    pub secondary_endpoint: Option<String>,
+    pub secondary_http_endpoint: Option<String>,
+    pub failover_enabled: bool,
     pub auth_token: Option<String>,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
@@ -3697,6 +3722,9 @@ impl Default for TelemetryConfig {
             enabled: false,
             endpoint: None,
             http_endpoint: None,
+            secondary_endpoint: None,
+            secondary_http_endpoint: None,
+            failover_enabled: false,
             auth_token: None,
             timeout_ms: default_timeout_ms(),
             retry_max: default_retry_max(),
@@ -3743,6 +3771,28 @@ impl TelemetryConfig {
         }
         if let Some(endpoint) = self.http_endpoint.as_ref() {
             validate_endpoint("telemetry.http_endpoint", endpoint)?;
+        }
+        if let Some(endpoint) = self.secondary_endpoint.as_ref() {
+            validate_endpoint("telemetry.secondary_endpoint", endpoint)?;
+        }
+        if let Some(endpoint) = self.secondary_http_endpoint.as_ref() {
+            validate_endpoint("telemetry.secondary_http_endpoint", endpoint)?;
+        }
+
+        if self.failover_enabled && self.enabled {
+            if self.endpoint.is_none() && self.http_endpoint.is_none() {
+                return Err(ChainError::Config(
+                    "telemetry failover requires a primary endpoint (endpoint or http_endpoint)"
+                        .into(),
+                ));
+            }
+
+            if self.secondary_endpoint.is_none() && self.secondary_http_endpoint.is_none() {
+                return Err(ChainError::Config(
+                    "telemetry failover requires a secondary endpoint (secondary_endpoint or secondary_http_endpoint)"
+                        .into(),
+                ));
+            }
         }
 
         validate_tls_config("telemetry.grpc_tls", self.grpc_tls.as_ref())?;

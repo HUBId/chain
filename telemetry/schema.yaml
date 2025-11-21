@@ -224,3 +224,7 @@ metrics:
     labels:
       - proof_backend
       - proof_kind
+  - name: telemetry_otlp_failures_total
+    labels:
+      - phase
+      - sink
