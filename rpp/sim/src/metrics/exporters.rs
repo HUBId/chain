@@ -161,6 +161,7 @@ mod tests {
                 timeout_failures: 1,
             }),
             slow_peer_records: Vec::new(),
+            resource_usage: None,
             comparison: None,
         }
     }

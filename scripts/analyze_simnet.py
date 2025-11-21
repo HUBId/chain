@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -57,6 +58,23 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
             f"events={backpressure.get('events', 0)}, "
             f"queue_full={backpressure.get('queue_full_messages', 0)}"
         )
+
+    resource_usage = summary.get("resource_usage") or {}
+    if resource_usage:
+        max_rss = resource_usage.get("max_rss_bytes")
+        max_rss_mib = max_rss / (1024 * 1024) if max_rss is not None else None
+        cpu_percent = resource_usage.get("avg_cpu_percent")
+        wall_secs = resource_usage.get("wall_time_secs")
+        cpu_time = resource_usage.get("cpu_time_secs")
+        formatted_parts = []
+        if cpu_percent is not None:
+            formatted_parts.append(f"cpu%={cpu_percent:.1f}")
+        if cpu_time is not None and wall_secs is not None:
+            formatted_parts.append(f"cpu_time_s={cpu_time:.1f}/{wall_secs:.1f}")
+        if max_rss_mib is not None:
+            formatted_parts.append(f"max_rss_mib={max_rss_mib:.0f}")
+        if formatted_parts:
+            lines.append("  resources: " + ", ".join(formatted_parts))
 
     comparison = summary.get("comparison")
     if comparison:
@@ -149,9 +167,27 @@ def main(argv: List[str]) -> int:
         default=5000.0,
         help="Fail if the recovery max resume latency exceeds this threshold (ms)",
     )
+    parser.add_argument(
+        "--max-cpu-percent",
+        type=float,
+        default=320.0,
+        help="Fail if simnet average CPU exceeds this percentage of a single core",
+    )
+    parser.add_argument(
+        "--max-memory-mib",
+        type=float,
+        default=3500.0,
+        help="Fail if simnet RSS exceeds this many MiB",
+    )
+    parser.add_argument(
+        "--capture-dir",
+        type=Path,
+        help="If set, copy logs/profiles for failing summaries into this directory",
+    )
     args = parser.parse_args(argv)
 
     failures: List[str] = []
+    failure_roots: List[Path] = []
     for path in args.summaries:
         summary = load_summary(path)
         print(render_report(path, summary))
@@ -226,7 +262,41 @@ def main(argv: List[str]) -> int:
                     f"{path} reported gossip backpressure metrics without queue-full samples"
                 )
 
+        resource_usage = summary.get("resource_usage")
+        if not resource_usage:
+            failures.append(f"{path} missing resource_usage block")
+            failure_roots.append(path)
+        else:
+            cpu_percent = resource_usage.get("avg_cpu_percent")
+            if cpu_percent is not None and cpu_percent > args.max_cpu_percent:
+                failures.append(
+                    f"{path} cpu {cpu_percent:.1f}% exceeds threshold {args.max_cpu_percent:.1f}%"
+                )
+                failure_roots.append(path)
+
+            max_rss = resource_usage.get("max_rss_bytes")
+            if max_rss is not None:
+                max_rss_mib = max_rss / (1024 * 1024)
+                if max_rss_mib > args.max_memory_mib:
+                    failures.append(
+                        f"{path} rss {max_rss_mib:.0f}MiB exceeds threshold {args.max_memory_mib:.0f}MiB"
+                    )
+                    failure_roots.append(path)
+            else:
+                failures.append(f"{path} missing max_rss_bytes in resource_usage")
+                failure_roots.append(path)
+
     if failures:
+        if args.capture_dir:
+            args.capture_dir.mkdir(parents=True, exist_ok=True)
+            unique_roots = {p.parent.parent for p in failure_roots if p.parent.parent}
+            for root in unique_roots:
+                scenario_root = args.capture_dir / root.name
+                for bucket in ("logs", "profiles", "summaries"):
+                    src = root / bucket
+                    dst = scenario_root / bucket
+                    if src.exists():
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
         for failure in failures:
             print(f"ERROR: {failure}", file=sys.stderr)
         return 1

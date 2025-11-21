@@ -28,6 +28,8 @@ pub struct SimulationSummary {
     pub gossip_backpressure: Option<GossipBackpressureMetrics>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slow_peer_records: Vec<SlowPeerRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_usage: Option<ResourceUsageMetrics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<ComparisonReport>,
 }
@@ -64,6 +66,18 @@ pub struct GossipBackpressureMetrics {
     pub publish_failures: usize,
     pub forward_failures: usize,
     pub timeout_failures: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ResourceUsageMetrics {
+    /// Sum of user and system CPU time in seconds.
+    pub cpu_time_secs: f64,
+    /// Wall-clock time spanned by the simulation in seconds.
+    pub wall_time_secs: f64,
+    /// Average CPU consumption expressed as a percentage of a single core.
+    pub avg_cpu_percent: f64,
+    /// Peak resident set size observed for the orchestrator process.
+    pub max_rss_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -198,6 +212,7 @@ mod tests {
             bandwidth: None,
             gossip_backpressure: None,
             slow_peer_records: Vec::new(),
+            resource_usage: None,
             comparison: None,
         };
         let multi = SimulationSummary {
@@ -215,6 +230,7 @@ mod tests {
             bandwidth: None,
             gossip_backpressure: None,
             slow_peer_records: Vec::new(),
+            resource_usage: None,
             comparison: None,
         };
 
