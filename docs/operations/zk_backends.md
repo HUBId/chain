@@ -18,6 +18,19 @@ values are `backend="stwo"` for proof generation and wallet prover surfaces
 and `proof_backend="rpp-stark"` for verifier signals; alerts in this guide are
 scoped to those labels to keep mixed-backend deployments separate.【F:rpp/runtime/telemetry/metrics.rs†L380-L459】【F:ops/alerts/zk/rpp_stark.yaml†L6-L35】
 
+### Backend-specific alerts
+
+- **STWO prover failures** – `increase(rpp_runtime_wallet_prover_failures{backend="stwo"}[10m])`
+  pages when wallet proof generation repeatedly fails and always carries the
+  `backend="stwo"` label so stwo regressions cannot be conflated with other
+  prover incidents.【F:ops/alerts/zk/stwo.yaml†L1-L35】
+- **RPP-STARK verifier regressions** – Stage-failure and latency alerts remain
+  scoped to `proof_backend="rpp-stark"`, ensuring verifier incidents do not
+  page wallets or other proving systems.【F:ops/alerts/zk/rpp_stark.yaml†L1-L35】
+- **Validation coverage** – The alert probe under `tests/zk_alert_probe.rs`
+  exercises both backends and asserts the fired payloads include the backend
+  identifier, preventing cross-backend pollution in Alertmanager payloads.【F:tests/zk_alert_probe.rs†L1-L101】
+
 ### Startup validation and supported flag combinations
 
 The node now validates compiled ZK backend flags during bootstrap so operators

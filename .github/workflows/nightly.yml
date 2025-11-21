@@ -163,6 +163,26 @@ jobs:
           set -euo pipefail
           cargo test -p rpp-chain --test networking -- replay_alert_probe_saturates_window_triggers_alerts
 
+  zk-alert-probes:
+    name: ZK backend alert probes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate zk alert definitions
+        run: |
+          set -euo pipefail
+          ruby scripts/ci/validate_prometheus_rules.rb ops/alerts/zk
+
+      - name: Exercise zk alert probes
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --test zk_alert_probe
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest

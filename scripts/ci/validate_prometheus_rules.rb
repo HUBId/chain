@@ -81,14 +81,14 @@ files.each do |file|
   end
 
   spec = data['spec']
-  unless spec.is_a?(Hash)
-    errors << format('%<file>s: spec must be a mapping', file: file)
-    next
-  end
+  groups = if spec.is_a?(Hash)
+             spec['groups']
+           else
+             data['groups']
+           end
 
-  groups = spec['groups']
   unless groups.is_a?(Array) && !groups.empty?
-    errors << format('%<file>s: spec.groups must be a non-empty array', file: file)
+    errors << format('%<file>s: spec.groups or groups must be a non-empty array', file: file)
     next
   end
 

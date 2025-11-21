@@ -214,6 +214,10 @@ name = "finality_alert_probe"
 path = "../../tests/consensus/finality_alert_probe.rs"
 
 [[test]]
+name = "zk_alert_probe"
+path = "../../tests/zk_alert_probe.rs"
+
+[[test]]
 name = "feature_guard"
 path = "../../tests/feature_guard.rs"
 
