@@ -457,7 +457,8 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
             }
 
             if let Some(address) = maybe_address {
-                if current_index.get() > requested_index.get() {
+                let was_split = current_index.get() > requested_index.get();
+                if was_split {
                     self.split_free_block(address, current_index, requested_index)?;
                 }
 
@@ -467,6 +468,21 @@ impl<'a, S: WritableStorage> NodeAllocator<'a, S> {
                     "index" => index_name(requested_index)
                 )
                 .increment(1);
+                if was_split {
+                    firewood_counter!(
+                        "firewood.allocations.reused.split",
+                        "Node allocations that split larger free-list entries by target size",
+                        "area_size" => index_name(requested_index)
+                    )
+                    .increment(1);
+                } else {
+                    firewood_counter!(
+                        "firewood.allocations.reused.whole",
+                        "Node allocations served by exact free-list entries by target size",
+                        "area_size" => index_name(requested_index)
+                    )
+                    .increment(1);
+                }
                 firewood_gauge!(
                     "firewood.freelist.available",
                     "Free list entries available by area size",
@@ -1073,6 +1089,22 @@ mod tests {
             &[("index", index_name(small_index))],
         );
         assert_eq!(reused_small, 2.0);
+
+        let reused_whole = metric_delta(
+            &seeded_metrics,
+            &final_metrics,
+            "firewood_allocations_reused_whole",
+            &[("area_size", index_name(small_index))],
+        );
+        assert_eq!(reused_whole, 1.0);
+
+        let reused_split = metric_delta(
+            &seeded_metrics,
+            &final_metrics,
+            "firewood_allocations_reused_split",
+            &[("area_size", index_name(small_index))],
+        );
+        assert_eq!(reused_split, 1.0);
 
         let split_from_large = metric_delta(
             &seeded_metrics,

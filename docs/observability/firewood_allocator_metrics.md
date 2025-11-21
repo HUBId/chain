@@ -9,20 +9,30 @@ free-list depth. Names are shown as they appear in Prometheus after sanitization
   - Counter incremented whenever an allocation extends the nodestore (no free-list reuse).
 - `firewood_allocations_reused` (`index`)
   - Counter incremented when an allocation is satisfied by a free-list entry of the given size.
+- `firewood_allocations_reused_whole` (`area_size`)
+  - Counter incremented when an allocation reuses an exact-size free-list entry (no split needed).
+- `firewood_allocations_reused_split` (`area_size`)
+  - Counter incremented when an allocation requires splitting a larger free-list entry.
 - `firewood_freelist_split` (`from_index`, `target_index`)
   - Counter incremented every time a larger free area is split to satisfy a smaller request.
 - `firewood_freelist_available` (`index`)
   - Gauge tracking the current number of cached free-list entries for each area size.
 
-`index`/`from_index`/`target_index` use the human-readable area labels from `index_name` (e.g.
-`16B`, `96B`, `4KB`). Combine these with the existing byte-based metrics (`firewood_space_*`) to
-correlate counts and volume.
+`index`/`from_index`/`target_index`/`area_size` use the human-readable area labels from
+`index_name` (e.g. `16B`, `96B`, `4KB`). Combine these with the existing byte-based metrics
+(`firewood_space_*`) to corroborate counts and volume.
 
 ## Example PromQL queries
 
 - Allocations sourced from the free list in the last 15 minutes by area size:
   ```promql
   sum by (index)(increase(firewood_allocations_reused[15m]))
+  ```
+- Reuse mix (exact versus split) by area size:
+  ```promql
+  sum by (area_size)(increase(firewood_allocations_reused_whole[15m]))
+  /
+  sum by (area_size)(increase(firewood_allocations_reused_split[15m]))
   ```
 - Allocations that grew the nodestore in the same window:
   ```promql
@@ -54,6 +64,26 @@ correlate counts and volume.
     {
       "expr": "sum by (index)(increase(firewood_allocations_from_end[$__rate_interval]))",
       "legendFormat": "from_end {{index}}"
+    }
+  ]
+}
+```
+
+**Reuse breakdown: split vs exact** (time series)
+
+```json
+{
+  "title": "Free-list reuse breakdown",
+  "type": "timeseries",
+  "stack": true,
+  "targets": [
+    {
+      "expr": "sum by (area_size)(increase(firewood_allocations_reused_whole[$__rate_interval]))",
+      "legendFormat": "whole {{area_size}}"
+    },
+    {
+      "expr": "sum by (area_size)(increase(firewood_allocations_reused_split[$__rate_interval]))",
+      "legendFormat": "split {{area_size}}"
     }
   ]
 }

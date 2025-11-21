@@ -83,6 +83,12 @@ metrics:
   - name: firewood.allocations.reused
     labels:
       - index
+  - name: firewood.allocations.reused.split
+    labels:
+      - area_size
+  - name: firewood.allocations.reused.whole
+    labels:
+      - area_size
   - name: firewood.cache.freelist
     labels:
       - type
