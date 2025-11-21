@@ -41,6 +41,10 @@ These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-de
 
 Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
+The storage hashing and zk-backend combinations covered by CI are summarized in
+[`docs/development/testing_matrix.md`](docs/development/testing_matrix.md) so
+contributors can quickly map feature flags to the job IDs that exercise them.
+
 ### Feature matrix and failure triage
 
 Branch-protection suites (`unit-suites`, `integration-workflows`, `observability-metrics`, `simnet-smoke`) now execute under four feature sets so contributors can surface regressions that only appear once the prover, GUI, or advanced wallet knobs are compiled in.【F:.github/workflows/ci.yml†L635-L940】 Use the table below to reproduce the same combinations locally for any `cargo xtask` command:
