@@ -59,6 +59,10 @@ struct Args {
     #[arg(long = "chunk-root")]
     chunk_root: Option<PathBuf>,
 
+    /// Emit periodic checksum progress while streaming snapshot chunks
+    #[arg(long, default_value_t = false)]
+    verbose_progress: bool,
+
     /// Optional path to write the JSON verification report to. Defaults to stdout.
     #[arg(long)]
     output: Option<PathBuf>,
@@ -71,6 +75,7 @@ fn main() {
         signature: args.signature.clone(),
         public_key: DataSource::Path(args.public_key.clone()),
         chunk_root: args.chunk_root.clone(),
+        verbose_progress: args.verbose_progress,
     };
 
     let mut report = VerificationReport::new(&verify_args);

@@ -441,6 +441,10 @@ struct SnapshotVerifyCommand {
     /// Use a specific public key file instead of the configured signing key
     #[arg(long = "public-key", value_name = "PATH")]
     public_key: Option<PathBuf>,
+
+    /// Emit verbose checksum progress while validating snapshot chunks
+    #[arg(long, default_value_t = false)]
+    verbose_progress: bool,
 }
 
 #[derive(Args, Clone)]
@@ -1237,6 +1241,7 @@ async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
         signature: signature_path.clone(),
         public_key: public_key_source,
         chunk_root: Some(chunk_root.clone()),
+        verbose_progress: args.verbose_progress,
     };
 
     let mut report = SnapshotVerificationReport::new(&verify_args);
