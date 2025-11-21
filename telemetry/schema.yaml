@@ -77,6 +77,103 @@ metrics:
       - outcome
   - name: firewood.nodestore.unwritten_nodes
     labels: []
+  - name: firewood.allocations.from_end
+    labels:
+      - index
+  - name: firewood.allocations.reused
+    labels:
+      - index
+  - name: firewood.cache.freelist
+    labels:
+      - type
+  - name: firewood.cache.node
+    labels:
+      - mode
+      - type
+  - name: firewood.checker.leaked_areas.detected
+    labels: []
+  - name: firewood.checker.leaked_areas.failed_to_fix
+    labels: []
+  - name: firewood.checker.leaked_areas.fixed
+    labels: []
+  - name: firewood.checker.leaked_ranges
+    labels: []
+  - name: firewood.checker.leaked_ranges.detected
+    labels: []
+  - name: firewood.commit.wal_flush.queue_depth
+    labels: []
+  - name: firewood.commit.wal_flush.wait_seconds
+    labels: []
+  - name: firewood.freelist.available
+    labels:
+      - index
+  - name: firewood.freelist.corrupt_header
+    labels:
+      - index
+  - name: firewood.freelist.split
+    labels:
+      - from_index
+      - target_index
+  - name: firewood.io.read
+    labels: []
+  - name: firewood.io.read_ms
+    labels: []
+  - name: firewood.nodestore.ethhash.corrupt_proof
+    labels:
+      - reason
+  - name: firewood.nodestore.root.read_errors
+    labels:
+      - state
+  - name: firewood.nodestore.serialize.avg_capacity_hint
+    labels: []
+  - name: firewood.nodestore.serialize.avg_len
+    labels: []
+  - name: firewood.nodestore.serialize.max_capacity_hint
+    labels: []
+  - name: firewood.nodestore.serialize.max_len
+    labels: []
+  - name: firewood.nodestore.serialize.nodes
+    labels: []
+  - name: firewood.nodestore.serialize.reserve_miss
+    labels: []
+  - name: firewood.nodestore.serialize.reserve_miss_bytes
+    labels: []
+  - name: firewood.nodestore.serialize.reserve_miss_count
+    labels: []
+  - name: firewood.read_node
+    labels:
+      - from
+  - name: firewood.recovery.active
+    labels: []
+  - name: firewood.recovery.runs
+    labels:
+      - phase
+  - name: firewood.space.from_end
+    labels:
+      - index
+  - name: firewood.space.freed
+    labels:
+      - index
+  - name: firewood.space.reused
+    labels:
+      - index
+  - name: firewood.space.wasted
+    labels:
+      - index
+  - name: firewood.snapshot.ingest.failures
+    labels:
+      - reason
+  - name: firewood.storage.bytes_written
+    labels:
+      - cf
+  - name: firewood.storage.io_budget
+    labels:
+      - stage
+  - name: firewood.storage.io_uring_ring_entries
+    labels: []
+  - name: firewood.wal.transactions
+    labels:
+      - result
   - name: rpp.runtime.wallet.rpc_latency
     labels:
       - method

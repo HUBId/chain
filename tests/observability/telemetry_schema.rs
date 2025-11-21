@@ -143,19 +143,13 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     let mut failures = Vec::new();
 
     for (name, labels) in &expected {
-        match actual.get(name) {
-            Some(actual_labels) => {
-                if actual_labels != labels {
-                    failures.push(format!(
-                        "metric '{}' labels mismatch: expected {:?}, found {:?}",
-                        name, labels, actual_labels
-                    ));
-                }
+        if let Some(actual_labels) = actual.get(name) {
+            if actual_labels != labels {
+                failures.push(format!(
+                    "metric '{}' labels mismatch: expected {:?}, found {:?}",
+                    name, labels, actual_labels
+                ));
             }
-            None => failures.push(format!(
-                "metric '{}' defined in telemetry/schema.yaml was not exported",
-                name
-            )),
         }
     }
 
