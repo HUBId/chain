@@ -22,16 +22,26 @@ or they are rejected with `401` responses.【F:config/validator.toml†L1-L34】
 
 ## Rate limiting and abuse protections
 
-The RPC server can enforce a global requests-per-minute limit via the
-`network.limits.per_ip_token_bucket` configuration block. When enabled, an Axum
-`RateLimitLayer` wraps all routes and throttles clients exceeding the budget.【F:config/validator.toml†L17-L48】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L960-L1047】
+The RPC server exposes two complementary limiters:
 
-- Combine rate limiting with reverse proxies (e.g., Envoy, NGINX) for per-IP
-  accounting. The in-process limiter is intentionally simple and guards against
-  runaway automation rather than targeted floods.
-- Telemetry and health endpoints share the same limiter; if collectors require
-  higher throughput, raise the limit or front the RPC with a cache for read-only
-  paths.
+- **Per-API-key budgets**. When `wallet.rpc.requests_per_minute` (or the
+  equivalent CLI override) is set, each API key is assigned an isolated token
+  bucket keyed by `Authorization` or `X-Api-Key` headers. Exceeding the quota
+  returns `429` responses with `X-RateLimit-*` headers scoped to the offending
+  tenant; other tenants can continue issuing requests with their own budgets.【F:config/wallet.toml†L23-L33】【F:rpp/node/src/lib.rs†L360-L418】【F:rpp/rpc/api.rs†L1511-L1615】【F:rpp/rpc/api.rs†L1938-L1954】
+- **Per-IP token bucket**. `network.limits.per_ip_token_bucket` remains the
+  first line of defence against noisy neighbours and unauthenticated floods.
+  Tune burst and replenish values alongside upstream reverse proxies to achieve
+  the desired concurrency envelope.【F:config/validator.toml†L17-L48】【F:rpp/runtime/config.rs†L1578-L1725】【F:rpp/rpc/api.rs†L1487-L1579】
+
+Operational guidance:
+
+- Provision distinct API keys for each tenant or automation domain so budgets
+  cannot be stolen across customers. The limiter echoes remaining budget and
+  next-reset seconds on `429` responses to aid client-side backoff strategies.
+- Telemetry and health endpoints share the same tenant-scoped limiter; if
+  collectors require larger headroom, increase the per-minute budget or front
+  those routes with a cache to amortise reads.
 
 ## Cross-origin access
 
