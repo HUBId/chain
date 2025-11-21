@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -223,6 +223,9 @@ impl Scenario {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.sim.duration_ms == 0 {
+            bail!("simulation duration_ms must be positive");
+        }
         if self.traffic.tx.phases.is_empty() {
             return Err(anyhow!("at least one traffic phase must be specified"));
         }
@@ -273,9 +276,15 @@ impl Scenario {
                 self.sim.duration_ms
             ));
         }
+        if self.topology.n == 0 {
+            bail!("topology must include at least one peer");
+        }
         if let Some(k) = self.topology.k {
             if k == 0 {
                 return Err(anyhow!("topology degree k must be greater than zero"));
+            }
+            if k >= self.topology.n {
+                bail!("topology degree k must be less than node count");
             }
         }
         if let Some(p) = self.topology.p {
@@ -314,6 +323,11 @@ impl Scenario {
             && self.topology.rewire_p.is_none()
         {
             return Err(anyhow!("small-world topology requires rewire_p parameter"));
+        }
+        for (label, link) in &self.links.entries {
+            if !(0.0..=1.0).contains(&link.loss) {
+                bail!("link '{label}' loss must be between 0 and 1 inclusive");
+            }
         }
         if let Some(partition) = &self.faults.partition {
             if self.regions.assignments.is_empty() {

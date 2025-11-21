@@ -1,0 +1,11 @@
+{
+  "name": "invalid-link-loss",
+  "duration_secs": 0,
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "negative_loss.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/negative_loss.json"
+  }
+}

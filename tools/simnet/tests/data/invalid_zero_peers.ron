@@ -1,0 +1,11 @@
+{
+  "name": "invalid-zero-peers",
+  "duration_secs": 0,
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "zero_peers.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/zero_peers.json"
+  }
+}

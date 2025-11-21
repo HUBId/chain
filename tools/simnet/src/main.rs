@@ -55,6 +55,9 @@ async fn main() -> Result<()> {
 
     let config = SimnetConfig::from_path(&cli.scenario)
         .with_context(|| format!("failed to load scenario {}", cli.scenario.display()))?;
+    config
+        .validate()
+        .with_context(|| format!("invalid scenario {}", cli.scenario.display()))?;
     let artifacts_dir = config.resolve_artifacts_dir(cli.artifacts_dir.as_deref())?;
 
     let mut runner = SimnetRunner::new(config, artifacts_dir);

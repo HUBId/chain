@@ -1,0 +1,12 @@
+{
+  "name": "invalid-consensus",
+  "duration_secs": 0,
+  "nodes": [],
+  "wallets": [],
+  "consensus": {
+    "runs": 0,
+    "validators": 0,
+    "witness_commitments": 0,
+    "tamper": { "every_n": 0 }
+  }
+}
