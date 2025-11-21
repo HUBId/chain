@@ -41,6 +41,21 @@ Contract tests in `tests/rpc/` validate that representative request and response
 examples remain compatible with the published JSON Schemas. CI executes these
 checks on every PR so any incompatible change is caught before landing.
 
+## Rate Limiting Semantics
+
+The public RPC is protected by a per-IP token bucket. When a request depletes
+the bucket and is throttled, the server responds with `429 Too Many Requests`
+and the following headers:
+
+* `X-RateLimit-Limit` – Maximum tokens in the bucket (the burst size).
+* `X-RateLimit-Remaining` – Tokens still available for the current bucket.
+* `X-RateLimit-Reset` – Seconds until a token is replenished and the bucket is
+  usable again.
+
+Clients should treat a `429` as a temporary condition. Retry only after waiting
+for at least the advertised reset window and prefer exponential backoff to avoid
+immediate re-throttling.
+
 ## Snapshot Regression Fixtures
 
 Critical request/response shapes for the public RPC are captured as JSON fixtures

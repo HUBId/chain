@@ -1460,7 +1460,7 @@ impl PerIpTokenBucketState {
         }
     }
 
-    fn try_acquire(&self, ip: IpAddr) -> bool {
+    fn try_acquire(&self, ip: IpAddr) -> Result<(), RateLimitSnapshot> {
         let mut buckets = self.buckets.lock();
         let bucket = buckets.entry(ip).or_insert_with(|| TokenBucket {
             tokens: self.burst,
@@ -1477,9 +1477,21 @@ impl PerIpTokenBucketState {
 
         if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
-            true
+            Ok(())
         } else {
-            false
+            let reset_seconds = if self.replenish_per_second > 0.0 {
+                ((1.0 - bucket.tokens) / self.replenish_per_second)
+                    .ceil()
+                    .max(0.0) as u64
+            } else {
+                0
+            };
+
+            Err(RateLimitSnapshot {
+                limit: self.burst as u64,
+                remaining: bucket.tokens.floor() as u64,
+                reset_seconds,
+            })
         }
     }
 }
@@ -1487,6 +1499,12 @@ impl PerIpTokenBucketState {
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
+}
+
+struct RateLimitSnapshot {
+    limit: u64,
+    remaining: u64,
+    reset_seconds: u64,
 }
 
 #[derive(Clone)]
@@ -1518,12 +1536,18 @@ where
 
         Box::pin(async move {
             if let Some(ip) = remote_ip {
-                if !state.try_acquire(ip) {
-                    let response = Response::builder()
-                        .status(StatusCode::TOO_MANY_REQUESTS)
-                        .body(Body::from("rate limit exceeded"))
-                        .unwrap();
-                    return Ok(response);
+                match state.try_acquire(ip) {
+                    Ok(()) => {}
+                    Err(snapshot) => {
+                        let response = Response::builder()
+                            .status(StatusCode::TOO_MANY_REQUESTS)
+                            .header("X-RateLimit-Limit", snapshot.limit.to_string())
+                            .header("X-RateLimit-Remaining", snapshot.remaining.to_string())
+                            .header("X-RateLimit-Reset", snapshot.reset_seconds.to_string())
+                            .body(Body::from("rate limit exceeded"))
+                            .unwrap();
+                        return Ok(response);
+                    }
                 }
             }
 

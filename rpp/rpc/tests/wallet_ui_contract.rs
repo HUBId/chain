@@ -7,6 +7,9 @@ use reqwest::{Client, StatusCode};
 use serde_json::to_value;
 use tokio::sync::oneshot;
 
+use rpp::api::{self, ApiContext};
+use rpp::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
+use rpp::runtime::RuntimeMode;
 use rpp_chain::interfaces::{
     WalletUiHistoryContract, WalletUiNodeContract, WalletUiReceiveContract, WalletUiSendContract,
     WALLET_UI_HISTORY_CONTRACT, WALLET_UI_NODE_CONTRACT, WALLET_UI_RECEIVE_CONTRACT,
@@ -17,9 +20,6 @@ use rpp_chain::types::Address;
 use rpp_chain::wallet::{
     ConsensusReceipt, HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview,
 };
-use rpp::api::{self, ApiContext};
-use rpp::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
-use rpp::runtime::RuntimeMode;
 
 use parking_lot::RwLock;
 
@@ -108,7 +108,10 @@ fn history_contract_is_versioned() {
 
     let value = to_value(&contract).expect("serialize history contract");
     assert_eq!(value["version"], WALLET_UI_HISTORY_CONTRACT);
-    assert_eq!(value["entries"].as_array().map(|entries| entries.len()), Some(1));
+    assert_eq!(
+        value["entries"].as_array().map(|entries| entries.len()),
+        Some(1)
+    );
 }
 
 #[test]
@@ -193,17 +196,18 @@ fn receive_contract_lists_addresses() {
 
     let value = to_value(&contract).expect("serialize receive contract");
     assert_eq!(value["version"], WALLET_UI_RECEIVE_CONTRACT);
-    assert_eq!(value["addresses"].as_array().map(|items| items.len()), Some(2));
+    assert_eq!(
+        value["addresses"].as_array().map(|items| items.len()),
+        Some(2)
+    );
 }
 
 #[test]
 fn receive_contract_serializes_indices() {
-    let addresses = vec![
-        ReceiveTabAddress {
-            derivation_index: 7,
-            address: sample_address("receive7"),
-        },
-    ];
+    let addresses = vec![ReceiveTabAddress {
+        derivation_index: 7,
+        address: sample_address("receive7"),
+    }];
     let contract = WalletUiReceiveContract {
         version: WALLET_UI_RECEIVE_CONTRACT,
         addresses,
@@ -305,7 +309,29 @@ async fn wallet_ui_rate_limit_returns_plain_text() {
     let second = client.get(&url).send().await.expect("second request");
 
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(second.text().await.expect("read body"), "rate limit exceeded");
+    let headers = second.headers();
+    assert_eq!(
+        headers
+            .get("x-ratelimit-limit")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    assert_eq!(
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok()),
+        Some("0")
+    );
+    let reset = headers
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("reset header present");
+    assert!(reset >= 1 && reset <= 120);
+    assert_eq!(
+        second.text().await.expect("read body"),
+        "rate limit exceeded"
+    );
 
     let _ = shutdown_tx.send(());
     let _ = handle.await;
