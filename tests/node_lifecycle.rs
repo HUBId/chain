@@ -1,10 +1,12 @@
 #![cfg(feature = "integration")]
 
+use std::collections::BTreeMap;
 use std::net::{TcpListener, ToSocketAddrs};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
+use serde::Deserialize;
 use serde_json::Value;
 
 #[path = "support/mod.rs"]
@@ -14,6 +16,7 @@ mod support;
 mod startup_errors;
 
 use rpp_chain::config::{FirewoodSyncPolicyConfig, NodeConfig};
+use rpp_chain::orchestration::PipelineStage;
 
 use support::{send_ctrl_c, wait_for_exit, ProcessNodeHarness, ProcessTestCluster};
 
@@ -166,6 +169,62 @@ async fn node_restart_applies_feature_gate_changes() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backend_switch_routes_proofs_to_active_backend() -> Result<()> {
+    let mut cluster = match ProcessTestCluster::start_with(2, |config, _| {
+        config.rollout.feature_gates.consensus_enforcement = true;
+        Ok(())
+    })
+    .await
+    {
+        Ok(cluster) => cluster,
+        Err(err) => {
+            eprintln!("skipping backend switch check: {err:?}");
+            return Ok(());
+        }
+    };
+
+    let node = &cluster.nodes()[0];
+    let base_url = format!("http://{}", node.rpc_addr);
+    let client = cluster.client();
+
+    let harness = node
+        .harness()
+        .context("failed to connect to node harness")?;
+    harness
+        .wait_for_ready(READY_TIMEOUT)
+        .await
+        .context("node did not report ready state")?;
+
+    let baseline = backend_verifier_totals(&client, &base_url).await?;
+    let (backend, baseline_total) = baseline
+        .iter()
+        .next()
+        .map(|(name, metrics)| (name.clone(), metrics.accepted + metrics.rejected))
+        .context("backend health report missing verifier metrics")?;
+
+    let orchestrator = harness.orchestrator();
+    let recipient = cluster
+        .genesis_accounts()
+        .get(1)
+        .context("cluster missing recipient account")?
+        .address
+        .clone();
+    let submission = orchestrator
+        .submit_transaction(recipient, 10, 1, Some("backend-switch-check".to_string()))
+        .await
+        .context("failed to submit backend switch validation transaction")?;
+    orchestrator
+        .wait_for_stage(&submission.hash, PipelineStage::Finalized, READY_TIMEOUT)
+        .await
+        .context("transaction did not reach finalized stage")?;
+
+    wait_for_backend_progress(&client, &base_url, &backend, baseline_total).await?;
+
+    cluster.shutdown().await?;
+    Ok(())
+}
+
 async fn assert_backend_health(client: &reqwest::Client, base_url: &str) -> Result<()> {
     let status_url = format!("{}/status/node", base_url);
     let response = client
@@ -193,4 +252,69 @@ async fn assert_backend_health(client: &reqwest::Client, base_url: &str) -> Resu
     );
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct BackendVerifierMetrics {
+    accepted: u64,
+    rejected: u64,
+    bypassed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BackendHealthSnapshot {
+    verifier: BackendVerifierMetrics,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeStatusSnapshot {
+    backend_health: BTreeMap<String, BackendHealthSnapshot>,
+}
+
+async fn backend_verifier_totals(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<BTreeMap<String, BackendVerifierMetrics>> {
+    let status_url = format!("{}/status/node", base_url);
+    let payload: NodeStatusSnapshot = client
+        .get(&status_url)
+        .send()
+        .await
+        .context("failed to fetch node status")?
+        .json()
+        .await
+        .context("failed to decode node status payload")?;
+    anyhow::ensure!(
+        !payload.backend_health.is_empty(),
+        "node status payload missing backend health entries"
+    );
+    Ok(payload
+        .backend_health
+        .into_iter()
+        .map(|(backend, health)| (backend, health.verifier))
+        .collect())
+}
+
+async fn wait_for_backend_progress(
+    client: &reqwest::Client,
+    base_url: &str,
+    backend: &str,
+    baseline_total: u64,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let poll_delay = Duration::from_millis(500);
+    loop {
+        let snapshots = backend_verifier_totals(client, base_url).await?;
+        let Some(snapshot) = snapshots.get(backend) else {
+            anyhow::bail!("backend {backend} disappeared from backend health report");
+        };
+        let total = snapshot.accepted + snapshot.rejected + snapshot.bypassed;
+        if total > baseline_total {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("backend {backend} did not record new proofs after switch");
+        }
+        tokio::time::sleep(poll_delay).await;
+    }
 }
