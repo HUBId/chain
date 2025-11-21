@@ -113,8 +113,16 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
     Manipulationen führen zu einem roten Workflow-Status.
   - [`Nightly fuzzing`](../.github/workflows/nightly-fuzz.yml): Startet `cargo fuzz` für die P2P-Handler
     (`handle_meta`, `handle_blocks`, `handle_votes`, `admission_evaluate_publish`), die Wallet-RPC-Decoder (`wallet_rpc`,
-    `zsi_lifecycle`) sowie den STWO/Plonky3-Beweisparser (`stwo_circuit_loader`) auf einem Nightly-Toolchain-Setup und
-    archiviert die Corpora.
+    `zsi_lifecycle`) sowie den STWO/Plonky3-Beweisparser (`stwo_circuit_loader`) auf einem Nightly-Toolchain-Setup,
+    archiviert die Corpora und schreibt minimierte Repro-Eingaben bei Fehlersignalen nach
+    `ci-artifacts/fuzz-failures/<bereich>/<target>-minimized`.
+    
+### Reproducing fuzz regressions
+
+1. Lade das Artefakt `nightly-fuzz-failures` aus dem fehlgeschlagenen Workflow und entpacke es im Repository-Stamm (`tar -xzf nightly-fuzz-failures.tar.gz`).
+2. Wechsle ins passende Fuzzer-Verzeichnis (`rpp/p2p`, `rpp/wallet` oder `prover/fuzz`).
+3. Starte den betroffenen Target mit dem minimierten Input und einem Run-Limit: z. B. `cargo fuzz run handle_meta ../ci-artifacts/fuzz-failures/p2p/handle_meta-minimized -runs=1` oder `cargo fuzz run wallet_rpc ../../ci-artifacts/fuzz-failures/wallet/wallet_rpc-minimized -runs=1`.
+4. Optional kann derselbe Pfad als `-exact_artifact_path` genutzt werden, um angepasste Repro-Dateien direkt zu überschreiben (`cargo fuzz run ... -- -exact_artifact_path=../ci-artifacts/fuzz-failures/...`).
 - **Manuelle Prüfpfade**:
   - `scripts/run_hybrid_mode.sh`, `scripts/run_node_mode.sh`, `scripts/run_wallet_mode.sh`: Lokale Smoke-Tests für Node- und
     Wallet-Modi. Die GitHub-Actions-Stufe `runtime-smoke` automatisiert diese Läufe, prüft die Health-Endpunkte (`/health/live`,

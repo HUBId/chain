@@ -11,9 +11,14 @@ jobs:
     timeout-minutes: 30
     env:
       NIGHTLY_TOOLCHAIN: nightly-2025-07-14
+      FUZZ_FAILURES: ${{ github.workspace }}/ci-artifacts/fuzz-failures
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Prepare fuzz artifact directories
+        run: |
+          mkdir -p "$FUZZ_FAILURES/p2p" "$FUZZ_FAILURES/wallet" "$FUZZ_FAILURES/prover"
 
       - name: Install nightly toolchain
         run: rustup toolchain install "$NIGHTLY_TOOLCHAIN" --profile minimal
@@ -24,21 +29,21 @@ jobs:
       - name: Run P2P fuzzers
         working-directory: rpp/p2p
         run: |
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_meta-
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_blocks -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_blocks-
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_votes-
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/admission_evaluate_publish-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/p2p/handle_meta-" -exact_artifact_path="$FUZZ_FAILURES/p2p/handle_meta-minimized"
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_blocks -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/p2p/handle_blocks-" -exact_artifact_path="$FUZZ_FAILURES/p2p/handle_blocks-minimized"
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/p2p/handle_votes-" -exact_artifact_path="$FUZZ_FAILURES/p2p/handle_votes-minimized"
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/p2p/admission_evaluate_publish-" -exact_artifact_path="$FUZZ_FAILURES/p2p/admission_evaluate_publish-minimized"
 
       - name: Run wallet fuzzers
         working-directory: rpp/wallet
         run: |
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/wallet_rpc-
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run zsi_lifecycle -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/zsi_lifecycle-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/wallet/wallet_rpc-" -exact_artifact_path="$FUZZ_FAILURES/wallet/wallet_rpc-minimized"
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run zsi_lifecycle -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/wallet/zsi_lifecycle-" -exact_artifact_path="$FUZZ_FAILURES/wallet/zsi_lifecycle-minimized"
 
       - name: Run prover fuzzers
         working-directory: prover/fuzz
         run: |
-          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run stwo_circuit_loader -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/stwo_circuit_loader-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run stwo_circuit_loader -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix="$FUZZ_FAILURES/prover/stwo_circuit_loader-" -exact_artifact_path="$FUZZ_FAILURES/prover/stwo_circuit_loader-minimized"
 
       - name: Package corpora
         run: |
@@ -55,3 +60,14 @@ jobs:
         with:
           name: nightly-fuzz-corpus
           path: ci-artifacts/nightly-fuzz-corpus.tar.gz
+
+      - name: Package failing corpora
+        if: failure()
+        run: tar -czf ci-artifacts/nightly-fuzz-failures.tar.gz -C ci-artifacts fuzz-failures
+
+      - name: Upload failing corpora
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fuzz-failures
+          path: ci-artifacts/nightly-fuzz-failures.tar.gz
