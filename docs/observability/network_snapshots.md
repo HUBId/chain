@@ -12,6 +12,8 @@ feature gate is enabled.
 | --- | --- | --- | --- |
 | `snapshot_bytes_sent_total` | Counter (u64) | `direction` (`outbound`, `inbound`), `kind` (`plan`, `chunk`, `light_client_update`, `resume`, `ack`, `error`) | Total bytes transferred per snapshot artefact and direction. Outbound values represent producer traffic, inbound values track consumer throughput. |
 | `snapshot_stream_lag_seconds` | Gauge (f64) | _none_ | Maximum wall-clock delay since the last successful chunk, update, or acknowledgement across all active sessions. Values close to zero indicate the stream is progressing. |
+| `snapshot_chunk_send_queue_depth` | Gauge (u64) | _none_ | Current number of chunk responses buffered by the provider because the consumer cannot accept them yet. Rising depth signals backpressure or stalled consumers. |
+| `snapshot_chunk_send_latency_seconds` | Histogram (f64) | _none_ | Time to flush a chunk response to the consumer. Captures transport- and consumer-side backpressure; sustained elevation indicates slow receivers. |
 | `light_client_chunk_failures_total` | Counter (u64) | `direction`, `kind` (`chunk`, `light_client_update`) | Count of failed fetches, serialisation, or decode operations for chunks and light-client updates. A sustained increase requires investigation. |
 
 All metrics reset when a node restarts. The counter cardinality is limited to a
@@ -29,6 +31,11 @@ intervals.
    `snapshot_stream_lag_seconds`. Configure thresholds at 30s (warning) and
    120s (critical). Values above the warning threshold indicate stalled
    consumers or saturated producers.
+3. **Chunk Backpressure Panel** – Plot
+   `max_over_time(snapshot_chunk_send_queue_depth[5m])` as a gauge with warning
+   at 10 buffered chunks and critical at 25. Pair with
+   `rate(snapshot_chunk_send_latency_seconds_sum[5m]) / rate(snapshot_chunk_send_latency_seconds_count[5m])`
+   to visualise average flush latency; keep it below ~2s during healthy syncs.
 3. **Failure Rate Table** – PromQL:
    ```promql
    sum by(direction, kind)(increase(light_client_chunk_failures_total[15m]))
@@ -49,6 +56,13 @@ critical pages to the snapshot on-call rotation:
 - **Snapshot Lag Warning** – Alert when
   `snapshot_stream_lag_seconds > 30` for longer than 5 minutes. Escalate to
   critical at 120 seconds (2 minute hold time).
+- **Chunk Send Backpressure** – Warn when
+  `max_over_time(snapshot_chunk_send_queue_depth[5m])` exceeds 10, signalling
+  that the consumer is not draining chunk responses quickly. Page once the
+  5-minute max crosses 25 to avoid exhausting buffers.
+- **Chunk Send Latency** – Warn when the 5-minute average
+  `snapshot_chunk_send_latency_seconds` tops 2 seconds. Page at 8 seconds to
+  catch receivers that are persistently throttling or misbehaving.
 - **Chunk Failure Surge** – Fire when
   `increase(light_client_chunk_failures_total{direction="outbound",kind="chunk"}[10m])`
   exceeds 3. On consumers, alert when inbound failures exceed 1 in 10 minutes,

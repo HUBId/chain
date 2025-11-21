@@ -33,6 +33,58 @@ spec:
               Snapshot lag has breached the 120 second critical threshold. Escalate to the on-call
               snapshot engineer and execute the failover playbook to restore healthy consumers.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkQueueDepthWarning
+          expr: max_over_time(snapshot_chunk_send_queue_depth[5m]) > 10
+          for: 5m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk send queue depth above warning threshold
+            description: |
+              Producers are buffering more than 10 chunk responses for at least five minutes, indicating
+              sustained backpressure from consumers. Inspect the receiving peer and network links for
+              slow readers before buffers overflow.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkQueueDepthCritical
+          expr: max_over_time(snapshot_chunk_send_queue_depth[5m]) > 25
+          for: 2m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk send queue depth nearing exhaustion
+            description: |
+              Providers have buffered more than 25 chunk responses for two minutes. Page the snapshot
+              on-call to relieve consumer backpressure or redirect the stream before delivery halts.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkSendLatencyWarning
+          expr: |
+            (rate(snapshot_chunk_send_latency_seconds_sum[5m]) / rate(snapshot_chunk_send_latency_seconds_count[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk send latency above warning threshold
+            description: |
+              Average chunk send latency has stayed above two seconds for five minutes, signalling
+              slow consumers or constrained links. Check consumer health and bandwidth before stalls
+              propagate to lag alerts.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkSendLatencyCritical
+          expr: |
+            (rate(snapshot_chunk_send_latency_seconds_sum[5m]) / rate(snapshot_chunk_send_latency_seconds_count[5m])) > 8
+          for: 5m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk send latency above critical threshold
+            description: |
+              Chunk responses now take longer than eight seconds on average to flush. Page immediately
+              to rebalance consumers or restart streams before they fall irrecoverably behind.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
         - alert: SnapshotStreamZeroThroughputWarning
           expr: |
             (sum(increase(snapshot_bytes_sent_total{kind="chunk"}[30m])) > 0)
