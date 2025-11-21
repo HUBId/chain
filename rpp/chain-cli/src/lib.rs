@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use hex;
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use rpp_chain::crypto::{
@@ -111,7 +111,7 @@ impl From<anyhow::Error> for CliError {
     propagate_version = true,
     about = "Run an rpp node",
     long_about = None,
-    after_help = "Exit codes:\n  0 - runtime exited cleanly\n  2 - configuration validation failed\n  3 - runtime startup failed\n  4 - unexpected runtime error"
+    after_help = "Exit codes:\n  0 - runtime exited cleanly\n  2 - configuration validation failed\n  3 - runtime startup failed\n  4 - unexpected runtime error\n\nCleanup runbook: docs/mempool_cleanup.md"
 )]
 struct RootCli {
     #[command(subcommand)]
@@ -1977,6 +1977,24 @@ mod tests {
             Some("ExplicitToken".into())
         );
         assert_eq!(normalize_cli_bearer_token("   "), None);
+    }
+
+    #[test]
+    fn root_help_mentions_cleanup_runbook() {
+        const CLEANUP_RUNBOOK: &str = "docs/mempool_cleanup.md";
+
+        let mut command = RootCli::command();
+        let mut help = Vec::new();
+
+        command
+            .write_long_help(&mut help)
+            .expect("render root help output");
+
+        let help = String::from_utf8(help).expect("UTF-8 help text");
+        assert!(
+            help.contains(CLEANUP_RUNBOOK),
+            "help output should mention the cleanup runbook at {CLEANUP_RUNBOOK}"
+        );
     }
 }
 
