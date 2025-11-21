@@ -108,6 +108,7 @@ use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HAND
 use crate::identity::NodeIdentity;
 #[cfg(feature = "metrics")]
 use crate::metrics::AdmissionMetrics;
+use crate::peerstore::peer_class::PeerClass;
 use crate::peerstore::{AllowlistedPeer, Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
 use crate::pipeline::{
@@ -545,6 +546,8 @@ struct NetworkMetrics {
     registry: Registry,
     gossip_bytes: Family<Vec<(String, String)>, Counter>,
     peer_score_gauge: Family<Vec<(String, String)>, Gauge>,
+    replay_guard_drops: Family<Vec<(String, String)>, Counter>,
+    replay_guard_window_fill_ratio: Family<Vec<(String, String)>, Gauge>,
     topic_totals: HashMap<GossipTopic, TopicTraffic>,
 }
 
@@ -566,10 +569,26 @@ impl NetworkMetrics {
             peer_score_gauge.clone(),
         );
 
+        let replay_guard_drops = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "network_replay_guard_drops_total",
+            "Duplicate gossip drops grouped by peer class",
+            replay_guard_drops.clone(),
+        );
+
+        let replay_guard_window_fill_ratio = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "network_replay_guard_window_fill_ratio",
+            "Replay window occupancy grouped by peer class",
+            replay_guard_window_fill_ratio.clone(),
+        );
+
         Self {
             registry,
             gossip_bytes,
             peer_score_gauge,
+            replay_guard_drops,
+            replay_guard_window_fill_ratio,
             topic_totals: HashMap::new(),
         }
     }
@@ -605,6 +624,24 @@ impl NetworkMetrics {
     fn update_peer_score_metric(&self, peer: &PeerId, score: f64) {
         let labels = vec![("peer".to_string(), peer.to_base58())];
         self.peer_score_gauge.get_or_create(&labels).set(score);
+    }
+
+    fn record_replay_guard_drop(&self, peer_class: PeerClass) {
+        let labels = vec![("peer_class".to_string(), peer_class.label().to_string())];
+        self.replay_guard_drops.get_or_create(&labels).inc();
+    }
+
+    fn update_replay_window_fill(&self, peer_class: PeerClass, fill_ratio: f64) {
+        let labels = vec![("peer_class".to_string(), peer_class.label().to_string())];
+        self.replay_guard_window_fill_ratio
+            .get_or_create(&labels)
+            .set(fill_ratio);
+    }
+
+    fn update_replay_window_fill_all(&self, fill_ratio: f64) {
+        for class in [PeerClass::Trusted, PeerClass::Untrusted] {
+            self.update_replay_window_fill(class, fill_ratio);
+        }
     }
 
     fn snapshot(&self, behaviour: &gossipsub::Behaviour) -> NetworkMetricsSnapshot {
@@ -1013,6 +1050,10 @@ impl Network {
             #[cfg(feature = "metrics")]
             admission_metrics,
         };
+        #[cfg(feature = "metrics")]
+        network
+            .metrics
+            .update_replay_window_fill_all(network.replay.fill_ratio());
         let push_event: Arc<dyn Fn(NetworkEvent) + Send + Sync> = {
             let handle = network.events_handle.clone();
             Arc::new(move |event: NetworkEvent| {
@@ -1593,8 +1634,15 @@ impl Network {
             } => {
                 if let Some(topic) = GossipTopic::from_hash(&message.topic) {
                     let digest = blake3::hash(&message.data);
-                    if !self.replay.observe(digest) {
+                    let observed = self.replay.observe(digest);
+                    #[cfg(feature = "metrics")]
+                    self.metrics
+                        .update_replay_window_fill_all(self.replay.fill_ratio());
+                    if !observed {
                         tracing::warn!(?propagation_source, ?topic, "replayed gossip detected");
+                        #[cfg(feature = "metrics")]
+                        self.metrics
+                            .record_replay_guard_drop(self.peerstore.peer_class(&propagation_source));
                         self.penalise_peer(
                             propagation_source,
                             ReputationEvent::ManualPenalty {
@@ -2168,6 +2216,36 @@ mod tests {
     use std::time::Duration as StdDuration;
     use tempfile::tempdir;
     use tokio::time::timeout;
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn replay_guard_metrics_emit_peer_classes() {
+        let metrics = NetworkMetrics::new(Registry::default());
+
+        metrics.record_replay_guard_drop(PeerClass::Trusted);
+        metrics.record_replay_guard_drop(PeerClass::Untrusted);
+        metrics.update_replay_window_fill_all(0.5);
+
+        let trusted = vec![("peer_class".to_string(), "trusted".to_string())];
+        let untrusted = vec![("peer_class".to_string(), "untrusted".to_string())];
+
+        assert_eq!(metrics.replay_guard_drops.get_or_create(&trusted).get(), 1);
+        assert_eq!(metrics.replay_guard_drops.get_or_create(&untrusted).get(), 1);
+        assert_eq!(
+            metrics
+                .replay_guard_window_fill_ratio
+                .get_or_create(&trusted)
+                .get(),
+            0.5
+        );
+        assert_eq!(
+            metrics
+                .replay_guard_window_fill_ratio
+                .get_or_create(&untrusted)
+                .get(),
+            0.5
+        );
+    }
 
     fn temp_identity(path: &std::path::Path) -> Arc<NodeIdentity> {
         Arc::new(NodeIdentity::load_or_generate(path).expect("identity"))

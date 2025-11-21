@@ -3,7 +3,7 @@ groups:
     interval: 1m
     rules:
       - alert: NetworkReplayGuardDropsWarning
-        expr: increase(network_replay_guard_drops_total[5m]) > 50
+        expr: sum by (instance, peer_class) (increase(network_replay_guard_drops_total[5m])) > 50
         for: 5m
         labels:
           severity: warning
@@ -16,7 +16,7 @@ groups:
             window saturates completely.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
       - alert: NetworkReplayGuardDropsCritical
-        expr: increase(network_replay_guard_drops_total[5m]) > 200
+        expr: sum by (instance, peer_class) (increase(network_replay_guard_drops_total[5m])) > 200
         for: 2m
         labels:
           severity: critical
@@ -29,7 +29,7 @@ groups:
             avoid ejecting legitimate traffic.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
       - alert: NetworkReplayGuardWindowFillWarning
-        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) > 0.85
+        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) by (peer_class) > 0.85
         for: 10m
         labels:
           severity: warning
@@ -41,7 +41,7 @@ groups:
             gossip churn and consider increasing network.p2p.replay_window_size.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/networking.md#replay-guard-alerts
       - alert: NetworkReplayGuardWindowFillCritical
-        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) > 0.95
+        expr: max_over_time(network_replay_guard_window_fill_ratio[5m]) by (peer_class) > 0.95
         for: 5m
         labels:
           severity: critical

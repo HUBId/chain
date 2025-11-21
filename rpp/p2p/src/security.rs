@@ -24,6 +24,17 @@ impl ReplayProtector {
         self.capacity
     }
 
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub fn fill_ratio(&self) -> f64 {
+        if self.capacity == 0 {
+            return 0.0;
+        }
+        self.queue.len() as f64 / self.capacity as f64
+    }
+
     pub fn preload(&mut self, digests: impl IntoIterator<Item = Hash>) {
         for digest in digests {
             self.observe(digest);
