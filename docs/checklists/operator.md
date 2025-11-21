@@ -27,6 +27,9 @@ and the [runbooks](../runbooks/startup.md). Update it after each deployment.
       reviews using the validator CLI (`validator vrf rotate` / `validator vrf inspect`).【F:rpp/node/src/main.rs†L57-L178】【F:rpp/runtime/config.rs†L34-L120】
 - [ ] Reconcile local configurations with the upstream templates after upgrades, noting telemetry or
       heartbeat default changes highlighted in the [upgrade runbook](../runbooks/upgrade.md).【F:config/hybrid.toml†L1-L47】【F:config/validator.toml†L1-L46】
+- [ ] During documentation reviews, confirm the [startup validation failures table](../operator-guide.md#startup-validation-failures)
+      captures any new configuration, backend, or snapshot boot issues observed since the last deployment.
+      Update the table and linked runbooks as needed so on-call handoffs stay accurate.【F:docs/operator-guide.md†L25-L49】
 
 ## Phase 2 Acceptance
 

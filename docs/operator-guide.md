@@ -43,26 +43,18 @@ Startup validation now has dedicated coverage in
 common operator mistakes and asserts that the CLI exits with code 2, the
 configuration error bucket exposed by `BootstrapErrorKind` in the runtime.
 
-- **Malformed configuration files.** If TOML parsing fails, the process exits
-  with `configuration error: failed to load configuration …`. Re-copy the
-  template and reapply changes rather than editing the broken file in place.
-  This scenario catches stray brackets, truncated content, and merge conflicts
-  left inside the config.【F:tests/node_lifecycle/startup_errors.rs†L11-L39】
-- **Missing configuration paths.** When `RPP_CONFIG` points to a file that does
-  not exist, the CLI prints `node configuration not found … (resolved from
-  environment)` before exiting. Clear the environment variable or fix the path
-  before restarting automation; otherwise every rollout loops on the same
-  failure.【F:tests/node_lifecycle/startup_errors.rs†L41-L68】
-- **Invalid telemetry overrides.** Setting `RPP_NODE_OTLP_ENDPOINT` to a URI
-  that is not HTTP(S) is rejected with `telemetry.endpoint must use http or
-  https scheme`. Confirm the scheme and host in secrets management before
-  retrying; the runtime will not fall back to the configured endpoint when the
-  override is invalid.【F:tests/node_lifecycle/startup_errors.rs†L70-L101】
+| Failure mode | Likely causes | Fix | Deeper docs |
+| --- | --- | --- | --- |
+| Configuration parsing fails or the config file is missing | Truncated or malformed TOML, or `RPP_CONFIG` points to a path that does not exist.【F:tests/node_lifecycle/startup_errors.rs†L11-L68】 | Re-copy the template, reapply changes, and re-run `rpp-node … --dry-run` to surface loader errors before restarting automation.【F:tests/node_lifecycle/startup_errors.rs†L11-L68】【F:rpp/node/src/lib.rs†L258-L359】 | [Configuration reference](./configuration.md) and [startup runbook](./runbooks/startup.md) checklist entries for config loading. |
+| Backend validation rejects the build | Validator or hybrid modes compiled without a proof backend (`prover-stwo`), or feature flags enable unsupported backend combinations (e.g., Plonky3 with mock prover).【F:rpp/node/src/lib.rs†L90-L120】【F:docs/runbooks/startup.md†L15-L28】 | Rebuild with the required backend feature set (see `prover-stwo`/`backend-plonky3`), then rerun the startup checklist to confirm guards and readiness markers pass.【F:rpp/node/src/lib.rs†L90-L120】【F:docs/runbooks/startup.md†L15-L38】 | [ZK backend procedures](./zk_backends.md) and [startup runbook guard verification](./runbooks/startup.md#phase-1-guard-verification). |
+| Missing snapshots or corrupted state during boot | Baseline Firewood snapshots absent from `storage.firewood.snapshots`, or root-integrity guard detects corrupted manifests while state sync hydrates storage.【F:docs/storage/firewood.md†L1-L48】【F:docs/runbooks/startup.md†L19-L38】 | Restore snapshots from the export pipeline or rebuild via `/snapshots/rebuild`, then retry boot once the root-integrity guard reports healthy readiness.【F:docs/storage/firewood.md†L1-L48】【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/startup.md†L19-L38】 | [Firewood lifecycle guide](./storage/firewood.md) and [pruning operations runbook](./runbooks/pruning_operations.md). |
 
 In all three cases, the exit code remains `2`, matching the configuration error
 mapping in the runtime. Orchestrators that supervise the process should treat
 this exit code as a hard-stop requiring human intervention rather than a simple
-retry.【F:rpp/node/src/lib.rs†L152-L233】
+retry.【F:rpp/node/src/lib.rs†L152-L233】 Keep this table in sync with the
+documentation review checklist so on-call handoffs always reflect the latest
+failure modes.
 
 Storage-sensitive rollouts should also review the [Firewood WAL sizing and sync
 guidance](./storage/firewood.md#wal-sizing-and-sync-policy-guidance) before
