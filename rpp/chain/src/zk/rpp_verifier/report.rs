@@ -16,6 +16,23 @@ pub struct RppStarkVerificationFlags {
 }
 
 impl RppStarkVerificationFlags {
+    /// Construct flags directly from stage outcomes.
+    pub const fn from_bools(
+        params: bool,
+        public: bool,
+        merkle: bool,
+        fri: bool,
+        composition: bool,
+    ) -> Self {
+        Self {
+            params,
+            public,
+            merkle,
+            fri,
+            composition,
+        }
+    }
+
     /// Returns whether parameter hashing checks succeeded.
     pub const fn params(self) -> bool {
         self.params

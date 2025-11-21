@@ -12,10 +12,10 @@ groups:
         annotations:
           summary: RPP-STARK verifier observed repeated stage failures
           description: >-
-            At least one RPP-STARK verification stage reported result="fail" for
-            ten minutes. Inspect the per-stage labels to identify whether params,
-            public inputs, Merkle, FRI, or composition checks are failing and
-            follow the on-call playbook.
+            At least one RPP-STARK verification stage ({{ $labels.stage }})
+            reported result="fail" for ten minutes. Inspect the per-stage labels
+            to identify whether params, public inputs, Merkle, FRI, adapter, or
+            composition checks are failing and follow the on-call playbook.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
       - alert: ZkRppStarkVerificationFailuresCritical
         expr: increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[10m]) > 3
@@ -28,8 +28,9 @@ groups:
           summary: RPP-STARK verifier is rejecting multiple proofs
           description: >-
             More than three RPP-STARK verification stages have failed within ten
-            minutes. Expect the runtime to slash or bypass consensus proofs;
-            escalate to release engineering if mitigation fails.
+            minutes (latest: {{ $labels.stage }}). Expect the runtime to slash
+            or bypass consensus proofs; escalate to release engineering if
+            mitigation fails.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
       - alert: ZkRppStarkVerifierLatencyCritical
         expr: histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend="rpp-stark",proof_kind="consensus"}[5m])) by (le)) > 3.2

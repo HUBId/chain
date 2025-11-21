@@ -129,6 +129,10 @@ use crate::vrf::{
 use crate::zk::rpp_adapter::compute_public_digest;
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
+use crate::zk::rpp_verifier::{
+    RppStarkSerializationContext, RppStarkVerificationFlags, RppStarkVerifierError,
+    RppStarkVerifyFailure,
+};
 use blake3::Hash;
 use libp2p::PeerId;
 #[cfg(feature = "prover-stwo")]
@@ -4103,7 +4107,7 @@ impl NodeInner {
         let started = Instant::now();
         match self
             .verifiers
-            .verify_rpp_stark_with_report(proof, proof_kind.as_str())
+            .verify_rpp_stark_with_report_raw(proof, proof_kind.as_str())
         {
             Ok(report) => {
                 self.emit_rpp_stark_metrics(
@@ -4123,7 +4127,7 @@ impl NodeInner {
                     started.elapsed(),
                     &err,
                 );
-                Err(err)
+                Err(self.verifiers.map_rpp_stark_error(proof_kind.as_str(), err))
             }
         }
     }
@@ -4141,36 +4145,7 @@ impl NodeInner {
         let proof_metrics = self.runtime_metrics.proofs();
         proof_metrics.observe_verification(backend, proof_kind, duration);
         proof_metrics.observe_verification_total_bytes(backend, proof_kind, report.total_bytes());
-        proof_metrics.observe_verification_stage(
-            backend,
-            proof_kind,
-            ProofVerificationStage::Params,
-            ProofVerificationOutcome::from_bool(flags.params()),
-        );
-        proof_metrics.observe_verification_stage(
-            backend,
-            proof_kind,
-            ProofVerificationStage::Public,
-            ProofVerificationOutcome::from_bool(flags.public()),
-        );
-        proof_metrics.observe_verification_stage(
-            backend,
-            proof_kind,
-            ProofVerificationStage::Merkle,
-            ProofVerificationOutcome::from_bool(flags.merkle()),
-        );
-        proof_metrics.observe_verification_stage(
-            backend,
-            proof_kind,
-            ProofVerificationStage::Fri,
-            ProofVerificationOutcome::from_bool(flags.fri()),
-        );
-        proof_metrics.observe_verification_stage(
-            backend,
-            proof_kind,
-            ProofVerificationStage::Composition,
-            ProofVerificationOutcome::from_bool(flags.composition()),
-        );
+        record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
 
         if let Ok(artifact) = proof.expect_rpp_stark() {
             let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
@@ -4233,72 +4208,150 @@ impl NodeInner {
         proof_kind: ProofVerificationKind,
         proof: &ChainProof,
         duration: Duration,
-        error: &ChainError,
+        error: &RppStarkVerifierError,
     ) {
         let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
         let proof_metrics = self.runtime_metrics.proofs();
         proof_metrics.observe_verification(backend, proof_kind, duration);
-        if let Ok(artifact) = proof.expect_rpp_stark() {
-            let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
-            let public_inputs_bytes =
-                u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
-            let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
-            let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+        match error {
+            RppStarkVerifierError::VerificationFailed { failure, report } => {
+                let flags = report.flags();
+                record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
+                if let Ok(artifact) = proof.expect_rpp_stark() {
+                    let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
+                    let public_inputs_bytes =
+                        u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
+                    let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+                    let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
 
-            proof_metrics.observe_verification_total_bytes(backend, proof_kind, proof_bytes);
-            proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
-            proof_metrics.observe_verification_public_inputs_bytes(
-                backend,
-                proof_kind,
-                public_inputs_bytes,
-            );
-            proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
+                    proof_metrics.observe_verification_total_bytes(
+                        backend,
+                        proof_kind,
+                        proof_bytes,
+                    );
+                    proof_metrics.observe_verification_params_bytes(
+                        backend,
+                        proof_kind,
+                        params_bytes,
+                    );
+                    proof_metrics.observe_verification_public_inputs_bytes(
+                        backend,
+                        proof_kind,
+                        public_inputs_bytes,
+                    );
+                    proof_metrics.observe_verification_payload_bytes(
+                        backend,
+                        proof_kind,
+                        payload_bytes,
+                    );
 
-            warn!(
-                target = "proofs",
-                proof_backend = "rpp-stark",
-                proof_kind = proof_kind.as_str(),
-                valid = false,
-                proof_bytes,
-                params_bytes,
-                public_inputs_bytes,
-                payload_bytes,
-                verify_duration_ms,
-                error = %error,
-                "rpp-stark proof verification failed"
-            );
-            warn!(
-                target = "telemetry",
-                proof_backend = "rpp-stark",
-                proof_kind = proof_kind.as_str(),
-                valid = false,
-                proof_bytes,
-                params_bytes,
-                public_inputs_bytes,
-                payload_bytes,
-                verify_duration_ms,
-                error = %error,
-                "rpp-stark proof verification failed"
-            );
-        } else {
-            warn!(
-                target = "proofs",
-                proof_backend = "rpp-stark",
-                proof_kind = proof_kind.as_str(),
-                valid = false,
-                verify_duration_ms,
-                error = %error,
-                "rpp-stark proof verification failed"
-            );
-            warn!(
-                target = "telemetry",
-                proof_backend = "rpp-stark",
-                proof_kind = proof_kind.as_str(),
-                valid = false,
-                verify_duration_ms,
-                error = %error,
-                "rpp-stark proof verification failed"
-            );
+                    warn!(
+                        target = "proofs",
+                        proof_backend = "rpp-stark",
+                        proof_kind = proof_kind.as_str(),
+                        valid = false,
+                        proof_bytes,
+                        params_bytes,
+                        public_inputs_bytes,
+                        payload_bytes,
+                        verify_duration_ms,
+                        error = %failure,
+                        "rpp-stark proof verification failed"
+                    );
+                    warn!(
+                        target = "telemetry",
+                        proof_backend = "rpp-stark",
+                        proof_kind = proof_kind.as_str(),
+                        valid = false,
+                        proof_bytes,
+                        params_bytes,
+                        public_inputs_bytes,
+                        payload_bytes,
+                        verify_duration_ms,
+                        error = %failure,
+                        "rpp-stark proof verification failed"
+                    );
+                }
+            }
+            other => {
+                proof_metrics.observe_verification_stage(
+                    backend,
+                    proof_kind,
+                    classify_rpp_stark_error_stage(other),
+                    ProofVerificationOutcome::Fail,
+                );
+                warn!(
+                    target = "proofs",
+                    proof_backend = "rpp-stark",
+                    proof_kind = proof_kind.as_str(),
+                    valid = false,
+                    verify_duration_ms,
+                    error = %other,
+                    "rpp-stark proof verification failed"
+                );
+                warn!(
+                    target = "telemetry",
+                    proof_backend = "rpp-stark",
+                    proof_kind = proof_kind.as_str(),
+                    valid = false,
+                    verify_duration_ms,
+                    error = %other,
+                    "rpp-stark proof verification failed"
+                );
+            }
+        }
+    }
+
+    fn record_rpp_stark_stage_checks(
+        proof_metrics: &ProofMetrics,
+        backend: ProofVerificationBackend,
+        proof_kind: ProofVerificationKind,
+        flags: RppStarkVerificationFlags,
+    ) {
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Params,
+            ProofVerificationOutcome::from_bool(flags.params()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Public,
+            ProofVerificationOutcome::from_bool(flags.public()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Merkle,
+            ProofVerificationOutcome::from_bool(flags.merkle()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Fri,
+            ProofVerificationOutcome::from_bool(flags.fri()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Composition,
+            ProofVerificationOutcome::from_bool(flags.composition()),
+        );
+    }
+
+    fn classify_rpp_stark_error_stage(error: &RppStarkVerifierError) -> ProofVerificationStage {
+        match error {
+            RppStarkVerifierError::VerificationFailed { failure, report } => {
+                stage_from_failure(failure, report.flags())
+                    .unwrap_or(ProofVerificationStage::Adapter)
+            }
+            RppStarkVerifierError::MalformedParams { .. }
+            | RppStarkVerifierError::UnsupportedParamsProfile { .. }
+            | RppStarkVerifierError::ProofSizeLimitMismatch { .. }
+            | RppStarkVerifierError::ProofSizeLimitOverflow { .. }
+            | RppStarkVerifierError::MalformedPublicInputs { .. }
+            | RppStarkVerifierError::BackendUnavailable(_) => ProofVerificationStage::Adapter,
         }
     }
 
@@ -8263,11 +8316,18 @@ fn tier_to_level(tier: &Tier) -> TierLevel {
 
 #[cfg(test)]
 mod telemetry_metrics_tests {
-    use super::{ConsensusTelemetry, RuntimeMetrics};
+    use super::{
+        classify_rpp_stark_error_stage, record_rpp_stark_stage_checks, ConsensusTelemetry,
+        ProofVerificationBackend, ProofVerificationKind, ProofVerificationOutcome, RuntimeMetrics,
+    };
     use crate::types::Address;
+    use crate::zk::rpp_verifier::RppStarkVerificationFlags;
+    use crate::zk::rpp_verifier::RppStarkVerifierError;
+    use opentelemetry_sdk::metrics::data::Data;
     use opentelemetry_sdk::metrics::{
         InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
     };
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -8311,6 +8371,77 @@ mod telemetry_metrics_tests {
         assert!(seen.contains("rpp.runtime.consensus.witness.events"));
         assert!(seen.contains("rpp.runtime.consensus.slashing.events"));
         assert!(seen.contains("rpp.runtime.consensus.failed_votes"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn rpp_stark_failure_metrics_include_stage_labels() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("rpp-stark-stage-metrics");
+        let metrics = RuntimeMetrics::from_meter(&meter);
+        let proof_metrics = metrics.proofs();
+
+        record_rpp_stark_stage_checks(
+            proof_metrics,
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            RppStarkVerificationFlags::from_bools(true, true, false, true, true),
+        );
+
+        let adapter_stage =
+            classify_rpp_stark_error_stage(&RppStarkVerifierError::ProofSizeLimitMismatch {
+                params_kib: 64,
+                expected_kib: 32,
+            });
+        proof_metrics.observe_verification_stage(
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            adapter_stage,
+            ProofVerificationOutcome::Fail,
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut stages: HashMap<String, HashSet<String>> = HashMap::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    if metric.name != "rpp_stark_stage_checks_total" {
+                        continue;
+                    }
+                    if let Data::Sum(sum) = metric.data {
+                        for point in sum.data_points {
+                            let mut attrs = HashMap::new();
+                            for attribute in point.attributes {
+                                attrs
+                                    .insert(attribute.key.to_string(), attribute.value.to_string());
+                            }
+                            if let (Some(stage), Some(result)) =
+                                (attrs.get("stage"), attrs.get("result"))
+                            {
+                                stages
+                                    .entry(stage.clone())
+                                    .or_default()
+                                    .insert(result.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            stages.get("merkle"),
+            Some(&HashSet::from(["fail".to_string()])),
+        );
+        assert_eq!(
+            stages.get("adapter"),
+            Some(&HashSet::from(["fail".to_string()])),
+        );
 
         Ok(())
     }
@@ -8744,4 +8875,79 @@ fn build_genesis_accounts(entries: Vec<GenesisAccount>) -> ChainResult<Vec<Accou
             Ok(Account::new(entry.address, entry.balance, stake))
         })
         .collect()
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn stage_from_failure(
+    failure: &RppStarkVerifyFailure,
+    flags: RppStarkVerificationFlags,
+) -> Option<ProofVerificationStage> {
+    use RppStarkSerializationContext as SerCtx;
+    use RppStarkVerifyFailure as Failure;
+
+    let mapped = match failure {
+        Failure::ParamsHashMismatch
+        | Failure::VersionMismatch { .. }
+        | Failure::UnknownProofKind(_)
+        | Failure::HeaderLengthMismatch { .. }
+        | Failure::BodyLengthMismatch { .. }
+        | Failure::UnexpectedEndOfBuffer { .. }
+        | Failure::IntegrityDigestMismatch
+        | Failure::NonCanonicalFieldElement
+        | Failure::DeterministicHashSlice { .. } => Some(ProofVerificationStage::Params),
+        Failure::PublicInputMismatch | Failure::PublicDigestMismatch | Failure::TranscriptOrder => {
+            Some(ProofVerificationStage::Public)
+        }
+        Failure::RootMismatch { .. }
+        | Failure::MerkleVerifyFailed { .. }
+        | Failure::TraceLeafMismatch
+        | Failure::CompositionLeafMismatch
+        | Failure::UnsupportedMerkleScheme => Some(ProofVerificationStage::Merkle),
+        Failure::FriVerifyFailed { .. }
+        | Failure::OutOfDomainInvalid
+        | Failure::DegreeBoundExceeded
+        | Failure::EmptyOpenings
+        | Failure::IndicesNotSorted
+        | Failure::IndicesDuplicate { .. }
+        | Failure::IndicesMismatch
+        | Failure::InvalidFriSection { .. } => Some(ProofVerificationStage::Fri),
+        Failure::AggregationDigestMismatch
+        | Failure::CompositionOodMismatch
+        | Failure::CompositionInconsistent { .. } => Some(ProofVerificationStage::Composition),
+        Failure::Serialization { context } => match context {
+            SerCtx::Params => Some(ProofVerificationStage::Params),
+            SerCtx::PublicInputs => Some(ProofVerificationStage::Public),
+            SerCtx::TraceCommitment | SerCtx::CompositionCommitment => {
+                Some(ProofVerificationStage::Merkle)
+            }
+            SerCtx::Fri | SerCtx::Openings => Some(ProofVerificationStage::Fri),
+            SerCtx::Telemetry | SerCtx::Proof => Some(ProofVerificationStage::Adapter),
+        },
+        Failure::ProofTooLarge { .. } => Some(ProofVerificationStage::Adapter),
+        Failure::TraceOodMismatch | Failure::CompositionOodMismatch => {
+            Some(ProofVerificationStage::Composition)
+        }
+    };
+
+    mapped.or_else(|| first_failing_stage(flags))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+const fn first_failing_stage(flags: RppStarkVerificationFlags) -> Option<ProofVerificationStage> {
+    if !flags.params() {
+        return Some(ProofVerificationStage::Params);
+    }
+    if !flags.public() {
+        return Some(ProofVerificationStage::Public);
+    }
+    if !flags.merkle() {
+        return Some(ProofVerificationStage::Merkle);
+    }
+    if !flags.fri() {
+        return Some(ProofVerificationStage::Fri);
+    }
+    if !flags.composition() {
+        return Some(ProofVerificationStage::Composition);
+    }
+    None
 }
