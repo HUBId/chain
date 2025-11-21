@@ -26,7 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::{Keypair, SigningKey};
+use ed25519_dalek::{Keypair, Signature, SigningKey, Verifier};
 use malachite::Natural;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
@@ -48,6 +48,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
+    SnapshotSigningKey,
 };
 use crate::consensus::messages::compute_consensus_bindings;
 use crate::consensus::{
@@ -1169,6 +1170,7 @@ enum SnapshotManifestError {
 enum SnapshotPayloadError {
     Io(std::io::Error),
     Manifest(SnapshotManifestError),
+    Signature(String),
 }
 
 impl From<std::io::Error> for SnapshotPayloadError {
@@ -1219,6 +1221,7 @@ impl fmt::Display for SnapshotPayloadError {
         match self {
             SnapshotPayloadError::Io(err) => write!(f, "{err}"),
             SnapshotPayloadError::Manifest(err) => write!(f, "{err}"),
+            SnapshotPayloadError::Signature(err) => write!(f, "{err}"),
         }
     }
 }
@@ -1293,13 +1296,40 @@ fn log_manifest_error(manifest_path: &Path, err: &SnapshotManifestError) {
     }
 }
 
+fn parse_snapshot_signature(
+    raw: &str,
+    signature_path: &Path,
+) -> Result<(u32, Signature), SnapshotPayloadError> {
+    let trimmed = raw.trim();
+    let (version_str, encoded_signature) = trimmed.split_once(':').unwrap_or(("0", trimmed));
+    let version = version_str.parse::<u32>().map_err(|err| {
+        SnapshotPayloadError::Signature(format!(
+            "invalid snapshot signature version at {}: {err}",
+            signature_path.display()
+        ))
+    })?;
+    let signature_bytes = BASE64.decode(encoded_signature).map_err(|err| {
+        SnapshotPayloadError::Signature(format!(
+            "invalid snapshot signature encoding at {}: {err}",
+            signature_path.display()
+        ))
+    })?;
+    let signature = Signature::from_bytes(&signature_bytes).map_err(|err| {
+        SnapshotPayloadError::Signature(format!(
+            "invalid snapshot signature bytes at {}: {err}",
+            signature_path.display()
+        ))
+    })?;
+    Ok((version, signature))
+}
+
 pub(crate) struct NodeInner {
     config: NodeConfig,
     mempool_limit: AtomicUsize,
     queue_weights: RwLock<QueueWeightsConfig>,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
-    timetoke_snapshot_signing_key: SigningKey,
+    timetoke_snapshot_signing_key: SnapshotSigningKey,
     p2p_identity: Arc<NodeIdentity>,
     address: Address,
     storage: Storage,
@@ -4981,29 +5011,37 @@ impl NodeInner {
                         .into());
                     }
                     let encoded = fs::read_to_string(&signature_path)?;
-                    let trimmed = encoded.trim();
-                    let signature_bytes = match BASE64.decode(trimmed) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            let root_hex = hex::encode(root.as_bytes());
-                            error!(
-                                target: "node",
-                                root = %root_hex,
-                                signature = %signature_path.display(),
-                                %err,
-                                "snapshot signature failed base64 decoding"
-                            );
-                            return Err(std::io::Error::new(
-                                ErrorKind::InvalidData,
-                                format!(
-                                    "invalid snapshot signature encoding at {}: {err}",
-                                    signature_path.display()
-                                ),
-                            )
-                            .into());
-                        }
-                    };
-                    let canonical = BASE64.encode(signature_bytes);
+                    let (signature_version, signature) =
+                        parse_snapshot_signature(&encoded, &signature_path)?;
+
+                    if signature_version != self.timetoke_snapshot_signing_key.version {
+                        let expected = self.timetoke_snapshot_signing_key.version;
+                        return Err(SnapshotPayloadError::Signature(format!(
+                            "snapshot signature version {signature_version} rejected; expected {expected} at {}",
+                            signature_path.display()
+                        )));
+                    }
+
+                    let verifying_key = self
+                        .timetoke_snapshot_signing_key
+                        .signing_key
+                        .verifying_key();
+                    if let Err(err) = verifying_key.verify(&payload, &signature) {
+                        let root_hex = hex::encode(root.as_bytes());
+                        error!(
+                            target: "node",
+                            root = %root_hex,
+                            signature = %signature_path.display(),
+                            %err,
+                            "snapshot signature failed verification",
+                        );
+                        return Err(SnapshotPayloadError::Signature(format!(
+                            "snapshot signature verification failed at {}: {err}",
+                            signature_path.display()
+                        )));
+                    }
+
+                    let canonical = BASE64.encode(signature.to_bytes());
                     return Ok(Some((payload, canonical)));
                 }
             }
@@ -5060,6 +5098,12 @@ impl NodeInner {
                     return Err(StateSyncChunkError::ManifestViolation {
                         reason: err.to_string(),
                     })
+                }
+                Err(SnapshotPayloadError::Signature(err)) => {
+                    return Err(StateSyncChunkError::Io(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        err,
+                    )))
                 }
             };
             let mut store = SnapshotStore::new(chunk_size);

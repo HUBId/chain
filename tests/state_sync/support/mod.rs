@@ -76,6 +76,7 @@ pub struct StateSyncFixture {
     plan: StateSyncPlan,
     chunk_size: usize,
     snapshot_dir: PathBuf,
+    config: NodeConfig,
 }
 
 impl StateSyncFixture {
@@ -84,7 +85,7 @@ impl StateSyncFixture {
         let chunk_size = DEFAULT_STATE_SYNC_CHUNK;
         let (config, temp_dir) = prepare_config();
         let snapshot_dir = config.snapshot_dir.clone();
-        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+        let node = Node::new(config.clone(), RuntimeMetrics::noop()).expect("node");
         let handle = node.handle();
         let storage = handle.storage();
         let pruned = storage
@@ -106,6 +107,7 @@ impl StateSyncFixture {
             plan: artifacts.plan,
             chunk_size,
             snapshot_dir,
+            config,
         }
     }
 
@@ -116,6 +118,12 @@ impl StateSyncFixture {
 
     pub fn snapshot_dir(&self) -> &Path {
         &self.snapshot_dir
+    }
+
+    pub fn snapshot_signing_key(&self) -> rpp_chain::config::SnapshotSigningKey {
+        self.config
+            .load_timetoke_snapshot_signing_key()
+            .expect("load snapshot signing key")
     }
 
     pub fn chunk_size(&self) -> usize {
