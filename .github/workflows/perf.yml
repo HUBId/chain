@@ -1,9 +1,20 @@
 name: Performance smoke benchmark
 
+permissions:
+  contents: read
+  pull-requests: write
+
 on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'Optional pull request number to comment on'
+        required: false
+      dashboard-endpoint:
+        description: 'Optional URL to receive the summarized JSON payload'
+        required: false
 
 jobs:
   smoke:
@@ -32,84 +43,41 @@ jobs:
       - name: Summarize metrics
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-import json
-import sys
-from pathlib import Path
+          python3 tools/perf_smoke_summary.py \
+            --metrics smoke-metrics.json \
+            --summary-md smoke-summary.md \
+            --summary-json smoke-summary.json \
+            --summary-html smoke-summary.html
 
-metrics_path = Path('smoke-metrics.json')
-if not metrics_path.exists():
-    print('::error ::smoke-metrics.json is missing', file=sys.stderr)
-    sys.exit(1)
+      - name: Comment summary on pull request
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.pr-number != '')
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const prNumber = Number(process.env.PR_NUMBER);
+            if (!prNumber) {
+              core.info('No pull request target provided; skipping summary comment');
+              return;
+            }
 
-data = json.loads(metrics_path.read_text())
-baseline = data.get('baseline', {})
-summary_rows: list[str] = []
-failures: list[tuple[str, float, float | None, float | None]] = []
+            const summary = fs.readFileSync('smoke-summary.md', 'utf8');
+            const body = [
+              'Performance smoke benchmark summary:',
+              '',
+              summary.trim(),
+              '',
+              'Additional artifacts: `smoke-summary.json` (machine readable) and `smoke-summary.html` (rich view).',
+            ].join('\n');
 
-def fmt_bounds(entry: dict[str, float | None]) -> str:
-    lower = entry.get('lower')
-    upper = entry.get('upper')
-    pieces = []
-    if lower is not None:
-        pieces.append(f">= {lower:.2f}")
-    if upper is not None:
-        pieces.append(f"<= {upper:.2f}")
-    return ', '.join(pieces) if pieces else 'no bounds configured'
-
-def record_metric(key: str, label: str) -> None:
-    entry = baseline.get(key)
-    if not isinstance(entry, dict):
-        print(f"::warning ::Baseline entry '{key}' missing from smoke-metrics.json", file=sys.stderr)
-        return
-    actual = entry.get('actual')
-    if actual is None:
-        print(f"::warning ::Baseline entry '{key}' missing actual value", file=sys.stderr)
-        return
-    bounds = fmt_bounds(entry)
-    within = bool(entry.get('within_range'))
-    status = '✅' if within else '❌'
-    summary_rows.append(f"* {label}: {actual:.2f} ({bounds}) {status}")
-    if not within:
-        failures.append((label, float(actual), entry.get('lower'), entry.get('upper')))
-
-record_metric('throughput_ops_per_sec', 'Throughput (ops/sec)')
-record_metric('per_batch_p95_ms', 'Batch P95 latency (ms)')
-record_metric('total_duration_ms', 'Total duration (ms)')
-
-throughput = float(data.get('throughput_ops_per_sec', 0))
-print(f"Recorded throughput_ops_per_sec={throughput:.2f}")
-summary = [
-    '# Firewood smoke benchmark summary',
-    '',
-    f"* Total batches: {int(data.get('batches', 0))}",
-    f"* Batch size: {int(data.get('batch_size', 0))}",
-    f"* Throughput: {throughput:.2f} ops/sec",
-    f"* Total duration: {data.get('total_duration_ms', 0):.2f} ms",
-]
-if summary_rows:
-    summary.append('')
-    summary.append('## Baseline comparison')
-    summary.extend(summary_rows)
-
-if failures:
-    for label, actual, lower, upper in failures:
-        bounds = []
-        if lower is not None:
-            bounds.append(f'>= {lower:.2f}')
-        if upper is not None:
-            bounds.append(f'<= {upper:.2f}')
-        expected = ' and '.join(bounds) if bounds else 'within configured bounds'
-        print(f"::error ::{label} {actual:.2f} fell outside expected range ({expected})", file=sys.stderr)
-    sys.exit(1)
-
-if not summary_rows:
-    print('::warning ::No baseline metrics were evaluated', file=sys.stderr)
-    summary.append('')
-    summary.append('⚠️ Baseline metrics were not evaluated. Review smoke-metrics.json for details.')
-
-Path('smoke-summary.md').write_text('\n'.join(summary) + '\n')
-PY
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
 
       - name: Validate performance Grafana dashboards
         env:
@@ -119,6 +87,25 @@ PY
           set -euo pipefail
           tools/perf_dashboard_check.sh --manifest docs/performance_dashboards.json
 
+      - name: Publish summary to dashboard endpoint
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dashboard-endpoint != ''
+        env:
+          DASHBOARD_ENDPOINT: ${{ github.event.inputs.dashboard-endpoint }}
+          DASHBOARD_TOKEN: ${{ secrets.PERF_DASHBOARD_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DASHBOARD_TOKEN:-}" ]; then
+            echo "PERF_DASHBOARD_TOKEN is not configured; skipping dashboard upload"
+            exit 0
+          fi
+
+          curl --fail-with-body \
+            -X POST \
+            -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @smoke-summary.json \
+            "${DASHBOARD_ENDPOINT}"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -127,3 +114,5 @@ PY
             smoke-benchmark.log
             smoke-metrics.json
             smoke-summary.md
+            smoke-summary.json
+            smoke-summary.html

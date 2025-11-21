@@ -32,17 +32,27 @@ CI.
 
 The [`Performance smoke benchmark`](../.github/workflows/perf.yml) workflow runs
 nightly and on demand. It builds the repository with the nightly Rust toolchain,
-executes the smoke benchmark, and publishes three artifacts:
+executes the smoke benchmark, and publishes five artifacts:
 
 - `smoke-benchmark.log` captures the terminal output.
 - `smoke-metrics.json` contains the structured metrics.
 - `smoke-summary.md` summarizes the run for quick review.
+- `smoke-summary.json` provides the key metrics in machine-readable form.
+- `smoke-summary.html` renders a minimal dashboard-style view of the run.
 
 The workflow parses `smoke-metrics.json`, compares the recorded metrics against
 the JSON baseline embedded in `benchmark/baselines/smoke.json`, and fails if any
 value lands outside of the accepted range. The baseline tracks throughput,
 total runtime, and the 95th percentile batch latency so that we catch both
-throughput drops and stalls.
+throughput drops and stalls. The Markdown, JSON, and HTML summaries reuse those
+baseline results so humans, dashboards, and other jobs can all read the same
+status without re-parsing the raw metrics.
+
+On `workflow_dispatch` runs you can optionally set the `pr-number` input to
+have CI post the Markdown summary as a comment on a pull request. You can also
+set `dashboard-endpoint` (plus the `PERF_DASHBOARD_TOKEN` secret) to POST the
+JSON summary to an external metrics collector. Both options are opt-in and are
+ignored for scheduled runs.
 
 The benchmark binary accepts an optional `FIREWOOD_SMOKE_BASELINE` environment
 variable that points to an alternate baseline file. This is useful when testing
@@ -72,6 +82,18 @@ To refresh the exports after editing a dashboard in Grafana:
    exports listed in `docs/performance_dashboards.json`.
 4. Inspect the resulting diffs, commit the updated JSON files, and note the
    Grafana change in the pull request description.
+
+## Inspecting and comparing runs
+
+1. Download the `smoke-benchmark` artifact from the workflow run and open
+   `smoke-summary.html` for a quick, formatted snapshot of the results. The same
+   information appears in `smoke-summary.md` if you prefer Markdown.
+2. For automated consumers or detailed comparisons, use `smoke-summary.json`.
+   You can diff two runs with `jq -S . smoke-summary.json` to normalize ordering
+   or feed the file directly into a dashboard endpoint via
+   `workflow_dispatch`.
+3. The raw `smoke-metrics.json` remains available if you need to recompute
+   baseline thresholds or inspect per-batch timings.
 
 ## Updating the baseline
 
