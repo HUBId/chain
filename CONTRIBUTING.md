@@ -45,6 +45,25 @@ The storage hashing and zk-backend combinations covered by CI are summarized in
 [`docs/development/testing_matrix.md`](docs/development/testing_matrix.md) so
 contributors can quickly map feature flags to the job IDs that exercise them.
 
+### Documentation checks
+
+Pull requests that modify documentation automatically run the **Docs** workflow
+to ensure the mdBook snapshot renders and that local file/anchor links resolve.
+Reproduce the check locally with:
+
+```
+cargo install mdbook --locked --version 0.4.40
+cargo install lychee --locked --version 0.15.1
+scripts/ci/check_docs.sh
+```
+
+The helper script builds a temporary mdBook from `docs/` and the top-level
+README/CONTRIBUTING/MIGRATION files, then uses `lychee` to verify that relative
+links and fragments point at real files and headings. Fix failures by aligning
+relative paths (e.g., `../.github/workflows/ci.yml` from within `docs/`), adding
+explicit anchors with `{#my-anchor}` when a fragment targets a section title, or
+removing stale links to deleted files before rerunning the command.
+
 ### Feature matrix and failure triage
 
 Branch-protection suites (`unit-suites`, `integration-workflows`, `observability-metrics`, `simnet-smoke`) now execute under four feature sets so contributors can surface regressions that only appear once the prover, GUI, or advanced wallet knobs are compiled in.【F:.github/workflows/ci.yml†L635-L940】 Use the table below to reproduce the same combinations locally for any `cargo xtask` command:

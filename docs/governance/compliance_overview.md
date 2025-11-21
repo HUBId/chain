@@ -1,6 +1,6 @@
 # Compliance Overview
 
-## Phase 3 Control Coverage
+## Phase 3 Control Coverage {#phase3-control-coverage}
 
 | Control | Implementation Status | Evidence |
 | --- | --- | --- |
@@ -19,7 +19,7 @@
 ## Evidence Traceability
 - Updated [Threat Model](../THREAT_MODEL.md) highlighting snapshot and audit log attack surfaces.
 - [Security Risk Register](../security/register.md) entries for retention deviations and audit trail coverage.
-- Phase 3 [Acceptance Checklist](../runbooks/phase3_acceptance.md) and [Weekly Status](../status/weekly.md#phase3-tracking-kalenderwoche-20-2026) reference this overview for auditor sign-off.
+- Phase 3 [Acceptance Checklist](../runbooks/phase3_acceptance.md) and [Weekly Status](../status/weekly.md#phase-3-tracking-kalenderwoche-20-2026) reference this overview for auditor sign-off.
 - CI-Gate `snapshot-verifier` und die Release-Artefakte `snapshot-verify-report.json(.sha256)` dokumentieren jede Manifestprüfung inklusive Hash-Nachweis in den Release Notes.【F:.github/workflows/ci.yml†L369-L397】【F:.github/workflows/release.yml†L150-L233】
 
 ### Phase 3 Evidence Bundle

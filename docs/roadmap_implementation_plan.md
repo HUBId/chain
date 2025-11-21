@@ -23,7 +23,7 @@ Die entsprechende Vorlage (`docs/status/weekly_template.md`) enthält feste Plat
 
 Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arbeitspakete wurden geliefert und entsprechen der dokumentierten Definition of Done:
 
-- [Plonky3-Arbeiten](testing/plonky3_experimental_testplan.md#results) – Der Vendor-Prover/-Verifier laufen in Produktion; Testplan, Leistungsreport und Runbook dokumentieren Acceptance-Kriterien, Nightly-Stresstests und Betriebsabläufe.【F:docs/testing/plonky3_experimental_testplan.md†L1-L120】【F:docs/performance/consensus_proofs.md†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】
+- [Plonky3-Arbeiten](testing/plonky3_experimental_testplan.md) – Der Vendor-Prover/-Verifier laufen in Produktion; Testplan, Leistungsreport und Runbook dokumentieren Acceptance-Kriterien, Nightly-Stresstests und Betriebsabläufe.【F:docs/testing/plonky3_experimental_testplan.md†L1-L120】【F:docs/performance/consensus_proofs.md†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】
 - [Root-Guards & Telemetrie](observability/firewood_root_integrity.md) – Firewood-Snapshots und Trie-Wurzeln werden überwacht; Regressionstests schützen gegen Root-Korruption und dokumentieren das Incident-Playbook.【F:docs/observability/firewood_root_integrity.md†L1-L52】【F:tests/state_sync/root_corruption.rs†L1-L53】
 - [CI-Erweiterung](test_validation_strategy.md#4-cicd-integration) – Die verpflichtenden Checks erzwingen `fmt`, `clippy`, die vollständige Backend-Testmatrix und das neue Runtime-Smoke-Gate, das Health-/Metrics-Endpunkte prüft und Artefakte bereitstellt. Contributors erhalten passende Reproduktionskommandos direkt in der Dokumentation.【F:docs/test_validation_strategy.md†L41-L89】【F:docs/test_validation_strategy.md†L98-L134】
 
@@ -134,7 +134,7 @@ Die folgenden Arbeiten bleiben als Fokus für Phase‑3-Nacharbeiten und später
 
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module noch experimentelle Pfade enthalten (z. B. GPU-Optimierung für Plonky3, erweiterte VRF-Distribution).
-- **Tooling & CI**: Der Workflow [`CI`](.github/workflows/ci.yml) erzwingt neben dem Dashboard-Lint drei verpflichtende Gates: `fmt` (`cargo fmt --all -- --check`), `clippy` (`cargo clippy --workspace --all-targets --all-features -- -D warnings`) und `test` (`./scripts/test.sh --all`). Jede Blaupausenaufgabe muss diese Jobs grün halten; Reproduktionen laufen lokal mit denselben Kommandos, bevor Änderungen gemergt werden.
+- **Tooling & CI**: Der Workflow [`CI`](../.github/workflows/ci.yml) erzwingt neben dem Dashboard-Lint drei verpflichtende Gates: `fmt` (`cargo fmt --all -- --check`), `clippy` (`cargo clippy --workspace --all-targets --all-features -- -D warnings`) und `test` (`./scripts/test.sh --all`). Jede Blaupausenaufgabe muss diese Jobs grün halten; Reproduktionen laufen lokal mit denselben Kommandos, bevor Änderungen gemergt werden.
 - **Teamabstimmung**: Deliverables pro Phase mit Domain-Teams (Node, Wallet, Proofs, Networking) abklären, gemeinsame Definition-of-Done dokumentieren.
 
 ## 1. Architekturgrundlagen schärfen (Blueprint 2.0)

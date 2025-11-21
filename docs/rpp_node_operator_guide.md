@@ -274,7 +274,7 @@ or padded transcripts surface as immediate metadata errors. Double-check the
 witness payload when diagnosing failed block imports.【F:docs/consensus/finality_proof_story.md†L33-L44】
 
 Release-Builds listen Circuit-Versionen, Constraint-Zählungen und unterstützte Backends
-in den [Release-Notizen](docs/release_notes.md); ziehe die Tabelle bei Audits oder
+in den [Release-Notizen](release_notes.md); ziehe die Tabelle bei Audits oder
 Rollback-Plänen hinzu, um sicherzustellen, dass Operator:innen identische Proof-Artefakte
 ausrollen.【F:docs/release_notes.md†L1-L160】
 

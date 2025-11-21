@@ -1,6 +1,6 @@
 # Wallet UAT Checklist
 
-This checklist extends the [Wallet Operator Runbook](docs/wallet_operator_runbook.md) so UAT reviewers can collect end-to-end evidence for every wallet capability before a release. Pair the steps below with the existing runbook prerequisite inventory, CLI walkthrough, and troubleshooting tables so auditors can trace each artefact back to the documented procedure.【F:docs/wallet_operator_runbook.md†L1-L140】
+This checklist extends the [Wallet Operator Runbook](wallet_operator_runbook.md) so UAT reviewers can collect end-to-end evidence for every wallet capability before a release. Pair the steps below with the existing runbook prerequisite inventory, CLI walkthrough, and troubleshooting tables so auditors can trace each artefact back to the documented procedure.【F:docs/wallet_operator_runbook.md†L1-L140】
 
 ## 1. Environment and data prep
 
