@@ -586,40 +586,198 @@ fn run_observability_suite() -> Result<()> {
     run_command(command, "observability metrics")
 }
 
-fn run_simnet_smoke() -> Result<()> {
-    let mut scenarios = vec![
-        "tools/simnet/scenarios/ci_block_pipeline.ron",
-        "tools/simnet/scenarios/ci_state_sync_guard.ron",
-        "tools/simnet/scenarios/consensus_quorum_stress.ron",
-        "tools/simnet/scenarios/snapshot_partition.ron",
-    ];
-    if has_feature_flag("backend-rpp-stark") {
-        scenarios.push("tools/simnet/scenarios/consensus_reorg_stark.ron");
+#[derive(Clone)]
+struct SimnetPreset {
+    slug: &'static str,
+    scenario_path: &'static str,
+    description: &'static str,
+}
+
+fn simnet_presets() -> &'static [SimnetPreset] {
+    &[
+        SimnetPreset {
+            slug: "block-pipeline",
+            scenario_path: "tools/simnet/scenarios/ci_block_pipeline.ron",
+            description: "Exercise the CI block pipeline harness",
+        },
+        SimnetPreset {
+            slug: "state-sync-guard",
+            scenario_path: "tools/simnet/scenarios/ci_state_sync_guard.ron",
+            description: "Validate guard rails around state sync",
+        },
+        SimnetPreset {
+            slug: "quorum-stress",
+            scenario_path: "tools/simnet/scenarios/consensus_quorum_stress.ron",
+            description: "Drive a quorum stress drill against validators",
+        },
+        SimnetPreset {
+            slug: "partition",
+            scenario_path: "tools/simnet/scenarios/snapshot_partition.ron",
+            description: "Partition validators while exercising snapshot recovery",
+        },
+        SimnetPreset {
+            slug: "partitioned-flood",
+            scenario_path: "tools/simnet/scenarios/partitioned_flood.ron",
+            description: "Run the partitioned flood scenario using the gossip templates",
+        },
+        SimnetPreset {
+            slug: "small-world",
+            scenario_path: "tools/simnet/scenarios/small_world_smoke.ron",
+            description: "Run the in-process small world smoke harness",
+        },
+        SimnetPreset {
+            slug: "reorg-stark",
+            scenario_path: "tools/simnet/scenarios/consensus_reorg_stark.ron",
+            description: "Exercise the STARK backend reorg scenario",
+        },
+    ]
+}
+
+fn print_simnet_help() {
+    let mut message = String::from(
+        "usage: cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive]\n\n",
+    );
+    message.push_str(
+        "Runs a predefined simnet scenario or an explicit RON path using the simnet binary.\n\n",
+    );
+    message.push_str("Scenarios:\n");
+    for preset in simnet_presets() {
+        let _ = writeln!(message, "  {:<17} {}", preset.slug, preset.description);
     }
-    for scenario in scenarios {
-        let scenario_path = workspace_root().join(scenario);
-        let stem = Path::new(scenario)
+    print!("{}", message);
+}
+
+fn run_simnet(args: &[String]) -> Result<()> {
+    let mut selection: Option<String> = None;
+    let mut artifacts_dir: Option<PathBuf> = None;
+    let mut keep_alive = false;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--scenario" => {
+                selection = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--scenario requires a value"))?
+                        .to_string(),
+                );
+            }
+            "--artifacts-dir" => {
+                let path = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--artifacts-dir requires a value"))?;
+                artifacts_dir = Some(PathBuf::from(path));
+            }
+            "--keep-alive" => keep_alive = true,
+            "--help" | "-h" => {
+                print_simnet_help();
+                return Ok(());
+            }
+            other => bail!("unknown argument for simnet: {other}"),
+        }
+    }
+
+    let selection = selection.ok_or_else(|| anyhow!("--scenario is required for simnet"))?;
+    let (slug, scenario_path) = resolve_simnet_selection(&selection)?;
+    let workspace = workspace_root();
+    let artifacts = artifacts_dir.unwrap_or_else(|| {
+        workspace
+            .join("target/simnet")
+            .join(slug.replace('_', "-") + "-local")
+    });
+
+    execute_simnet_scenario(&slug, &scenario_path, &artifacts, keep_alive)
+}
+
+fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
+    let workspace = workspace_root();
+    if let Some(preset) = simnet_presets()
+        .iter()
+        .find(|preset| preset.slug.eq_ignore_ascii_case(selection))
+    {
+        return Ok((
+            preset.slug.to_string(),
+            workspace.join(preset.scenario_path),
+        ));
+    }
+
+    // Accept file stems for convenience (e.g., snapshot_partition)
+    if let Some(preset) = simnet_presets().iter().find(|preset| {
+        Path::new(preset.scenario_path)
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .unwrap_or("ci-simnet");
+            .map(|stem| stem.eq_ignore_ascii_case(selection))
+            .unwrap_or(false)
+    }) {
+        return Ok((
+            preset.slug.to_string(),
+            workspace.join(preset.scenario_path),
+        ));
+    }
+
+    let candidate = PathBuf::from(selection);
+    let scenario_path = if candidate.is_absolute() {
+        candidate
+    } else {
+        workspace.join(candidate)
+    };
+    if scenario_path.exists() {
+        let slug = scenario_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("simnet-scenario")
+            .replace('_', "-");
+        return Ok((slug, scenario_path));
+    }
+
+    bail!("unknown simnet scenario: {selection}")
+}
+
+fn execute_simnet_scenario(
+    slug: &str,
+    scenario_path: &Path,
+    artifacts_dir: &Path,
+    keep_alive: bool,
+) -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workspace_root())
+        .arg("run")
+        .arg("--quiet")
+        .arg("--package")
+        .arg("simnet")
+        .arg("--")
+        .arg("--scenario")
+        .arg(scenario_path)
+        .arg("--artifacts-dir")
+        .arg(artifacts_dir);
+
+    if keep_alive {
+        command.arg("--keep-alive");
+    }
+
+    apply_feature_flags(&mut command);
+    let context = format!("simnet scenario {slug}");
+    run_command(command, &context)
+}
+
+fn run_simnet_smoke() -> Result<()> {
+    let mut scenarios = vec![
+        "block-pipeline",
+        "state-sync-guard",
+        "quorum-stress",
+        "partition",
+    ];
+    if has_feature_flag("backend-rpp-stark") {
+        scenarios.push("reorg-stark");
+    }
+
+    for slug in scenarios {
+        let (resolved_slug, scenario_path) = resolve_simnet_selection(slug)?;
         let artifacts = workspace_root()
             .join("target/simnet")
-            .join(stem.replace('_', "-"));
-        let mut command = Command::new("cargo");
-        command
-            .current_dir(workspace_root())
-            .arg("run")
-            .arg("--quiet")
-            .arg("--package")
-            .arg("simnet")
-            .arg("--")
-            .arg("--scenario")
-            .arg(scenario_path)
-            .arg("--artifacts-dir")
-            .arg(artifacts);
-        apply_feature_flags(&mut command);
-        let context = format!("simnet scenario {stem}");
-        run_command(command, &context)?;
+            .join(resolved_slug.replace('_', "-"));
+        execute_simnet_scenario(&resolved_slug, &scenario_path, &artifacts, false)?;
     }
     Ok(())
 }
@@ -3267,7 +3425,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-wallet-feature-matrix  Run rpp-wallet checks/tests across wallet feature combinations and enforce wallet feature guards\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema\n  wallet-bundle        Build signed CLI/GUI bundle archives for the wallet\n  wallet-firmware      Build, sign, and verify vendor firmware bundles\n  wallet-installer     Produce platform installers that align with wallet bundles",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  simnet               Run a predefined or ad-hoc simnet scenario\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-wallet-feature-matrix  Run rpp-wallet checks/tests across wallet feature combinations and enforce wallet feature guards\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema\n  wallet-bundle        Build signed CLI/GUI bundle archives for the wallet\n  wallet-firmware      Build, sign, and verify vendor firmware bundles\n  wallet-installer     Produce platform installers that align with wallet bundles",
     );
 }
 
@@ -5238,6 +5396,7 @@ fn main() -> Result<()> {
         "test-integration" => run_integration_workflows(),
         "test-observability" => run_observability_suite(),
         "test-simnet" => run_simnet_smoke(),
+        "simnet" => run_simnet(&argv),
         "test-wallet-feature-matrix" => run_wallet_feature_matrix(),
         "test-cli" => cli_smoke::run_cli_smoke(&argv),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
