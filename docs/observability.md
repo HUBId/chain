@@ -28,6 +28,13 @@ both sinks and records a counter per exporter:
   `telemetry_otlp_failures_total{sink="traces",phase="init"}` increment once per
   exporter failure.【F:rpp/node/src/lib.rs†L88-L91】【F:tests/observability_otlp_failures.rs†L111-L132】
 
+Nodes configured with `rollout.telemetry.failover_enabled = true` also record a
+secondary series whenever the runtime falls back from the primary OTLP
+endpoints to the configured secondary ones. Both exporters emit
+`telemetry_otlp_failures_total{phase="init_failover"}` when they retry with the
+secondary endpoints so dashboards and alerts can distinguish between an outright
+failure and a successful failover.【F:rpp/node/src/lib.rs†L1650-L1711】【F:tests/observability_otlp_failures.rs†L109-L212】
+
 The Prometheus scrape contains both series, allowing dashboards and automated
 checks to confirm that exporter failures have been observed.
 

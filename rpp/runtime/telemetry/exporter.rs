@@ -18,6 +18,12 @@ pub struct TelemetryExporterBuilder<'a> {
     config: &'a TelemetryConfig,
 }
 
+#[derive(Debug)]
+pub struct ExporterBuildOutcome<T> {
+    pub exporter: Option<T>,
+    pub failover_used: bool,
+}
+
 impl<'a> TelemetryExporterBuilder<'a> {
     pub fn new(config: &'a TelemetryConfig) -> Self {
         Self { config }
@@ -32,14 +38,59 @@ impl<'a> TelemetryExporterBuilder<'a> {
             .or_else(|| normalized_endpoint(self.config.endpoint.as_ref()))
     }
 
-    pub fn build_metric_exporter(&self) -> Result<Option<opentelemetry_otlp::MetricExporter>> {
+    fn secondary_grpc_endpoint(&self) -> Option<&str> {
+        normalized_endpoint(self.config.secondary_endpoint.as_ref())
+    }
+
+    fn secondary_http_endpoint(&self) -> Option<&str> {
+        normalized_endpoint(self.config.secondary_http_endpoint.as_ref())
+            .or_else(|| normalized_endpoint(self.config.secondary_endpoint.as_ref()))
+    }
+
+    pub fn build_metric_exporter(
+        &self,
+    ) -> Result<ExporterBuildOutcome<opentelemetry_otlp::MetricExporter>> {
         if !self.config.enabled {
-            return Ok(None);
+            return Ok(ExporterBuildOutcome {
+                exporter: None,
+                failover_used: false,
+            });
         }
         let Some(endpoint) = self.http_endpoint() else {
-            return Ok(None);
+            return Ok(ExporterBuildOutcome {
+                exporter: None,
+                failover_used: false,
+            });
         };
 
+        let mut failover_used = false;
+
+        match self.build_metric_exporter_for_endpoint(endpoint) {
+            Ok(exporter) => Ok(ExporterBuildOutcome {
+                exporter: Some(exporter),
+                failover_used,
+            }),
+            Err(error) if self.config.failover_enabled => {
+                failover_used = true;
+                let Some(secondary) = self.secondary_http_endpoint() else {
+                    return Err(error);
+                };
+                let exporter = self
+                    .build_metric_exporter_for_endpoint(secondary)
+                    .context("failed to build OTLP metrics exporter via secondary endpoint")?;
+                Ok(ExporterBuildOutcome {
+                    exporter: Some(exporter),
+                    failover_used,
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn build_metric_exporter_for_endpoint(
+        &self,
+        endpoint: &str,
+    ) -> Result<opentelemetry_otlp::MetricExporter> {
         let mut builder = opentelemetry_otlp::MetricExporter::builder().with_http();
         builder = builder.with_endpoint(endpoint.to_string());
         builder = builder.with_timeout(self.timeout());
@@ -54,21 +105,54 @@ impl<'a> TelemetryExporterBuilder<'a> {
 
         builder = builder.with_temporality(Temporality::Cumulative);
 
-        let exporter = builder
+        builder
             .build()
-            .context("failed to build OTLP metrics exporter")?;
-
-        Ok(Some(exporter))
+            .context("failed to build OTLP metrics exporter")
     }
 
-    pub fn build_span_exporter(&self) -> Result<Option<opentelemetry_otlp::SpanExporter>> {
+    pub fn build_span_exporter(
+        &self,
+    ) -> Result<ExporterBuildOutcome<opentelemetry_otlp::SpanExporter>> {
         if !self.config.enabled {
-            return Ok(None);
+            return Ok(ExporterBuildOutcome {
+                exporter: None,
+                failover_used: false,
+            });
         }
         let Some(endpoint) = self.grpc_endpoint() else {
-            return Ok(None);
+            return Ok(ExporterBuildOutcome {
+                exporter: None,
+                failover_used: false,
+            });
         };
 
+        let mut failover_used = false;
+        match self.build_span_exporter_for_endpoint(endpoint) {
+            Ok(exporter) => Ok(ExporterBuildOutcome {
+                exporter: Some(exporter),
+                failover_used,
+            }),
+            Err(error) if self.config.failover_enabled => {
+                failover_used = true;
+                let Some(secondary) = self.secondary_grpc_endpoint() else {
+                    return Err(error);
+                };
+                let exporter = self
+                    .build_span_exporter_for_endpoint(secondary)
+                    .context("failed to build OTLP span exporter via secondary endpoint")?;
+                Ok(ExporterBuildOutcome {
+                    exporter: Some(exporter),
+                    failover_used,
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn build_span_exporter_for_endpoint(
+        &self,
+        endpoint: &str,
+    ) -> Result<opentelemetry_otlp::SpanExporter> {
         let mut exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_endpoint(endpoint.to_string())
@@ -82,11 +166,9 @@ impl<'a> TelemetryExporterBuilder<'a> {
             exporter = exporter.with_tls_config(tls);
         }
 
-        let exporter = exporter
+        exporter
             .build_span_exporter()
-            .context("failed to build OTLP span exporter")?;
-
-        Ok(Some(exporter))
+            .context("failed to build OTLP span exporter")
     }
 
     pub fn build_trace_batch_config(&self) -> BatchConfig {

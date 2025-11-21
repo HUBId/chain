@@ -189,6 +189,133 @@ fn telemetry_otlp_exporter_failures_surface_alerts() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
+    let temp_dir = TempDir::new().context("create temporary directory")?;
+    let binary = locate_rpp_node_binary().context("locate rpp-node binary")?;
+    let mut ports = PortAllocator::default();
+
+    let rpc_port = ports.next_port().context("allocate RPC port")?;
+    let metrics_port = ports.next_port().context("allocate metrics port")?;
+    let primary_grpc_port = ports.next_port().context("allocate primary gRPC port")?;
+    let primary_http_port = ports.next_port().context("allocate primary HTTP port")?;
+    let secondary_grpc_port = ports.next_port().context("allocate secondary gRPC port")?;
+    let secondary_http_port = ports.next_port().context("allocate secondary HTTP port")?;
+
+    let rpc_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), rpc_port);
+    let metrics_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), metrics_port);
+    let invalid_cert = temp_dir.path().join("invalid-ca.pem");
+    fs::write(&invalid_cert, b"not-a-certificate").context("write invalid certificate")?;
+
+    let node_config = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        &mut ports,
+        |config| {
+            config.network.rpc.listen = rpc_addr;
+            config.network.p2p.bootstrap_peers.clear();
+            config.rollout.telemetry.enabled = true;
+            config.rollout.telemetry.failover_enabled = true;
+            config.rollout.telemetry.endpoint =
+                Some(format!("http://127.0.0.1:{primary_grpc_port}"));
+            config.rollout.telemetry.http_endpoint =
+                Some(format!("http://127.0.0.1:{primary_http_port}/v1/metrics"));
+            config.rollout.telemetry.secondary_endpoint =
+                Some(format!("http://127.0.0.1:{secondary_grpc_port}"));
+            config.rollout.telemetry.secondary_http_endpoint =
+                Some(format!("http://127.0.0.1:{secondary_http_port}/v1/metrics"));
+            config.rollout.telemetry.sample_interval_secs = 1;
+            config.rollout.telemetry.metrics.listen = Some(metrics_addr);
+            config.rollout.telemetry.metrics.auth_token = None;
+            config.rollout.telemetry.grpc_tls = Some(TelemetryTlsConfig {
+                ca_certificate: Some(invalid_cert.clone()),
+                ..TelemetryTlsConfig::default()
+            });
+            config.rollout.telemetry.http_tls = Some(TelemetryTlsConfig {
+                ca_certificate: Some(invalid_cert.clone()),
+                ..TelemetryTlsConfig::default()
+            });
+        },
+    )
+    .context("write node configuration")?;
+
+    let mut command = Command::new(&binary);
+    command
+        .arg("validator")
+        .arg("--node-config")
+        .arg(&node_config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env(
+            "RUST_LOG",
+            "info,rpp_node=info,rpp_chain=info,rpp_node::runtime=info",
+        );
+
+    let mut child = command
+        .spawn()
+        .context("spawn rpp-node with failover configuration")?;
+    let mut guard = ChildTerminationGuard {
+        child: Some(&mut child),
+    };
+    let log_buffer = LogBuffer::default();
+    let mut logs = log_buffer.forward(capture_child_output(&mut child));
+
+    wait_for_log(&mut logs, "bootstrap configuration resolved")
+        .context("wait for bootstrap log")?;
+    wait_for_log(&mut logs, "telemetry endpoints configured")
+        .context("wait for telemetry endpoint log")?;
+    wait_for_log(&mut logs, "failed over to secondary OTLP metrics endpoint")
+        .context("wait for metrics failover log")?;
+    wait_for_log(&mut logs, "failed over to secondary OTLP traces endpoint")
+        .context("wait for traces failover log")?;
+
+    thread::sleep(Duration::from_secs(1));
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("build HTTP client")?;
+    let metrics_body = client
+        .get(format!("http://{metrics_addr}/metrics"))
+        .send()
+        .context("request metrics endpoint")?
+        .error_for_status()
+        .context("metrics endpoint returned error status")?
+        .text()
+        .context("read metrics body")?;
+
+    let metrics_failover = metrics_utils::metric_value(
+        &metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "metrics"), ("phase", "init_failover")],
+    )
+    .unwrap_or(0.0);
+    assert!(
+        metrics_failover >= 1.0,
+        "expected metrics failover counter to increment, found {metrics_failover}"
+    );
+
+    let traces_failover = metrics_utils::metric_value(
+        &metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "traces"), ("phase", "init_failover")],
+    )
+    .unwrap_or(0.0);
+    assert!(
+        traces_failover >= 1.0,
+        "expected trace failover counter to increment, found {traces_failover}"
+    );
+
+    start_log_drain(logs);
+    send_ctrl_c(guard.child.as_ref().expect("child reference"))
+        .context("signal rpp-node shutdown")?;
+    wait_for_exit(guard.child.as_mut().expect("child reference"))
+        .context("wait for rpp-node exit")?;
+    guard.child.take();
+
+    Ok(())
+}
+
 #[derive(Default, Clone)]
 struct LogBuffer {
     lines: std::sync::Arc<std::sync::Mutex<Vec<String>>>,

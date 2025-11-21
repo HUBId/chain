@@ -15,7 +15,7 @@ use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
 
-use super::exporter::TelemetryExporterBuilder;
+use super::exporter::{ExporterBuildOutcome, TelemetryExporterBuilder};
 use crate::config::TelemetryConfig;
 use rpp_wallet_interface::runtime_telemetry::RuntimeMetrics as WalletRuntimeMetrics;
 pub use rpp_wallet_interface::runtime_telemetry::{WalletAction, WalletActionResult};
@@ -30,20 +30,25 @@ const MILLIS_PER_SECOND: f64 = 1_000.0;
 pub fn init_runtime_metrics(
     config: &TelemetryConfig,
     resource: Resource,
-) -> Result<(Arc<RuntimeMetrics>, RuntimeMetricsGuard)> {
+) -> Result<(Arc<RuntimeMetrics>, RuntimeMetricsGuard, bool)> {
     let mut provider_builder = SdkMeterProvider::builder().with_resource(resource);
+    let mut used_failover = false;
 
     if config.enabled {
         let exporter_builder = TelemetryExporterBuilder::new(config);
         match exporter_builder.build_metric_exporter()? {
-            Some(exporter) => {
+            ExporterBuildOutcome {
+                exporter: Some(exporter),
+                failover_used,
+            } => {
+                used_failover = failover_used;
                 let interval = Duration::from_secs(config.sample_interval_secs.max(1));
                 let reader = PeriodicReader::builder(exporter)
                     .with_interval(interval)
                     .build();
                 provider_builder = provider_builder.with_reader(reader);
             }
-            None => {
+            ExporterBuildOutcome { exporter: None, .. } => {
                 if config.warn_on_drop {
                     warn!(
                         target = "telemetry",
@@ -61,7 +66,7 @@ pub fn init_runtime_metrics(
     let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
     let guard = RuntimeMetricsGuard::new(provider);
 
-    Ok((metrics, guard))
+    Ok((metrics, guard, used_failover))
 }
 
 /// Wrapper that holds all runtime specific metric instruments.
@@ -1940,7 +1945,7 @@ mod tests {
         config.warn_on_drop = true;
 
         let resource = Resource::new(Vec::new());
-        let (_metrics, mut guard) =
+        let (_metrics, mut guard, _) =
             init_runtime_metrics(&config, resource).expect("init metrics without exporter");
         guard.flush_and_shutdown();
 
