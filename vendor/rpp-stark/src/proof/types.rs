@@ -7,6 +7,8 @@ use crate::ser::{
 };
 use crate::utils::serialization::DigestBytes;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
+use std::time::Duration;
 
 /// Canonical proof version implemented by this crate.
 pub const PROOF_VERSION: u16 = 1;
@@ -1167,6 +1169,51 @@ pub struct VerifyReport {
     /// Optional verification error captured during decoding or checks.
     #[serde(default)]
     pub error: Option<VerifyError>,
+    /// Optional telemetry emitted by the verifier.
+    #[serde(default)]
+    pub telemetry: Option<VerifyTelemetry>,
+}
+
+/// Fine-grained timings emitted by the verifier.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VerifyTelemetry {
+    /// Time spent decoding and validating the envelope prior to Merkle checks (nanoseconds).
+    pub parse_duration_ns: u64,
+    /// Time spent validating Merkle commitments and transcript-derived openings (nanoseconds).
+    pub merkle_duration_ns: u64,
+    /// Time spent inside the FRI verifier (nanoseconds).
+    pub fri_duration_ns: u64,
+}
+
+impl VerifyTelemetry {
+    pub const fn zeroed() -> Self {
+        Self {
+            parse_duration_ns: 0,
+            merkle_duration_ns: 0,
+            fri_duration_ns: 0,
+        }
+    }
+
+    pub fn record_parse(&mut self, duration: Duration) {
+        self.parse_duration_ns = saturating_nanos(duration);
+    }
+
+    pub fn record_merkle(&mut self, duration: Duration) {
+        self.merkle_duration_ns = saturating_nanos(duration);
+    }
+
+    pub fn record_fri(&mut self, duration: Duration) {
+        self.fri_duration_ns = saturating_nanos(duration);
+    }
+}
+
+fn saturating_nanos(duration: Duration) -> u64 {
+    duration
+        .as_nanos()
+        .min(u128::from(u64::MAX))
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 /// Errors surfaced while decoding or validating a proof envelope.

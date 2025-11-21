@@ -4144,6 +4144,34 @@ impl NodeInner {
         let flags = report.flags();
         let proof_metrics = self.runtime_metrics.proofs();
         proof_metrics.observe_verification(backend, proof_kind, duration);
+        if let Some(stage_timings) = report.stage_timings() {
+            proof_metrics.observe_verification_stage_duration(
+                backend,
+                proof_kind,
+                ProofVerificationStage::Parse,
+                stage_timings.parse,
+            );
+            proof_metrics.observe_verification_stage_duration(
+                backend,
+                proof_kind,
+                ProofVerificationStage::Merkle,
+                stage_timings.merkle,
+            );
+            proof_metrics.observe_verification_stage_duration(
+                backend,
+                proof_kind,
+                ProofVerificationStage::Fri,
+                stage_timings.fri,
+            );
+            let accumulated = stage_timings.total();
+            let adapter_duration = duration.saturating_sub(accumulated);
+            proof_metrics.observe_verification_stage_duration(
+                backend,
+                proof_kind,
+                ProofVerificationStage::Adapter,
+                adapter_duration,
+            );
+        }
         proof_metrics.observe_verification_total_bytes(backend, proof_kind, report.total_bytes());
         record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
 
@@ -4216,6 +4244,33 @@ impl NodeInner {
         match error {
             RppStarkVerifierError::VerificationFailed { failure, report } => {
                 let flags = report.flags();
+                if let Some(stage_timings) = report.stage_timings() {
+                    proof_metrics.observe_verification_stage_duration(
+                        backend,
+                        proof_kind,
+                        ProofVerificationStage::Parse,
+                        stage_timings.parse,
+                    );
+                    proof_metrics.observe_verification_stage_duration(
+                        backend,
+                        proof_kind,
+                        ProofVerificationStage::Merkle,
+                        stage_timings.merkle,
+                    );
+                    proof_metrics.observe_verification_stage_duration(
+                        backend,
+                        proof_kind,
+                        ProofVerificationStage::Fri,
+                        stage_timings.fri,
+                    );
+                    let adapter_duration = duration.saturating_sub(stage_timings.total());
+                    proof_metrics.observe_verification_stage_duration(
+                        backend,
+                        proof_kind,
+                        ProofVerificationStage::Adapter,
+                        adapter_duration,
+                    );
+                }
                 record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
                 if let Ok(artifact) = proof.expect_rpp_stark() {
                     let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
@@ -5354,6 +5409,7 @@ impl NodeInner {
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             {
+                let stwo_started = Instant::now();
                 let verification = if let (Some(bytes), Some(inputs)) =
                     (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
                 {
@@ -5374,12 +5430,34 @@ impl NodeInner {
                     warn!(?err, "transaction proof rejected by verifier");
                     return Err(err);
                 }
+                if matches!(bundle.proof, ChainProof::Stwo(_)) {
+                    let duration = stwo_started.elapsed();
+                    let proof_metrics = self.runtime_metrics.proofs();
+                    proof_metrics.observe_verification(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        duration,
+                    );
+                    proof_metrics.observe_verification_stage_duration(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        ProofVerificationStage::Parse,
+                        duration,
+                    );
+                    proof_metrics.observe_verification_stage_duration(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        ProofVerificationStage::Adapter,
+                        Duration::from_millis(0),
+                    );
+                }
                 if !matches!(bundle.proof, ChainProof::RppStark(_)) {
                     Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
                 }
             }
             #[cfg(not(feature = "backend-rpp-stark"))]
             {
+                let stwo_started = Instant::now();
                 let verification = if let (Some(bytes), Some(inputs)) =
                     (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
                 {
@@ -5392,6 +5470,25 @@ impl NodeInner {
                     warn!(?err, "transaction proof rejected by verifier");
                     return Err(err);
                 }
+                let duration = stwo_started.elapsed();
+                let proof_metrics = self.runtime_metrics.proofs();
+                proof_metrics.observe_verification(
+                    ProofVerificationBackend::Stwo,
+                    ProofVerificationKind::Transaction,
+                    duration,
+                );
+                proof_metrics.observe_verification_stage_duration(
+                    ProofVerificationBackend::Stwo,
+                    ProofVerificationKind::Transaction,
+                    ProofVerificationStage::Parse,
+                    duration,
+                );
+                proof_metrics.observe_verification_stage_duration(
+                    ProofVerificationBackend::Stwo,
+                    ProofVerificationKind::Transaction,
+                    ProofVerificationStage::Adapter,
+                    Duration::from_millis(0),
+                );
                 Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
             }
         }

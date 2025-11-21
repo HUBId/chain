@@ -46,3 +46,17 @@ groups:
             for fifteen minutes. Review recent deployments, hardware saturation,
             and proof sizes before slashing resumes.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkVerifierStageLatencyCritical
+        expr: histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend="rpp-stark",stage!=""}[5m])) by (le, stage)) > 1.6
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: RPP-STARK stage latency above 1.6s (p95)
+          description: >-
+            The {{ $labels.stage }} verification stage is running slower than expected
+            for ten minutes. Inspect per-stage latency panels and recent deployments
+            for regressions before resuming proof validation.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
