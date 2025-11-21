@@ -42,7 +42,8 @@ test-case.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
-ethhash = ["firewood/ethhash"]
+ethhash = ["firewood/ethhash", "firewood-storage/ethhash"]
+branch_factor_256 = ["firewood/branch_factor_256", "firewood-storage/branch_factor_256"]
 
 [build-dependencies]
 cbindgen = "=0.29.2"

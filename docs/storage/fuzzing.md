@@ -9,6 +9,27 @@ from the raw fuzzer input bytes via a deterministic `byteStepper`. Identical
 `randSource`/`byteSteps` pairs therefore always produce identical key/value
 material and, consequently, the same database roots.
 
+## Selecting Firewood feature flags
+
+The Go harness links against the `firewood-ffi` static library. Set the
+`FIREWOOD_RS_FEATURES` environment variable before running the fuzz target to
+build the Rust dependencies with a non-default feature set:
+
+```sh
+# Default hashing mode
+./scripts/firewood-fuzz.sh
+
+# Branch-factor 256
+FIREWOOD_RS_FEATURES=branch_factor_256 ./scripts/firewood-fuzz.sh
+
+# Ethereum-compatible hashing
+FIREWOOD_RS_FEATURES=ethhash ./scripts/firewood-fuzz.sh
+```
+
+The helper respects `FIREWOOD_FUZZTIME` (forwarded to `go test -fuzztime`) and
+`FIREWOOD_CARGO_PROFILE` if you need a longer run or a different Cargo profile.
+Branch factor 256 and `ethhash` cannot be combined.
+
 ## Reproducing a fuzz failure
 
 1. Run the fuzz target: `go test ./ffi/tests/firewood -run FuzzTree -fuzz=FuzzTree`.
