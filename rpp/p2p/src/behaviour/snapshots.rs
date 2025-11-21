@@ -91,6 +91,15 @@ pub struct SnapshotResumeState {
 pub enum SnapshotsRequest {
     Plan {
         session_id: SnapshotSessionId,
+        /// Optional chunk size requested by the consumer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk_size: Option<u64>,
+        /// Optional lower capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_chunk_size: Option<u64>,
+        /// Optional upper capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chunk_size: Option<u64>,
     },
     Chunk {
         session_id: SnapshotSessionId,
@@ -105,6 +114,15 @@ pub enum SnapshotsRequest {
         plan_id: String,
         chunk_index: u64,
         update_index: u64,
+        /// Optional chunk size requested by the consumer when resuming.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk_size: Option<u64>,
+        /// Optional lower capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_chunk_size: Option<u64>,
+        /// Optional upper capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chunk_size: Option<u64>,
     },
     Ack {
         session_id: SnapshotSessionId,
@@ -124,6 +142,15 @@ pub enum SnapshotsResponse {
     Plan {
         session_id: SnapshotSessionId,
         plan: Vec<u8>,
+        /// Optional chunk size offered by the provider for this plan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk_size: Option<u64>,
+        /// Optional lower capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_chunk_size: Option<u64>,
+        /// Optional upper capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chunk_size: Option<u64>,
     },
     Chunk {
         session_id: SnapshotSessionId,
@@ -712,7 +739,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         if entry.peer != peer {
             entry.peer = peer.clone();
         }
-        let request = SnapshotsRequest::Plan { session_id };
+        let request = SnapshotsRequest::Plan {
+            session_id,
+            chunk_size: None,
+            min_chunk_size: None,
+            max_chunk_size: None,
+        };
         let request_id = self.inner.send_request(&peer, request);
         entry.in_flight = Some(request_id);
         self.requests
@@ -788,6 +820,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             plan_id,
             chunk_index: entry.next_chunk_index,
             update_index: entry.next_update_index,
+            chunk_size: None,
+            min_chunk_size: None,
+            max_chunk_size: None,
         };
         let request_id = self.inner.send_request(&peer, request);
         entry.in_flight = Some(request_id);
@@ -839,7 +874,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     channel,
                 } => {
                     let session_id = match &request {
-                        SnapshotsRequest::Plan { session_id }
+                        SnapshotsRequest::Plan { session_id, .. }
                         | SnapshotsRequest::Chunk { session_id, .. }
                         | SnapshotsRequest::LightClientUpdate { session_id, .. }
                         | SnapshotsRequest::Resume { session_id, .. }
@@ -907,7 +942,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         channel: RequestResponseChannel<SnapshotsResponse>,
     ) {
         let session_id = match &request {
-            SnapshotsRequest::Plan { session_id }
+            SnapshotsRequest::Plan { session_id, .. }
             | SnapshotsRequest::Chunk { session_id, .. }
             | SnapshotsRequest::LightClientUpdate { session_id, .. }
             | SnapshotsRequest::Resume { session_id, .. }
@@ -933,13 +968,23 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
 
         match request {
-            SnapshotsRequest::Plan { session_id } => match self.provider.fetch_plan(session_id) {
+            SnapshotsRequest::Plan { session_id, .. } => match self.provider.fetch_plan(session_id)
+            {
                 Ok(plan) => match serde_json::to_vec(&plan) {
                     Ok(plan) => {
                         self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
                         if self
                             .inner
-                            .send_response(channel, SnapshotsResponse::Plan { session_id, plan })
+                            .send_response(
+                                channel,
+                                SnapshotsResponse::Plan {
+                                    session_id,
+                                    plan,
+                                    chunk_size: None,
+                                    min_chunk_size: None,
+                                    max_chunk_size: None,
+                                },
+                            )
                             .is_ok()
                         {
                             #[cfg(feature = "metrics")]
@@ -1103,6 +1148,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 plan_id,
                 chunk_index,
                 update_index,
+                ..
             } => match self
                 .provider
                 .resume_session(session_id, &plan_id, chunk_index, update_index)
