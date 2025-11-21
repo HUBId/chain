@@ -122,7 +122,7 @@
 2. **Node sauber stoppen:** Stoppe den Validator nach Abschluss des aktuellen Slots/Heights (z. B. via Service-Manager), damit gepufferte Proofs persistiert sind.
 3. **Binary/Container austauschen:** Rolle das neue Artefakt aus und stelle sicher, dass der Dienst mit den aktualisierten Feature-Flags startet.
 4. **Konfiguration anwenden:** Lade die angepasste `config/node.toml` (inkl. aktualisiertem `max_proof_size_bytes` falls nötig) und führe einen Neustart durch. Verifiziere unmittelbar nach dem Start, dass `backend_health.<target>.verifier.accepted` ansteigt und `valid=true`-Logs für neue Proofs erscheinen.【F:rpp/runtime/node.rs†L5416-L5460】
-5. **Post-Checks & Dokumentation:** Erfasse `GET /status/node` und relevante Telemetrie-Panels als Artefakte, notiere die Slot-/Height-Marke des Wechsels und aktualisiere das Incident-Log mit dem erfolgreichen Flip.
+5. **Post-Checks & Dokumentation:** Erfasse `GET /status/node` und relevante Telemetrie-Panels als Artefakte, notiere die Slot-/Height-Marke des Wechsels und aktualisiere das Incident-Log mit dem erfolgreichen Flip. Führe unmittelbar nach dem Neustart `tools/backend_switch_check.sh --url http://<host>:<port> --backend <ziel>` aus, um sicherzustellen, dass `backend_health.<ziel>.verifier` steigt und neue Proofs tatsächlich auf dem frischen Backend landen. Alternativ lässt sich derselbe Check automatisiert über `cargo test --features integration --test node_lifecycle -- backend_switch_routes_proofs_to_active_backend` ausführen, falls eine lokale Simnet-Umgebung zur Verfügung steht.
 
 **Rolling Deploy ohne Datenverlust**
 
