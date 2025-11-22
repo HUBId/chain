@@ -635,7 +635,7 @@ fn simnet_presets() -> &'static [SimnetPreset] {
 
 fn print_simnet_help() {
     let mut message = String::from(
-        "usage: cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]\n\n",
+        "usage: cargo xtask simnet (--profile <name> | --scenario <name|path>) [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]\n\n",
     );
     message.push_str(
         "Runs a predefined simnet scenario or an explicit RON path using the simnet binary.\n\n",
@@ -663,6 +663,7 @@ fn default_simnet_seed() -> Option<u64> {
 
 fn run_simnet(args: &[String]) -> Result<()> {
     let mut selection: Option<String> = None;
+    let mut selection_is_profile = false;
     let mut artifacts_dir: Option<PathBuf> = None;
     let mut keep_alive = false;
     let mut seed = default_simnet_seed();
@@ -670,7 +671,22 @@ fn run_simnet(args: &[String]) -> Result<()> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--profile" => {
+                if selection.is_some() && !selection_is_profile {
+                    bail!("--profile cannot be combined with --scenario");
+                }
+                selection_is_profile = true;
+                selection = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--profile requires a value"))?
+                        .to_string(),
+                );
+            }
             "--scenario" => {
+                if selection.is_some() && selection_is_profile {
+                    bail!("--scenario cannot be combined with --profile");
+                }
+                selection_is_profile = false;
                 selection = Some(
                     iter.next()
                         .ok_or_else(|| anyhow!("--scenario requires a value"))?
@@ -700,8 +716,9 @@ fn run_simnet(args: &[String]) -> Result<()> {
         }
     }
 
-    let selection = selection.ok_or_else(|| anyhow!("--scenario is required for simnet"))?;
-    let (slug, scenario_path) = resolve_simnet_selection(&selection)?;
+    let selection =
+        selection.ok_or_else(|| anyhow!("--profile or --scenario is required for simnet"))?;
+    let (slug, scenario_path, use_profile) = resolve_simnet_selection(&selection)?;
     let workspace = workspace_root();
     let artifacts = artifacts_dir.unwrap_or_else(|| {
         workspace
@@ -709,10 +726,17 @@ fn run_simnet(args: &[String]) -> Result<()> {
             .join(slug.replace('_', "-") + "-local")
     });
 
-    execute_simnet_scenario(&slug, &scenario_path, &artifacts, keep_alive, seed)
+    execute_simnet_scenario(
+        &slug,
+        &scenario_path,
+        use_profile,
+        &artifacts,
+        keep_alive,
+        seed,
+    )
 }
 
-fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
+fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf, bool)> {
     let workspace = workspace_root();
     if let Some(preset) = simnet_presets()
         .iter()
@@ -721,6 +745,7 @@ fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
         return Ok((
             preset.slug.to_string(),
             workspace.join(preset.scenario_path),
+            true,
         ));
     }
 
@@ -735,6 +760,7 @@ fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
         return Ok((
             preset.slug.to_string(),
             workspace.join(preset.scenario_path),
+            true,
         ));
     }
 
@@ -750,7 +776,7 @@ fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
             .and_then(|stem| stem.to_str())
             .unwrap_or("simnet-scenario")
             .replace('_', "-");
-        return Ok((slug, scenario_path));
+        return Ok((slug, scenario_path, false));
     }
 
     bail!("unknown simnet scenario: {selection}")
@@ -759,6 +785,7 @@ fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
 fn execute_simnet_scenario(
     slug: &str,
     scenario_path: &Path,
+    use_profile: bool,
     artifacts_dir: &Path,
     keep_alive: bool,
     seed: Option<u64>,
@@ -770,11 +797,15 @@ fn execute_simnet_scenario(
         .arg("--quiet")
         .arg("--package")
         .arg("simnet")
-        .arg("--")
-        .arg("--scenario")
-        .arg(scenario_path)
-        .arg("--artifacts-dir")
-        .arg(artifacts_dir);
+        .arg("--");
+
+    if use_profile {
+        command.arg("--profile").arg(slug);
+    } else {
+        command.arg("--scenario").arg(scenario_path);
+    }
+
+    command.arg("--artifacts-dir").arg(artifacts_dir);
 
     if keep_alive {
         command.arg("--keep-alive");
@@ -801,13 +832,14 @@ fn run_simnet_smoke() -> Result<()> {
     }
 
     for slug in scenarios {
-        let (resolved_slug, scenario_path) = resolve_simnet_selection(slug)?;
+        let (resolved_slug, scenario_path, use_profile) = resolve_simnet_selection(slug)?;
         let artifacts = workspace_root()
             .join("target/simnet")
             .join(resolved_slug.replace('_', "-"));
         execute_simnet_scenario(
             &resolved_slug,
             &scenario_path,
+            use_profile,
             &artifacts,
             false,
             default_simnet_seed(),

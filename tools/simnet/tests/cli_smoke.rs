@@ -23,7 +23,7 @@ fn xtask_simnet_runs_small_world_smoke() {
         .current_dir(&workspace)
         .arg("xtask")
         .arg("simnet")
-        .arg("--scenario")
+        .arg("--profile")
         .arg("small-world")
         .arg("--artifacts-dir")
         .arg(&artifacts)
