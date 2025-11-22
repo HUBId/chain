@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use anyhow::Context;
 use base64::Engine;
@@ -10,6 +11,10 @@ use metrics::counter;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+const SNAPSHOT_VERIFY_RESULTS_METRIC: &str = "snapshot_verify_results_total";
+const SNAPSHOT_VERIFY_FAILURE_METRIC: &str = "snapshot_verify_failures_total";
+static SNAPSHOT_METRIC_REGISTER: Once = Once::new();
 
 #[derive(Clone, Debug)]
 pub enum DataSource {
@@ -164,6 +169,44 @@ impl ExitCode {
             ExitCode::ChunkMismatch => 3,
             ExitCode::Fatal => 1,
         }
+    }
+}
+
+pub fn record_verification_outcome(exit_code: ExitCode, manifest: &Path) {
+    SNAPSHOT_METRIC_REGISTER.call_once(|| {
+        metrics::describe_counter!(
+            SNAPSHOT_VERIFY_RESULTS_METRIC,
+            "Total number of snapshot verification outcomes grouped by result"
+        );
+        metrics::describe_counter!(
+            SNAPSHOT_VERIFY_FAILURE_METRIC,
+            "Total number of snapshot verification failures observed while packaging release snapshots",
+        );
+    });
+
+    let manifest_label = manifest.display().to_string();
+    let (result_label, error_label) = match exit_code {
+        ExitCode::Success => ("success", "none"),
+        ExitCode::SignatureInvalid => ("failure", "signature_invalid"),
+        ExitCode::ChunkMismatch => ("failure", "chunk_mismatch"),
+        ExitCode::Fatal => ("failure", "fatal"),
+    };
+
+    counter!(
+        SNAPSHOT_VERIFY_RESULTS_METRIC,
+        "manifest" => manifest_label.clone(),
+        "result" => result_label,
+        "error" => error_label,
+    )
+    .increment(1);
+
+    if result_label == "failure" {
+        counter!(
+            SNAPSHOT_VERIFY_FAILURE_METRIC,
+            "manifest" => manifest_label,
+            "exit_code" => error_label,
+        )
+        .increment(1);
     }
 }
 
@@ -545,11 +588,14 @@ impl<W: Write> ProgressReporter<W> {
                 writeln!(
                     self.writer,
                     "checksum progress: {} / {} bytes ({percent:.1}%)",
-                    self.bytes_read,
-                    total
+                    self.bytes_read, total
                 )
             }
-            _ => writeln!(self.writer, "checksum progress: {} bytes read", self.bytes_read),
+            _ => writeln!(
+                self.writer,
+                "checksum progress: {} bytes read",
+                self.bytes_read
+            ),
         }
     }
 }
@@ -583,10 +629,22 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use ed25519_dalek::{Signer, SigningKey};
-    use std::io::Cursor;
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use serde_json::json;
     use std::convert::TryFrom;
+    use std::io::Cursor;
+    use std::sync::OnceLock;
     use tempfile::TempDir;
+
+    static PROMETHEUS: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+
+    fn prometheus_handle() -> &'static metrics_exporter_prometheus::PrometheusHandle {
+        PROMETHEUS.get_or_init(|| {
+            PrometheusBuilder::new()
+                .install_recorder()
+                .expect("install prometheus recorder")
+        })
+    }
 
     fn deterministic_signing_key(seed: u8) -> SigningKey {
         let secret_bytes = [seed; 32];
@@ -705,6 +763,184 @@ mod tests {
         assert!(report.signature.unwrap().signature_valid);
     }
 
+    fn counter_value(metrics: &str, name: &str, key: &str, value: &str) -> f64 {
+        metrics
+            .lines()
+            .find_map(|line| {
+                if !line.starts_with(name) {
+                    return None;
+                }
+
+                let matcher = format!("{key}=\"{value}\"");
+                if !line.contains(&matcher) {
+                    return None;
+                }
+
+                line.split_whitespace()
+                    .last()
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+            .unwrap_or_default()
+    }
+
+    fn execution_exit_code(execution: Execution) -> ExitCode {
+        match execution {
+            Execution::Completed { exit_code } => exit_code,
+            Execution::Fatal { exit_code, .. } => exit_code,
+        }
+    }
+
+    #[test]
+    fn tampered_signature_increments_failure_metrics() {
+        let handle = prometheus_handle();
+        let baseline = handle.render();
+
+        let temp = TempDir::new().unwrap();
+        let (manifest_path, chunk_dir) = write_manifest(&temp, &[("chunk-0.bin", b"hello")]);
+
+        let signing_key = deterministic_signing_key(3);
+        let verifying_key = signing_key.verifying_key();
+        let manifest_bytes = fs::read(&manifest_path).unwrap();
+        let signature_path = temp.path().join("chunks.json.sig");
+        fs::write(
+            &signature_path,
+            hex::encode(signing_key.sign(&manifest_bytes).to_bytes()),
+        )
+        .unwrap();
+
+        let args = VerifyArgs {
+            manifest: manifest_path.clone(),
+            signature: signature_path.clone(),
+            public_key: DataSource::Inline {
+                label: "inline".to_string(),
+                data: hex::encode(verifying_key.to_bytes()),
+            },
+            chunk_root: Some(chunk_dir.clone()),
+            verbose_progress: false,
+        };
+
+        let mut success_report = VerificationReport::new(&args);
+        let success_code = execution_exit_code(run_verification(&args, &mut success_report));
+        assert_eq!(success_code, ExitCode::Success);
+        record_verification_outcome(success_code, &manifest_path);
+
+        let tampered_signature = deterministic_signing_key(7).sign(&manifest_bytes);
+        fs::write(&signature_path, hex::encode(tampered_signature.to_bytes())).unwrap();
+
+        for _ in 0..2 {
+            let mut report = VerificationReport::new(&args);
+            let exit_code = execution_exit_code(run_verification(&args, &mut report));
+            assert_eq!(exit_code, ExitCode::SignatureInvalid);
+            record_verification_outcome(exit_code, &manifest_path);
+        }
+
+        let metrics = handle.render();
+        let success_delta = counter_value(
+            &metrics,
+            SNAPSHOT_VERIFY_RESULTS_METRIC,
+            "result",
+            "success",
+        ) - counter_value(
+            &baseline,
+            SNAPSHOT_VERIFY_RESULTS_METRIC,
+            "result",
+            "success",
+        );
+        let failure_delta = counter_value(
+            &metrics,
+            SNAPSHOT_VERIFY_RESULTS_METRIC,
+            "result",
+            "failure",
+        ) - counter_value(
+            &baseline,
+            SNAPSHOT_VERIFY_RESULTS_METRIC,
+            "result",
+            "failure",
+        );
+        let signature_delta = counter_value(
+            &metrics,
+            SNAPSHOT_VERIFY_FAILURE_METRIC,
+            "exit_code",
+            "signature_invalid",
+        ) - counter_value(
+            &baseline,
+            SNAPSHOT_VERIFY_FAILURE_METRIC,
+            "exit_code",
+            "signature_invalid",
+        );
+
+        assert!(success_delta >= 1.0, "success outcomes should be counted");
+        assert!(
+            failure_delta >= 2.0,
+            "two tampered runs should count as failures: {metrics}"
+        );
+        assert!(
+            signature_delta >= 2.0,
+            "signature failures should flow to the dedicated counter"
+        );
+
+        let total_runs = success_delta + failure_delta;
+        assert!(
+            total_runs >= 3.0,
+            "expected at least three verification attempts recorded"
+        );
+
+        let failure_rate = failure_delta / total_runs;
+        assert!(
+            failure_rate > 0.5,
+            "tampered signatures should push the failure ratio above alert thresholds"
+        );
+    }
+
+    #[test]
+    fn failure_rate_alerts_reference_results_metric() {
+        let alerts_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/observability/alerts/compliance_controls.yaml");
+        let contents =
+            fs::read_to_string(&alerts_path).expect("read compliance controls alert file");
+        let document: serde_yaml::Value =
+            serde_yaml::from_str(&contents).expect("parse alert yaml");
+
+        let mut expressions = Vec::new();
+        if let Some(groups) = document
+            .get("spec")
+            .and_then(|spec| spec.get("groups"))
+            .and_then(|groups| groups.as_sequence())
+        {
+            for group in groups {
+                if let Some(rules) = group.get("rules").and_then(|rules| rules.as_sequence()) {
+                    for rule in rules {
+                        if let Some(alert_name) = rule.get("alert").and_then(|alert| alert.as_str())
+                        {
+                            if alert_name.starts_with("SnapshotVerifierFailureRate") {
+                                if let Some(expr) = rule.get("expr").and_then(|expr| expr.as_str())
+                                {
+                                    expressions.push(expr.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !expressions.is_empty(),
+            "expected snapshot verifier failure rate alerts to be defined"
+        );
+
+        for expr in expressions {
+            assert!(
+                expr.contains("snapshot_verify_results_total{result=\"failure\"}"),
+                "alert should track failure-labelled outcomes: {expr}"
+            );
+            assert!(
+                expr.contains("snapshot_verify_results_total"),
+                "alert should compute rates using the aggregated results counter: {expr}"
+            );
+        }
+    }
+
     #[test]
     fn streams_progress_with_expected_size() {
         let data = vec![0u8; (3 * PROGRESS_LOG_INTERVAL as usize) + 512];
@@ -717,19 +953,18 @@ mod tests {
             PROGRESS_LOG_INTERVAL,
         );
 
-        let digest = compute_sha256_from_reader(
-            Cursor::new(&data),
-            Path::new("mock.bin"),
-            Some(reporter),
-        )
-        .expect("checksum succeeds");
+        let digest =
+            compute_sha256_from_reader(Cursor::new(&data), Path::new("mock.bin"), Some(reporter))
+                .expect("checksum succeeds");
 
         assert_eq!(digest, hex::encode(expected));
 
         let output = String::from_utf8(log_buffer).expect("utf8 log");
         let lines: Vec<_> = output.lines().collect();
         assert!(lines.len() >= 3);
-        assert!(lines.iter().all(|line| line.starts_with("checksum progress:")));
+        assert!(lines
+            .iter()
+            .all(|line| line.starts_with("checksum progress:")));
         assert_eq!(
             lines.last().unwrap(),
             &format!(
@@ -747,12 +982,9 @@ mod tests {
 
         let reporter = ProgressReporter::new(&mut log_buffer, None, PROGRESS_LOG_INTERVAL);
 
-        let digest = compute_sha256_from_reader(
-            Cursor::new(&data),
-            Path::new("mock.bin"),
-            Some(reporter),
-        )
-        .expect("checksum succeeds");
+        let digest =
+            compute_sha256_from_reader(Cursor::new(&data), Path::new("mock.bin"), Some(reporter))
+                .expect("checksum succeeds");
 
         assert_eq!(digest, hex::encode(Sha256::digest(&data)));
 
