@@ -19,6 +19,7 @@ Release-Skript ersetzt und dürfen nicht leer bleiben:
 - Release automation now injects proof metadata into generated notes, capturing Plonky3 verifying/proving keys, STWO verifying key commitments, and blueprint circuit stages.
 - Release packaging emits `snapshot-manifest-summary-<target>.json` whenever pruning snapshots are attached to a build. The summary lists the snapshot manifest identifier, recorded Firewood state root, and chunk count derived from the persisted state-sync plan so operators can validate bundle integrity before rollout.【F:scripts/generate_snapshot_summary.py†L1-L190】【F:scripts/build_release.sh†L258-L272】【F:.github/workflows/release.yml†L333-L375】
 - The release build invokes `snapshot-verify` for every bundled manifest, aggregates the results into `snapshot-verify-report.json`, and attaches the JSON plus the cosign signature as release assets. The release notes record both the SHA256 digest and signature so auditors can validate the report before rolling out artifacts.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L303-L411】
+- ZK-Backend-Rollbacks sind dokumentiert: Der Operator-Guide beschreibt Konfig-Revert, Cache-Purge, Neustart-Reihenfolge und Validierungsschritte, inklusive Referenzen für Incident-Logs und `/status/node`-Checks.【F:docs/zk_backends.md†L193-L228】
 
 ### Proof metadata
 
