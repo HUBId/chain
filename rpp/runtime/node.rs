@@ -149,8 +149,9 @@ use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, ResumeBoundKind,
-    SnapshotChunk, SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
-    SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    SnapshotChunk, SnapshotChunkCapabilities, SnapshotChunkStream, SnapshotItemKind,
+    SnapshotProvider, SnapshotProviderHandle, SnapshotResumeState, SnapshotSessionId,
+    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
@@ -2088,6 +2089,15 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             _ => {}
         }
         self.persist_session(session_id, session)
+    }
+
+    fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
+        let chunk_size = u64::try_from(self.chunk_size).unwrap_or(u64::MAX);
+        SnapshotChunkCapabilities {
+            chunk_size: Some(chunk_size),
+            min_chunk_size: Some(chunk_size),
+            max_chunk_size: Some(chunk_size),
+        }
     }
 }
 
