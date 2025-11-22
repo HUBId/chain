@@ -26,7 +26,10 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time;
 use tracing::{debug, info, info_span, instrument, warn, Span};
 
-use crate::config::{FeatureGates, NetworkAdmissionConfig, NodeConfig, P2pConfig, TelemetryConfig};
+use crate::config::{
+    FeatureGates, NetworkAdmissionConfig, NodeConfig, P2pConfig, SnapshotDownloadConfig,
+    TelemetryConfig,
+};
 use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
 use crate::node::NetworkIdentityProfile;
 use crate::proof_backend::Blake2sHasher;
@@ -75,12 +78,14 @@ enum NodeCommand {
         peer: PeerId,
         root: String,
         chunk_size: u64,
+        max_concurrent_downloads: usize,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     ResumeSnapshotStream {
         session: SnapshotSessionId,
         plan_id: String,
         chunk_size: Option<u64>,
+        max_concurrent_downloads: usize,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     CancelSnapshotStream {
@@ -316,6 +321,7 @@ pub struct NodeRuntimeConfig {
     pub consensus_storage_path: PathBuf,
     pub feature_gates: FeatureGates,
     pub snapshot_provider: Option<SnapshotProviderHandle>,
+    pub snapshot_download: SnapshotDownloadConfig,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -331,6 +337,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             consensus_storage_path: config.consensus_pipeline_path.clone(),
             feature_gates: config.rollout.feature_gates.clone(),
             snapshot_provider: None,
+            snapshot_download: config.snapshot_download.clone(),
         }
     }
 }
@@ -354,6 +361,7 @@ impl fmt::Debug for NodeRuntimeConfig {
                     &"None"
                 },
             )
+            .field("snapshot_download", &self.snapshot_download)
             .finish()
     }
 }
@@ -1059,6 +1067,7 @@ impl NodeInner {
             snapshot_streams: snapshot_streams.clone(),
             peerstore: peerstore.clone(),
             admission_dual_control: dual_control.clone(),
+            snapshot_download: config.snapshot_download.clone(),
         };
         let local_features = config
             .identity
@@ -1251,11 +1260,17 @@ impl NodeInner {
                 peer,
                 root,
                 chunk_size,
+                max_concurrent_downloads,
                 response,
             } => {
                 let result = self
                     .network
-                    .start_snapshot_stream(session, peer.clone(), root.clone())
+                    .start_snapshot_stream(
+                        session,
+                        peer.clone(),
+                        root.clone(),
+                        max_concurrent_downloads,
+                    )
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(root), |status| {
@@ -1277,6 +1292,7 @@ impl NodeInner {
                 session,
                 plan_id,
                 chunk_size,
+                max_concurrent_downloads,
                 response,
             } => {
                 let resume_params = {
@@ -1319,7 +1335,13 @@ impl NodeInner {
                 }
                 let result = self
                     .network
-                    .resume_snapshot_stream(session, plan_id.clone(), next_chunk, next_update)
+                    .resume_snapshot_stream(
+                        session,
+                        plan_id.clone(),
+                        next_chunk,
+                        next_update,
+                        max_concurrent_downloads,
+                    )
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(plan_id.clone()), |status| {
@@ -2212,6 +2234,7 @@ pub struct NodeHandle {
     snapshot_streams: Arc<RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>>,
     peerstore: Arc<Peerstore>,
     admission_dual_control: Arc<DualControlApprovalService>,
+    snapshot_download: SnapshotDownloadConfig,
 }
 
 impl NodeHandle {
@@ -2228,6 +2251,10 @@ impl NodeHandle {
     /// Returns the latest verified light client head, if any have been observed.
     pub fn latest_light_client_head(&self) -> Option<LightClientHead> {
         self.light_client_heads.borrow().clone()
+    }
+
+    pub fn snapshot_download_config(&self) -> &SnapshotDownloadConfig {
+        &self.snapshot_download
     }
 
     /// Returns the current snapshot stream status for the provided session, if known.
@@ -2347,6 +2374,7 @@ impl NodeHandle {
         peer: PeerId,
         root: String,
         chunk_size: u64,
+        max_concurrent_downloads: usize,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
@@ -2355,6 +2383,7 @@ impl NodeHandle {
                 peer,
                 root,
                 chunk_size,
+                max_concurrent_downloads,
                 response: tx,
             })
             .await
@@ -2368,6 +2397,7 @@ impl NodeHandle {
         session: SnapshotSessionId,
         plan_id: String,
         chunk_size: Option<u64>,
+        max_concurrent_downloads: usize,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
@@ -2375,6 +2405,7 @@ impl NodeHandle {
                 session,
                 plan_id,
                 chunk_size,
+                max_concurrent_downloads,
                 response: tx,
             })
             .await
@@ -2510,6 +2541,7 @@ mod tests {
             consensus_storage_path,
             feature_gates: FeatureGates::default(),
             snapshot_provider: None,
+            snapshot_download: SnapshotDownloadConfig::default(),
         }
     }
 

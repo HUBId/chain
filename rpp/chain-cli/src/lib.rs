@@ -17,7 +17,8 @@ use rpp_chain::crypto::{
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeyStore, VrfKeypair,
 };
 use rpp_chain::runtime::config::{
-    NodeConfig, SecretsBackendConfig, SecretsConfig, TelemetryConfig, WalletConfig, WalletConfigExt,
+    NodeConfig, SecretsBackendConfig, SecretsConfig, TelemetryConfig, WalletConfig,
+    WalletConfigExt, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
 };
 use rpp_chain::runtime::{RuntimeMetrics, TelemetryExporterBuilder};
 use rpp_chain::storage::Storage;
@@ -281,6 +282,15 @@ struct SnapshotConnectionArgs {
     /// Initial backoff delay (ms) used when retrying snapshot downloads
     #[arg(long, value_name = "MILLIS", default_value_t = DEFAULT_SNAPSHOT_RETRY_BACKOFF_MS)]
     retry_backoff_ms: u64,
+
+    /// Maximum number of chunks to download concurrently
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS as u32,
+        env = "RPP_SNAPSHOT_MAX_CONCURRENT_DOWNLOADS"
+    )]
+    max_concurrent_downloads: u32,
 }
 
 #[derive(Subcommand)]
@@ -924,6 +934,7 @@ struct TimetokeReplayFailureBreakdown {
 struct StartSnapshotStreamRequest<'a> {
     peer: &'a str,
     chunk_size: u32,
+    max_concurrent_downloads: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     resume: Option<ResumeMarker<'a>>,
 }
@@ -1055,6 +1066,7 @@ async fn start_snapshot_session(args: SnapshotStartCommand) -> Result<()> {
     let request = StartSnapshotStreamRequest {
         peer: &args.peer,
         chunk_size: args.chunk_size,
+        max_concurrent_downloads: args.connection.max_concurrent_downloads,
         resume: None,
     };
     let response = client
@@ -1115,6 +1127,7 @@ async fn resume_snapshot_session(args: SnapshotResumeCommand) -> Result<()> {
     let request = StartSnapshotStreamRequest {
         peer: &args.peer,
         chunk_size: args.chunk_size,
+        max_concurrent_downloads: args.connection.max_concurrent_downloads,
         resume: Some(ResumeMarker {
             session: args.session,
             plan_id: &args.plan_id,

@@ -703,6 +703,7 @@ struct SnapshotSessionState {
     next_chunk: u64,
     next_update: u64,
     pending_request: Option<OutboundRequestId>,
+    max_concurrent_downloads: usize,
 }
 
 #[cfg(all(
@@ -722,6 +723,7 @@ impl SnapshotSessionState {
             next_chunk: 0,
             next_update: 0,
             pending_request: None,
+            max_concurrent_downloads: 1,
         }
     }
 
@@ -1279,6 +1281,7 @@ impl Network {
         session: SnapshotSessionId,
         peer: PeerId,
         root: String,
+        max_concurrent_downloads: usize,
     ) -> Result<(), NetworkError> {
         if self.snapshot_sessions.contains_key(&session) {
             tracing::warn!(%session, peer = %peer, "snapshot_session_already_started");
@@ -1292,6 +1295,7 @@ impl Network {
             .request_plan(peer.clone(), session)
         {
             let mut state = SnapshotSessionState::new(peer, root);
+            state.max_concurrent_downloads = max_concurrent_downloads.max(1);
             state.pending_request = Some(request_id);
             self.snapshot_sessions.insert(session, state);
         } else {
@@ -1307,6 +1311,7 @@ impl Network {
         plan_id: String,
         next_chunk: u64,
         next_update: u64,
+        max_concurrent_downloads: usize,
     ) -> Result<(), NetworkError> {
         let peer = match self.snapshot_sessions.get(&session) {
             Some(state) => {
@@ -1330,6 +1335,7 @@ impl Network {
             state.next_chunk = next_chunk;
             state.next_update = next_update;
             state.plan_id = plan_id.clone();
+            state.max_concurrent_downloads = max_concurrent_downloads.max(1);
         }
 
         if let Some(request_id) =
@@ -1641,8 +1647,9 @@ impl Network {
                     if !observed {
                         tracing::warn!(?propagation_source, ?topic, "replayed gossip detected");
                         #[cfg(feature = "metrics")]
-                        self.metrics
-                            .record_replay_guard_drop(self.peerstore.peer_class(&propagation_source));
+                        self.metrics.record_replay_guard_drop(
+                            self.peerstore.peer_class(&propagation_source),
+                        );
                         self.penalise_peer(
                             propagation_source,
                             ReputationEvent::ManualPenalty {
@@ -2230,7 +2237,10 @@ mod tests {
         let untrusted = vec![("peer_class".to_string(), "untrusted".to_string())];
 
         assert_eq!(metrics.replay_guard_drops.get_or_create(&trusted).get(), 1);
-        assert_eq!(metrics.replay_guard_drops.get_or_create(&untrusted).get(), 1);
+        assert_eq!(
+            metrics.replay_guard_drops.get_or_create(&untrusted).get(),
+            1
+        );
         assert_eq!(
             metrics
                 .replay_guard_window_fill_ratio

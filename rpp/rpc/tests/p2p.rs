@@ -11,6 +11,7 @@ use axum::{
 use hyper::body::to_bytes;
 use parking_lot::RwLock;
 use rpp_chain::api::{self, ApiContext, SnapshotStreamRuntime, SnapshotStreamRuntimeError};
+use rpp_chain::runtime::config::DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS;
 use rpp_chain::runtime::node_runtime::node::{NodeError as P2pNodeError, SnapshotStreamStatus};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{vendor::PeerId as NetworkPeerId, SnapshotSessionId};
@@ -21,7 +22,7 @@ struct FakeSnapshotRuntime {
     start_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
     resume_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
     statuses: Mutex<HashMap<u64, SnapshotStreamStatus>>,
-    started: Mutex<Vec<(u64, NetworkPeerId, u64)>>,
+    started: Mutex<Vec<(u64, NetworkPeerId, u64, usize)>>,
     resumed: Mutex<Vec<(u64, String)>>,
 }
 
@@ -39,7 +40,7 @@ impl FakeSnapshotRuntime {
         }
     }
 
-    fn record(&self) -> Vec<(u64, NetworkPeerId, u64)> {
+    fn record(&self) -> Vec<(u64, NetworkPeerId, u64, usize)> {
         self.started.lock().expect("start log lock").clone()
     }
 
@@ -56,11 +57,14 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
         peer: NetworkPeerId,
         _root: String,
         chunk_size: u64,
+        max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
-        self.started
-            .lock()
-            .expect("start log lock")
-            .push((session, peer.clone(), chunk_size));
+        self.started.lock().expect("start log lock").push((
+            session,
+            peer.clone(),
+            chunk_size,
+            max_concurrent_downloads,
+        ));
         let mut result = self.start_result.lock().expect("start result lock");
         if let Some(outcome) = result.take() {
             outcome
@@ -79,6 +83,7 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
         session: u64,
         plan_id: String,
         _chunk_size: Option<u64>,
+        _max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
         self.resumed
             .lock()
@@ -194,6 +199,7 @@ async fn start_snapshot_stream_returns_status() {
     assert_eq!(starts[0].0, session);
     assert_eq!(starts[0].1, peer);
     assert_eq!(starts[0].2, 16);
+    assert_eq!(starts[0].3, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS);
 }
 
 #[tokio::test]

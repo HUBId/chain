@@ -291,6 +291,7 @@ pub trait SnapshotStreamRuntime: Send + Sync {
         peer: NetworkPeerId,
         root: String,
         chunk_size: u64,
+        max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
 
     async fn resume_snapshot_stream(
@@ -298,6 +299,7 @@ pub trait SnapshotStreamRuntime: Send + Sync {
         session: u64,
         plan_id: String,
         chunk_size: Option<u64>,
+        max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
 
     fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus>;
@@ -324,10 +326,11 @@ impl SnapshotStreamRuntime for NodeSnapshotStreamRuntime {
         peer: NetworkPeerId,
         root: String,
         chunk_size: u64,
+        max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
         let session_id = SnapshotSessionId::new(session);
         self.handle
-            .start_snapshot_stream(session_id, peer, root, chunk_size)
+            .start_snapshot_stream(session_id, peer, root, chunk_size, max_concurrent_downloads)
             .await
             .map_err(SnapshotStreamRuntimeError::Runtime)?;
         self.snapshot_stream_status(session)
@@ -339,10 +342,11 @@ impl SnapshotStreamRuntime for NodeSnapshotStreamRuntime {
         session: u64,
         plan_id: String,
         chunk_size: Option<u64>,
+        max_concurrent_downloads: usize,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
         let session_id = SnapshotSessionId::new(session);
         self.handle
-            .resume_snapshot_stream(session_id, plan_id, chunk_size)
+            .resume_snapshot_stream(session_id, plan_id, chunk_size, max_concurrent_downloads)
             .await
             .map_err(SnapshotStreamRuntimeError::Runtime)?;
         self.snapshot_stream_status(session)

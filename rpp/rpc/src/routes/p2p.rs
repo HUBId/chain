@@ -17,6 +17,7 @@ use super::super::{
     SnapshotStreamRuntimeError,
 };
 use crate::node::DEFAULT_STATE_SYNC_CHUNK;
+use crate::runtime::config::DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS;
 use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
@@ -35,6 +36,8 @@ pub struct StartSnapshotStreamRequest {
     pub max_chunk_size: Option<u32>,
     #[serde(default)]
     pub resume: Option<ResumeMarker>,
+    #[serde(default)]
+    pub max_concurrent_downloads: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -336,6 +339,20 @@ pub(super) async fn start_snapshot_stream(
         ));
     }
 
+    let node = state.require_node()?;
+
+    let max_concurrent_downloads = request.max_concurrent_downloads.unwrap_or_else(|| {
+        node.snapshot_download_config()
+            .max_concurrent_chunk_downloads
+            .try_into()
+            .unwrap_or(DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS as u32)
+    });
+    if max_concurrent_downloads == 0 {
+        return Err(super::super::bad_request(
+            "max_concurrent_downloads must be greater than zero",
+        ));
+    }
+
     let peer = NetworkPeerId::from_str(request.peer.trim())
         .map_err(|err| super::super::bad_request(format!("invalid peer id: {err}")))?;
 
@@ -378,11 +395,22 @@ pub(super) async fn start_snapshot_stream(
 
     let status = match plan_id {
         Some(plan_id) => runtime
-            .resume_snapshot_stream(session, plan_id, Some(chunk_size))
+            .resume_snapshot_stream(
+                session,
+                plan_id,
+                Some(chunk_size),
+                max_concurrent_downloads as usize,
+            )
             .await
             .map_err(snapshot_runtime_error_to_http)?,
         None => runtime
-            .start_snapshot_stream(session, peer, root_hint, chunk_size)
+            .start_snapshot_stream(
+                session,
+                peer,
+                root_hint,
+                chunk_size,
+                max_concurrent_downloads as usize,
+            )
             .await
             .map_err(snapshot_runtime_error_to_http)?,
     };
