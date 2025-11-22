@@ -85,6 +85,13 @@ pub struct SnapshotResumeState {
     pub next_update_index: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SnapshotChunkCapabilities {
+    pub chunk_size: Option<u64>,
+    pub min_chunk_size: Option<u64>,
+    pub max_chunk_size: Option<u64>,
+}
+
 /// Snapshot protocol request payload.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -166,6 +173,15 @@ pub enum SnapshotsResponse {
         session_id: SnapshotSessionId,
         chunk_index: u64,
         update_index: u64,
+        /// Optional chunk size offered by the provider for this session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk_size: Option<u64>,
+        /// Optional lower capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_chunk_size: Option<u64>,
+        /// Optional upper capability bound for negotiated chunk sizes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chunk_size: Option<u64>,
     },
     Ack {
         session_id: SnapshotSessionId,
@@ -214,6 +230,10 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         chunk_index: u64,
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error>;
+
+    fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
+        SnapshotChunkCapabilities::default()
+    }
 
     fn acknowledge(
         &self,
@@ -275,6 +295,10 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
     ) -> Result<(), Self::Error> {
         (**self).acknowledge(session_id, kind, index)
     }
+
+    fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
+        (**self).chunk_capabilities()
+    }
 }
 
 /// Fallback snapshot provider returning `SnapshotNotFound` for every request.
@@ -324,6 +348,14 @@ impl SnapshotProvider for NullSnapshotProvider {
         _index: u64,
     ) -> Result<(), Self::Error> {
         Err(PipelineError::SnapshotNotFound)
+    }
+
+    fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
+        SnapshotChunkCapabilities {
+            chunk_size: Some(1),
+            min_chunk_size: Some(1),
+            max_chunk_size: None,
+        }
     }
 }
 
@@ -467,17 +499,25 @@ struct SessionState {
     next_update_index: u64,
     in_flight: Option<RequestResponseId>,
     last_progress: Instant,
+    chunk_size: Option<u64>,
+    capabilities: SnapshotChunkCapabilities,
 }
 
 #[cfg(feature = "request-response")]
 impl SessionState {
     fn new(peer: PeerId) -> Self {
+        Self::with_capabilities(peer, SnapshotChunkCapabilities::default())
+    }
+
+    fn with_capabilities(peer: PeerId, capabilities: SnapshotChunkCapabilities) -> Self {
         Self {
             peer,
             next_chunk_index: 0,
             next_update_index: 0,
             in_flight: None,
             last_progress: Instant::now(),
+            chunk_size: capabilities.chunk_size,
+            capabilities,
         }
     }
 
@@ -723,6 +763,87 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     #[cfg(not(feature = "metrics"))]
     fn update_stream_lag_metric(&mut self) {}
 
+    fn negotiate_chunk_size(
+        capabilities: SnapshotChunkCapabilities,
+        requested_chunk_size: Option<u64>,
+        requested_min_chunk_size: Option<u64>,
+        requested_max_chunk_size: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        if let (Some(min), Some(max)) = (requested_min_chunk_size, requested_max_chunk_size) {
+            if min > max {
+                return Err(format!(
+                    "requested chunk size bounds invalid: min {min} exceeds max {max}"
+                ));
+            }
+        }
+        if let (Some(min), Some(max)) = (capabilities.min_chunk_size, capabilities.max_chunk_size) {
+            if min > max {
+                return Err(format!(
+                    "provider chunk size bounds invalid: min {min} exceeds max {max}"
+                ));
+            }
+        }
+        if let (Some(cap_min), Some(req_max)) =
+            (capabilities.min_chunk_size, requested_max_chunk_size)
+        {
+            if req_max < cap_min {
+                return Err(format!(
+                    "requested max chunk size {req_max} below provider minimum {cap_min}"
+                ));
+            }
+        }
+        if let (Some(cap_max), Some(req_min)) =
+            (capabilities.max_chunk_size, requested_min_chunk_size)
+        {
+            if req_min > cap_max {
+                return Err(format!(
+                    "requested min chunk size {req_min} above provider maximum {cap_max}"
+                ));
+            }
+        }
+
+        let negotiated_chunk_size = requested_chunk_size.or(capabilities.chunk_size);
+        if let Some(size) = negotiated_chunk_size {
+            if capabilities
+                .min_chunk_size
+                .map(|min| size < min)
+                .unwrap_or(false)
+                || capabilities
+                    .max_chunk_size
+                    .map(|max| size > max)
+                    .unwrap_or(false)
+                || requested_min_chunk_size
+                    .map(|min| size < min)
+                    .unwrap_or(false)
+                || requested_max_chunk_size
+                    .map(|max| size > max)
+                    .unwrap_or(false)
+            {
+                return Err(format!("chunk size {size} out of negotiated bounds"));
+            }
+            return Ok(Some(size));
+        }
+
+        let lower_bound = [capabilities.min_chunk_size, requested_min_chunk_size]
+            .into_iter()
+            .flatten()
+            .max();
+        let upper_bound = [capabilities.max_chunk_size, requested_max_chunk_size]
+            .into_iter()
+            .flatten()
+            .min();
+
+        if let (Some(min), Some(max)) = (lower_bound, upper_bound) {
+            if min > max {
+                return Err(format!(
+                    "chunk size bounds have no overlap: min {min} exceeds max {max}"
+                ));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Sends a plan request to the remote peer.
     pub fn request_plan(
         &mut self,
@@ -820,9 +941,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             plan_id,
             chunk_index: entry.next_chunk_index,
             update_index: entry.next_update_index,
-            chunk_size: None,
-            min_chunk_size: None,
-            max_chunk_size: None,
+            chunk_size: entry.chunk_size,
+            min_chunk_size: entry.capabilities.min_chunk_size,
+            max_chunk_size: entry.capabilities.max_chunk_size,
         };
         let request_id = self.inner.send_request(&peer, request);
         entry.in_flight = Some(request_id);
@@ -950,6 +1071,19 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             | SnapshotsRequest::Error { session_id, .. } => *session_id,
         };
 
+        let capabilities = self.provider.chunk_capabilities();
+        let state = self
+            .sessions
+            .entry(session_id)
+            .or_insert_with(|| SessionState::with_capabilities(peer.clone(), capabilities));
+        state.capabilities = capabilities;
+        if state.chunk_size.is_none() {
+            state.chunk_size = capabilities.chunk_size;
+        }
+        if state.peer != peer {
+            state.peer = peer.clone();
+        }
+
         if let Err(err) = self.provider.open_session(session_id, &peer) {
             let message = err.to_string();
             let _ = self.inner.send_response(
@@ -968,31 +1102,79 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
 
         match request {
-            SnapshotsRequest::Plan { session_id, .. } => match self.provider.fetch_plan(session_id)
-            {
-                Ok(plan) => match serde_json::to_vec(&plan) {
-                    Ok(plan) => {
-                        self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
-                        if self
-                            .inner
-                            .send_response(
-                                channel,
-                                SnapshotsResponse::Plan {
-                                    session_id,
-                                    plan,
-                                    chunk_size: None,
-                                    min_chunk_size: None,
-                                    max_chunk_size: None,
-                                },
-                            )
-                            .is_ok()
-                        {
-                            #[cfg(feature = "metrics")]
-                            self.track_response(request_id, SnapshotItemKind::Plan);
-                        }
+            SnapshotsRequest::Plan {
+                session_id,
+                chunk_size,
+                min_chunk_size,
+                max_chunk_size,
+            } => {
+                let negotiated_chunk_size = match Self::negotiate_chunk_size(
+                    capabilities,
+                    chunk_size,
+                    min_chunk_size,
+                    max_chunk_size,
+                ) {
+                    Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
+                    Err(message) => {
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Error {
+                                session_id,
+                                message: message.clone(),
+                            },
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
+                            session_id,
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                        self.record_failure("outbound", SnapshotItemKind::Plan);
+                        return;
                     }
+                };
+                state.chunk_size = negotiated_chunk_size;
+
+                match self.provider.fetch_plan(session_id) {
+                    Ok(plan) => match serde_json::to_vec(&plan) {
+                        Ok(plan) => {
+                            self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
+                            if self
+                                .inner
+                                .send_response(
+                                    channel,
+                                    SnapshotsResponse::Plan {
+                                        session_id,
+                                        plan,
+                                        chunk_size: negotiated_chunk_size,
+                                        min_chunk_size: capabilities.min_chunk_size,
+                                        max_chunk_size: capabilities.max_chunk_size,
+                                    },
+                                )
+                                .is_ok()
+                            {
+                                #[cfg(feature = "metrics")]
+                                self.track_response(request_id, SnapshotItemKind::Plan);
+                            }
+                        }
+                        Err(err) => {
+                            let message = format!("encode plan: {err}");
+                            let _ = self.inner.send_response(
+                                channel,
+                                SnapshotsResponse::Error {
+                                    session_id,
+                                    message: message.clone(),
+                                },
+                            );
+                            self.pending_events.push_back(SnapshotsEvent::Error {
+                                peer,
+                                session_id,
+                                error: SnapshotProtocolError::Provider(message),
+                            });
+                            self.record_failure("outbound", SnapshotItemKind::Plan);
+                        }
+                    },
                     Err(err) => {
-                        let message = format!("encode plan: {err}");
+                        let message = err.to_string();
                         let _ = self.inner.send_response(
                             channel,
                             SnapshotsResponse::Error {
@@ -1007,24 +1189,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         });
                         self.record_failure("outbound", SnapshotItemKind::Plan);
                     }
-                },
-                Err(err) => {
-                    let message = err.to_string();
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::Error {
-                            session_id,
-                            message: message.clone(),
-                        },
-                    );
-                    self.pending_events.push_back(SnapshotsEvent::Error {
-                        peer,
-                        session_id,
-                        error: SnapshotProtocolError::Provider(message),
-                    });
-                    self.record_failure("outbound", SnapshotItemKind::Plan);
                 }
-            },
+            }
             SnapshotsRequest::Chunk {
                 session_id,
                 chunk_index,
@@ -1148,44 +1314,78 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 plan_id,
                 chunk_index,
                 update_index,
-                ..
-            } => match self
-                .provider
-                .resume_session(session_id, &plan_id, chunk_index, update_index)
-            {
-                Ok(resume) => {
-                    if self
-                        .inner
-                        .send_response(
+                chunk_size,
+                min_chunk_size,
+                max_chunk_size,
+            } => {
+                let negotiated_chunk_size = match Self::negotiate_chunk_size(
+                    capabilities,
+                    chunk_size,
+                    min_chunk_size,
+                    max_chunk_size,
+                ) {
+                    Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
+                    Err(message) => {
+                        let _ = self.inner.send_response(
                             channel,
-                            SnapshotsResponse::Resume {
+                            SnapshotsResponse::Error {
                                 session_id,
-                                chunk_index: resume.next_chunk_index,
-                                update_index: resume.next_update_index,
+                                message: message.clone(),
                             },
-                        )
-                        .is_ok()
-                    {
-                        #[cfg(feature = "metrics")]
-                        self.track_response(request_id, SnapshotItemKind::Resume);
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
+                            session_id,
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                        self.record_failure("outbound", SnapshotItemKind::Resume);
+                        return;
+                    }
+                };
+                state.chunk_size = negotiated_chunk_size;
+
+                match self
+                    .provider
+                    .resume_session(session_id, &plan_id, chunk_index, update_index)
+                {
+                    Ok(resume) => {
+                        if self
+                            .inner
+                            .send_response(
+                                channel,
+                                SnapshotsResponse::Resume {
+                                    session_id,
+                                    chunk_index: resume.next_chunk_index,
+                                    update_index: resume.next_update_index,
+                                    chunk_size: negotiated_chunk_size,
+                                    min_chunk_size: capabilities.min_chunk_size,
+                                    max_chunk_size: capabilities.max_chunk_size,
+                                },
+                            )
+                            .is_ok()
+                        {
+                            #[cfg(feature = "metrics")]
+                            self.track_response(request_id, SnapshotItemKind::Resume);
+                        }
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Error {
+                                session_id,
+                                message: message.clone(),
+                            },
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
+                            session_id,
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                        self.record_failure("outbound", SnapshotItemKind::Resume);
                     }
                 }
-                Err(err) => {
-                    let message = err.to_string();
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::Error {
-                            session_id,
-                            message: message.clone(),
-                        },
-                    );
-                    self.pending_events.push_back(SnapshotsEvent::Error {
-                        peer,
-                        session_id,
-                        error: SnapshotProtocolError::Provider(message),
-                    });
-                }
-            },
+            }
             SnapshotsRequest::Ack {
                 session_id,
                 kind,
@@ -1260,13 +1460,25 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         response: SnapshotsResponse,
     ) {
         match response {
-            SnapshotsResponse::Plan { plan, .. } => match serde_json::from_slice(&plan) {
+            SnapshotsResponse::Plan {
+                plan,
+                chunk_size,
+                min_chunk_size,
+                max_chunk_size,
+                ..
+            } => match serde_json::from_slice(&plan) {
                 Ok(plan) => {
                     self.record_bytes("inbound", SnapshotItemKind::Plan, plan.len());
                     let state = self
                         .sessions
                         .entry(session_id)
                         .or_insert_with(|| SessionState::new(peer.clone()));
+                    state.chunk_size = chunk_size;
+                    state.capabilities = SnapshotChunkCapabilities {
+                        chunk_size,
+                        min_chunk_size,
+                        max_chunk_size,
+                    };
                     state.next_chunk_index = 0;
                     state.next_update_index = 0;
                     state.mark_progress();
@@ -1344,9 +1556,18 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             SnapshotsResponse::Resume {
                 chunk_index,
                 update_index,
+                chunk_size,
+                min_chunk_size,
+                max_chunk_size,
                 ..
             } => {
                 if let Some(state) = self.sessions.get_mut(&session_id) {
+                    state.chunk_size = chunk_size;
+                    state.capabilities = SnapshotChunkCapabilities {
+                        chunk_size,
+                        min_chunk_size,
+                        max_chunk_size,
+                    };
                     state.next_chunk_index = chunk_index;
                     state.next_update_index = update_index;
                     state.mark_progress();
