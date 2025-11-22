@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -263,8 +264,47 @@ pub struct ProofRecord {
     pub received_at: SystemTime,
 }
 
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct ProofCacheMetricsSnapshot {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProofCacheMetrics {
+    hits: Arc<AtomicU64>,
+    misses: Arc<AtomicU64>,
+    evictions: Arc<AtomicU64>,
+}
+
+impl ProofCacheMetrics {
+    pub fn record_hit(&self) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_miss(&self) {
+        self.misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_evictions(&self, evictions: usize) {
+        if evictions > 0 {
+            self.evictions
+                .fetch_add(evictions as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot(&self) -> ProofCacheMetricsSnapshot {
+        ProofCacheMetricsSnapshot {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
+    }
+}
+
 pub trait ProofStorage: std::fmt::Debug + Send + Sync + 'static {
-    fn persist(&self, record: &ProofRecord) -> Result<(), PipelineError>;
+    fn persist(&self, record: &ProofRecord) -> Result<usize, PipelineError>;
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
         Ok(Vec::new())
     }
@@ -277,9 +317,9 @@ pub struct MemoryProofStorage {
 }
 
 impl ProofStorage for MemoryProofStorage {
-    fn persist(&self, record: &ProofRecord) -> Result<(), PipelineError> {
+    fn persist(&self, record: &ProofRecord) -> Result<usize, PipelineError> {
         self.records.lock().push(record.clone());
-        Ok(())
+        Ok(0)
     }
 
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
@@ -712,14 +752,17 @@ impl PersistentConsensusStorage {
 }
 
 impl ProofStorage for PersistentProofStorage {
-    fn persist(&self, record: &ProofRecord) -> Result<(), PipelineError> {
+    fn persist(&self, record: &ProofRecord) -> Result<usize, PipelineError> {
         let mut guard = self.cache.lock();
         guard.push(record.clone());
+        let mut evicted = 0;
         if guard.len() > self.retain {
             let overflow = guard.len() - self.retain;
             guard.drain(0..overflow);
+            evicted = overflow;
         }
-        self.persist_inner(&guard)
+        self.persist_inner(&guard)?;
+        Ok(evicted)
     }
 
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
@@ -734,12 +777,21 @@ pub struct ProofMempool {
     queue: VecDeque<ProofRecord>,
     validator: Arc<dyn ProofValidator>,
     storage: Arc<dyn ProofStorage>,
+    cache_metrics: ProofCacheMetrics,
 }
 
 impl ProofMempool {
     pub fn new(
         validator: Arc<dyn ProofValidator>,
         storage: Arc<dyn ProofStorage>,
+    ) -> Result<Self, PipelineError> {
+        Self::new_with_metrics(validator, storage, ProofCacheMetrics::default())
+    }
+
+    pub fn new_with_metrics(
+        validator: Arc<dyn ProofValidator>,
+        storage: Arc<dyn ProofStorage>,
+        cache_metrics: ProofCacheMetrics,
     ) -> Result<Self, PipelineError> {
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
@@ -752,6 +804,7 @@ impl ProofMempool {
             queue,
             validator,
             storage,
+            cache_metrics,
         })
     }
 
@@ -763,8 +816,10 @@ impl ProofMempool {
     ) -> Result<bool, PipelineError> {
         let digest = blake3::hash(&payload);
         if !self.seen.insert(digest) {
+            self.cache_metrics.record_hit();
             return Err(PipelineError::Duplicate);
         }
+        self.cache_metrics.record_miss();
         if topic != GossipTopic::Proofs && topic != GossipTopic::WitnessProofs {
             return Err(PipelineError::Validation(format!(
                 "unexpected topic: {:?}",
@@ -779,7 +834,10 @@ impl ProofMempool {
             digest,
             received_at: SystemTime::now(),
         };
-        self.storage.persist(&record)?;
+        let evicted = self.storage.persist(&record)?;
+        if evicted > 0 {
+            self.cache_metrics.record_evictions(evicted);
+        }
         self.queue.push_back(record);
         Ok(true)
     }

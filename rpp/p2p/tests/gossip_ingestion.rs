@@ -13,8 +13,8 @@ use rpp_p2p::{
 struct EphemeralProofStorage;
 
 impl ProofStorage for EphemeralProofStorage {
-    fn persist(&self, _record: &ProofRecord) -> Result<(), PipelineError> {
-        Ok(())
+    fn persist(&self, _record: &ProofRecord) -> Result<usize, PipelineError> {
+        Ok(0)
     }
 }
 
