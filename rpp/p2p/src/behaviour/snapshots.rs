@@ -583,6 +583,10 @@ struct SnapshotStreamMetrics {
     failures: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
+    negotiated_chunk_size_bytes: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
+    negotiated_chunk_size_bytes_histogram: Histogram,
+    adaptive_chunk_size_bytes: Gauge<u64, AtomicU64>,
+    adaptive_chunk_size_bytes_histogram: Histogram,
 }
 
 #[cfg(feature = "request-response")]
@@ -807,6 +811,41 @@ impl SnapshotStreamMetrics {
             chunk_send_queue_depth.clone(),
         );
 
+        let negotiated_chunk_size_bytes =
+            Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
+        registry.register_with_unit(
+            "snapshot_negotiated_chunk_size_bytes",
+            "Last negotiated snapshot chunk size in bytes grouped by role (provider or consumer)",
+            Unit::Bytes,
+            negotiated_chunk_size_bytes.clone(),
+        );
+
+        let negotiated_chunk_size_bytes_histogram =
+            Histogram::new(exponential_buckets(64.0, 2.0, 12));
+        registry.register_with_unit(
+            "snapshot_negotiated_chunk_size_bytes_histogram",
+            "Distribution of negotiated snapshot chunk sizes in bytes",
+            Unit::Bytes,
+            negotiated_chunk_size_bytes_histogram.clone(),
+        );
+
+        let adaptive_chunk_size_bytes = Gauge::<u64, AtomicU64>::default();
+        registry.register_with_unit(
+            "snapshot_adaptive_chunk_size_bytes",
+            "Most recent adaptive snapshot chunk size selected by the requester",
+            Unit::Bytes,
+            adaptive_chunk_size_bytes.clone(),
+        );
+
+        let adaptive_chunk_size_bytes_histogram =
+            Histogram::new(exponential_buckets(64.0, 2.0, 12));
+        registry.register_with_unit(
+            "snapshot_adaptive_chunk_size_bytes_histogram",
+            "Distribution of adaptive snapshot chunk sizes selected by the requester",
+            Unit::Bytes,
+            adaptive_chunk_size_bytes_histogram.clone(),
+        );
+
         Self {
             bytes_transferred,
             request_telemetry,
@@ -814,6 +853,10 @@ impl SnapshotStreamMetrics {
             failures,
             chunk_send_latency_seconds,
             chunk_send_queue_depth,
+            negotiated_chunk_size_bytes,
+            negotiated_chunk_size_bytes_histogram,
+            adaptive_chunk_size_bytes,
+            adaptive_chunk_size_bytes_histogram,
         }
     }
 
@@ -857,6 +900,21 @@ impl SnapshotStreamMetrics {
             ];
             self.failures.get_or_create(&labels).inc();
         }
+    }
+
+    fn record_negotiated_chunk_size(&self, role: &str, size: u64) {
+        let labels = vec![("role".to_string(), role.to_string())];
+        self.negotiated_chunk_size_bytes
+            .get_or_create(&labels)
+            .set(size);
+        self.negotiated_chunk_size_bytes_histogram
+            .observe(size as f64);
+    }
+
+    fn record_adaptive_chunk_size(&self, size: u64) {
+        self.adaptive_chunk_size_bytes.set(size);
+        self.adaptive_chunk_size_bytes_histogram
+            .observe(size as f64);
     }
 
     fn observe_send_latency(&self, kind: SnapshotItemKind, latency: Duration) {
@@ -1140,6 +1198,26 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     #[cfg(not(feature = "metrics"))]
     fn record_failure(&self, _direction: &str, _kind: SnapshotItemKind) {}
 
+    #[cfg(feature = "metrics")]
+    fn record_negotiated_chunk_size(&self, role: &str, size: u64) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_negotiated_chunk_size(role, size);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_negotiated_chunk_size(&self, _role: &str, _size: u64) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_adaptive_chunk_size(&self, size: u64) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_adaptive_chunk_size(size);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_adaptive_chunk_size(&self, _size: u64) {}
+
     fn send_response_with_metrics(
         &mut self,
         request_id: RequestResponseInboundId,
@@ -1270,6 +1348,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             entry.peer = peer.clone();
         }
         let requested_size = entry.negotiated_chunk_size();
+        self.record_adaptive_chunk_size(requested_size);
         let (min_chunk_size, max_chunk_size) = entry.chunk_sizing.bounds();
         let request = SnapshotsRequest::Plan {
             session_id,
@@ -1360,6 +1439,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             return None;
         }
         let requested_size = entry.negotiated_chunk_size();
+        self.record_adaptive_chunk_size(requested_size);
         let (min_chunk_size, max_chunk_size) = entry.chunk_sizing.bounds();
         let request = SnapshotsRequest::Resume {
             session_id,
@@ -1524,6 +1604,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         state.capabilities = capabilities;
         if state.chunk_size.is_none() {
             state.chunk_size = capabilities.chunk_size;
+            if let Some(size) = state.chunk_size {
+                self.record_negotiated_chunk_size("provider", size);
+            }
         }
         if state.peer != peer {
             state.peer = peer.clone();
@@ -1580,6 +1663,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     }
                 };
                 state.chunk_size = negotiated_chunk_size;
+                if let Some(size) = negotiated_chunk_size {
+                    self.record_negotiated_chunk_size("provider", size);
+                }
 
                 match self.provider.fetch_plan(session_id) {
                     Ok(plan) => match serde_json::to_vec(&plan) {
@@ -1788,6 +1874,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     }
                 };
                 state.chunk_size = negotiated_chunk_size;
+                if let Some(size) = negotiated_chunk_size {
+                    self.record_negotiated_chunk_size("provider", size);
+                }
 
                 match self.provider.resume_session(
                     session_id,
@@ -1921,6 +2010,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         min_chunk_size,
                         max_chunk_size,
                     });
+                    if let Some(size) = chunk_size {
+                        self.record_negotiated_chunk_size("consumer", size);
+                    }
                     state.next_chunk_index = 0;
                     state.next_update_index = 0;
                     state.mark_progress();
@@ -2015,6 +2107,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         min_chunk_size,
                         max_chunk_size,
                     });
+                    if let Some(size) = chunk_size {
+                        self.record_negotiated_chunk_size("consumer", size);
+                    }
                     state.next_chunk_index = chunk_index;
                     state.next_update_index = update_index;
                     state.mark_progress();
@@ -2478,5 +2573,54 @@ mod tests {
                 "throughput recorded for {direction} {kind}"
             );
         }
+    }
+
+    #[test]
+    fn chunk_size_metrics_track_negotiated_and_adaptive_sizes() {
+        let mut registry = Registry::default();
+        let metrics = SnapshotStreamMetrics::register(&mut registry);
+
+        metrics.record_negotiated_chunk_size("provider", 256);
+        metrics.record_negotiated_chunk_size("consumer", 128);
+        metrics.record_adaptive_chunk_size(192);
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_negotiated_chunk_size_bytes",
+                &[("role", "provider")],
+            ),
+            Some(256.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_negotiated_chunk_size_bytes",
+                &[("role", "consumer")],
+            ),
+            Some(128.0)
+        );
+
+        let negotiated_sum = metric_value(
+            &buffer,
+            "snapshot_negotiated_chunk_size_bytes_histogram_sum",
+        )
+        .expect("negotiated histogram updated");
+        assert!(negotiated_sum >= 384.0);
+
+        assert_eq!(
+            metric_value(&buffer, "snapshot_adaptive_chunk_size_bytes"),
+            Some(192.0)
+        );
+
+        let adaptive_sum = metric_value(
+            &buffer,
+            "snapshot_adaptive_chunk_size_bytes_histogram_sum",
+        )
+        .expect("adaptive histogram updated");
+        assert!(adaptive_sum >= 192.0);
     }
 }
