@@ -37,7 +37,7 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 
 Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt vier Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`), ein Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`) sowie die wallet-spezifischen Varianten `wallet_gui` und `wallet_zsi,wallet_hw,wallet_multisig_hooks,wallet_rpc_mtls`. Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L635-L918】【F:.github/workflows/nightly.yml†L1-L86】【f3105d†L1-L5】【f3e57e†L1-L5】
 
-Eine tabellarische Übersicht der unterstützten Storage-Hashing-Varianten (`branch_factor_256`, `ethhash`, `io-uring`) und zk-Backends samt der CI-Jobs, die sie abdecken, steht unter [`docs/development/testing_matrix.md`](development/testing_matrix.md) bereit.
+Eine tabellarische Übersicht der unterstützten Storage-Hashing-Varianten (`branch_factor_256`, `ethhash`, `io-uring`) und zk-Backends samt der CI-Jobs, die sie abdecken, steht unter [`docs/development/testing_matrix.md`](development/testing_matrix.md) bereit. Vor dem Aktivieren von io-uring sollten Operator:innen die [Kernel-Voraussetzungen und Validierungsschritte](../storage/operations.md#io-uring-prerequisites) prüfen.
 
 | Feature-Set | Reproduktionsbefehl | Erwartete Dauer (Cold / Warm) |
 | --- | --- | --- |

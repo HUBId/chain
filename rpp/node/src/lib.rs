@@ -1530,7 +1530,7 @@ fn handle_io_uring_capability(
                 target = "storage",
                 storage_io_uring_ring_entries = ring_size,
                 %reason,
-                "io-uring unavailable; using synchronous file I/O"
+                "io-uring unavailable; using synchronous file I/O (see docs/storage/operations.md#io-uring-prerequisites)"
             );
             Ok(())
         }
@@ -1539,7 +1539,7 @@ fn handle_io_uring_capability(
                 target = "storage",
                 storage_io_uring_ring_entries = ring_size,
                 %reason,
-                "io-uring is enabled but unsupported on this kernel"
+                "io-uring is enabled but unsupported on this kernel (see docs/storage/operations.md#io-uring-prerequisites)"
             );
             Err(BootstrapError::startup(ChainError::Config(format!(
                 "io-uring support requested but unavailable: {reason}"
