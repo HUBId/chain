@@ -7,7 +7,7 @@ run the common presets locally and to mirror the scenarios exercised by CI.
 ## CLI presets
 
 ```
-cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive]
+cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
 ```
 
 ### Available scenarios
@@ -29,7 +29,11 @@ cargo xtask simnet --scenario tools/simnet/scenarios/ring_latency_profile.ron
 ```
 
 Use `--artifacts-dir` to control where logs and outputs are written and
-`--keep-alive` to leave the harness processes up for inspection.
+`--keep-alive` to leave the harness processes up for inspection. The
+`--seed` flag (or `SIMNET_SEED` environment variable) overrides the RNG seed
+used by both the p2p harness and the consensus load generator. CI defaults to
+`0x53494d4e4554` when no seed is provided so runs remain reproducible; set
+`SIMNET_SEED` to a different value locally when fuzzing is desired.
 
 ## Scenario configuration
 

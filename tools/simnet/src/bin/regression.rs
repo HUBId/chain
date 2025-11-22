@@ -238,7 +238,7 @@ async fn execute_scenario(artifacts_root: &Path, scenario_path: &Path) -> Result
         .resolve_artifacts_dir(Some(&scenario_dir))
         .with_context(|| format!("prepare artifacts dir {}", scenario_dir.display()))?;
 
-    let mut runner = SimnetRunner::new(config.clone(), artifacts_dir.clone());
+    let mut runner = SimnetRunner::new(config.clone(), artifacts_dir.clone(), None);
 
     info!(
         target = "simnet::regression",

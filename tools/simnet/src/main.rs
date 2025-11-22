@@ -35,6 +35,10 @@ struct Cli {
     /// Keep processes alive after the harness finishes
     #[arg(long)]
     keep_alive: bool,
+
+    /// Override the RNG seed used by p2p and consensus harnesses
+    #[arg(long, env = "SIMNET_SEED")]
+    seed: Option<u64>,
 }
 
 #[tokio::main]
@@ -60,7 +64,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("invalid scenario {}", cli.scenario.display()))?;
     let artifacts_dir = config.resolve_artifacts_dir(cli.artifacts_dir.as_deref())?;
 
-    let mut runner = SimnetRunner::new(config, artifacts_dir);
+    let mut runner = SimnetRunner::new(config, artifacts_dir, cli.seed);
 
     if let Some(server) = &health_server {
         server.set_active(true);

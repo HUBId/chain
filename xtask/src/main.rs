@@ -635,7 +635,7 @@ fn simnet_presets() -> &'static [SimnetPreset] {
 
 fn print_simnet_help() {
     let mut message = String::from(
-        "usage: cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive]\n\n",
+        "usage: cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]\n\n",
     );
     message.push_str(
         "Runs a predefined simnet scenario or an explicit RON path using the simnet binary.\n\n",
@@ -647,10 +647,25 @@ fn print_simnet_help() {
     print!("{}", message);
 }
 
+const DEFAULT_SIMNET_CI_SEED: u64 = 0x5349_4D4E_4554; // "SIMNET"
+
+fn default_simnet_seed() -> Option<u64> {
+    if let Ok(value) = env::var("SIMNET_SEED") {
+        return value.parse::<u64>().ok();
+    }
+
+    if env::var("CI").is_ok() {
+        return Some(DEFAULT_SIMNET_CI_SEED);
+    }
+
+    None
+}
+
 fn run_simnet(args: &[String]) -> Result<()> {
     let mut selection: Option<String> = None;
     let mut artifacts_dir: Option<PathBuf> = None;
     let mut keep_alive = false;
+    let mut seed = default_simnet_seed();
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -669,6 +684,14 @@ fn run_simnet(args: &[String]) -> Result<()> {
                 artifacts_dir = Some(PathBuf::from(path));
             }
             "--keep-alive" => keep_alive = true,
+            "--seed" => {
+                seed = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--seed requires a value"))?
+                        .parse()?
+                        .into(),
+                );
+            }
             "--help" | "-h" => {
                 print_simnet_help();
                 return Ok(());
@@ -686,7 +709,7 @@ fn run_simnet(args: &[String]) -> Result<()> {
             .join(slug.replace('_', "-") + "-local")
     });
 
-    execute_simnet_scenario(&slug, &scenario_path, &artifacts, keep_alive)
+    execute_simnet_scenario(&slug, &scenario_path, &artifacts, keep_alive, seed)
 }
 
 fn resolve_simnet_selection(selection: &str) -> Result<(String, PathBuf)> {
@@ -738,6 +761,7 @@ fn execute_simnet_scenario(
     scenario_path: &Path,
     artifacts_dir: &Path,
     keep_alive: bool,
+    seed: Option<u64>,
 ) -> Result<()> {
     let mut command = Command::new("cargo");
     command
@@ -754,6 +778,10 @@ fn execute_simnet_scenario(
 
     if keep_alive {
         command.arg("--keep-alive");
+    }
+
+    if let Some(seed) = seed {
+        command.arg("--seed").arg(seed.to_string());
     }
 
     apply_feature_flags(&mut command);
@@ -777,7 +805,13 @@ fn run_simnet_smoke() -> Result<()> {
         let artifacts = workspace_root()
             .join("target/simnet")
             .join(resolved_slug.replace('_', "-"));
-        execute_simnet_scenario(&resolved_slug, &scenario_path, &artifacts, false)?;
+        execute_simnet_scenario(
+            &resolved_slug,
+            &scenario_path,
+            &artifacts,
+            false,
+            default_simnet_seed(),
+        )?;
     }
     Ok(())
 }

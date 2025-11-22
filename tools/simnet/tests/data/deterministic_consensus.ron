@@ -1,0 +1,17 @@
+{
+  "name": "deterministic-consensus",
+  "description": "Small consensus workload for seed determinism checks",
+  "duration_secs": 0,
+  "env": {},
+  "nodes": [],
+  "wallets": [],
+  "p2p": null,
+  "consensus": {
+    "runs": 3,
+    "validators": 4,
+    "witness_commitments": 6,
+    "security_bits": 128,
+    "use_gpu": false,
+    "summary_path": "summaries/deterministic_consensus.json"
+  }
+}
