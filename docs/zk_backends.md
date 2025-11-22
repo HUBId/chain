@@ -130,10 +130,23 @@
 2. **Staggered rollout:** Aktualisiere die übrigen Nodes in kleinen Batches; zwischen den Batches sicherstellen, dass Finality-Gaps stabil bleiben und keine Mempool-Drops auftreten (Monitor `finality_lag_slots` und `backend_health.*`).
 3. **Cluster-weite Bestätigung:** Nach Abschluss bestätigen, dass alle Nodes denselben Backend-Status melden und die Telemetrie-Histogramme (`*_proof_total_bytes`, `*_verify_duration_seconds`) keine Regressionen zeigen.
 
-**Rollback**
+**Rollback (Backend-Downgrade)**
 
-- Halte den vorherigen Build und die gesicherte `config/node.toml` bereit. Wenn Proof-Rejections oder Finality-Gaps nach dem Flip auftreten, stelle den vorherigen Binary-Stand wieder her, setze die Konfiguration zurück und starte den Dienst neu. Validere, dass `backend_health.<previous>.verifier.accepted` erneut steigt und dokumentiere den Zeitpunkt des Rollbacks im Incident-Log.
-- Bei Rolling Deployments sofort zum letzten stabilen Backend zurückkehren, falls der Canary Fehler zeigt; stoppe weitere Batches und verwirf nur den canary-spezifischen Proof-Cache, um Datenverlust zu vermeiden.
+1. **Konfiguration und Artefakte zurückdrehen:**
+   - Lade das zuletzt funktionierende Release-Artefakt (Binary/Container) und die gesicherte `config/node.toml` mit dokumentiertem Hash aus dem Incident-/Change-Log. Stelle sicher, dass `RPP_RELEASE_BASE_FEATURES` bzw. die Deployment-Pipeline wieder das vorherige Backend aktivieren (z. B. `prod,backend-rpp-stark`).【F:scripts/build_release.sh†L10-L118】
+   - Entferne zwischenzeitliche Overrides (z. B. `rollout.feature_gates.consensus_enforcement = false`) aus der Konfigurationskopie, damit die Runtime nach dem Rollback wieder die ursprünglichen Guardrails lädt.【F:config/node.toml†L57-L71】
+2. **Proof-Cache säubern:**
+   - Stoppe den Validator-Dienst nach Abschluss des aktuellen Slots/Heights, damit gepufferte Proofs persistiert sind.
+   - Leere den `proof_cache_dir` (Standard: `./data/proofs`) oder verschiebe ihn in ein zeitgestempeltes Backup, damit keine gemischten Vendor-Artefakte übrigbleiben, die den alten Verifier oder Prover verunreinigen.【F:config/node.toml†L5-L25】【F:rpp/runtime/config.rs†L1728-L1784】
+   - Falls der Cluster Rolling-Deploys nutzt, entferne nur den Cache der betroffenen Canary-Nodes, damit stabile Validatoren weiterarbeiten können.
+3. **Restart-Reihenfolge:**
+   - Starte abhängige Services (Telemetrie-Scraper, Log-Shipper) zuerst, damit der Rollback beobachtbar ist.
+   - Anschließend den Validator mit dem zurückgedrehten Artefakt und der bereinigten Konfiguration starten. Warten, bis `/status/node` erreichbar ist und die Backend-Felder geladen sind, bevor nachgelagerte Komponenten (z. B. Wallet-Prover) neu gestartet werden.【F:rpp/runtime/node.rs†L161-L220】【F:rpp/runtime/node.rs†L5416-L5460】
+4. **Validierung nach Rollback:**
+   - `/status/node`: Prüfe, dass `backend_health.<previous>.verifier.accepted` bzw. `backend_health.<previous>.prover.proofs_generated` steigen und keine neuen Rejects für das zurückgerollte Backend auftauchen. Notiere den Zeitpunkt im Incident-Log.【F:rpp/runtime/node.rs†L5416-L5460】【F:rpp/runtime/node.rs†L4862-L4894】
+   - Logs/Telemetrie: Suche nach `proof_backend="<previous>" valid=true`-Einträgen und kontrolliere, dass Stage-Counter (`rpp_stark_stage_checks_total{result="fail"}`) flachlaufen.【F:rpp/runtime/telemetry/metrics.rs†L473-L520】
+   - Proof-Cache: Verifiziere, dass der Cache nach dem Neustart wieder mit den erwarteten Circuit-Familien gefüllt wird (`proof_cache_dir` enthält neue Dateien, `backend_health.<previous>.cached_circuits` steigt).【F:rpp/runtime/node.rs†L4862-L4894】
+   - Kontroll-Check: Führe `tools/backend_switch_check.sh --url http://<host>:<port> --backend <previous>` aus oder den Integrationstest `backend_switch_routes_proofs_to_active_backend`, um sicherzustellen, dass neue Proofs tatsächlich über das zurückgerollte Backend laufen.
 
 ### Incident Runbook: rpp-stark verification failures
 
