@@ -57,9 +57,13 @@ Each directory contains:
 
 - `node.log`: combined stdout and stderr from the chaos node.【F:tests/observability_otlp_failures.rs†L99-L134】【F:tests/observability_otlp_failures.rs†L178-L216】
 - `metrics.prom`: the Prometheus scrape retrieved after the exporters fail to
-  start.【F:tests/observability_otlp_failures.rs†L59-L93】【F:tests/observability_otlp_failures.rs†L218-L235】
+  start.【F:tests/observability_otlp_failures.rs†L59-L93】【F:tests/observability_otlp_failures.rs†L218-L248】
+- `metrics_after_failover.prom`: the follow-up scrape collected after the
+  runtime switches to the secondary endpoints, showing that failover counters
+  stop incrementing once the secondary backend is in use.【F:tests/observability_otlp_failures.rs†L218-L280】
 - `alert_payload.json`: the synthetic Alertmanager payload that summarises the
-  firing `OtlpExporterFailure` alert for the captured metrics.【F:tests/observability_otlp_failures.rs†L136-L176】【F:tests/observability_otlp_failures.rs†L224-L235】
+  firing `OtlpExporterFailure` alert for the captured metrics and records the
+  resolved state once the secondary backend is healthy.【F:tests/observability_otlp_failures.rs†L136-L176】【F:tests/observability_otlp_failures.rs†L248-L276】
 
 You can inspect the latest chaos output locally with:
 
@@ -70,9 +74,9 @@ grep telemetry_otlp_failures_total rpp/chain/artifacts/telemetry-chaos/<run>/met
 jq . rpp/chain/artifacts/telemetry-chaos/<run>/alert_payload.json
 ```
 
-CI automatically uploads the `telemetry-chaos` artifact bundle whenever the
-chaos test fails so responders can download and review the run without
-reproducing it locally.【F:.github/workflows/nightly.yml†L92-L110】
+CI automatically uploads the `telemetry-chaos` artifact bundle for every chaos
+test invocation so responders can download and review the run without
+reproducing it locally, even when the test succeeds.【F:.github/workflows/nightly.yml†L92-L112】
 
 ## Telemetry schema allowlist
 
