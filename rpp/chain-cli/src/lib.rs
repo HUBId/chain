@@ -882,6 +882,8 @@ struct SnapshotStreamStatusResponse {
     peer: String,
     root: String,
     #[serde(default)]
+    chunk_size: Option<u64>,
+    #[serde(default)]
     plan_id: Option<String>,
     #[serde(default)]
     last_chunk_index: Option<u64>,
@@ -1643,6 +1645,13 @@ fn print_snapshot_status(label: &str, status: &SnapshotStreamStatusResponse) {
     println!("  session: {}", status.session);
     println!("  peer: {}", status.peer);
     println!("  root: {}", status.root);
+    println!(
+        "  chunk_size: {}",
+        status
+            .chunk_size
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
     let plan_id = status
         .plan_id
         .as_deref()

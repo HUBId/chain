@@ -17,7 +17,8 @@ pub const SNAPSHOT_BUILD_DELAY: Duration = Duration::from_secs(10);
 #[derive(Debug, Serialize)]
 pub struct StartSnapshotStreamRequest {
     pub peer: String,
-    pub chunk_size: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_size: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume: Option<ResumeMarker>,
 }
@@ -33,6 +34,8 @@ pub struct SnapshotStreamStatusResponse {
     pub session: u64,
     pub peer: String,
     pub root: String,
+    #[serde(default)]
+    pub chunk_size: Option<u64>,
     #[serde(default)]
     pub plan_id: Option<String>,
     #[serde(default)]
