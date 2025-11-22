@@ -131,8 +131,12 @@ pub enum DecodeError {
     Base64(#[from] base64::DecodeError),
 }
 
+const SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+
 #[derive(Debug, Deserialize)]
 struct SnapshotManifest {
+    #[serde(default)]
+    version: u32,
     #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
@@ -236,6 +240,16 @@ pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> E
             }
         }
     };
+
+    if manifest.version != SNAPSHOT_MANIFEST_VERSION {
+        return Execution::Fatal {
+            exit_code: ExitCode::Fatal,
+            error: format!(
+                "snapshot manifest version mismatch (expected {}, found {})",
+                SNAPSHOT_MANIFEST_VERSION, manifest.version
+            ),
+        };
+    }
 
     let chunk_root = match determine_chunk_root(args) {
         Ok(root) => root,
