@@ -8,7 +8,8 @@ use thiserror::Error;
 use tracing::debug;
 
 use crate::pipeline::{
-    NetworkLightClientUpdate, NetworkStateSyncPlan, PipelineError, SnapshotChunk,
+    chunk_sizing::ChunkSizingStrategy, NetworkLightClientUpdate, NetworkStateSyncPlan,
+    PipelineError, SnapshotChunk,
 };
 use crate::vendor::PeerId;
 
@@ -502,6 +503,7 @@ struct SessionState {
     last_progress: Instant,
     chunk_size: Option<u64>,
     capabilities: SnapshotChunkCapabilities,
+    chunk_sizing: ChunkSizingStrategy,
 }
 
 #[cfg(feature = "request-response")]
@@ -511,6 +513,7 @@ impl SessionState {
     }
 
     fn with_capabilities(peer: PeerId, capabilities: SnapshotChunkCapabilities) -> Self {
+        let chunk_sizing = Self::chunk_sizing_for(&capabilities);
         Self {
             peer,
             next_chunk_index: 0,
@@ -519,11 +522,38 @@ impl SessionState {
             last_progress: Instant::now(),
             chunk_size: capabilities.chunk_size,
             capabilities,
+            chunk_sizing,
         }
     }
 
     fn mark_progress(&mut self) {
         self.last_progress = Instant::now();
+    }
+
+    fn chunk_sizing_for(capabilities: &SnapshotChunkCapabilities) -> ChunkSizingStrategy {
+        let min = capabilities.min_chunk_size.unwrap_or(1) as usize;
+        let max = capabilities
+            .max_chunk_size
+            .or(capabilities.chunk_size)
+            .unwrap_or(min as u64) as usize;
+        let initial = capabilities.chunk_size.unwrap_or(min as u64) as usize;
+        ChunkSizingStrategy::new(min, max, initial, Duration::from_millis(500))
+    }
+
+    fn update_capabilities(&mut self, capabilities: SnapshotChunkCapabilities) {
+        self.chunk_size = capabilities.chunk_size.or(self.chunk_size);
+        self.capabilities = capabilities.clone();
+        self.chunk_sizing = Self::chunk_sizing_for(&capabilities);
+    }
+
+    fn record_chunk_telemetry(&mut self, bytes: usize, rtt: Duration) {
+        self.chunk_sizing.record_sample(bytes, rtt);
+    }
+
+    fn negotiated_chunk_size(&mut self) -> u64 {
+        let size = self.chunk_sizing.next_chunk_size() as u64;
+        self.chunk_size = Some(size);
+        size
     }
 }
 
@@ -634,19 +664,24 @@ impl SnapshotRequestMetrics {
         request_id: RequestResponseId,
         response_kind: SnapshotItemKind,
         response_bytes: usize,
-    ) {
+    ) -> Option<SnapshotRequestTiming> {
         if let Some(mut entry) = self.outbound.remove(&request_id) {
             entry.set_response(response_kind, response_bytes);
+            let emitted = entry.clone();
             #[cfg(feature = "metrics")]
             {
-                Self::emit("outbound", entry, self.telemetry.as_ref());
+                Self::emit("outbound", emitted, self.telemetry.as_ref());
             }
 
             #[cfg(not(feature = "metrics"))]
             {
-                Self::emit("outbound", entry);
+                Self::emit("outbound", emitted);
             }
+
+            return Some(entry);
         }
+
+        None
     }
 
     fn finish_inbound(&mut self, request_id: RequestResponseInboundId) {
@@ -1217,11 +1252,13 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         if entry.peer != peer {
             entry.peer = peer.clone();
         }
+        let requested_size = entry.negotiated_chunk_size();
+        let (min_chunk_size, max_chunk_size) = entry.chunk_sizing.bounds();
         let request = SnapshotsRequest::Plan {
             session_id,
-            chunk_size: None,
-            min_chunk_size: None,
-            max_chunk_size: None,
+            chunk_size: Some(requested_size),
+            min_chunk_size: Some(min_chunk_size as u64),
+            max_chunk_size: Some(max_chunk_size as u64),
         };
         let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
@@ -1305,14 +1342,16 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         if entry.in_flight.is_some() || entry.peer != peer {
             return None;
         }
+        let requested_size = entry.negotiated_chunk_size();
+        let (min_chunk_size, max_chunk_size) = entry.chunk_sizing.bounds();
         let request = SnapshotsRequest::Resume {
             session_id,
             plan_id,
             chunk_index: entry.next_chunk_index,
             update_index: entry.next_update_index,
-            chunk_size: entry.chunk_size,
-            min_chunk_size: entry.capabilities.min_chunk_size,
-            max_chunk_size: entry.capabilities.max_chunk_size,
+            chunk_size: Some(requested_size),
+            min_chunk_size: Some(min_chunk_size as u64),
+            max_chunk_size: Some(max_chunk_size as u64),
         };
         let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
@@ -1401,12 +1440,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                                 state.in_flight = None;
                             }
                         }
-                        self.request_metrics.finish_outbound(
+                        let timing = self.request_metrics.finish_outbound(
                             request_id,
                             response_kind,
                             response_bytes,
                         );
-                        self.handle_response(peer, session_id, response);
+                        self.handle_response(peer, session_id, response, timing);
                     }
                 }
             },
@@ -1839,6 +1878,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         peer: PeerId,
         session_id: SnapshotSessionId,
         response: SnapshotsResponse,
+        timing: Option<SnapshotRequestTiming>,
     ) {
         match response {
             SnapshotsResponse::Plan {
@@ -1854,12 +1894,11 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         .sessions
                         .entry(session_id)
                         .or_insert_with(|| SessionState::new(peer.clone()));
-                    state.chunk_size = chunk_size;
-                    state.capabilities = SnapshotChunkCapabilities {
+                    state.update_capabilities(SnapshotChunkCapabilities {
                         chunk_size,
                         min_chunk_size,
                         max_chunk_size,
-                    };
+                    });
                     state.next_chunk_index = 0;
                     state.next_update_index = 0;
                     state.mark_progress();
@@ -1885,6 +1924,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(chunk) => {
                     if let Some(state) = self.sessions.get_mut(&session_id) {
                         state.next_chunk_index = chunk_index.saturating_add(1);
+                        if let Some(timing) = timing {
+                            state.record_chunk_telemetry(
+                                chunk.data.len(),
+                                timing.started_at.elapsed(),
+                            );
+                        }
                         state.mark_progress();
                     }
                     self.record_bytes("inbound", SnapshotItemKind::Chunk, chunk.len());
@@ -1943,12 +1988,11 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ..
             } => {
                 if let Some(state) = self.sessions.get_mut(&session_id) {
-                    state.chunk_size = chunk_size;
-                    state.capabilities = SnapshotChunkCapabilities {
+                    state.update_capabilities(SnapshotChunkCapabilities {
                         chunk_size,
                         min_chunk_size,
                         max_chunk_size,
-                    };
+                    });
                     state.next_chunk_index = chunk_index;
                     state.next_update_index = update_index;
                     state.mark_progress();
