@@ -58,7 +58,8 @@ events so higher layers can retry or fail the session.【F:rpp/p2p/src/behaviour
 
 Snapshot providers advertise sizing hints so consumers can negotiate chunk
 sizes that fit their bandwidth and latency envelope. Tune the defaults via the
-`snapshot_sizing` section in `node.toml`:
+`snapshot_sizing` section in `node.toml` (see [state sync tuning](../sync.md#adaptive-chunk-sizing)
+for operational guidance):
 
 - `snapshot_sizing.default_chunk_size` controls the chunk size used when
   generating state sync plans and when no consumer preference is supplied

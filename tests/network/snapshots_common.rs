@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use rpp_chain::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_p2p::pipeline::chunk_sizing::ChunkSizingStrategy;
 use rpp_p2p::SnapshotSessionId;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
@@ -102,4 +103,24 @@ where
 
 pub fn default_chunk_size() -> u32 {
     DEFAULT_STATE_SYNC_CHUNK as u32
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LinkShape {
+    pub bandwidth_bytes_per_sec: u64,
+    pub latency: Duration,
+}
+
+impl LinkShape {
+    pub fn negotiated_chunk_size(&self, min: usize, max: usize, initial: usize) -> u64 {
+        let mut strategy =
+            ChunkSizingStrategy::new(min.max(1), max.max(min), initial.max(min), self.latency);
+
+        let bytes_for_latency = ((self.bandwidth_bytes_per_sec as f64)
+            * self.latency.as_secs_f64())
+        .clamp(1.0, max as f64);
+
+        strategy.record_sample(bytes_for_latency as usize, self.latency);
+        strategy.next_chunk_size() as u64
+    }
 }
