@@ -105,7 +105,7 @@ jobs:
           cargo test --test observability_otlp_failures --features integration
 
       - name: Upload telemetry chaos artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: telemetry-chaos

@@ -191,6 +191,7 @@ fn telemetry_otlp_exporter_failures_surface_alerts() -> Result<()> {
 
 #[test]
 fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
+    let artifact_dir = telemetry_chaos_artifact_dir().context("prepare artifact directory")?;
     let temp_dir = TempDir::new().context("create temporary directory")?;
     let binary = locate_rpp_node_binary().context("locate rpp-node binary")?;
     let mut ports = PortAllocator::default();
@@ -284,6 +285,17 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
         .text()
         .context("read metrics body")?;
 
+    let metrics_init = metrics_utils::metric_value(
+        &metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "metrics"), ("phase", "init")],
+    )
+    .unwrap_or(0.0);
+    assert!(
+        metrics_init >= 1.0,
+        "expected primary metrics exporter failures to be recorded, found {metrics_init}"
+    );
+
     let metrics_failover = metrics_utils::metric_value(
         &metrics_body,
         OTLP_FAILURE_METRIC,
@@ -293,6 +305,17 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
     assert!(
         metrics_failover >= 1.0,
         "expected metrics failover counter to increment, found {metrics_failover}"
+    );
+
+    let traces_init = metrics_utils::metric_value(
+        &metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "traces"), ("phase", "init")],
+    )
+    .unwrap_or(0.0);
+    assert!(
+        traces_init >= 1.0,
+        "expected primary trace exporter failures to be recorded, found {traces_init}"
     );
 
     let traces_failover = metrics_utils::metric_value(
@@ -305,6 +328,80 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
         traces_failover >= 1.0,
         "expected trace failover counter to increment, found {traces_failover}"
     );
+
+    thread::sleep(Duration::from_secs(2));
+    let steady_metrics_body = client
+        .get(format!("http://{metrics_addr}/metrics"))
+        .send()
+        .context("request metrics endpoint after failover")?
+        .error_for_status()
+        .context("metrics endpoint returned error status after failover")?
+        .text()
+        .context("read metrics body after failover")?;
+
+    let metrics_failover_after = metrics_utils::metric_value(
+        &steady_metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "metrics"), ("phase", "init_failover")],
+    )
+    .unwrap_or(0.0);
+    assert_eq!(
+        metrics_failover, metrics_failover_after,
+        "expected metrics failover counter to stay flat after recovery"
+    );
+
+    let traces_failover_after = metrics_utils::metric_value(
+        &steady_metrics_body,
+        OTLP_FAILURE_METRIC,
+        &[("sink", "traces"), ("phase", "init_failover")],
+    )
+    .unwrap_or(0.0);
+    assert_eq!(
+        traces_failover, traces_failover_after,
+        "expected trace failover counter to stay flat after recovery"
+    );
+
+    let alert_payload = json!({
+        "receiver": "telemetry-chaos-harness",
+        "status": "firing",
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": "OtlpExporterFailure",
+                    "severity": "warning",
+                    "service": "observability",
+                },
+                "annotations": {
+                    "summary": "OTLP telemetry exporters failed on the primary backend",
+                    "description": "The primary OTLP endpoints rejected TLS handshakes; the runtime is attempting failover.",
+                    "validation.metrics": metrics_init,
+                    "validation.traces": traces_init,
+                },
+            },
+            {
+                "status": "resolved",
+                "labels": {
+                    "alertname": "OtlpExporterFailure",
+                    "severity": "warning",
+                    "service": "observability",
+                },
+                "annotations": {
+                    "summary": "OTLP telemetry exporters failed over successfully",
+                    "description": "Secondary OTLP endpoints are active and failure counters stopped incrementing.",
+                    "validation.metrics": metrics_failover_after,
+                    "validation.traces": traces_failover_after,
+                },
+            },
+        ],
+    });
+
+    TelemetryChaosArtifacts::new(artifact_dir, log_buffer)
+        .with_metrics(metrics_body)
+        .with_named_metrics("metrics_after_failover.prom", steady_metrics_body)
+        .with_alert_payload(alert_payload)
+        .persist()
+        .context("write telemetry failover chaos artifacts")?;
 
     start_log_drain(logs);
     send_ctrl_c(guard.child.as_ref().expect("child reference"))
@@ -355,7 +452,7 @@ impl LogBuffer {
 struct TelemetryChaosArtifacts {
     directory: std::path::PathBuf,
     logs: LogBuffer,
-    metrics: Option<String>,
+    metrics: Vec<(String, String)>,
     alert_payload: Option<serde_json::Value>,
 }
 
@@ -364,13 +461,18 @@ impl TelemetryChaosArtifacts {
         Self {
             directory,
             logs,
-            metrics: None,
+            metrics: Vec::new(),
             alert_payload: None,
         }
     }
 
     fn with_metrics(mut self, metrics: String) -> Self {
-        self.metrics = Some(metrics);
+        self.metrics.push(("metrics.prom".to_string(), metrics));
+        self
+    }
+
+    fn with_named_metrics(mut self, name: impl Into<String>, metrics: String) -> Self {
+        self.metrics.push((name.into(), metrics));
         self
     }
 
@@ -393,9 +495,14 @@ impl TelemetryChaosArtifacts {
                 .context("write telemetry chaos log artifact")?;
         }
 
-        if let Some(metrics) = &self.metrics {
-            fs::write(self.directory.join("metrics.prom"), metrics)
-                .context("write telemetry chaos metrics snapshot")?;
+        for (index, (name, metrics)) in self.metrics.iter().enumerate() {
+            let filename = if index == 0 {
+                "metrics.prom"
+            } else {
+                name.as_str()
+            };
+            fs::write(self.directory.join(filename), metrics)
+                .with_context(|| format!("write telemetry chaos metrics snapshot to {filename}"))?;
         }
 
         if let Some(payload) = &self.alert_payload {

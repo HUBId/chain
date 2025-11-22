@@ -31,6 +31,19 @@ These metrics and alert thresholds are documented in the snapshot and pipeline
 observability references; keep those dashboards open while running this
 playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/observability/pipeline.md†L22-L96】
 
+### Expected operator signals
+
+- **Exporter failover:** During control-plane disruptions the OTLP exporters
+  emit `telemetry_otlp_failures_total{phase="init"}` when the primary backend
+  rejects connections and `telemetry_otlp_failures_total{phase="init_failover"}`
+  after switching to the secondary endpoints. The
+  `OtlpExporterFailure` alert fires while either counter increments and clears
+  once the secondary exporter stabilises, matching the chaos drill assertions in
+  `telemetry_otlp_failover_uses_secondary_endpoints`.【F:tests/observability_otlp_failures.rs†L205-L280】【F:docs/observability/alerts/telemetry.yaml†L1-L20】
+- **Dashboards:** Keep the pipeline overview Grafana dashboard open to watch
+  `snapshot_stream_lag_seconds` and throughput; the alert annotations link back
+  to this runbook for quick navigation.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
+
 ## Prerequisites
 
 1. Export the RPC bearer token into your shell: `export RPP_RPC_TOKEN=...`.
