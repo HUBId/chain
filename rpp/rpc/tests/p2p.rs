@@ -132,6 +132,9 @@ fn sample_status(session: u64, peer: &NetworkPeerId) -> SnapshotStreamStatus {
         peer: peer.clone(),
         root: "root-hash".to_string(),
         chunk_size: Some(16),
+        requested_chunk_size: Some(16),
+        min_chunk_size: Some(8),
+        max_chunk_size: Some(32),
         plan_id: Some("plan-id".to_string()),
         last_chunk_index: Some(4),
         last_update_index: Some(7),
@@ -162,7 +165,7 @@ async fn start_snapshot_stream_returns_status() {
         .body(Body::from(
             json!({
                 "peer": peer.to_string(),
-                "chunk_size": 16,
+                "requested_chunk_size": 16,
             })
             .to_string(),
         ))
@@ -176,7 +179,10 @@ async fn start_snapshot_stream_returns_status() {
     assert_eq!(payload["peer"], peer.to_string());
     assert_eq!(payload["root"], status.root);
     assert_eq!(payload["chunk_size"], 16);
-    assert_eq!(payload["chunk_size"], 16);
+    assert_eq!(payload["negotiated_chunk_size"], 16);
+    assert_eq!(payload["requested_chunk_size"], 16);
+    assert_eq!(payload["min_chunk_size"], 8);
+    assert_eq!(payload["max_chunk_size"], 32);
     assert_eq!(payload["last_chunk_index"], 4);
     assert_eq!(payload["last_update_index"], 7);
     assert_eq!(payload["last_update_height"], 128);
@@ -213,7 +219,7 @@ async fn resume_snapshot_stream_returns_status() {
         .body(Body::from(
             json!({
                 "peer": peer.to_string(),
-                "chunk_size": 16,
+                "requested_chunk_size": 16,
                 "resume": {
                     "session": session,
                     "plan_id": status.plan_id.clone().unwrap(),
@@ -231,6 +237,8 @@ async fn resume_snapshot_stream_returns_status() {
     assert_eq!(payload["peer"], peer.to_string());
     assert_eq!(payload["root"], status.root);
     assert_eq!(payload["plan_id"], status.plan_id.unwrap());
+    assert_eq!(payload["negotiated_chunk_size"], 16);
+    assert_eq!(payload["requested_chunk_size"], 16);
     assert_eq!(payload["last_chunk_index"], 4);
     assert_eq!(payload["last_update_index"], 7);
     assert_eq!(payload["last_update_height"], 128);

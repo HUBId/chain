@@ -27,8 +27,12 @@ use rpp_p2p::{
 #[derive(Debug, Deserialize)]
 pub struct StartSnapshotStreamRequest {
     pub peer: String,
+    #[serde(default, alias = "chunk_size")]
+    pub requested_chunk_size: Option<u32>,
     #[serde(default)]
-    pub chunk_size: Option<u32>,
+    pub min_chunk_size: Option<u32>,
+    #[serde(default)]
+    pub max_chunk_size: Option<u32>,
     #[serde(default)]
     pub resume: Option<ResumeMarker>,
 }
@@ -47,6 +51,14 @@ pub struct SnapshotStreamStatusResponse {
     pub root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunk_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub negotiated_chunk_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_chunk_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_chunk_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_chunk_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,6 +175,10 @@ impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
             peer: status.peer.to_string(),
             root: status.root,
             chunk_size: status.chunk_size,
+            negotiated_chunk_size: status.chunk_size,
+            requested_chunk_size: status.requested_chunk_size,
+            min_chunk_size: status.min_chunk_size,
+            max_chunk_size: status.max_chunk_size,
             plan_id,
             last_chunk_index: status.last_chunk_index,
             last_update_index: status.last_update_index,
@@ -314,7 +330,7 @@ pub(super) async fn start_snapshot_stream(
     State(state): State<ApiContext>,
     Json(request): Json<StartSnapshotStreamRequest>,
 ) -> Result<Json<SnapshotStreamStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if request.chunk_size == Some(0) {
+    if request.requested_chunk_size == Some(0) {
         return Err(super::super::bad_request(
             "chunk_size must be greater than zero",
         ));
@@ -325,7 +341,7 @@ pub(super) async fn start_snapshot_stream(
 
     let runtime = state.require_snapshot_runtime()?;
     let default_chunk_size = DEFAULT_STATE_SYNC_CHUNK as u64;
-    let chunk_size = match request.chunk_size {
+    let chunk_size = match request.requested_chunk_size {
         Some(size) => size as u64,
         None => request
             .resume
