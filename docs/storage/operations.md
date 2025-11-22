@@ -1,5 +1,30 @@
 # Firewood storage operations
 
+## io-uring prerequisites
+
+Linux kernels from 5.10 onward include the io-uring syscalls Firewood depends on.
+Hosts must expose the `io_uring_setup` syscall and ship with the `CONFIG_IO_URING`
+and `CONFIG_FUTEX` kernel config options enabled (both are `y` on mainstream
+distributions). Statically linked kernels expose their configuration under
+`/proc/config.gz`; others store it under `/boot/config-$(uname -r)`.
+
+Validation checklist before enabling io-uring:
+
+1. Confirm the kernel is recent enough: `uname -r` should report 5.10 or newer.
+2. Verify kernel config enables io-uring and futexes:
+   ```bash
+   if [ -f /proc/config.gz ]; then
+     zgrep -E 'CONFIG_(IO_URING|FUTEX)=[ym]' /proc/config.gz
+   else
+     grep -E 'CONFIG_(IO_URING|FUTEX)=[ym]' /boot/config-$(uname -r)
+   fi
+   ```
+3. (Optional) Run a dry bootstrap with the desired ring size to confirm the
+   kernel accepts the allocation before promoting the change to production:
+   ```bash
+   RPP_NODE_STORAGE_RING_SIZE=64 target/release/rpp-node -- node --dry-run --storage-ring-size 64 --config config/node.toml
+   ```
+
 ## io-uring ring sizing
 
 Firewood allocates an [`io_uring`](https://docs.kernel.org/io_uring.html) ring when
