@@ -8,17 +8,22 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+default = ["prover-mock"]
+prover-mock = ["dep:prover_mock_backend", "rpp-wallet/prover-mock"]
+backend-rpp-stark = ["rpp-wallet/backend-rpp-stark"]
+
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 serde_json = "1.0"
-prover_mock_backend = { path = "../../zk/prover_mock_backend" }
+prover_mock_backend = { path = "../../zk/prover_mock_backend", optional = true }
 
 [dependencies.rpp-wallet]
 package = "rpp-wallet-lib"
 path = ".."
 default-features = false
-features = ["prover-mock"]
+features = []
 
 [[bin]]
 name = "wallet_rpc"
