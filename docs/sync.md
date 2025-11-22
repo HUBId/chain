@@ -93,6 +93,32 @@ and plan identifier after restarts or transport interruptions; the runtime
 maintains the offsets on disk and will reject regressed or skipped ranges while
 continuing from the next expected chunk.
 
+### Adaptive chunk sizing
+
+Snapshot streams adapt chunk sizes to the observed bandwidth-delay product so
+slow links avoid retransmitting oversized payloads while fast links keep the
+pipe full. Providers advertise `snapshot_sizing.{min_chunk_size,max_chunk_size}`
+and the default chunk size through the plan response; consumers feed request/response
+RTT and chunk byte counts into an adaptive strategy that grows or shrinks the
+next request within the advertised bounds. Start requests can override the
+initial chunk size to account for known constraints, but the runtime will clamp
+it to the configured limits.
+
+Operators can tune the caps in `node.toml` to match their network profile:
+
+* `snapshot_sizing.default_chunk_size` – starting point for the adaptive sizing
+  strategy (must fall between `min_chunk_size` and `max_chunk_size`).
+* `snapshot_sizing.min_chunk_size` – smallest chunk the provider will serve; use
+  lower values for high-latency or metered links.
+* `snapshot_sizing.max_chunk_size` – upper bound for chunk requests; increase on
+  LAN/IX environments to reduce request overhead.
+
+If downloads stall or oscillate between chunk sizes, tighten the min/max window
+and check provider telemetry (`snapshot_bytes_sent_total` and
+`snapshot_stream_lag_seconds`) to confirm progress. Consumers expose the
+negotiated chunk size and bounds through the snapshot status RPC, which helps
+debug mismatches between requested and served sizes.
+
 ## Snapshot download authentication
 
 Snapshot download and status endpoints reuse the validator RPC surface, so the
