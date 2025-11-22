@@ -31,6 +31,12 @@ that updates feature flags or backend policies should be applied by writing the
 new values to the node configuration file and restarting the service, matching
 exactly what the automated lifecycle tests cover.
 
+API credential updates follow the same pattern: publish the new bearer token to
+clients, then roll validators with the replacement value so each node reloads the
+secret and clears any token-bucket cache. Use the
+[RPC API key rotation checklist](./interfaces/rpc/README.md#live-api-key-rotation)
+for step-by-step timing guidance.
+
 > **Warning:** The runtime only loads configuration files during startup. Signals such as
 > `SIGHUP` are ignored for reload purposes, and editing `node.toml`, `malachite.toml`, or admission
 > policies while the process is running does not take effect. Plan for a full shutdown and restart
