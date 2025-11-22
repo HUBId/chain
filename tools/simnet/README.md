@@ -7,10 +7,14 @@ run the common presets locally and to mirror the scenarios exercised by CI.
 ## CLI presets
 
 ```
-cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
+cargo xtask simnet --profile <name> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
+cargo xtask simnet --scenario <path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
 ```
 
-### Available scenarios
+Use `--profile` to load the canned simnet parameter sets that CI exercises; fall
+back to `--scenario` for ad-hoc RON files.
+
+### Available profiles
 
 | Name | Scenario file | Description |
 | --- | --- | --- |
@@ -18,7 +22,7 @@ cargo xtask simnet --scenario <name|path> [--artifacts-dir <path>] [--keep-alive
 | `state-sync-guard` | `tools/simnet/scenarios/ci_state_sync_guard.ron` | Validates guard rails around state sync. |
 | `quorum-stress` | `tools/simnet/scenarios/consensus_quorum_stress.ron` | Drives the consensus quorum stress drill. |
 | `partition` | `tools/simnet/scenarios/snapshot_partition.ron` | Partitions validators while testing snapshot recovery. |
-| `partitioned-flood` | `tools/simnet/scenarios/partitioned_flood.ron` | Runs the partitioned flood drill using gossip templates. |
+| `flood` (also `partitioned-flood`) | `tools/simnet/scenarios/partitioned_flood.ron` | Runs the partitioned flood drill using gossip templates. |
 | `small-world` | `tools/simnet/scenarios/small_world_smoke.ron` | Executes the in-process small world smoke harness. |
 | `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. |
 
@@ -57,5 +61,5 @@ validations before starting any processes:
 ## CI and nightly parity
 
 The `cargo xtask test-simnet` entry point used in CI and nightly workflows calls
-the same wrapper to run the canonical suite of scenarios. When adding new
+the same wrapper to run the canonical suite of profiles. When adding new
 presets, update the table above so local runs and automation stay aligned.

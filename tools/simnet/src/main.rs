@@ -1,6 +1,7 @@
 mod config;
 mod consensus;
 mod process;
+mod profiles;
 mod runner;
 
 use std::net::SocketAddr;
@@ -8,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -19,14 +20,19 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::SimnetConfig;
+use crate::profiles::SimnetProfile;
 use crate::runner::SimnetRunner;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Orchestrate RPP simulation networks", long_about = None)]
 struct Cli {
+    /// Use a predefined scenario profile
+    #[arg(long, value_enum, conflicts_with = "scenario")]
+    profile: Option<SimnetProfile>,
+
     /// Path to the RON scenario file
-    #[arg(long)]
-    scenario: PathBuf,
+    #[arg(long, conflicts_with = "profile")]
+    scenario: Option<PathBuf>,
 
     /// Override the artifacts directory defined in the scenario
     #[arg(long)]
@@ -57,11 +63,12 @@ async fn main() -> Result<()> {
         }
     };
 
-    let config = SimnetConfig::from_path(&cli.scenario)
-        .with_context(|| format!("failed to load scenario {}", cli.scenario.display()))?;
+    let scenario_path = resolve_scenario_path(&cli)?;
+    let config = SimnetConfig::from_path(&scenario_path)
+        .with_context(|| format!("failed to load scenario {}", scenario_path.display()))?;
     config
         .validate()
-        .with_context(|| format!("invalid scenario {}", cli.scenario.display()))?;
+        .with_context(|| format!("invalid scenario {}", scenario_path.display()))?;
     let artifacts_dir = config.resolve_artifacts_dir(cli.artifacts_dir.as_deref())?;
 
     let mut runner = SimnetRunner::new(config, artifacts_dir, cli.seed);
@@ -100,6 +107,26 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_scenario_path(cli: &Cli) -> Result<PathBuf> {
+    if let Some(profile) = cli.profile {
+        let path = profile.scenario_path();
+        if !path.exists() {
+            bail!(
+                "scenario for profile {} not found at {}",
+                profile.slug(),
+                path.display()
+            );
+        }
+        return Ok(path);
+    }
+
+    if let Some(path) = &cli.scenario {
+        return Ok(path.to_path_buf());
+    }
+
+    bail!("either --profile or --scenario must be provided")
 }
 
 fn init_tracing() {
