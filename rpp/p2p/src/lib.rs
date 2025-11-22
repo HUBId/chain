@@ -109,7 +109,9 @@ pub use behaviour::snapshots::{
     SnapshotSessionId, SnapshotsRequest, SnapshotsResponse,
 };
 #[cfg(feature = "request-response")]
-pub use behaviour::snapshots::{SnapshotProtocolError, SnapshotsBehaviour, SnapshotsEvent};
+pub use behaviour::snapshots::{
+    SnapshotProtocolError, SnapshotsBehaviour, SnapshotsBehaviourConfig, SnapshotsEvent,
+};
 pub use behaviour::witness::{
     WitnessChannelConfig, WitnessGossipPipelines, WitnessMessage, WitnessPipelineConfig,
     WitnessPipelineError,
