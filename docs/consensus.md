@@ -80,3 +80,19 @@ verifies that the warning/critical levels escalate correctly for both metrics.
 Run the probe after modifying alert rules to prove that simulated delayed
 finality raises the expected signals.【F:tests/consensus/finality_alert_probe.rs†L1-L89】
 
+If the probe fails locally or in CI, it writes `probe.log` and `metrics.prom`
+to `FINALITY_ALERT_ARTIFACT_DIR` (defaults to
+`target/artifacts/finality-alert-probe`). CI exposes sanitized copies under
+`artifacts/observability/<feature-matrix>/finality-alert-probe` in the workflow
+artifacts so on-call reviewers can quickly retrieve them.【F:tests/consensus/finality_alert_probe.rs†L25-L201】【F:.github/workflows/ci.yml†L100-L121】
+
+To debug a failure:
+
+1. Read `probe.log` to confirm the expressions, parsed thresholds, and the
+   trigger/quiet sample sets.
+2. Inspect `metrics.prom` with `promtool check metrics metrics.prom` or import
+   it into a temporary Prometheus to replay the two scenarios.
+3. Compare the recorded samples against the alert definitions to understand why
+   an escalation fired or was suppressed, then adjust the expressions or
+   thresholds accordingly.
+

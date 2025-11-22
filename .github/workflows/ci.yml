@@ -1015,6 +1015,8 @@ PY
         with:
           shared-key: ${{ matrix.name }}
       - name: Run observability metrics
+        env:
+          FINALITY_ALERT_ARTIFACT_DIR: artifacts/finality-alert-probe/${{ matrix.name }}
         run: |
           set -euo pipefail
           if [ -n "${{ matrix.no_default_features }}" ]; then
@@ -1024,11 +1026,15 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-observability
+          cargo test -p rpp-chain --locked --test finality_alert_probe
       - name: Collect observability artifacts (${{ matrix.name }})
         if: always()
         run: |
           set -euo pipefail
-          scripts/ci/collect_test_artifacts.sh "artifacts/observability/${{ matrix.name }}" logs
+          scripts/ci/collect_test_artifacts.sh \
+            "artifacts/observability/${{ matrix.name }}" \
+            logs \
+            artifacts/finality-alert-probe/${{ matrix.name }}
       - name: Upload observability artifacts (${{ matrix.name }})
         if: always()
         uses: actions/upload-artifact@v4
