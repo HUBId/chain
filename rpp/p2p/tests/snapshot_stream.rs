@@ -409,6 +409,7 @@ fn sample_plan(root_hex: String) -> NetworkStateSyncPlan {
             previous_commitment: Some("bb".repeat(32)),
             recursive_proof: "rec-proof".into(),
         }],
+        max_concurrent_requests: Some(1),
     }
 }
 

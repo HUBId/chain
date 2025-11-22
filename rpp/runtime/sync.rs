@@ -907,6 +907,7 @@ pub struct StateSyncPlan {
     pub tip: BlockMetadata,
     pub chunks: Vec<StateSyncChunk>,
     pub light_client_updates: Vec<LightClientUpdate>,
+    pub max_concurrent_requests: Option<u64>,
 }
 
 impl StateSyncPlan {
@@ -950,6 +951,7 @@ impl StateSyncPlan {
             tip: encode_block_metadata(&self.tip),
             chunks,
             light_client_updates: updates,
+            max_concurrent_requests: self.max_concurrent_requests,
         })
     }
 
@@ -1104,6 +1106,7 @@ impl ReconstructionEngine {
             tip: plan.tip.clone(),
             chunks,
             light_client_updates: updates,
+            max_concurrent_requests: None,
         })
     }
 

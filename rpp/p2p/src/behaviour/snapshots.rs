@@ -92,6 +92,7 @@ pub struct SnapshotChunkCapabilities {
     pub chunk_size: Option<u64>,
     pub min_chunk_size: Option<u64>,
     pub max_chunk_size: Option<u64>,
+    pub max_concurrent_requests: Option<u64>,
 }
 
 /// Snapshot protocol request payload.
@@ -160,6 +161,9 @@ pub enum SnapshotsResponse {
         /// Optional upper capability bound for negotiated chunk sizes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_chunk_size: Option<u64>,
+        /// Optional maximum concurrent requests supported by the provider for this plan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent_requests: Option<u64>,
     },
     Chunk {
         session_id: SnapshotSessionId,
@@ -184,6 +188,9 @@ pub enum SnapshotsResponse {
         /// Optional upper capability bound for negotiated chunk sizes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_chunk_size: Option<u64>,
+        /// Optional maximum concurrent requests supported by the provider for this session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent_requests: Option<u64>,
     },
     Ack {
         session_id: SnapshotSessionId,
@@ -374,6 +381,7 @@ impl SnapshotProvider for NullSnapshotProvider {
             chunk_size: Some(1),
             min_chunk_size: Some(1),
             max_chunk_size: None,
+            max_concurrent_requests: None,
         }
     }
 }
@@ -525,6 +533,7 @@ struct SessionState {
     last_progress: Instant,
     chunk_size: Option<u64>,
     capabilities: SnapshotChunkCapabilities,
+    plan_max_concurrent_requests: Option<usize>,
     chunk_sizing: ChunkSizingStrategy,
 }
 
@@ -549,6 +558,7 @@ impl SessionState {
             last_progress: Instant::now(),
             chunk_size: capabilities.chunk_size,
             capabilities,
+            plan_max_concurrent_requests: None,
             chunk_sizing,
         }
     }
@@ -571,6 +581,12 @@ impl SessionState {
         self.chunk_size = capabilities.chunk_size.or(self.chunk_size);
         self.capabilities = capabilities.clone();
         self.chunk_sizing = Self::chunk_sizing_for(&capabilities);
+    }
+
+    fn set_plan_concurrency_limit(&mut self, limit: Option<u64>) {
+        if let Some(limit) = limit.and_then(|value| usize::try_from(value).ok()) {
+            self.plan_max_concurrent_requests = Some(limit);
+        }
     }
 
     fn record_chunk_telemetry(&mut self, bytes: usize, rtt: Duration) {
@@ -647,8 +663,20 @@ impl SessionState {
         self.in_flight_chunks + self.in_flight_updates + self.in_flight_control
     }
 
-    fn has_capacity(&self, limit: usize) -> bool {
-        self.total_in_flight() < limit
+    fn effective_concurrency_limit(&self, configured_limit: Option<usize>) -> usize {
+        let limits = [
+            configured_limit,
+            self.capabilities
+                .max_concurrent_requests
+                .and_then(|limit| usize::try_from(limit).ok()),
+            self.plan_max_concurrent_requests,
+        ];
+
+        limits.into_iter().flatten().min().unwrap_or(1).max(1)
+    }
+
+    fn has_capacity(&self, configured_limit: Option<usize>) -> bool {
+        self.total_in_flight() < self.effective_concurrency_limit(configured_limit)
     }
 }
 
@@ -1323,8 +1351,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     #[cfg(not(feature = "metrics"))]
     fn record_adaptive_chunk_size(&self, _size: u64) {}
 
-    fn max_concurrent_requests(&self) -> usize {
-        self.config.max_concurrent_requests.unwrap_or(1).max(1)
+    fn configured_concurrency_limit(&self) -> Option<usize> {
+        self.config
+            .max_concurrent_requests
+            .map(|limit| limit.max(1))
     }
 
     fn track_outbound_request(
@@ -1368,7 +1398,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         session_id: SnapshotSessionId,
         target: Option<(SnapshotItemKind, u64)>,
     ) -> Option<RequestResponseId> {
-        let max_in_flight = self.max_concurrent_requests();
+        let configured_limit = self.configured_concurrency_limit();
         let mut target_request_id = None;
 
         loop {
@@ -1378,7 +1408,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     None => break,
                 };
 
-                if !state.has_capacity(max_in_flight) {
+                if !state.has_capacity(configured_limit) {
                     break;
                 }
 
@@ -1543,7 +1573,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             .sessions
             .entry(session_id)
             .or_insert_with(|| SessionState::new(peer.clone()));
-        if !entry.has_capacity(self.max_concurrent_requests()) {
+        if !entry.has_capacity(self.configured_concurrency_limit()) {
             return None;
         }
         if entry.peer != peer {
@@ -1616,7 +1646,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         plan_id: String,
     ) -> Option<RequestResponseId> {
         let entry = self.sessions.get_mut(&session_id)?;
-        if !entry.has_capacity(self.max_concurrent_requests()) || entry.peer != peer {
+        if !entry.has_capacity(self.configured_concurrency_limit()) || entry.peer != peer {
             return None;
         }
         let requested_size = entry.negotiated_chunk_size();
@@ -1846,6 +1876,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                                     chunk_size: negotiated_chunk_size,
                                     min_chunk_size: capabilities.min_chunk_size,
                                     max_chunk_size: capabilities.max_chunk_size,
+                                    max_concurrent_requests: capabilities.max_concurrent_requests,
                                 },
                             ) {
                                 #[cfg(feature = "metrics")]
@@ -2064,6 +2095,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                                 chunk_size: negotiated_chunk_size,
                                 min_chunk_size: capabilities.min_chunk_size,
                                 max_chunk_size: capabilities.max_chunk_size,
+                                max_concurrent_requests: capabilities.max_concurrent_requests,
                             },
                         ) {
                             #[cfg(feature = "metrics")]
@@ -2157,12 +2189,14 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         response: SnapshotsResponse,
         timing: Option<SnapshotRequestTiming>,
     ) {
+        let kind = snapshot_response_kind(&response);
         match response {
             SnapshotsResponse::Plan {
                 plan,
                 chunk_size,
                 min_chunk_size,
                 max_chunk_size,
+                max_concurrent_requests,
                 ..
             } => match serde_json::from_slice(&plan) {
                 Ok(plan) => {
@@ -2175,7 +2209,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         chunk_size,
                         min_chunk_size,
                         max_chunk_size,
+                        max_concurrent_requests,
                     });
+                    state.set_plan_concurrency_limit(plan.max_concurrent_requests);
                     if let Some(size) = chunk_size {
                         self.record_negotiated_chunk_size("consumer", size);
                     }
@@ -2265,6 +2301,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 chunk_size,
                 min_chunk_size,
                 max_chunk_size,
+                max_concurrent_requests,
                 ..
             } => {
                 if let Some(state) = self.sessions.get_mut(&session_id) {
@@ -2272,7 +2309,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         chunk_size,
                         min_chunk_size,
                         max_chunk_size,
+                        max_concurrent_requests,
                     });
+                    state.set_plan_concurrency_limit(max_concurrent_requests);
                     if let Some(size) = chunk_size {
                         self.record_negotiated_chunk_size("consumer", size);
                     }

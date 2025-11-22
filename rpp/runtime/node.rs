@@ -1857,9 +1857,10 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                     "failed to build state sync plan: {err}"
                 ))
             })?;
-        let network_plan = state_plan.to_network_plan().map_err(|err| {
+        let mut network_plan = state_plan.to_network_plan().map_err(|err| {
             PipelineError::SnapshotVerification(format!("failed to encode state sync plan: {err}"))
         })?;
+        network_plan.max_concurrent_requests = self.chunk_capabilities().max_concurrent_requests;
         let updates = state_plan.light_client_messages().map_err(|err| {
             PipelineError::SnapshotVerification(format!(
                 "failed to encode light client updates: {err}"
@@ -2185,6 +2186,7 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             chunk_size: Some(chunk_size),
             min_chunk_size: Some(min_chunk_size),
             max_chunk_size: Some(max_chunk_size),
+            max_concurrent_requests: None,
         }
     }
 }
