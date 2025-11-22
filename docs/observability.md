@@ -34,6 +34,10 @@ endpoints to the configured secondary ones. Both exporters emit
 `telemetry_otlp_failures_total{phase="init_failover"}` when they retry with the
 secondary endpoints so dashboards and alerts can distinguish between an outright
 failure and a successful failover.【F:rpp/node/src/lib.rs†L1650-L1711】【F:tests/observability_otlp_failures.rs†L109-L212】
+Startup validation enforces that failover deployments provide secondary OTLP
+endpoints and a non-empty `auth_token` for the backup collector; missing fields
+produce configuration exit code `2` so operators can correct the credentials
+before the node starts processing traffic.【F:rpp/runtime/config.rs†L3885-L3937】【F:tests/node_lifecycle/startup_errors.rs†L75-L139】
 
 The Prometheus scrape contains both series, allowing dashboards and automated
 checks to confirm that exporter failures have been observed.
