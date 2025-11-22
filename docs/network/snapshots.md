@@ -54,6 +54,24 @@ provider receives `Ack` requests, persists the acknowledgement, and echoes a
 matching response; outbound errors trigger `SnapshotProtocolError::Outbound`
 events so higher layers can retry or fail the session.【F:rpp/p2p/src/behaviour/snapshots.rs†L813-L840】【F:rpp/p2p/src/behaviour/snapshots.rs†L578-L633】
 
+## Chunk sizing defaults and caps
+
+Snapshot providers advertise sizing hints so consumers can negotiate chunk
+sizes that fit their bandwidth and latency envelope. Tune the defaults via the
+`snapshot_sizing` section in `node.toml`:
+
+- `snapshot_sizing.default_chunk_size` controls the chunk size used when
+  generating state sync plans and when no consumer preference is supplied
+  (default: 16).
+- `snapshot_sizing.min_chunk_size` and `snapshot_sizing.max_chunk_size` bound the
+  adaptive sizing strategy advertised to peers, ensuring negotiated sizes stay
+  within operator-defined caps (defaults: 16/16).
+
+Values must be non-zero and satisfy `min <= default <= max`; invalid settings
+are rejected during configuration validation.【F:rpp/runtime/config.rs†L1703-L1765】【F:rpp/runtime/config.rs†L2326-L2358】 The runtime snapshot provider
+uses these values both to build plans and to surface capability bounds to the
+network behaviour.【F:rpp/runtime/node.rs†L1558-L1606】【F:rpp/runtime/node.rs†L2068-L2105】
+
 ## Runtime session manager
 
 The node runtime wraps the behaviour in a session manager that tracks progress

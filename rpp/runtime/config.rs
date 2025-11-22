@@ -1706,6 +1706,9 @@ pub const DEFAULT_ADMISSION_RECONCILER_CADENCE_SECS: u64 = 60;
 pub const DEFAULT_ADMISSION_RECONCILER_ALERT_THRESHOLD: u64 = 1;
 pub const DEFAULT_ADMISSION_RECONCILER_AUDIT_LAG_SECS: u64 = 300;
 pub const DEFAULT_SNAPSHOT_VALIDATOR_CADENCE_SECS: u64 = 300;
+pub const DEFAULT_SNAPSHOT_CHUNK_SIZE: usize = 16;
+pub const DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
+pub const DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -1756,6 +1759,8 @@ pub struct NodeConfig {
     pub admission_reconciler: AdmissionReconcilerConfig,
     #[serde(default)]
     pub snapshot_validator: SnapshotValidatorConfig,
+    #[serde(default)]
+    pub snapshot_sizing: SnapshotSizingConfig,
     #[serde(default)]
     pub governance: GovernanceConfig,
 }
@@ -2114,6 +2119,7 @@ impl NodeConfig {
         self.pruning.validate()?;
         self.admission_reconciler.validate()?;
         self.snapshot_validator.validate()?;
+        self.snapshot_sizing.validate()?;
         self.governance.validate()?;
         Ok(())
     }
@@ -2205,6 +2211,7 @@ impl Default for NodeConfig {
             pruning: PruningConfig::default(),
             admission_reconciler: AdmissionReconcilerConfig::default(),
             snapshot_validator: SnapshotValidatorConfig::default(),
+            snapshot_sizing: SnapshotSizingConfig::default(),
             governance: GovernanceConfig::default(),
         }
     }
@@ -2308,6 +2315,59 @@ impl Default for SnapshotValidatorConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotSizingConfig {
+    pub default_chunk_size: usize,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+}
+
+impl SnapshotSizingConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.default_chunk_size == 0 {
+            return Err(ChainError::Config(
+                "snapshot_sizing.default_chunk_size must be greater than 0".into(),
+            ));
+        }
+        if self.min_chunk_size == 0 {
+            return Err(ChainError::Config(
+                "snapshot_sizing.min_chunk_size must be greater than 0".into(),
+            ));
+        }
+        if self.max_chunk_size == 0 {
+            return Err(ChainError::Config(
+                "snapshot_sizing.max_chunk_size must be greater than 0".into(),
+            ));
+        }
+        if self.min_chunk_size > self.max_chunk_size {
+            return Err(ChainError::Config(
+                "snapshot_sizing.min_chunk_size must be less than or equal to snapshot_sizing.max_chunk_size"
+                    .into(),
+            ));
+        }
+        if self.default_chunk_size < self.min_chunk_size
+            || self.default_chunk_size > self.max_chunk_size
+        {
+            return Err(ChainError::Config(
+                "snapshot_sizing.default_chunk_size must fall within the configured min/max bounds"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for SnapshotSizingConfig {
+    fn default() -> Self {
+        Self {
+            default_chunk_size: DEFAULT_SNAPSHOT_CHUNK_SIZE,
+            min_chunk_size: DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE,
+            max_chunk_size: DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2356,6 +2416,27 @@ mod tests {
         );
         config
             .snapshot_validator
+            .validate()
+            .expect("defaults should validate");
+    }
+
+    #[test]
+    fn snapshot_sizing_defaults_are_valid() {
+        let config = NodeConfig::default();
+        assert_eq!(
+            config.snapshot_sizing.default_chunk_size,
+            DEFAULT_SNAPSHOT_CHUNK_SIZE
+        );
+        assert_eq!(
+            config.snapshot_sizing.min_chunk_size,
+            DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE
+        );
+        assert_eq!(
+            config.snapshot_sizing.max_chunk_size,
+            DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE
+        );
+        config
+            .snapshot_sizing
             .validate()
             .expect("defaults should validate");
     }

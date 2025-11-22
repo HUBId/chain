@@ -48,7 +48,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
-    SnapshotSigningKey,
+    SnapshotSigningKey, SnapshotSizingConfig, DEFAULT_SNAPSHOT_CHUNK_SIZE,
 };
 use crate::consensus::messages::compute_consensus_bindings;
 use crate::consensus::{
@@ -157,7 +157,7 @@ use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
-pub const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
+pub const DEFAULT_STATE_SYNC_CHUNK: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 const PROOF_IO_MARKER: &str = "ProofError::IO";
 #[derive(Clone)]
 struct ChainTip {
@@ -1561,7 +1561,7 @@ impl SnapshotSessionStore {
 
 struct RuntimeSnapshotProvider {
     inner: Arc<NodeInner>,
-    chunk_size: usize,
+    sizing: SnapshotSizingConfig,
     sessions: ParkingMutex<HashMap<SnapshotSessionId, RuntimeSnapshotSession>>,
     snapshots: RwLock<SnapshotStore>,
     session_store: Arc<SnapshotSessionStore>,
@@ -1569,8 +1569,9 @@ struct RuntimeSnapshotProvider {
 }
 
 impl RuntimeSnapshotProvider {
-    fn build(inner: Arc<NodeInner>, chunk_size: usize) -> Arc<Self> {
+    fn build(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> Arc<Self> {
         let store_path = inner.config.snapshot_dir.join("snapshot_sessions.json");
+        let chunk_size = sizing.default_chunk_size;
         let (store, persisted) = match SnapshotSessionStore::open(store_path.clone()) {
             Ok(store) => {
                 let records = store.records();
@@ -1595,7 +1596,7 @@ impl RuntimeSnapshotProvider {
 
         let mut restored_sessions = HashMap::new();
         for (session_id, record) in persisted {
-            match Self::restore_session(&inner, chunk_size, &record) {
+            match Self::restore_session(&inner, &sizing, &record) {
                 Ok(session) => {
                     restored_sessions.insert(session_id, session);
                 }
@@ -1618,7 +1619,7 @@ impl RuntimeSnapshotProvider {
 
         Arc::new(Self {
             inner,
-            chunk_size,
+            sizing,
             sessions: ParkingMutex::new(restored_sessions),
             snapshots: RwLock::new(SnapshotStore::new(chunk_size)),
             session_store: store,
@@ -1626,13 +1627,13 @@ impl RuntimeSnapshotProvider {
         })
     }
 
-    fn new(inner: Arc<NodeInner>, chunk_size: usize) -> SnapshotProviderHandle {
-        Self::build(inner, chunk_size) as SnapshotProviderHandle
+    fn new(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> SnapshotProviderHandle {
+        Self::build(inner, sizing) as SnapshotProviderHandle
     }
 
     #[cfg(test)]
-    fn new_arc(inner: Arc<NodeInner>, chunk_size: usize) -> Arc<Self> {
-        Self::build(inner, chunk_size)
+    fn new_arc(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> Arc<Self> {
+        Self::build(inner, sizing)
     }
 
     fn decode_root(plan: &NetworkStateSyncPlan) -> Result<Hash, PipelineError> {
@@ -1671,7 +1672,7 @@ impl RuntimeSnapshotProvider {
 
     fn restore_session(
         inner: &Arc<NodeInner>,
-        chunk_size: usize,
+        sizing: &SnapshotSizingConfig,
         record: &StoredSnapshotSession,
     ) -> Result<RuntimeSnapshotSession, PipelineError> {
         let peer = NetworkPeerId::from_str(&record.peer)
@@ -1683,7 +1684,7 @@ impl RuntimeSnapshotProvider {
             .unwrap_or_else(|| record.root.clone());
 
         let state_plan = inner
-            .state_sync_plan(chunk_size)
+            .state_sync_plan(sizing.default_chunk_size)
             .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
         let network_plan = state_plan
             .to_network_plan()
@@ -1796,9 +1797,14 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         &self,
         session_id: SnapshotSessionId,
     ) -> Result<NetworkStateSyncPlan, Self::Error> {
-        let state_plan = self.inner.state_sync_plan(self.chunk_size).map_err(|err| {
-            PipelineError::SnapshotVerification(format!("failed to build state sync plan: {err}"))
-        })?;
+        let state_plan = self
+            .inner
+            .state_sync_plan(self.sizing.default_chunk_size)
+            .map_err(|err| {
+                PipelineError::SnapshotVerification(format!(
+                    "failed to build state sync plan: {err}"
+                ))
+            })?;
         let network_plan = state_plan.to_network_plan().map_err(|err| {
             PipelineError::SnapshotVerification(format!("failed to encode state sync plan: {err}"))
         })?;
@@ -2092,11 +2098,13 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
     }
 
     fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
-        let chunk_size = u64::try_from(self.chunk_size).unwrap_or(u64::MAX);
+        let chunk_size = u64::try_from(self.sizing.default_chunk_size).unwrap_or(u64::MAX);
+        let min_chunk_size = u64::try_from(self.sizing.min_chunk_size).unwrap_or(u64::MAX);
+        let max_chunk_size = u64::try_from(self.sizing.max_chunk_size).unwrap_or(u64::MAX);
         SnapshotChunkCapabilities {
             chunk_size: Some(chunk_size),
-            min_chunk_size: Some(chunk_size),
-            max_chunk_size: Some(chunk_size),
+            min_chunk_size: Some(min_chunk_size),
+            max_chunk_size: Some(max_chunk_size),
         }
     }
 }
@@ -3889,7 +3897,7 @@ impl NodeInner {
         config.metrics = self.runtime_metrics.clone();
         config.snapshot_provider = Some(RuntimeSnapshotProvider::new(
             Arc::clone(self),
-            DEFAULT_STATE_SYNC_CHUNK,
+            self.config.snapshot_sizing.clone(),
         ));
         Ok(config)
     }
@@ -8911,8 +8919,10 @@ mod tests {
         let config = sample_node_config(tempdir.path());
         let config_restart = config.clone();
         let node = Node::new(config, RuntimeMetrics::noop()).expect("node init");
-        let provider =
-            RuntimeSnapshotProvider::new_arc(Arc::clone(&node.inner), DEFAULT_STATE_SYNC_CHUNK);
+        let provider = RuntimeSnapshotProvider::new_arc(
+            Arc::clone(&node.inner),
+            node.inner.config.snapshot_sizing.clone(),
+        );
 
         let session = SnapshotSessionId::new(7);
         let peer = NetworkPeerId::random();
@@ -8960,8 +8970,10 @@ mod tests {
         drop(node);
 
         let node = Node::new(config_restart, RuntimeMetrics::noop()).expect("node restart");
-        let provider =
-            RuntimeSnapshotProvider::new_arc(Arc::clone(&node.inner), DEFAULT_STATE_SYNC_CHUNK);
+        let provider = RuntimeSnapshotProvider::new_arc(
+            Arc::clone(&node.inner),
+            node.inner.config.snapshot_sizing.clone(),
+        );
         {
             let sessions = provider.sessions.lock();
             let record = sessions.get(&session).expect("restored session state");
