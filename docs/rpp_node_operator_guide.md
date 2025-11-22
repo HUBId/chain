@@ -386,6 +386,10 @@ per sink and increments `telemetry_otlp_failures_total{phase="init_failover"}`
 so dashboards can distinguish successful failovers from hard failures. TLS
 material is validated before attempting the primary endpoint; malformed
 certificates trigger the failover path while keeping the node running.【F:rpp/runtime/config.rs†L3633-L3699】【F:rpp/node/src/lib.rs†L1644-L1725】【F:tests/observability_otlp_failures.rs†L109-L212】
+Startup validation rejects incomplete failover configs with exit code `2`,
+including missing secondary endpoints or a blank/missing `auth_token` used to
+authenticate against the secondary collector. The node prints the config error
+before exiting so operators can correct the credentials and restart safely.【F:rpp/runtime/config.rs†L3885-L3937】【F:tests/node_lifecycle/startup_errors.rs†L75-L139】
 
 Verwende für `/state-sync`-Operationen die Snapshot-Subcommands statt ad-hoc
 `curl`-Aufrufen. `cargo run -p rpp-chain -- validator snapshot status --session <id>` spiegelt die

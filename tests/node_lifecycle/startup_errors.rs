@@ -105,6 +105,89 @@ fn startup_rejects_invalid_env_overrides() -> Result<()> {
 }
 
 #[test]
+fn startup_rejects_failover_without_secondary_endpoints() -> Result<()> {
+    let temp_dir = TempDir::new().context("create temporary directory")?;
+    let mut ports = PortAllocator::default();
+    let config_path = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::WithEndpoint),
+        &mut ports,
+        |config| {
+            config.rollout.telemetry.failover_enabled = true;
+            config.rollout.telemetry.secondary_endpoint = None;
+            config.rollout.telemetry.secondary_http_endpoint = None;
+        },
+    )
+    .context("write node configuration without secondary failover endpoints")?;
+
+    let binary = locate_rpp_node_binary().context("locate rpp-node binary")?;
+    let output = Command::new(&binary)
+        .arg("node")
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .context("spawn rpp-node with missing secondary failover endpoints")?;
+
+    assert!(!output.status.success(), "process unexpectedly succeeded");
+    assert_eq!(
+        output.status.code(),
+        Some(CONFIG_EXIT_CODE),
+        "missing failover endpoints should map to configuration exit code",
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("telemetry failover requires a secondary endpoint"),
+        "expected secondary endpoint validation failure in stderr, found: {stderr}",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn startup_rejects_failover_without_auth_token() -> Result<()> {
+    let temp_dir = TempDir::new().context("create temporary directory")?;
+    let mut ports = PortAllocator::default();
+    let secondary_grpc = format!("http://127.0.0.1:{}", ports.next_port()?);
+    let secondary_http = format!("http://127.0.0.1:{}/v1/metrics", ports.next_port()?);
+    let config_path = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::WithEndpoint),
+        &mut ports,
+        |config| {
+            config.rollout.telemetry.failover_enabled = true;
+            config.rollout.telemetry.auth_token = None;
+            config.rollout.telemetry.secondary_endpoint = Some(secondary_grpc.clone());
+            config.rollout.telemetry.secondary_http_endpoint = Some(secondary_http.clone());
+        },
+    )
+    .context("write node configuration without failover credentials")?;
+
+    let binary = locate_rpp_node_binary().context("locate rpp-node binary")?;
+    let output = Command::new(&binary)
+        .arg("node")
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .context("spawn rpp-node with missing failover credentials")?;
+
+    assert!(!output.status.success(), "process unexpectedly succeeded");
+    assert_eq!(
+        output.status.code(),
+        Some(CONFIG_EXIT_CODE),
+        "missing failover credentials should map to configuration exit code",
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires auth_token for secondary backend credentials"),
+        "expected failover credential validation failure in stderr, found: {stderr}",
+    );
+
+    Ok(())
+}
+
+#[test]
 fn startup_rejects_out_of_range_ring_size() -> Result<()> {
     let temp_dir = TempDir::new().context("create temporary directory")?;
     let mut ports = PortAllocator::default();

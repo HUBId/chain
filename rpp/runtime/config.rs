@@ -2760,6 +2760,25 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_config_validation_rejects_blank_auth_token() {
+        let mut config = TelemetryConfig::default();
+        config.auth_token = Some("   ".to_string());
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for blank auth token");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("telemetry.auth_token"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
     fn telemetry_config_validation_rejects_missing_failover_endpoint() {
         let mut config = TelemetryConfig::default();
         config.enabled = true;
@@ -2773,6 +2792,31 @@ mod tests {
             ChainError::Config(message) => {
                 assert!(
                     message.contains("telemetry failover requires a secondary endpoint"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn telemetry_config_validation_rejects_missing_failover_auth_token() {
+        let mut config = TelemetryConfig::default();
+        config.enabled = true;
+        config.failover_enabled = true;
+        config.endpoint = Some("http://127.0.0.1:4317".to_string());
+        config.http_endpoint = Some("http://127.0.0.1:4318".to_string());
+        config.secondary_endpoint = Some("http://127.0.0.1:5317".to_string());
+        config.secondary_http_endpoint = Some("http://127.0.0.1:5318".to_string());
+
+        let error = config.validate().expect_err(
+            "telemetry validation should fail without credentials for secondary endpoint",
+        );
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("requires auth_token"),
                     "unexpected message: {}",
                     message
                 );
@@ -3895,6 +3939,14 @@ impl TelemetryConfig {
             validate_endpoint("telemetry.secondary_http_endpoint", endpoint)?;
         }
 
+        if let Some(token) = self.auth_token.as_ref() {
+            if token.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "telemetry.auth_token must not be empty when provided".into(),
+                ));
+            }
+        }
+
         if self.failover_enabled && self.enabled {
             if self.endpoint.is_none() && self.http_endpoint.is_none() {
                 return Err(ChainError::Config(
@@ -3905,7 +3957,19 @@ impl TelemetryConfig {
 
             if self.secondary_endpoint.is_none() && self.secondary_http_endpoint.is_none() {
                 return Err(ChainError::Config(
-                    "telemetry failover requires a secondary endpoint (secondary_endpoint or secondary_http_endpoint)"
+                    "telemetry failover requires a secondary endpoint (secondary_endpoint or secondary_http_endpoint)".into(),
+                ));
+            }
+
+            if self
+                .auth_token
+                .as_ref()
+                .map(|token| token.trim())
+                .filter(|token| !token.is_empty())
+                .is_none()
+            {
+                return Err(ChainError::Config(
+                    "telemetry failover requires auth_token for secondary backend credentials"
                         .into(),
                 ));
             }
