@@ -33,6 +33,9 @@ their OTLP form; apply your collector's naming transforms as needed.
 - **Wallet RPC throughput.** Overlay `rpp.runtime.rpc.request.total` with the
   matching latency histogram so operators can tie load to response times; use the
   `method` and `result` labels to identify failure hot spots.【F:rpp/runtime/telemetry/metrics.rs†L124-L139】
+- **RPC rate limiting.** Plot `sum by (method, status)(rate(rpp.runtime.rpc.rate_limit.total[5m]))`
+  to separate throttled requests from healthy traffic per method when tuning
+  budgets or investigating abuse spikes.【F:rpp/runtime/telemetry/metrics.rs†L124-L150】
 - **Pipeline health.** Complement runtime metrics with the orchestrator
   counters—`pipeline_stage_latency_ms`, `pipeline_errors_total`,
   `pipeline_gossip_events_total`, `pipeline_leader_rotations_total`—to ensure the

@@ -98,6 +98,7 @@ pub struct RuntimeMetrics {
     wallet_sync_driver_active: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
+    rpc_rate_limit_total: RpcCounter<RpcMethod, RpcRateLimitStatus>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
     wal_flush_bytes: EnumU64Histogram<WalFlushOutcome>,
     wal_flush_total: EnumCounter<WalFlushOutcome>,
@@ -216,6 +217,15 @@ impl RuntimeMetrics {
                 meter
                     .u64_counter("rpp.runtime.rpc.request.total")
                     .with_description("Total RPC handler invocations grouped by method and result")
+                    .with_unit("1")
+                    .build(),
+            ),
+            rpc_rate_limit_total: RpcCounter::new(
+                meter
+                    .u64_counter("rpp.runtime.rpc.rate_limit.total")
+                    .with_description(
+                        "RPC rate limit decisions grouped by method and allow/throttle status",
+                    )
                     .with_unit("1")
                     .build(),
             ),
@@ -538,6 +548,11 @@ impl RuntimeMetrics {
         self.rpc_request_latency
             .record_duration(method, result, duration);
         self.rpc_request_total.add(method, result, 1);
+    }
+
+    /// Record the outcome of a rate limit decision for an RPC handler.
+    pub fn record_rpc_rate_limit(&self, method: RpcMethod, status: RpcRateLimitStatus) {
+        self.rpc_rate_limit_total.add(method, status, 1);
     }
 
     /// Record the duration of a WAL flush attempt.
@@ -1315,6 +1330,30 @@ pub enum RpcResult {
     Success,
     ClientError,
     ServerError,
+}
+
+/// Outcomes for rate-limit checks on RPC invocations.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum RpcRateLimitStatus {
+    Allowed,
+    Throttled,
+}
+
+impl RpcRateLimitStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Throttled => "throttled",
+        }
+    }
+}
+
+impl MetricLabel for RpcRateLimitStatus {
+    const KEY: &'static str = "status";
+
+    fn as_str(&self) -> &'static str {
+        self.as_str()
+    }
 }
 
 impl RpcResult {
