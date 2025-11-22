@@ -1,3 +1,5 @@
+pub mod chunk_sizing;
+
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs;
@@ -15,6 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::watch;
+use tracing::debug;
 
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
