@@ -11,6 +11,10 @@ feature gate is enabled.
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `snapshot_bytes_sent_total` | Counter (u64) | `direction` (`outbound`, `inbound`), `kind` (`plan`, `chunk`, `light_client_update`, `resume`, `ack`, `error`) | Total bytes transferred per snapshot artefact and direction. Outbound values represent producer traffic, inbound values track consumer throughput. |
+| `snapshot_negotiated_chunk_size_bytes` | Gauge (u64) | `role` (`provider`, `consumer`) | Last chunk size selected after negotiating capabilities and explicit bounds. Providers emit the size they apply to responses; consumers emit the size advertised by the peer. |
+| `snapshot_negotiated_chunk_size_bytes_histogram` | Histogram (u64) | _none_ | Distribution of negotiated chunk sizes in bytes to spot skew across peers or sessions. |
+| `snapshot_adaptive_chunk_size_bytes` | Gauge (u64) | _none_ | Most recent adaptive chunk size calculated by the requester based on observed throughput and RTT. |
+| `snapshot_adaptive_chunk_size_bytes_histogram` | Histogram (u64) | _none_ | Distribution of adaptive chunk sizes selected over time, useful for catching oscillation or stagnation. |
 | `snapshot_stream_lag_seconds` | Gauge (f64) | _none_ | Maximum wall-clock delay since the last successful chunk, update, or acknowledgement across all active sessions. Values close to zero indicate the stream is progressing. |
 | `snapshot_chunk_send_queue_depth` | Gauge (u64) | _none_ | Current number of chunk responses buffered by the provider because the consumer cannot accept them yet. Rising depth signals backpressure or stalled consumers. |
 | `snapshot_chunk_send_latency_seconds` | Histogram (f64) | _none_ | Time to flush a chunk response to the consumer. Captures transport- and consumer-side backpressure; sustained elevation indicates slow receivers. |
