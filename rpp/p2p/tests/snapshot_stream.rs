@@ -1,5 +1,5 @@
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand::rngs::OsRng;
 use rpp_p2p::vendor::PeerId;
@@ -413,6 +413,96 @@ fn sample_plan(root_hex: String) -> NetworkStateSyncPlan {
     }
 }
 
+fn synthetic_plan(
+    root_hex: String,
+    chunk_count: usize,
+    max_concurrent_requests: Option<u64>,
+) -> NetworkStateSyncPlan {
+    let pruning = NetworkPruningEnvelope {
+        schema_version: 1,
+        parameter_version: 1,
+        snapshot: NetworkPruningSnapshot {
+            schema_version: 1,
+            parameter_version: 1,
+            block_height: 10,
+            state_commitment: NetworkTaggedDigestHex::from("aa".repeat(32)),
+        },
+        segments: vec![NetworkPruningSegment {
+            schema_version: 1,
+            parameter_version: 1,
+            segment_index: 0,
+            start_height: 0,
+            end_height: 10,
+            segment_commitment: NetworkTaggedDigestHex::from("bb".repeat(32)),
+        }],
+        commitment: NetworkPruningCommitment {
+            schema_version: 1,
+            parameter_version: 1,
+            aggregate_commitment: NetworkTaggedDigestHex::from("cc".repeat(32)),
+        },
+        binding_digest: NetworkTaggedDigestHex::from("dd".repeat(32)),
+    };
+
+    let chunks = (0..chunk_count)
+        .map(|i| NetworkStateSyncChunk {
+            start_height: (i as u64) * 10,
+            end_height: (i as u64) * 10 + 9,
+            requests: vec![NetworkReconstructionRequest {
+                height: (i as u64) * 10,
+                block_hash: format!("block-{i}"),
+                tx_root: format!("tx-{i}"),
+                state_root: format!("state-{i}"),
+                utxo_root: format!("utxo-{i}"),
+                reputation_root: format!("rep-{i}"),
+                timetoke_root: format!("time-{i}"),
+                zsi_root: format!("zsi-{i}"),
+                proof_root: format!("proof-{i}"),
+                pruning: pruning.clone(),
+                previous_commitment: None,
+                payload_expectations: NetworkPayloadExpectations::default(),
+            }],
+            proofs: vec![format!("proof-chunk-{i}")],
+        })
+        .collect();
+
+    NetworkStateSyncPlan {
+        snapshot: NetworkSnapshotSummary {
+            height: 64,
+            block_hash: "benchmark-block".into(),
+            commitments: NetworkGlobalStateCommitments {
+                global_state_root: root_hex.clone(),
+                utxo_root: "11".repeat(32),
+                reputation_root: "22".repeat(32),
+                timetoke_root: "33".repeat(32),
+                zsi_root: "44".repeat(32),
+                proof_root: "55".repeat(32),
+            },
+            chain_commitment: "66".repeat(32),
+        },
+        tip: NetworkBlockMetadata {
+            height: 70,
+            hash: "benchmark-tip".into(),
+            timestamp: 101,
+            previous_state_root: "77".repeat(32),
+            new_state_root: "88".repeat(32),
+            proof_hash: "99".repeat(32),
+            pruning: Some(pruning.clone()),
+            pruning_binding_digest: None,
+            recursion_anchor: "anchor".into(),
+        },
+        chunks,
+        light_client_updates: vec![NetworkLightClientUpdate {
+            height: 90,
+            block_hash: "benchmark-update".into(),
+            state_root: "update-state".into(),
+            proof_commitment: "aa".repeat(32),
+            previous_commitment: Some("bb".repeat(32)),
+            recursive_proof: "rec-proof".into(),
+        }],
+        max_concurrent_requests,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_stream_pause_and_resume() {
     let mut store = SnapshotStore::new(8);
@@ -678,4 +768,177 @@ async fn snapshot_resume_rejects_invalid_offsets() {
 
     drop(client);
     drop(server);
+}
+
+#[derive(Debug)]
+struct BenchmarkObservation {
+    concurrency: usize,
+    throughput_bytes_per_sec: f64,
+    avg_chunk_gap: Duration,
+    tail_gap: Duration,
+    chunks: usize,
+    updates: usize,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_stream_parallel_benchmark_reports_throughput() {
+    let chunk_size = 1_024u64;
+    let chunk_count = 8usize;
+
+    let mut observations = Vec::new();
+
+    for concurrency in [1usize, 2, 4] {
+        let mut store = SnapshotStore::new(chunk_size);
+        let payload = vec![0u8; (chunk_size as usize) * chunk_count];
+        let root = store.insert(payload, None);
+        let root_hex = hex::encode(root.as_bytes());
+        let plan = synthetic_plan(root_hex.clone(), chunk_count, Some(concurrency as u64));
+        let provider = MockSnapshotProvider::new(plan.clone(), store, root);
+        provider.pause_after_chunk = u64::MAX;
+        {
+            let mut gate = provider.gate.lock().expect("gate");
+            gate.resume_allowed = true;
+        }
+        provider.condvar.notify_all();
+
+        let server_dir = tempdir().expect("server");
+        let client_dir = tempdir().expect("client");
+
+        let mut server = init_network(
+            &server_dir,
+            &format!("server-{concurrency}"),
+            TierLevel::Tl3,
+            Some(provider.clone()),
+        );
+        let mut client = init_network(
+            &client_dir,
+            &format!("client-{concurrency}"),
+            TierLevel::Tl3,
+            None,
+        );
+
+        server
+            .listen_on("/ip4/127.0.0.1/tcp/0".parse().expect("addr"))
+            .expect("listen");
+
+        let listen_addr = loop {
+            match timeout(Duration::from_secs(5), server.next_event()).await {
+                Ok(Ok(NetworkEvent::NewListenAddr(addr))) => break addr,
+                Ok(_) => continue,
+                Err(err) => panic!("listen timeout: {err:?}"),
+            }
+        };
+
+        client.dial(listen_addr).expect("dial");
+
+        let mut got_client_handshake = false;
+        let mut got_server_handshake = false;
+
+        timeout(Duration::from_secs(10), async {
+            while !(got_client_handshake && got_server_handshake) {
+                tokio::select! {
+                    event = client.next_event() => {
+                        if let Ok(NetworkEvent::HandshakeCompleted { .. }) = event {
+                            got_client_handshake = true;
+                        }
+                    }
+                    event = server.next_event() => {
+                        if let Ok(NetworkEvent::HandshakeCompleted { .. }) = event {
+                            got_server_handshake = true;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("handshake");
+
+        let session = SnapshotSessionId::new(20 + concurrency as u64);
+        client
+            .start_snapshot_stream(session, server.local_peer_id(), root_hex, concurrency)
+            .expect("start stream");
+
+        let mut chunk_times = Vec::new();
+        let mut total_bytes = 0usize;
+        let mut updates = 0usize;
+        let mut completed_at: Option<Instant> = None;
+        let start = Instant::now();
+
+        timeout(Duration::from_secs(30), async {
+            while completed_at.is_none() {
+                tokio::select! {
+                    event = client.next_event() => {
+                        match event.expect("client event") {
+                            NetworkEvent::SnapshotPlan { .. } => {}
+                            NetworkEvent::SnapshotChunk { chunk, .. } => {
+                                total_bytes += chunk.data.len();
+                                chunk_times.push(Instant::now());
+                            }
+                            NetworkEvent::SnapshotUpdate { .. } => {
+                                updates += 1;
+                            }
+                            NetworkEvent::SnapshotStreamCompleted { .. } => {
+                                completed_at = Some(Instant::now());
+                            }
+                            NetworkEvent::SnapshotStreamError { reason, .. } => {
+                                panic!("benchmark stream error: {reason}");
+                            }
+                            _ => {}
+                        }
+                    }
+                    event = server.next_event() => {
+                        if let Ok(NetworkEvent::SnapshotStreamError { reason, .. }) = event {
+                            panic!("server stream error: {reason}");
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("benchmark stream complete");
+
+        let completed_at = completed_at.expect("completed time");
+        let elapsed = completed_at.duration_since(start);
+        let throughput = total_bytes as f64 / elapsed.as_secs_f64().max(0.000_1);
+        let avg_chunk_gap = if chunk_times.len() > 1 {
+            let total_gap: f64 = chunk_times
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).as_secs_f64())
+                .sum();
+            Duration::from_secs_f64(total_gap / (chunk_times.len() as f64 - 1.0))
+        } else {
+            Duration::ZERO
+        };
+        let tail_gap = chunk_times
+            .last()
+            .map(|last| completed_at - *last)
+            .unwrap_or_default();
+
+        observations.push(BenchmarkObservation {
+            concurrency,
+            throughput_bytes_per_sec: throughput,
+            avg_chunk_gap,
+            tail_gap,
+            chunks: chunk_times.len(),
+            updates,
+        });
+
+        drop(client);
+        drop(server);
+    }
+
+    for observation in &observations {
+        println!(
+            "snapshot_parallel_metrics concurrency={} throughput_bps={:.2} avg_chunk_gap_ms={:.2} tail_gap_ms={:.2} chunks={} updates={}",
+            observation.concurrency,
+            observation.throughput_bytes_per_sec,
+            observation.avg_chunk_gap.as_secs_f64() * 1000.0,
+            observation.tail_gap.as_secs_f64() * 1000.0,
+            observation.chunks,
+            observation.updates
+        );
+    }
+
+    assert!(observations.iter().all(|obs| obs.chunks == chunk_count));
+    assert!(observations.iter().all(|obs| obs.updates == 1));
 }
