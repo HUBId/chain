@@ -79,6 +79,15 @@ metrics:
   - name: rpp.runtime.storage.wal_flush.total
     labels:
       - outcome
+  - name: rpp.runtime.storage.cache.hits
+    labels:
+      - cache
+  - name: rpp.runtime.storage.cache.misses
+    labels:
+      - cache
+  - name: rpp.runtime.storage.cache.evictions
+    labels:
+      - cache
   - name: firewood.nodestore.unwritten_nodes
     labels: []
   - name: firewood.allocations.from_end

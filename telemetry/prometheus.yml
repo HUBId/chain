@@ -1,6 +1,9 @@
 global:
   scrape_interval: 15s
 
+rule_files:
+  - /etc/prometheus/cache-rules.yaml
+
 scrape_configs:
   - job_name: rpp-node
     metrics_path: /metrics

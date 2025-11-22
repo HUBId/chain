@@ -18,6 +18,7 @@ services:
       - --web.listen-address=:9090
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/cache-rules.yaml:/etc/prometheus/cache-rules.yaml:ro
     ports:
       - "9090:9090"
     depends_on:
@@ -33,5 +34,7 @@ services:
       - "3000:3000"
     volumes:
       - ./grafana/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
