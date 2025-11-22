@@ -385,6 +385,9 @@ pub struct SnapshotStreamStatus {
     pub peer: PeerId,
     pub root: String,
     pub chunk_size: Option<u64>,
+    pub requested_chunk_size: Option<u64>,
+    pub min_chunk_size: Option<u64>,
+    pub max_chunk_size: Option<u64>,
     pub plan_id: Option<String>,
     pub last_chunk_index: Option<u64>,
     pub last_update_index: Option<u64>,
@@ -400,6 +403,9 @@ impl SnapshotStreamStatus {
             peer,
             root,
             chunk_size: None,
+            requested_chunk_size: None,
+            min_chunk_size: None,
+            max_chunk_size: None,
             plan_id: if root.is_empty() {
                 None
             } else {
@@ -1253,6 +1259,9 @@ impl NodeInner {
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(root), |status| {
+                        status.requested_chunk_size = Some(chunk_size);
+                        status.min_chunk_size = Some(chunk_size);
+                        status.max_chunk_size = Some(chunk_size);
                         status.chunk_size = Some(chunk_size);
                         status.last_chunk_index = None;
                         status.last_update_index = None;
@@ -1314,6 +1323,11 @@ impl NodeInner {
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(plan_id.clone()), |status| {
+                        if let Some(chunk_size) = chunk_size {
+                            status.requested_chunk_size = Some(chunk_size);
+                            status.min_chunk_size = Some(chunk_size);
+                            status.max_chunk_size = Some(chunk_size);
+                        }
                         if let Some(chunk_size) = chunk_size {
                             status.chunk_size = Some(chunk_size);
                         }
