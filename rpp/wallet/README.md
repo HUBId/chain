@@ -6,6 +6,14 @@ The `rpp-wallet` crate bundles the wallet runtime, JSON-RPC surface, and CLI use
 
 Operator- and security-focused documentation lives under [`docs/README.md`](../../docs/README.md#wallet-documentation-index). Start there for the four wallet phases, the Phase 4 runbook, policy references, and the schema migration playbook before changing configuration defaults.
 
+## Rate limits and client retries
+
+The `WalletRpcClient` now surfaces rate-limit metadata from throttled responses and will retry once after respecting the server-provided `x-ratelimit-reset` window. SDK consumers should:
+
+- Inspect the `WalletRpcClientError::RateLimited` payload for limit/remaining/reset values when retries are exhausted.
+- Avoid concurrent floods: the client retries only once, so callers should back off exponentially or align retry timers with `reset_after` when issuing follow-up requests.
+- Log the headers in operational pipelines so regressions in rate-limit formatting are caught quickly.
+
 ## Shared wallet interface crate
 
 RPC DTOs, telemetry counters, workflow payloads, and the `WalletService` trait now live in the sibling [`rpp-wallet-interface`](../wallet-interface) crate. `rpp-wallet` re-exports every interface type so downstream consumers keep importing from `rpp_wallet::*`, but when you touch shared payloads you must update both the interface crate and any wallet modules that rely on those types. Failing to do so will compile locally (thanks to the re-exports) but will break other crates that depend on `rpp-wallet-interface` directly. Use `cargo check -p rpp-wallet-interface && cargo check -p rpp-wallet` before submitting interface changes.

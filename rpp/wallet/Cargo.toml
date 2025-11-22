@@ -89,6 +89,7 @@ tempfile = "3.10"
 opentelemetry = "=0.30.0"
 opentelemetry_sdk = "=0.30.0"
 prover_mock_backend = { path = "../zk/prover_mock_backend" }
+httpmock = "0.7"
 
 [[bin]]
 name = "rpp-wallet-gui"

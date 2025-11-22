@@ -4,6 +4,7 @@ use reqwest::{Client, Identity, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::time::{sleep, Duration};
 
 #[cfg(feature = "wallet_rpc_mtls")]
 use super::dto::WalletRoleDto;
@@ -92,28 +93,43 @@ impl WalletRpcClient {
                 .map_err(WalletRpcClientError::from)?,
         };
 
-        let mut request = self.inner.post(self.url.clone()).json(&payload);
-        if let Some(token) = &self.auth_token {
-            request = request.bearer_auth(token);
-        }
+        let mut attempts = 0u8;
+        loop {
+            let mut request = self.inner.post(self.url.clone()).json(&payload);
+            if let Some(token) = &self.auth_token {
+                request = request.bearer_auth(token);
+            }
 
-        let response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(WalletRpcClientError::HttpStatus(response.status()));
-        }
+            let response = request.send().await?;
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let window = RateLimitWindow::from_headers(response.headers());
+                if attempts == 0 {
+                    if let Some(reset_after) = window.reset_after {
+                        sleep(reset_after).await;
+                        attempts += 1;
+                        continue;
+                    }
+                }
+                return Err(WalletRpcClientError::RateLimited(window));
+            }
 
-        let response: JsonRpcResponse = response.json().await?;
-        if let Some(error) = response.error {
-            let (code, details) = rpc_error_payload(&error);
-            return Err(WalletRpcClientError::Rpc {
-                code,
-                message: error.message,
-                json_code: error.code,
-                details,
-            });
-        }
+            if !response.status().is_success() {
+                return Err(WalletRpcClientError::HttpStatus(response.status()));
+            }
 
-        response.result.ok_or(WalletRpcClientError::EmptyResponse)
+            let response: JsonRpcResponse = response.json().await?;
+            if let Some(error) = response.error {
+                let (code, details) = rpc_error_payload(&error);
+                return Err(WalletRpcClientError::Rpc {
+                    code,
+                    message: error.message,
+                    json_code: error.code,
+                    details,
+                });
+            }
+
+            break response.result.ok_or(WalletRpcClientError::EmptyResponse);
+        }
     }
 
     /// Issues a JSON-RPC call and deserialises the result into `R`.
@@ -600,6 +616,37 @@ fn rpc_error_payload(error: &JsonRpcError) -> (WalletRpcErrorCode, Option<Value>
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitWindow {
+    pub limit: Option<u64>,
+    pub remaining: Option<u64>,
+    pub reset_after: Option<Duration>,
+}
+
+impl RateLimitWindow {
+    fn from_headers(headers: &reqwest::header::HeaderMap) -> Self {
+        let limit = headers
+            .get("x-ratelimit-limit")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let remaining = headers
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let reset_after = headers
+            .get("x-ratelimit-reset")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs);
+
+        Self {
+            limit,
+            remaining,
+            reset_after,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WalletRpcClientError {
     #[error("invalid RPC endpoint: {0}")]
@@ -610,6 +657,13 @@ pub enum WalletRpcClientError {
     Transport(#[from] reqwest::Error),
     #[error("wallet RPC transport error: HTTP status {0}")]
     HttpStatus(StatusCode),
+    #[error(
+        "wallet RPC rate limited (limit={:?}, remaining={:?}, reset_after={:?})",
+        limit,
+        remaining,
+        reset_after
+    )]
+    RateLimited(RateLimitWindow),
     #[error("wallet RPC returned an empty response")]
     EmptyResponse,
     #[error("wallet RPC error [{code}]: {message}")]
@@ -624,4 +678,89 @@ pub enum WalletRpcClientError {
         feature: &'static str,
         details: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RateLimitWindow, WalletRpcClient, WalletRpcClientError};
+    use crate::wallet::rpc::dto::JSONRPC_VERSION;
+    use httpmock::prelude::*;
+    use reqwest::StatusCode;
+    use serde_json::json;
+    use tokio::time::Duration;
+
+    #[tokio::test]
+    async fn retries_after_reset_header() {
+        let server = MockServer::start_async().await;
+        let throttled = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/rpc").matches(|_| true);
+                then.status(StatusCode::TOO_MANY_REQUESTS.as_u16())
+                    .header("x-ratelimit-limit", "1")
+                    .header("x-ratelimit-remaining", "0")
+                    .header("x-ratelimit-reset", "1");
+            })
+            .await;
+
+        let recovered = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/rpc");
+                then.status(StatusCode::OK.as_u16())
+                    .header("content-type", "application/json")
+                    .json_body(
+                        json!({ "jsonrpc": JSONRPC_VERSION, "id": 1, "result": {"ok": true}}),
+                    );
+            })
+            .await;
+
+        let client =
+            WalletRpcClient::from_endpoint(&server.base_url(), None, None, Duration::from_secs(5))
+                .expect("client");
+
+        let value = client
+            .request::<serde_json::Value>("health", Option::<serde_json::Value>::None)
+            .await
+            .expect("eventual success");
+
+        assert_eq!(value, json!({"ok": true}));
+        assert_eq!(throttled.hits_async().await, 1);
+        assert_eq!(recovered.hits_async().await, 1);
+    }
+
+    #[tokio::test]
+    async fn surfaces_rate_limit_window_on_repeated_throttle() {
+        let server = MockServer::start_async().await;
+        let throttled = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/rpc");
+                then.status(StatusCode::TOO_MANY_REQUESTS.as_u16())
+                    .header("x-ratelimit-limit", "5")
+                    .header("x-ratelimit-remaining", "0")
+                    .header("x-ratelimit-reset", "2");
+            })
+            .expect(2)
+            .await;
+
+        let client =
+            WalletRpcClient::from_endpoint(&server.base_url(), None, None, Duration::from_secs(5))
+                .expect("client");
+
+        let error = client
+            .request::<serde_json::Value>("health", Option::<serde_json::Value>::None)
+            .await
+            .expect_err("rate limited twice");
+
+        let WalletRpcClientError::RateLimited(window) = error else {
+            panic!("expected rate limit error");
+        };
+        assert_eq!(
+            window,
+            RateLimitWindow {
+                limit: Some(5),
+                remaining: Some(0),
+                reset_after: Some(Duration::from_secs(2)),
+            }
+        );
+        assert_eq!(throttled.hits_async().await, 2);
+    }
 }
