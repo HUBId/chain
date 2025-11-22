@@ -516,7 +516,12 @@ struct SessionState {
     peer: PeerId,
     next_chunk_index: u64,
     next_update_index: u64,
-    in_flight: Option<RequestResponseId>,
+    pending_chunks: VecDeque<u64>,
+    pending_updates: VecDeque<u64>,
+    in_flight_chunks: usize,
+    in_flight_updates: usize,
+    in_flight_control: usize,
+    last_dispatched_kind: Option<SnapshotItemKind>,
     last_progress: Instant,
     chunk_size: Option<u64>,
     capabilities: SnapshotChunkCapabilities,
@@ -535,7 +540,12 @@ impl SessionState {
             peer,
             next_chunk_index: 0,
             next_update_index: 0,
-            in_flight: None,
+            pending_chunks: VecDeque::new(),
+            pending_updates: VecDeque::new(),
+            in_flight_chunks: 0,
+            in_flight_updates: 0,
+            in_flight_control: 0,
+            last_dispatched_kind: None,
             last_progress: Instant::now(),
             chunk_size: capabilities.chunk_size,
             capabilities,
@@ -571,6 +581,74 @@ impl SessionState {
         let size = self.chunk_sizing.next_chunk_size() as u64;
         self.chunk_size = Some(size);
         size
+    }
+
+    fn enqueue(&mut self, kind: SnapshotItemKind, index: u64) {
+        match kind {
+            SnapshotItemKind::Chunk => self.pending_chunks.push_back(index),
+            SnapshotItemKind::LightClientUpdate => self.pending_updates.push_back(index),
+            _ => {}
+        }
+    }
+
+    fn pop_next_pending(&mut self) -> Option<(SnapshotItemKind, u64)> {
+        let next_kind = match (
+            self.pending_chunks.front().copied(),
+            self.pending_updates.front().copied(),
+        ) {
+            (Some(_), Some(_)) => match self.last_dispatched_kind {
+                Some(SnapshotItemKind::Chunk) => SnapshotItemKind::LightClientUpdate,
+                Some(SnapshotItemKind::LightClientUpdate) => SnapshotItemKind::Chunk,
+                _ => SnapshotItemKind::Chunk,
+            },
+            (Some(_), None) => SnapshotItemKind::Chunk,
+            (None, Some(_)) => SnapshotItemKind::LightClientUpdate,
+            (None, None) => return None,
+        };
+
+        match next_kind {
+            SnapshotItemKind::Chunk => self.pending_chunks.pop_front().map(|index| {
+                self.last_dispatched_kind = Some(SnapshotItemKind::Chunk);
+                (SnapshotItemKind::Chunk, index)
+            }),
+            SnapshotItemKind::LightClientUpdate => self.pending_updates.pop_front().map(|index| {
+                self.last_dispatched_kind = Some(SnapshotItemKind::LightClientUpdate);
+                (SnapshotItemKind::LightClientUpdate, index)
+            }),
+            _ => None,
+        }
+    }
+
+    fn record_outbound(&mut self, kind: SnapshotItemKind) {
+        match kind {
+            SnapshotItemKind::Chunk => {
+                self.in_flight_chunks = self.in_flight_chunks.saturating_add(1)
+            }
+            SnapshotItemKind::LightClientUpdate => {
+                self.in_flight_updates = self.in_flight_updates.saturating_add(1)
+            }
+            _ => self.in_flight_control = self.in_flight_control.saturating_add(1),
+        }
+    }
+
+    fn finish_outbound(&mut self, kind: SnapshotItemKind) {
+        match kind {
+            SnapshotItemKind::Chunk => {
+                self.in_flight_chunks = self.in_flight_chunks.saturating_sub(1)
+            }
+            SnapshotItemKind::LightClientUpdate => {
+                self.in_flight_updates = self.in_flight_updates.saturating_sub(1)
+            }
+            _ => self.in_flight_control = self.in_flight_control.saturating_sub(1),
+        }
+    }
+
+    fn total_in_flight(&self) -> usize {
+        self.in_flight_chunks + self.in_flight_updates + self.in_flight_control
+    }
+
+    fn has_capacity(&self, limit: usize) -> bool {
+        self.total_in_flight() < limit
     }
 }
 
@@ -1088,6 +1166,7 @@ pub struct SnapshotsBehaviour<P: SnapshotProvider> {
     pending_events: VecDeque<SnapshotsEvent>,
     requests: HashMap<RequestResponseId, (SnapshotSessionId, SnapshotItemKind)>,
     sessions: HashMap<SnapshotSessionId, SessionState>,
+    config: SnapshotsBehaviourConfig,
     request_metrics: SnapshotRequestMetrics,
     #[cfg(feature = "metrics")]
     metrics: Option<SnapshotStreamMetrics>,
@@ -1101,11 +1180,30 @@ struct ResponseInFlight {
     started_at: Instant,
 }
 
+/// Configuration for [`SnapshotsBehaviour`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SnapshotsBehaviourConfig {
+    /// Maximum number of concurrent outbound requests per session.
+    ///
+    /// When unset, the behaviour matches the legacy single-request-in-flight
+    /// semantics.
+    pub max_concurrent_requests: Option<usize>,
+}
+
 #[cfg(feature = "request-response")]
 impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     /// Creates a new `SnapshotsBehaviour` for the given provider.
     #[cfg(feature = "metrics")]
     pub fn new(provider: P, registry: Option<&mut Registry>) -> Self {
+        Self::with_config(provider, SnapshotsBehaviourConfig::default(), registry)
+    }
+
+    #[cfg(feature = "metrics")]
+    pub fn with_config(
+        provider: P,
+        config: SnapshotsBehaviourConfig,
+        registry: Option<&mut Registry>,
+    ) -> Self {
         let protocols = vec![(SNAPSHOTS_PROTOCOL_ID.to_string(), ProtocolSupport::Full)];
         let config = RequestResponseConfig::default();
         let metrics = registry.map(SnapshotStreamMetrics::register);
@@ -1118,6 +1216,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            config,
             request_metrics,
             metrics,
             response_timers: HashMap::new(),
@@ -1126,6 +1225,11 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
 
     #[cfg(not(feature = "metrics"))]
     pub fn new(provider: P) -> Self {
+        Self::with_config(provider, SnapshotsBehaviourConfig::default())
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    pub fn with_config(provider: P, config: SnapshotsBehaviourConfig) -> Self {
         let protocols = vec![(SNAPSHOTS_PROTOCOL_ID.to_string(), ProtocolSupport::Full)];
         let config = RequestResponseConfig::default();
         Self {
@@ -1134,6 +1238,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            config,
             request_metrics: SnapshotRequestMetrics::default(),
         }
     }
@@ -1217,6 +1322,103 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
 
     #[cfg(not(feature = "metrics"))]
     fn record_adaptive_chunk_size(&self, _size: u64) {}
+
+    fn max_concurrent_requests(&self) -> usize {
+        self.config.max_concurrent_requests.unwrap_or(1).max(1)
+    }
+
+    fn track_outbound_request(
+        &mut self,
+        session_id: SnapshotSessionId,
+        kind: SnapshotItemKind,
+        request_bytes: usize,
+        request_id: RequestResponseId,
+    ) {
+        self.request_metrics
+            .start_outbound(request_id, kind, request_bytes);
+        if let Some(state) = self.sessions.get_mut(&session_id) {
+            state.record_outbound(kind);
+        }
+        self.requests.insert(request_id, (session_id, kind));
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
+    }
+
+    fn finish_outbound_request(&mut self, session_id: SnapshotSessionId, kind: SnapshotItemKind) {
+        if let Some(state) = self.sessions.get_mut(&session_id) {
+            state.finish_outbound(kind);
+        }
+    }
+
+    fn send_outbound_request(
+        &mut self,
+        peer: &PeerId,
+        session_id: SnapshotSessionId,
+        request: SnapshotsRequest,
+        kind: SnapshotItemKind,
+    ) -> RequestResponseId {
+        let request_bytes = snapshot_message_size(&request);
+        let request_id = self.inner.send_request(peer, request);
+        self.track_outbound_request(session_id, kind, request_bytes, request_id);
+        request_id
+    }
+
+    fn dispatch_pending_requests(
+        &mut self,
+        session_id: SnapshotSessionId,
+        target: Option<(SnapshotItemKind, u64)>,
+    ) -> Option<RequestResponseId> {
+        let max_in_flight = self.max_concurrent_requests();
+        let mut target_request_id = None;
+
+        loop {
+            let (peer, kind, index) = {
+                let state = match self.sessions.get_mut(&session_id) {
+                    Some(state) => state,
+                    None => break,
+                };
+
+                if !state.has_capacity(max_in_flight) {
+                    break;
+                }
+
+                match state.pop_next_pending() {
+                    Some((kind, index)) => (state.peer.clone(), kind, index),
+                    None => break,
+                }
+            };
+
+            let request_id = match kind {
+                SnapshotItemKind::Chunk => self.send_outbound_request(
+                    &peer,
+                    session_id,
+                    SnapshotsRequest::Chunk {
+                        session_id,
+                        chunk_index: index,
+                    },
+                    kind,
+                ),
+                SnapshotItemKind::LightClientUpdate => self.send_outbound_request(
+                    &peer,
+                    session_id,
+                    SnapshotsRequest::LightClientUpdate {
+                        session_id,
+                        update_index: index,
+                    },
+                    kind,
+                ),
+                _ => continue,
+            };
+
+            if target.is_some_and(|(target_kind, target_index)| {
+                target_kind == kind && target_index == index
+            }) {
+                target_request_id = Some(request_id);
+            }
+        }
+
+        target_request_id
+    }
 
     fn send_response_with_metrics(
         &mut self,
@@ -1341,7 +1543,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             .sessions
             .entry(session_id)
             .or_insert_with(|| SessionState::new(peer.clone()));
-        if entry.in_flight.is_some() {
+        if !entry.has_capacity(self.max_concurrent_requests()) {
             return None;
         }
         if entry.peer != peer {
@@ -1356,16 +1558,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        let request_bytes = snapshot_message_size(&request);
-        let request_id = self.inner.send_request(&peer, request);
-        self.request_metrics
-            .start_outbound(request_id, SnapshotItemKind::Plan, request_bytes);
-        entry.in_flight = Some(request_id);
-        self.requests
-            .insert(request_id, (session_id, SnapshotItemKind::Plan));
-        #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
-        Some(request_id)
+        Some(self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Plan))
     }
 
     /// Requests a chunk from the remote peer.
@@ -1375,24 +1568,19 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         session_id: SnapshotSessionId,
         chunk_index: u64,
     ) -> Option<RequestResponseId> {
-        let entry = self.sessions.get_mut(&session_id)?;
-        if entry.in_flight.is_some() || entry.peer != peer {
+        if self
+            .sessions
+            .get(&session_id)
+            .map(|entry| entry.peer != peer)
+            .unwrap_or(true)
+        {
             return None;
         }
-        let request = SnapshotsRequest::Chunk {
-            session_id,
-            chunk_index,
-        };
-        let request_bytes = snapshot_message_size(&request);
-        let request_id = self.inner.send_request(&peer, request);
-        self.request_metrics
-            .start_outbound(request_id, SnapshotItemKind::Chunk, request_bytes);
-        entry.in_flight = Some(request_id);
-        self.requests
-            .insert(request_id, (session_id, SnapshotItemKind::Chunk));
-        #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
-        Some(request_id)
+        if let Some(entry) = self.sessions.get_mut(&session_id) {
+            entry.enqueue(SnapshotItemKind::Chunk, chunk_index);
+        }
+
+        self.dispatch_pending_requests(session_id, Some((SnapshotItemKind::Chunk, chunk_index)))
     }
 
     /// Requests a light client update from the remote peer.
@@ -1402,29 +1590,22 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         session_id: SnapshotSessionId,
         update_index: u64,
     ) -> Option<RequestResponseId> {
-        let entry = self.sessions.get_mut(&session_id)?;
-        if entry.in_flight.is_some() || entry.peer != peer {
+        if self
+            .sessions
+            .get(&session_id)
+            .map(|entry| entry.peer != peer)
+            .unwrap_or(true)
+        {
             return None;
         }
-        let request = SnapshotsRequest::LightClientUpdate {
+        if let Some(entry) = self.sessions.get_mut(&session_id) {
+            entry.enqueue(SnapshotItemKind::LightClientUpdate, update_index);
+        }
+
+        self.dispatch_pending_requests(
             session_id,
-            update_index,
-        };
-        let request_bytes = snapshot_message_size(&request);
-        let request_id = self.inner.send_request(&peer, request);
-        self.request_metrics.start_outbound(
-            request_id,
-            SnapshotItemKind::LightClientUpdate,
-            request_bytes,
-        );
-        entry.in_flight = Some(request_id);
-        self.requests.insert(
-            request_id,
-            (session_id, SnapshotItemKind::LightClientUpdate),
-        );
-        #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
-        Some(request_id)
+            Some((SnapshotItemKind::LightClientUpdate, update_index)),
+        )
     }
 
     /// Requests the remote peer to resume a snapshot session from the stored indices.
@@ -1435,7 +1616,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         plan_id: String,
     ) -> Option<RequestResponseId> {
         let entry = self.sessions.get_mut(&session_id)?;
-        if entry.in_flight.is_some() || entry.peer != peer {
+        if !entry.has_capacity(self.max_concurrent_requests()) || entry.peer != peer {
             return None;
         }
         let requested_size = entry.negotiated_chunk_size();
@@ -1450,16 +1631,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        let request_bytes = snapshot_message_size(&request);
-        let request_id = self.inner.send_request(&peer, request);
-        self.request_metrics
-            .start_outbound(request_id, SnapshotItemKind::Resume, request_bytes);
-        entry.in_flight = Some(request_id);
-        self.requests
-            .insert(request_id, (session_id, SnapshotItemKind::Resume));
-        #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
-        Some(request_id)
+        Some(self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume))
     }
 
     /// Cancels a snapshot session by notifying the remote peer.
@@ -1532,17 +1704,14 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     let response_kind = snapshot_response_kind(&response);
                     let response_bytes = snapshot_message_size(&response);
                     if let Some((session_id, kind)) = self.requests.remove(&request_id) {
-                        if let Some(state) = self.sessions.get_mut(&session_id) {
-                            if state.in_flight == Some(request_id) {
-                                state.in_flight = None;
-                            }
-                        }
+                        self.finish_outbound_request(session_id, kind);
                         let timing = self.request_metrics.finish_outbound(
                             request_id,
                             response_kind,
                             response_bytes,
                         );
                         self.handle_response(peer, session_id, response, timing);
+                        self.dispatch_pending_requests(session_id, None);
                     }
                 }
             },
@@ -1553,11 +1722,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ..
             } => {
                 if let Some((session_id, kind)) = self.requests.remove(&request_id) {
-                    if let Some(state) = self.sessions.get_mut(&session_id) {
-                        if state.in_flight == Some(request_id) {
-                            state.in_flight = None;
-                        }
-                    }
+                    self.finish_outbound_request(session_id, kind);
                     self.request_metrics.fail_outbound(request_id);
                     self.record_failure("outbound", kind);
                     self.pending_events.push_back(SnapshotsEvent::Error {
@@ -1565,6 +1730,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Outbound { kind, error },
                     });
+                    self.dispatch_pending_requests(session_id, None);
                 }
             }
             RequestResponseEvent::InboundFailure { request_id, .. } => {
@@ -2616,11 +2782,9 @@ mod tests {
             Some(192.0)
         );
 
-        let adaptive_sum = metric_value(
-            &buffer,
-            "snapshot_adaptive_chunk_size_bytes_histogram_sum",
-        )
-        .expect("adaptive histogram updated");
+        let adaptive_sum =
+            metric_value(&buffer, "snapshot_adaptive_chunk_size_bytes_histogram_sum")
+                .expect("adaptive histogram updated");
         assert!(adaptive_sum >= 192.0);
     }
 }

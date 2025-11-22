@@ -6,4 +6,6 @@ pub use snapshots::{
     SnapshotsResponse,
 };
 #[cfg(feature = "request-response")]
-pub use snapshots::{SnapshotProtocolError, SnapshotsBehaviour, SnapshotsEvent};
+pub use snapshots::{
+    SnapshotProtocolError, SnapshotsBehaviour, SnapshotsBehaviourConfig, SnapshotsEvent,
+};
