@@ -21,7 +21,7 @@ struct FakeSnapshotRuntime {
     start_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
     resume_result: Mutex<Option<Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>>>,
     statuses: Mutex<HashMap<u64, SnapshotStreamStatus>>,
-    started: Mutex<Vec<(u64, NetworkPeerId)>>,
+    started: Mutex<Vec<(u64, NetworkPeerId, u64)>>,
     resumed: Mutex<Vec<(u64, String)>>,
 }
 
@@ -39,7 +39,7 @@ impl FakeSnapshotRuntime {
         }
     }
 
-    fn record(&self) -> Vec<(u64, NetworkPeerId)> {
+    fn record(&self) -> Vec<(u64, NetworkPeerId, u64)> {
         self.started.lock().expect("start log lock").clone()
     }
 
@@ -55,11 +55,12 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
         session: u64,
         peer: NetworkPeerId,
         _root: String,
+        chunk_size: u64,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
         self.started
             .lock()
             .expect("start log lock")
-            .push((session, peer.clone()));
+            .push((session, peer.clone(), chunk_size));
         let mut result = self.start_result.lock().expect("start result lock");
         if let Some(outcome) = result.take() {
             outcome
@@ -77,6 +78,7 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
         &self,
         session: u64,
         plan_id: String,
+        _chunk_size: Option<u64>,
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
         self.resumed
             .lock()
@@ -129,6 +131,7 @@ fn sample_status(session: u64, peer: &NetworkPeerId) -> SnapshotStreamStatus {
         session: SnapshotSessionId::new(session),
         peer: peer.clone(),
         root: "root-hash".to_string(),
+        chunk_size: Some(16),
         plan_id: Some("plan-id".to_string()),
         last_chunk_index: Some(4),
         last_update_index: Some(7),
@@ -172,6 +175,8 @@ async fn start_snapshot_stream_returns_status() {
     assert_eq!(payload["session"], session);
     assert_eq!(payload["peer"], peer.to_string());
     assert_eq!(payload["root"], status.root);
+    assert_eq!(payload["chunk_size"], 16);
+    assert_eq!(payload["chunk_size"], 16);
     assert_eq!(payload["last_chunk_index"], 4);
     assert_eq!(payload["last_update_index"], 7);
     assert_eq!(payload["last_update_height"], 128);
@@ -182,6 +187,7 @@ async fn start_snapshot_stream_returns_status() {
     assert_eq!(starts.len(), 1);
     assert_eq!(starts[0].0, session);
     assert_eq!(starts[0].1, peer);
+    assert_eq!(starts[0].2, 16);
 }
 
 #[tokio::test]

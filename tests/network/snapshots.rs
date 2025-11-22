@@ -250,7 +250,12 @@ async fn snapshot_sessions_persist_across_provider_restart() -> Result<()> {
             let provider_peer = provider.p2p_handle.local_peer_id();
             consumer
                 .node_handle
-                .start_snapshot_stream(session, provider_peer, String::new())
+                .start_snapshot_stream(
+                    session,
+                    provider_peer,
+                    String::new(),
+                    u64::from(default_chunk_size()),
+                )
                 .await
                 .context("start snapshot stream")?;
         }
@@ -293,22 +298,24 @@ async fn snapshot_sessions_persist_across_provider_restart() -> Result<()> {
 
         {
             let nodes = cluster.nodes();
-            let plan_id = nodes[1]
+            let status = nodes[1]
                 .node_handle
                 .snapshot_stream_status(session)
-                .and_then(|status| {
-                    status.plan_id.clone().or_else(|| {
-                        if status.root.is_empty() {
-                            None
-                        } else {
-                            Some(status.root)
-                        }
-                    })
-                })
-                .context("missing snapshot plan identifier before resume")?;
+                .context("missing snapshot status before resume")?;
+            let plan_id = status.plan_id.clone().or_else(|| {
+                if status.root.is_empty() {
+                    None
+                } else {
+                    Some(status.root)
+                }
+            })
+            .context("missing snapshot plan identifier before resume")?;
+            let chunk_size = status
+                .chunk_size
+                .unwrap_or(u64::from(default_chunk_size()));
             nodes[1]
                 .node_handle
-                .resume_snapshot_stream(session, plan_id)
+                .resume_snapshot_stream(session, plan_id, Some(chunk_size))
                 .await
                 .context("resume snapshot stream")?;
         }

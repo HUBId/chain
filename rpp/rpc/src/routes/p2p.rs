@@ -16,6 +16,7 @@ use super::super::{
     snapshot_runtime_error_to_http, to_http_error, ApiContext, ErrorResponse,
     SnapshotStreamRuntimeError,
 };
+use crate::node::DEFAULT_STATE_SYNC_CHUNK;
 use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
@@ -26,7 +27,8 @@ use rpp_p2p::{
 #[derive(Debug, Deserialize)]
 pub struct StartSnapshotStreamRequest {
     pub peer: String,
-    pub chunk_size: u32,
+    #[serde(default)]
+    pub chunk_size: Option<u32>,
     #[serde(default)]
     pub resume: Option<ResumeMarker>,
 }
@@ -43,6 +45,8 @@ pub struct SnapshotStreamStatusResponse {
     pub session: u64,
     pub peer: String,
     pub root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,6 +162,7 @@ impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
             session: status.session.get(),
             peer: status.peer.to_string(),
             root: status.root,
+            chunk_size: status.chunk_size,
             plan_id,
             last_chunk_index: status.last_chunk_index,
             last_update_index: status.last_update_index,
@@ -309,7 +314,7 @@ pub(super) async fn start_snapshot_stream(
     State(state): State<ApiContext>,
     Json(request): Json<StartSnapshotStreamRequest>,
 ) -> Result<Json<SnapshotStreamStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if request.chunk_size == 0 {
+    if request.chunk_size == Some(0) {
         return Err(super::super::bad_request(
             "chunk_size must be greater than zero",
         ));
@@ -317,6 +322,18 @@ pub(super) async fn start_snapshot_stream(
 
     let peer = NetworkPeerId::from_str(request.peer.trim())
         .map_err(|err| super::super::bad_request(format!("invalid peer id: {err}")))?;
+
+    let runtime = state.require_snapshot_runtime()?;
+    let default_chunk_size = DEFAULT_STATE_SYNC_CHUNK as u64;
+    let chunk_size = match request.chunk_size {
+        Some(size) => size as u64,
+        None => request
+            .resume
+            .as_ref()
+            .and_then(|marker| runtime.snapshot_stream_status(marker.session))
+            .and_then(|status| status.chunk_size)
+            .unwrap_or(default_chunk_size),
+    };
 
     let session = request
         .resume
@@ -343,14 +360,13 @@ pub(super) async fn start_snapshot_stream(
 
     let root_hint = plan_id.clone().unwrap_or_default();
 
-    let runtime = state.require_snapshot_runtime()?;
     let status = match plan_id {
         Some(plan_id) => runtime
-            .resume_snapshot_stream(session, plan_id)
+            .resume_snapshot_stream(session, plan_id, Some(chunk_size))
             .await
             .map_err(snapshot_runtime_error_to_http)?,
         None => runtime
-            .start_snapshot_stream(session, peer, root_hint)
+            .start_snapshot_stream(session, peer, root_hint, chunk_size)
             .await
             .map_err(snapshot_runtime_error_to_http)?,
     };

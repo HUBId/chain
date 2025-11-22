@@ -74,11 +74,13 @@ enum NodeCommand {
         session: SnapshotSessionId,
         peer: PeerId,
         root: String,
+        chunk_size: u64,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     ResumeSnapshotStream {
         session: SnapshotSessionId,
         plan_id: String,
+        chunk_size: Option<u64>,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     CancelSnapshotStream {
@@ -382,6 +384,7 @@ pub struct SnapshotStreamStatus {
     pub session: SnapshotSessionId,
     pub peer: PeerId,
     pub root: String,
+    pub chunk_size: Option<u64>,
     pub plan_id: Option<String>,
     pub last_chunk_index: Option<u64>,
     pub last_update_index: Option<u64>,
@@ -396,6 +399,7 @@ impl SnapshotStreamStatus {
             session,
             peer,
             root,
+            chunk_size: None,
             plan_id: if root.is_empty() {
                 None
             } else {
@@ -1240,6 +1244,7 @@ impl NodeInner {
                 session,
                 peer,
                 root,
+                chunk_size,
                 response,
             } => {
                 let result = self
@@ -1248,6 +1253,7 @@ impl NodeInner {
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(root), |status| {
+                        status.chunk_size = Some(chunk_size);
                         status.last_chunk_index = None;
                         status.last_update_index = None;
                         status.last_update_height = None;
@@ -1261,6 +1267,7 @@ impl NodeInner {
             NodeCommand::ResumeSnapshotStream {
                 session,
                 plan_id,
+                chunk_size,
                 response,
             } => {
                 let resume_params = {
@@ -1274,21 +1281,24 @@ impl NodeInner {
                             .last_update_index
                             .map(|index| index.saturating_add(1))
                             .unwrap_or(0);
+                        let chunk_size = chunk_size.or(status.chunk_size);
                         (
                             status.peer.clone(),
                             status.plan_id.clone(),
                             next_chunk,
                             next_update,
+                            chunk_size,
                         )
                     })
                 };
-                let (peer, expected_plan_id, next_chunk, next_update) = match resume_params {
-                    Some(params) => params,
-                    None => {
-                        let _ = response.send(Err(NodeError::SnapshotStreamNotFound));
-                        return Ok(false);
-                    }
-                };
+                let (peer, expected_plan_id, next_chunk, next_update, chunk_size) =
+                    match resume_params {
+                        Some(params) => params,
+                        None => {
+                            let _ = response.send(Err(NodeError::SnapshotStreamNotFound));
+                            return Ok(false);
+                        }
+                    };
                 if let Some(expected) = expected_plan_id {
                     if expected != plan_id {
                         let error = PipelineError::SnapshotVerification(format!(
@@ -1304,6 +1314,9 @@ impl NodeInner {
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(plan_id.clone()), |status| {
+                        if let Some(chunk_size) = chunk_size {
+                            status.chunk_size = Some(chunk_size);
+                        }
                         status.error = None;
                         status.verified = None;
                     });
@@ -2319,6 +2332,7 @@ impl NodeHandle {
         session: SnapshotSessionId,
         peer: PeerId,
         root: String,
+        chunk_size: u64,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
@@ -2326,6 +2340,7 @@ impl NodeHandle {
                 session,
                 peer,
                 root,
+                chunk_size,
                 response: tx,
             })
             .await
@@ -2338,12 +2353,14 @@ impl NodeHandle {
         &self,
         session: SnapshotSessionId,
         plan_id: String,
+        chunk_size: Option<u64>,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(NodeCommand::ResumeSnapshotStream {
                 session,
                 plan_id,
+                chunk_size,
                 response: tx,
             })
             .await
