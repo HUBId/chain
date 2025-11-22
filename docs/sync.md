@@ -144,6 +144,40 @@ and check provider telemetry (`snapshot_bytes_sent_total` and
 negotiated chunk size and bounds through the snapshot status RPC, which helps
 debug mismatches between requested and served sizes.
 
+## Parallel snapshot downloads
+
+Snapshot streams can download multiple chunks in parallel. The CLI flag
+`--max-concurrent-downloads` (also available via
+`RPP_SNAPSHOT_MAX_CONCURRENT_DOWNLOADS`) controls the client-side parallelism
+and defaults to `snapshot_download.max_concurrent_chunk_downloads` in
+`node.toml` (default: `4`). Providers may advertise a lower
+`max_concurrent_requests` in the plan response; the runtime clamps client
+requests to whichever limit is smaller to avoid overwhelming peers.
+
+The `snapshot_stream_parallel_benchmark_reports_throughput` test exercises
+concurrency levels 1, 2, and 4 with synthetic payloads and prints lines shaped
+like `snapshot_parallel_metrics concurrency=4 throughput_bps=...` so operators
+can capture throughput and lag under different profiles. Use those numbers to
+pick baselines:
+
+* WAN/VPN links: start with `max_concurrent_downloads=1` or `2` to reduce tail
+  latency spikes and backpressure when round-trip times dominate. Combine with
+  the retry flags (`--snapshot-retry-attempts` and
+  `--snapshot-retry-backoff-ms`) to smooth out transient packet loss without
+  inflating the in-flight window.
+* LAN/IX fabrics: `3-4` parallel chunk requests usually saturate the local
+  connection without triggering provider throttling. If the benchmark logs show
+  the tail gap growing, lower the chunk size bounds or parallelism until the
+  reported `avg_chunk_gap_ms` stabilises.
+
+Higher parallelism interacts with chunk sizing: large chunks with high
+parallelism can overwhelm provider I/O queues, while tiny chunks at high
+parallelism can exacerbate retry storms. Keep `min_chunk_size`/`max_chunk_size`
+tight for WAN paths and pair higher parallelism with larger chunk caps on fast
+links. When a plan advertises `max_concurrent_requests`, treat it as a hard cap
+and avoid overriding it in the CLI or config; mismatches will otherwise cause
+retries and extend `tail_gap_ms` in the benchmark output.
+
 ## Snapshot download authentication
 
 Snapshot download and status endpoints reuse the validator RPC surface, so the
