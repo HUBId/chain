@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::debug;
 
 use crate::pipeline::{
     NetworkLightClientUpdate, NetworkStateSyncPlan, PipelineError, SnapshotChunk,
@@ -536,6 +537,128 @@ struct SnapshotStreamMetrics {
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
 }
 
+#[cfg(feature = "request-response")]
+#[derive(Clone, Copy, Debug)]
+struct SnapshotRequestTiming {
+    request_kind: SnapshotItemKind,
+    response_kind: Option<SnapshotItemKind>,
+    started_at: Instant,
+    request_bytes: usize,
+    response_bytes: Option<usize>,
+}
+
+#[cfg(feature = "request-response")]
+impl SnapshotRequestTiming {
+    fn with_request(request_kind: SnapshotItemKind, request_bytes: usize) -> Self {
+        Self {
+            request_kind,
+            response_kind: None,
+            started_at: Instant::now(),
+            request_bytes,
+            response_bytes: None,
+        }
+    }
+
+    fn set_response(&mut self, kind: SnapshotItemKind, bytes: usize) {
+        self.response_kind = Some(kind);
+        self.response_bytes = Some(bytes);
+    }
+}
+
+#[cfg(feature = "request-response")]
+#[derive(Default)]
+struct SnapshotRequestMetrics {
+    outbound: HashMap<RequestResponseId, SnapshotRequestTiming>,
+    inbound: HashMap<RequestResponseInboundId, SnapshotRequestTiming>,
+}
+
+#[cfg(feature = "request-response")]
+impl SnapshotRequestMetrics {
+    fn start_outbound(
+        &mut self,
+        request_id: RequestResponseId,
+        kind: SnapshotItemKind,
+        request_bytes: usize,
+    ) {
+        self.outbound.insert(
+            request_id,
+            SnapshotRequestTiming::with_request(kind, request_bytes),
+        );
+    }
+
+    fn start_inbound(
+        &mut self,
+        request_id: RequestResponseInboundId,
+        kind: SnapshotItemKind,
+        request_bytes: usize,
+    ) {
+        self.inbound.insert(
+            request_id,
+            SnapshotRequestTiming::with_request(kind, request_bytes),
+        );
+    }
+
+    fn record_inbound_response(
+        &mut self,
+        request_id: RequestResponseInboundId,
+        response_kind: SnapshotItemKind,
+        response_bytes: usize,
+    ) {
+        if let Some(entry) = self.inbound.get_mut(&request_id) {
+            entry.set_response(response_kind, response_bytes);
+        }
+    }
+
+    fn finish_outbound(
+        &mut self,
+        request_id: RequestResponseId,
+        response_kind: SnapshotItemKind,
+        response_bytes: usize,
+    ) {
+        if let Some(mut entry) = self.outbound.remove(&request_id) {
+            entry.set_response(response_kind, response_bytes);
+            Self::emit("outbound", entry);
+        }
+    }
+
+    fn finish_inbound(&mut self, request_id: RequestResponseInboundId) {
+        if let Some(entry) = self.inbound.remove(&request_id) {
+            Self::emit("inbound", entry);
+        }
+    }
+
+    fn fail_outbound(&mut self, request_id: RequestResponseId) {
+        self.outbound.remove(&request_id);
+    }
+
+    fn fail_inbound(&mut self, request_id: RequestResponseInboundId) {
+        self.inbound.remove(&request_id);
+    }
+
+    fn emit(direction: &str, entry: SnapshotRequestTiming) {
+        let response_kind = entry.response_kind.unwrap_or(entry.request_kind);
+        let response_bytes = entry.response_bytes.unwrap_or(0);
+        let elapsed = entry.started_at.elapsed();
+        let throughput = if elapsed.is_zero() {
+            None
+        } else {
+            Some(response_bytes as f64 / elapsed.as_secs_f64())
+        };
+
+        debug!(
+            target: "telemetry.snapshots",
+            direction,
+            request_kind = ?entry.request_kind,
+            response_kind = ?response_kind,
+            request_bytes = entry.request_bytes,
+            response_bytes,
+            rtt_ms = elapsed.as_millis(),
+            throughput_bytes_per_sec = throughput,
+            "snapshot_request_metrics"
+        );
+    }
+}
+
 #[cfg(all(feature = "metrics", feature = "request-response"))]
 impl SnapshotStreamMetrics {
     fn register(registry: &mut Registry) -> Self {
@@ -636,6 +759,37 @@ impl SnapshotStreamMetrics {
     }
 }
 
+#[cfg(feature = "request-response")]
+fn snapshot_request_kind(request: &SnapshotsRequest) -> SnapshotItemKind {
+    match request {
+        SnapshotsRequest::Plan { .. } => SnapshotItemKind::Plan,
+        SnapshotsRequest::Chunk { .. } => SnapshotItemKind::Chunk,
+        SnapshotsRequest::LightClientUpdate { .. } => SnapshotItemKind::LightClientUpdate,
+        SnapshotsRequest::Resume { .. } => SnapshotItemKind::Resume,
+        SnapshotsRequest::Ack { .. } => SnapshotItemKind::Ack,
+        SnapshotsRequest::Error { .. } => SnapshotItemKind::Error,
+    }
+}
+
+#[cfg(feature = "request-response")]
+fn snapshot_response_kind(response: &SnapshotsResponse) -> SnapshotItemKind {
+    match response {
+        SnapshotsResponse::Plan { .. } => SnapshotItemKind::Plan,
+        SnapshotsResponse::Chunk { .. } => SnapshotItemKind::Chunk,
+        SnapshotsResponse::LightClientUpdate { .. } => SnapshotItemKind::LightClientUpdate,
+        SnapshotsResponse::Resume { .. } => SnapshotItemKind::Resume,
+        SnapshotsResponse::Ack { .. } => SnapshotItemKind::Ack,
+        SnapshotsResponse::Error { .. } => SnapshotItemKind::Error,
+    }
+}
+
+#[cfg(feature = "request-response")]
+fn snapshot_message_size<T: Serialize>(message: &T) -> usize {
+    serde_json::to_vec(message)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
+}
+
 /// Behaviour managing snapshot-related networking logic.
 #[cfg(feature = "request-response")]
 pub struct SnapshotsBehaviour<P: SnapshotProvider> {
@@ -644,6 +798,7 @@ pub struct SnapshotsBehaviour<P: SnapshotProvider> {
     pending_events: VecDeque<SnapshotsEvent>,
     requests: HashMap<RequestResponseId, (SnapshotSessionId, SnapshotItemKind)>,
     sessions: HashMap<SnapshotSessionId, SessionState>,
+    request_metrics: SnapshotRequestMetrics,
     #[cfg(feature = "metrics")]
     metrics: Option<SnapshotStreamMetrics>,
     #[cfg(feature = "metrics")]
@@ -669,6 +824,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            request_metrics: SnapshotRequestMetrics::default(),
             metrics: registry.map(SnapshotStreamMetrics::register),
             response_timers: HashMap::new(),
         }
@@ -684,6 +840,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            request_metrics: SnapshotRequestMetrics::default(),
         }
     }
 
@@ -746,6 +903,22 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
 
     #[cfg(not(feature = "metrics"))]
     fn record_failure(&self, _direction: &str, _kind: SnapshotItemKind) {}
+
+    fn send_response_with_metrics(
+        &mut self,
+        request_id: RequestResponseInboundId,
+        channel: RequestResponseChannel<SnapshotsResponse>,
+        response: SnapshotsResponse,
+    ) -> bool {
+        let response_kind = snapshot_response_kind(&response);
+        let response_bytes = snapshot_message_size(&response);
+        let sent = self.inner.send_response(channel, response).is_ok();
+        if sent {
+            self.request_metrics
+                .record_inbound_response(request_id, response_kind, response_bytes);
+        }
+        sent
+    }
 
     #[cfg(feature = "metrics")]
     fn update_stream_lag_metric(&mut self) {
@@ -866,7 +1039,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: None,
             max_chunk_size: None,
         };
+        let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
+        self.request_metrics
+            .start_outbound(request_id, SnapshotItemKind::Plan, request_bytes);
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Plan));
@@ -890,7 +1066,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             session_id,
             chunk_index,
         };
+        let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
+        self.request_metrics
+            .start_outbound(request_id, SnapshotItemKind::Chunk, request_bytes);
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Chunk));
@@ -914,7 +1093,13 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             session_id,
             update_index,
         };
+        let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
+        self.request_metrics.start_outbound(
+            request_id,
+            SnapshotItemKind::LightClientUpdate,
+            request_bytes,
+        );
         entry.in_flight = Some(request_id);
         self.requests.insert(
             request_id,
@@ -945,7 +1130,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: entry.capabilities.min_chunk_size,
             max_chunk_size: entry.capabilities.max_chunk_size,
         };
+        let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
+        self.request_metrics
+            .start_outbound(request_id, SnapshotItemKind::Resume, request_bytes);
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Resume));
@@ -975,7 +1163,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             session_id,
             message: reason,
         };
+        let request_bytes = snapshot_message_size(&request);
         let request_id = self.inner.send_request(&peer, request);
+        self.request_metrics
+            .start_outbound(request_id, SnapshotItemKind::Error, request_bytes);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Error));
         #[cfg(feature = "metrics")]
@@ -1002,6 +1193,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         | SnapshotsRequest::Ack { session_id, .. }
                         | SnapshotsRequest::Error { session_id, .. } => *session_id,
                     };
+                    let request_kind = snapshot_request_kind(&request);
+                    let request_bytes = snapshot_message_size(&request);
+                    self.request_metrics
+                        .start_inbound(request_id, request_kind, request_bytes);
                     self.pending_events
                         .push_back(SnapshotsEvent::InboundRequest {
                             peer: peer.clone(),
@@ -1014,13 +1209,20 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     request_id,
                     response,
                 } => {
+                    let response_kind = snapshot_response_kind(&response);
+                    let response_bytes = snapshot_message_size(&response);
                     if let Some((session_id, kind)) = self.requests.remove(&request_id) {
                         if let Some(state) = self.sessions.get_mut(&session_id) {
                             if state.in_flight == Some(request_id) {
                                 state.in_flight = None;
                             }
                         }
-                        self.handle_response(peer, session_id, kind, response);
+                        self.request_metrics.finish_outbound(
+                            request_id,
+                            response_kind,
+                            response_bytes,
+                        );
+                        self.handle_response(peer, session_id, response);
                     }
                 }
             },
@@ -1036,6 +1238,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             state.in_flight = None;
                         }
                     }
+                    self.request_metrics.fail_outbound(request_id);
                     self.record_failure("outbound", kind);
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
@@ -1047,10 +1250,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             RequestResponseEvent::InboundFailure { request_id, .. } => {
                 #[cfg(feature = "metrics")]
                 self.clear_response_timer(request_id);
+                self.request_metrics.fail_inbound(request_id);
             }
             RequestResponseEvent::ResponseSent { request_id, .. } => {
                 #[cfg(feature = "metrics")]
                 self.record_response_sent(request_id);
+                self.request_metrics.finish_inbound(request_id);
             }
         }
     }
@@ -1086,7 +1291,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
 
         if let Err(err) = self.provider.open_session(session_id, &peer) {
             let message = err.to_string();
-            let _ = self.inner.send_response(
+            let _ = self.send_response_with_metrics(
+                request_id,
                 channel,
                 SnapshotsResponse::Error {
                     session_id,
@@ -1116,7 +1322,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ) {
                     Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
                     Err(message) => {
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1138,27 +1345,25 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     Ok(plan) => match serde_json::to_vec(&plan) {
                         Ok(plan) => {
                             self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
-                            if self
-                                .inner
-                                .send_response(
-                                    channel,
-                                    SnapshotsResponse::Plan {
-                                        session_id,
-                                        plan,
-                                        chunk_size: negotiated_chunk_size,
-                                        min_chunk_size: capabilities.min_chunk_size,
-                                        max_chunk_size: capabilities.max_chunk_size,
-                                    },
-                                )
-                                .is_ok()
-                            {
+                            if self.send_response_with_metrics(
+                                request_id,
+                                channel,
+                                SnapshotsResponse::Plan {
+                                    session_id,
+                                    plan,
+                                    chunk_size: negotiated_chunk_size,
+                                    min_chunk_size: capabilities.min_chunk_size,
+                                    max_chunk_size: capabilities.max_chunk_size,
+                                },
+                            ) {
                                 #[cfg(feature = "metrics")]
                                 self.track_response(request_id, SnapshotItemKind::Plan);
                             }
                         }
                         Err(err) => {
                             let message = format!("encode plan: {err}");
-                            let _ = self.inner.send_response(
+                            let _ = self.send_response_with_metrics(
+                                request_id,
                                 channel,
                                 SnapshotsResponse::Error {
                                     session_id,
@@ -1175,7 +1380,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     },
                     Err(err) => {
                         let message = err.to_string();
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1198,25 +1404,23 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(chunk) => match serde_json::to_vec(&chunk) {
                     Ok(chunk) => {
                         self.record_bytes("outbound", SnapshotItemKind::Chunk, chunk.len());
-                        if self
-                            .inner
-                            .send_response(
-                                channel,
-                                SnapshotsResponse::Chunk {
-                                    session_id,
-                                    chunk_index,
-                                    chunk,
-                                },
-                            )
-                            .is_ok()
-                        {
+                        if self.send_response_with_metrics(
+                            request_id,
+                            channel,
+                            SnapshotsResponse::Chunk {
+                                session_id,
+                                chunk_index,
+                                chunk,
+                            },
+                        ) {
                             #[cfg(feature = "metrics")]
                             self.track_response(request_id, SnapshotItemKind::Chunk);
                         }
                     }
                     Err(err) => {
                         let message = format!("encode chunk: {err}");
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1233,7 +1437,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 },
                 Err(err) => {
                     let message = err.to_string();
-                    let _ = self.inner.send_response(
+                    let _ = self.send_response_with_metrics(
+                        request_id,
                         channel,
                         SnapshotsResponse::Error {
                             session_id,
@@ -1259,25 +1464,23 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             SnapshotItemKind::LightClientUpdate,
                             update.len(),
                         );
-                        if self
-                            .inner
-                            .send_response(
-                                channel,
-                                SnapshotsResponse::LightClientUpdate {
-                                    session_id,
-                                    update_index,
-                                    update,
-                                },
-                            )
-                            .is_ok()
-                        {
+                        if self.send_response_with_metrics(
+                            request_id,
+                            channel,
+                            SnapshotsResponse::LightClientUpdate {
+                                session_id,
+                                update_index,
+                                update,
+                            },
+                        ) {
                             #[cfg(feature = "metrics")]
                             self.track_response(request_id, SnapshotItemKind::LightClientUpdate);
                         }
                     }
                     Err(err) => {
                         let message = format!("encode update: {err}");
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1294,7 +1497,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 },
                 Err(err) => {
                     let message = err.to_string();
-                    let _ = self.inner.send_response(
+                    let _ = self.send_response_with_metrics(
+                        request_id,
                         channel,
                         SnapshotsResponse::Error {
                             session_id,
@@ -1326,7 +1530,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ) {
                     Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
                     Err(message) => {
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1349,28 +1554,26 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     .resume_session(session_id, &plan_id, chunk_index, update_index)
                 {
                     Ok(resume) => {
-                        if self
-                            .inner
-                            .send_response(
-                                channel,
-                                SnapshotsResponse::Resume {
-                                    session_id,
-                                    chunk_index: resume.next_chunk_index,
-                                    update_index: resume.next_update_index,
-                                    chunk_size: negotiated_chunk_size,
-                                    min_chunk_size: capabilities.min_chunk_size,
-                                    max_chunk_size: capabilities.max_chunk_size,
-                                },
-                            )
-                            .is_ok()
-                        {
+                        if self.send_response_with_metrics(
+                            request_id,
+                            channel,
+                            SnapshotsResponse::Resume {
+                                session_id,
+                                chunk_index: resume.next_chunk_index,
+                                update_index: resume.next_update_index,
+                                chunk_size: negotiated_chunk_size,
+                                min_chunk_size: capabilities.min_chunk_size,
+                                max_chunk_size: capabilities.max_chunk_size,
+                            },
+                        ) {
                             #[cfg(feature = "metrics")]
                             self.track_response(request_id, SnapshotItemKind::Resume);
                         }
                     }
                     Err(err) => {
                         let message = err.to_string();
-                        let _ = self.inner.send_response(
+                        let _ = self.send_response_with_metrics(
+                            request_id,
                             channel,
                             SnapshotsResponse::Error {
                                 session_id,
@@ -1392,25 +1595,23 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 index,
             } => match self.provider.acknowledge(session_id, kind, index) {
                 Ok(()) => {
-                    if self
-                        .inner
-                        .send_response(
-                            channel,
-                            SnapshotsResponse::Ack {
-                                session_id,
-                                kind,
-                                index,
-                            },
-                        )
-                        .is_ok()
-                    {
+                    if self.send_response_with_metrics(
+                        request_id,
+                        channel,
+                        SnapshotsResponse::Ack {
+                            session_id,
+                            kind,
+                            index,
+                        },
+                    ) {
                         #[cfg(feature = "metrics")]
                         self.track_response(request_id, kind);
                     }
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    let _ = self.inner.send_response(
+                    let _ = self.send_response_with_metrics(
+                        request_id,
                         channel,
                         SnapshotsResponse::Error {
                             session_id,
@@ -1433,18 +1634,15 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     session_id,
                     error: SnapshotProtocolError::Remote(message),
                 });
-                if self
-                    .inner
-                    .send_response(
-                        channel,
-                        SnapshotsResponse::Ack {
-                            session_id,
-                            kind: SnapshotItemKind::Error,
-                            index: 0,
-                        },
-                    )
-                    .is_ok()
-                {
+                if self.send_response_with_metrics(
+                    request_id,
+                    channel,
+                    SnapshotsResponse::Ack {
+                        session_id,
+                        kind: SnapshotItemKind::Error,
+                        index: 0,
+                    },
+                ) {
                     #[cfg(feature = "metrics")]
                     self.track_response(request_id, SnapshotItemKind::Error);
                 }
@@ -1456,7 +1654,6 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         &mut self,
         peer: PeerId,
         session_id: SnapshotSessionId,
-        kind: SnapshotItemKind,
         response: SnapshotsResponse,
     ) {
         match response {
