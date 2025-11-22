@@ -60,6 +60,10 @@ metrics:
     labels:
       - method
       - result
+  - name: rpp.runtime.rpc.rate_limit.total
+    labels:
+      - method
+      - status
   - name: rpp.runtime.storage.header_flush.bytes
     labels: []
   - name: rpp.runtime.storage.header_flush.duration

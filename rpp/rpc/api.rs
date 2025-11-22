@@ -92,7 +92,8 @@ use crate::runtime::node_runtime::node::{
 };
 use crate::runtime::sync::StateSyncServer;
 use crate::runtime::{
-    ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
+    ProofRpcMethod, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics, RuntimeMode,
+    WalletRpcMethod,
 };
 use crate::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 use crate::sync::ReconstructionPlan;
@@ -1491,12 +1492,14 @@ fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
 #[derive(Clone)]
 struct PerIpTokenBucketLayer {
     state: Arc<PerIpTokenBucketState>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl PerIpTokenBucketLayer {
-    fn new(burst: u64, replenish_per_minute: u64) -> Self {
+    fn new(burst: u64, replenish_per_minute: u64, metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
             state: Arc::new(PerIpTokenBucketState::new(burst, replenish_per_minute)),
+            metrics,
         }
     }
 }
@@ -1508,6 +1511,7 @@ impl<S> Layer<S> for PerIpTokenBucketLayer {
         PerIpTokenBucketService {
             inner,
             state: self.state.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -1616,12 +1620,14 @@ fn extract_api_key(request: &Request<Body>) -> ApiKey {
 #[derive(Clone)]
 struct PerApiKeyTokenBucketLayer {
     state: Arc<ApiKeyTokenBucketState>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl PerApiKeyTokenBucketLayer {
-    fn new(burst: u64) -> Self {
+    fn new(burst: u64, metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
             state: Arc::new(ApiKeyTokenBucketState::new(burst, burst)),
+            metrics,
         }
     }
 }
@@ -1633,6 +1639,7 @@ impl<S> Layer<S> for PerApiKeyTokenBucketLayer {
         PerApiKeyTokenBucketService {
             inner,
             state: self.state.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -1641,6 +1648,7 @@ impl<S> Layer<S> for PerApiKeyTokenBucketLayer {
 struct PerApiKeyTokenBucketService<S> {
     inner: S,
     state: Arc<ApiKeyTokenBucketState>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl<S> Service<Request<Body>> for PerApiKeyTokenBucketService<S>
@@ -1658,13 +1666,19 @@ where
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let api_key = extract_api_key(&request);
+        let rpc_method = classify_rpc_method(request.method(), request.uri().path());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
+        let metrics = self.metrics.clone();
 
         Box::pin(async move {
             match state.try_acquire(api_key) {
-                Ok(()) => inner.call(request).await,
+                Ok(()) => {
+                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                    inner.call(request).await
+                }
                 Err(snapshot) => {
+                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
                     let response = Response::builder()
                         .status(StatusCode::TOO_MANY_REQUESTS)
                         .header("X-RateLimit-Limit", snapshot.limit.to_string())
@@ -1684,6 +1698,7 @@ where
 struct PerIpTokenBucketService<S> {
     inner: S,
     state: Arc<PerIpTokenBucketState>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl<S> Service<Request<Body>> for PerIpTokenBucketService<S>
@@ -1704,14 +1719,19 @@ where
             .extensions()
             .get::<ConnectInfo<SocketAddr>>()
             .map(|info| info.0.ip());
+        let rpc_method = classify_rpc_method(request.method(), request.uri().path());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
+        let metrics = self.metrics.clone();
 
         Box::pin(async move {
             if let Some(ip) = remote_ip {
                 match state.try_acquire(ip) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                    }
                     Err(snapshot) => {
+                        metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
                         let response = Response::builder()
                             .status(StatusCode::TOO_MANY_REQUESTS)
                             .header("X-RateLimit-Limit", snapshot.limit.to_string())
@@ -1722,6 +1742,8 @@ where
                         return Ok(response);
                     }
                 }
+            } else {
+                metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
             }
 
             inner.call(request).await
@@ -1941,12 +1963,14 @@ where
 
     let mut service_builder = ServiceBuilder::new();
     if let Some(limit) = request_limit_per_minute {
-        service_builder = service_builder.layer(PerApiKeyTokenBucketLayer::new(limit.get()));
+        service_builder =
+            service_builder.layer(PerApiKeyTokenBucketLayer::new(limit.get(), metrics.clone()));
     }
     if limits.per_ip_token_bucket.enabled {
         service_builder = service_builder.layer(PerIpTokenBucketLayer::new(
             limits.per_ip_token_bucket.burst,
             limits.per_ip_token_bucket.replenish_per_minute,
+            metrics.clone(),
         ));
     }
     service_builder = service_builder

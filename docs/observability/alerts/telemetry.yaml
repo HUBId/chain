@@ -22,3 +22,16 @@ spec:
               TLS material and collector reachability, and restart the node once the
               exporter configuration is healthy.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/observability.md#otlp-exporter-failure-drill
+        - alert: RpcRateLimitThrottling
+          expr: sum by (method)(rate(rpp_runtime_rpc_rate_limit_total{status="throttled"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: rpc
+          annotations:
+            summary: RPC requests are being throttled
+            description: |
+              The RPC rate limiter is throttling requests. Inspect the tagged method in the alert
+              and correlate with `rpp.runtime.rpc.rate_limit.total{method,status}` to determine if
+              a specific endpoint or tenant is exceeding budgets before raising limits.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/API_SECURITY.md#rate-limiting-and-abuse-protections

@@ -45,6 +45,9 @@ Operational guidance:
 - Telemetry and health endpoints share the same tenant-scoped limiter; if
   collectors require larger headroom, increase the per-minute budget or front
   those routes with a cache to amortise reads.
+- The limiter exports `rpp.runtime.rpc.rate_limit.total` with `method`/`status`
+  labels to split normal and throttled traffic by RPC handler for dashboards and
+  alerts.【F:rpp/runtime/telemetry/metrics.rs†L124-L150】
 
 ## Cross-origin access
 
