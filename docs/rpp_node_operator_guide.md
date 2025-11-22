@@ -145,6 +145,9 @@ start, resume, inspect, and cancel consumer sessions without constructing HTTP
 requests by hand. The CLI resolves the active validator configuration, derives
 the RPC base URL from `network.rpc.listen`, and automatically attaches the
 configured bearer token unless an explicit `--auth-token` override is provided.
+Failures will echo the RPC `code` field described in the
+[Snapshot and state sync RPC errors](interfaces/rpc/README.md#snapshot-and-state-sync-rpc-errors)
+reference so operators can align CLI output with troubleshooting steps.
 
 ```text
 $ cargo run -p rpp-chain -- validator snapshot start --peer 12D3KooWexamplePeer

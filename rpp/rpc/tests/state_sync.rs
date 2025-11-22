@@ -10,6 +10,7 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine as _;
+use blake3::Hash as Blake3Hash;
 use hex::encode;
 use hyper::body::HttpBody;
 use parking_lot::RwLock;
@@ -19,7 +20,6 @@ use rpp_chain::api::{
 };
 use rpp_chain::node::{LightClientVerificationEvent, DEFAULT_STATE_SYNC_CHUNK};
 use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
-use blake3::Hash as Blake3Hash;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
 use serde_json::Value;
@@ -35,6 +35,7 @@ struct FakeStateSyncApi {
     chunk_size: RwLock<Option<usize>>,
     chunks: HashMap<u32, SnapshotChunk>,
     ensure_error: RwLock<Option<StateSyncError>>,
+    chunk_error: RwLock<Option<StateSyncError>>,
 }
 
 fn auth_context(api: Arc<dyn StateSyncApi>) -> ApiContext {
@@ -70,6 +71,7 @@ async fn state_sync_session_respects_auth() {
         Some(session),
         Some(DEFAULT_STATE_SYNC_CHUNK),
         HashMap::new(),
+        None,
         None,
     ));
     let context = auth_context(api);
@@ -137,6 +139,7 @@ impl FakeStateSyncApi {
         chunk_size: Option<usize>,
         chunks: HashMap<u32, SnapshotChunk>,
         ensure_error: Option<StateSyncError>,
+        chunk_error: Option<StateSyncError>,
     ) -> Self {
         Self {
             sender,
@@ -145,6 +148,7 @@ impl FakeStateSyncApi {
             chunk_size: RwLock::new(chunk_size),
             chunks,
             ensure_error: RwLock::new(ensure_error),
+            chunk_error: RwLock::new(chunk_error),
         }
     }
 
@@ -185,12 +189,7 @@ impl StateSyncApi for FakeStateSyncApi {
         }
     }
 
-    fn reset_state_sync_session(
-        &self,
-        root: Blake3Hash,
-        chunk_size: usize,
-        total_chunks: usize,
-    ) {
+    fn reset_state_sync_session(&self, root: Blake3Hash, chunk_size: usize, total_chunks: usize) {
         let mut session = self.session.write();
         let mut cached_size = self.chunk_size.write();
         let root_diverged = session
@@ -203,9 +202,7 @@ impl StateSyncApi for FakeStateSyncApi {
             .and_then(|info| info.total_chunks)
             .map(|count| count != total_chunks as u32)
             .unwrap_or(false);
-        let chunk_size_diverged = cached_size
-            .map(|size| size != chunk_size)
-            .unwrap_or(false);
+        let chunk_size_diverged = cached_size.map(|size| size != chunk_size).unwrap_or(false);
 
         if root_diverged || chunk_count_diverged || chunk_size_diverged {
             *session = None;
@@ -224,9 +221,13 @@ impl StateSyncApi for FakeStateSyncApi {
     }
 
     async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError> {
+        if let Some(error) = self.chunk_error.read().clone() {
+            return Err(error);
+        }
         self.chunks.get(&index).cloned().ok_or_else(|| {
-            StateSyncError::new(
+            StateSyncError::with_code(
                 StateSyncErrorKind::ChunkNotFound { index },
+                RpcErrorCode::StateSyncPlanInvalid,
                 Some(format!("chunk {index} missing")),
             )
         })
@@ -257,6 +258,7 @@ async fn state_sync_head_stream_emits_events() {
         None,
         None,
         HashMap::new(),
+        None,
         None,
     ));
     let context = test_context(api.clone());
@@ -333,6 +335,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
         None,
         chunks,
         None,
+        None,
     ));
     let context = test_context(api.clone());
     let app = Router::new()
@@ -367,10 +370,12 @@ async fn state_sync_chunk_by_id_returns_payload() {
     assert_eq!(status["remaining_chunks"], 0);
     assert!(status["verified"].as_bool().unwrap());
     assert!(status["last_completed_step"].is_null());
-    assert_eq!(status["last_error"], Value::String("verification complete".into()));
+    assert_eq!(
+        status["last_error"],
+        Value::String("verification complete".into())
+    );
     assert_eq!(status["served_chunks"], Value::Array(vec![Value::from(0)]));
-    let expected_log: Vec<Value> =
-        progress_log.iter().cloned().map(Value::String).collect();
+    let expected_log: Vec<Value> = progress_log.iter().cloned().map(Value::String).collect();
     assert_eq!(status["progress_log"], Value::Array(expected_log));
 
     let session_info = api.state_sync_active_session().unwrap();
@@ -410,6 +415,7 @@ async fn state_sync_session_status_returns_details() {
         None,
         HashMap::new(),
         None,
+        None,
     ));
     let context = test_context(api);
     let app = Router::new()
@@ -434,15 +440,15 @@ async fn state_sync_session_status_returns_details() {
         Value::String(format!("0x{}", encode(root.as_bytes())))
     );
     assert_eq!(json["last_error"], Value::String("ready".into()));
-    assert_eq!(json["served_chunks"], Value::Array(vec![Value::from(0), Value::from(1)]));
-    let expected_log: Vec<Value> =
-        progress_log.iter().cloned().map(Value::String).collect();
+    assert_eq!(
+        json["served_chunks"],
+        Value::Array(vec![Value::from(0), Value::from(1)])
+    );
+    let expected_log: Vec<Value> = progress_log.iter().cloned().map(Value::String).collect();
     assert_eq!(json["progress_log"], Value::Array(expected_log));
     assert_eq!(
         json["last_completed_step"],
-        Value::String(
-            "plan loaded: snapshot height 42, 4 chunks, 2 updates".to_string(),
-        )
+        Value::String("plan loaded: snapshot height 42, 4 chunks, 2 updates".to_string(),)
     );
 }
 
@@ -455,6 +461,7 @@ async fn state_sync_session_status_returns_service_unavailable_without_session()
         None,
         None,
         HashMap::new(),
+        None,
         None,
     ));
     let context = test_context(api);
@@ -492,6 +499,7 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         None,
         HashMap::new(),
         None,
+        None,
     ));
     let context = test_context(api.clone());
     let app = Router::new()
@@ -511,6 +519,100 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
 }
 
 #[tokio::test]
+async fn state_sync_chunk_missing_returns_error_code() {
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let session = StateSyncSessionInfo {
+        root: Some(blake3::hash(&[1u8])),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: None,
+        served_chunks: Vec::new(),
+        progress_log: Vec::new(),
+    };
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        None,
+        HashMap::new(),
+        None,
+        None,
+    ));
+    let context = test_context(api);
+    let app = Router::new()
+        .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
+        .with_state(context);
+
+    let request = Request::builder()
+        .uri("/state-sync/chunk/0")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        json["code"],
+        Value::String("state_sync_plan_invalid".into())
+    );
+    assert_eq!(json["error"], Value::String("chunk 0 missing".into()));
+}
+
+#[tokio::test]
+async fn state_sync_chunk_error_includes_snapshot_code() {
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let session = StateSyncSessionInfo {
+        root: Some(blake3::hash(&[2u8])),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: None,
+        served_chunks: Vec::new(),
+        progress_log: Vec::new(),
+    };
+    let chunk_error = StateSyncError::with_code(
+        StateSyncErrorKind::Internal,
+        RpcErrorCode::StateSyncMetadataMismatch,
+        Some("snapshot root mismatch: expected ab, found cd".into()),
+    );
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        None,
+        HashMap::new(),
+        None,
+        Some(chunk_error),
+    ));
+    let context = test_context(api);
+    let app = Router::new()
+        .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
+        .with_state(context);
+
+    let request = Request::builder()
+        .uri("/state-sync/chunk/0")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        json["code"],
+        Value::String("state_sync_metadata_mismatch".into())
+    );
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("snapshot root mismatch"));
+}
+
+#[tokio::test]
 async fn state_sync_chunk_failure_surfaces_structured_code() {
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let error = StateSyncError::with_code(
@@ -525,6 +627,7 @@ async fn state_sync_chunk_failure_surfaces_structured_code() {
         Some(DEFAULT_STATE_SYNC_CHUNK),
         HashMap::new(),
         Some(error),
+        None,
     ));
     let context = test_context(api);
     let app = Router::new()
@@ -570,6 +673,7 @@ async fn state_sync_session_reset_on_new_plan_metadata() {
         Some(session),
         Some(DEFAULT_STATE_SYNC_CHUNK),
         HashMap::new(),
+        None,
         None,
     ));
 

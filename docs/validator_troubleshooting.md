@@ -10,6 +10,11 @@ includes an endpoint quick-reference table covering `/p2p/peers`,
 mentioned below. Note that all RPC calls in this quick-reference require the
 configured bearer token when RPC auth is enabled.
 
+Snapshot and reconstruction calls return structured error codes. When an RPC
+response includes a `code` value, map it to the remediation steps in the
+[Snapshot and state sync RPC errors](interfaces/rpc/README.md#snapshot-and-state-sync-rpc-errors)
+table before escalating.
+
 ## VRF Mismatch or Invalid Proofs
 
 **Symptoms**
