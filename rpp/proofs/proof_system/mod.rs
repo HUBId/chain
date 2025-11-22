@@ -14,6 +14,7 @@ use crate::types::{
     AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, SignedTransaction,
     UptimeClaim,
 };
+use rpp_p2p::{ProofCacheMetrics, ProofCacheMetricsSnapshot};
 use rpp_pruning::Envelope;
 
 #[cfg(feature = "backend-plonky3")]
@@ -351,6 +352,7 @@ pub struct BackendVerificationMetrics {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct VerifierMetricsSnapshot {
     pub per_backend: BTreeMap<String, BackendVerificationMetrics>,
+    pub cache: ProofCacheMetricsSnapshot,
 }
 
 impl Default for VerifierMetricsSnapshot {
@@ -362,13 +364,17 @@ impl Default for VerifierMetricsSnapshot {
                 BackendVerificationMetrics::default(),
             );
         }
-        Self { per_backend }
+        Self {
+            per_backend,
+            cache: ProofCacheMetricsSnapshot::default(),
+        }
     }
 }
 
 #[derive(Clone)]
 struct VerifierMetrics {
     inner: Arc<Mutex<BTreeMap<String, BackendVerificationMetrics>>>,
+    cache: ProofCacheMetrics,
 }
 
 impl VerifierMetrics {
@@ -382,6 +388,7 @@ impl VerifierMetrics {
         }
         Self {
             inner: Arc::new(Mutex::new(per_backend)),
+            cache: ProofCacheMetrics::default(),
         }
     }
 
@@ -413,7 +420,14 @@ impl VerifierMetrics {
                 .or_insert_with(BackendVerificationMetrics::default)
                 .clone_from(metrics);
         }
-        VerifierMetricsSnapshot { per_backend }
+        VerifierMetricsSnapshot {
+            per_backend,
+            cache: self.cache.snapshot(),
+        }
+    }
+
+    fn cache_metrics(&self) -> ProofCacheMetrics {
+        self.cache.clone()
     }
 }
 
@@ -892,6 +906,10 @@ impl ProofVerifierRegistry {
 
     pub fn metrics_snapshot(&self) -> VerifierMetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    pub fn cache_metrics(&self) -> ProofCacheMetrics {
+        self.metrics.cache_metrics()
     }
 
     fn verify_with_metrics<F, T>(

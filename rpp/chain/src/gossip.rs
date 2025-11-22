@@ -44,6 +44,7 @@ pub struct NodeGossipProcessor {
 impl NodeGossipProcessor {
     pub fn new(node: NodeHandle, proof_storage_path: impl Into<PathBuf>) -> Self {
         let registry = ProofVerifierRegistry::default();
+        let cache_metrics = registry.cache_metrics();
         let backend = Arc::new(RuntimeTransactionProofVerifier::new(registry));
         let validator = Arc::new(RuntimeProofValidator::new(backend));
         let storage_path = proof_storage_path.into();
@@ -55,7 +56,7 @@ impl NodeGossipProcessor {
             warn!(?err, "failed to load persisted proof records");
             Vec::new()
         });
-        let proofs = ProofMempool::new(validator, storage)
+        let proofs = ProofMempool::new_with_metrics(validator, storage, cache_metrics)
             .expect("in-memory proof pipeline must initialise");
         let processor = Self {
             node,
