@@ -36,6 +36,15 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
 * **Mixed severities.** The regression confirms that multiple alerts can fire simultaneously (for
   example, identity saturation plus transaction warning). Treat them independently—clear the critical
   queue first, then review any remaining warnings to keep the backlog healthy.【F:tests/mempool/status_probe.rs†L130-L163】
+* **Alert names and payloads.** The probe encodes Alertmanager-style payloads with `alertname`,
+  `queue`, `severity`, and `summary` fields. Expect `TransactionsQueueWarning` when the transaction
+  queue crosses the warning threshold and `TransactionsQueueSaturated`/`IdentitiesQueueSaturated`
+  at full capacity; failing CI runs write the payloads to
+  `target/artifacts/mempool-alert-probe/*.json` (or the directory set in
+  `MEMPOOL_ALERT_ARTIFACT_DIR`) for debugging.【F:tests/mempool/status_probe.rs†L100-L207】
+* **Operator response.** When a critical payload lands in alerting, pause bulk submissions, raise
+  `mempool_limit` to drain legitimate traffic, and clear the saturated queues before resuming
+  normal load—mirroring the saturation/recovery sequence validated by the probe.【F:tests/mempool/status_probe.rs†L108-L163】
 
 ## Configuration and tuning controls
 
