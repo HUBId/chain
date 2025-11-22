@@ -531,6 +531,7 @@ impl SessionState {
 #[derive(Clone)]
 struct SnapshotStreamMetrics {
     bytes_transferred: Family<Vec<(String, String)>, Counter>,
+    request_telemetry: SnapshotRequestTelemetry,
     lag_seconds: Gauge<f64, AtomicU64>,
     failures: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
@@ -570,10 +571,29 @@ impl SnapshotRequestTiming {
 struct SnapshotRequestMetrics {
     outbound: HashMap<RequestResponseId, SnapshotRequestTiming>,
     inbound: HashMap<RequestResponseInboundId, SnapshotRequestTiming>,
+    #[cfg(feature = "metrics")]
+    telemetry: Option<SnapshotRequestTelemetry>,
 }
 
 #[cfg(feature = "request-response")]
 impl SnapshotRequestMetrics {
+    #[cfg(feature = "metrics")]
+    fn with_telemetry(telemetry: Option<SnapshotRequestTelemetry>) -> Self {
+        Self {
+            outbound: HashMap::new(),
+            inbound: HashMap::new(),
+            telemetry,
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn with_telemetry(_telemetry: Option<SnapshotRequestTelemetry>) -> Self {
+        Self {
+            outbound: HashMap::new(),
+            inbound: HashMap::new(),
+        }
+    }
+
     fn start_outbound(
         &mut self,
         request_id: RequestResponseId,
@@ -617,13 +637,29 @@ impl SnapshotRequestMetrics {
     ) {
         if let Some(mut entry) = self.outbound.remove(&request_id) {
             entry.set_response(response_kind, response_bytes);
-            Self::emit("outbound", entry);
+            #[cfg(feature = "metrics")]
+            {
+                Self::emit("outbound", entry, self.telemetry.as_ref());
+            }
+
+            #[cfg(not(feature = "metrics"))]
+            {
+                Self::emit("outbound", entry);
+            }
         }
     }
 
     fn finish_inbound(&mut self, request_id: RequestResponseInboundId) {
         if let Some(entry) = self.inbound.remove(&request_id) {
-            Self::emit("inbound", entry);
+            #[cfg(feature = "metrics")]
+            {
+                Self::emit("inbound", entry, self.telemetry.as_ref());
+            }
+
+            #[cfg(not(feature = "metrics"))]
+            {
+                Self::emit("inbound", entry);
+            }
         }
     }
 
@@ -635,7 +671,11 @@ impl SnapshotRequestMetrics {
         self.inbound.remove(&request_id);
     }
 
-    fn emit(direction: &str, entry: SnapshotRequestTiming) {
+    fn emit(
+        direction: &str,
+        entry: SnapshotRequestTiming,
+        #[cfg(feature = "metrics")] telemetry: Option<&SnapshotRequestTelemetry>,
+    ) {
         let response_kind = entry.response_kind.unwrap_or(entry.request_kind);
         let response_bytes = entry.response_bytes.unwrap_or(0);
         let elapsed = entry.started_at.elapsed();
@@ -644,6 +684,19 @@ impl SnapshotRequestMetrics {
         } else {
             Some(response_bytes as f64 / elapsed.as_secs_f64())
         };
+
+        #[cfg(feature = "metrics")]
+        if let Some(telemetry) = telemetry {
+            telemetry.observe(
+                direction,
+                entry.request_kind,
+                response_kind,
+                entry.request_bytes,
+                response_bytes,
+                elapsed,
+                throughput,
+            );
+        }
 
         debug!(
             target: "telemetry.snapshots",
@@ -669,6 +722,8 @@ impl SnapshotStreamMetrics {
             Unit::Bytes,
             bytes_transferred.clone(),
         );
+
+        let request_telemetry = SnapshotRequestTelemetry::register(registry);
 
         let lag_seconds = Gauge::<f64, AtomicU64>::default();
         registry.register_with_unit(
@@ -702,6 +757,7 @@ impl SnapshotStreamMetrics {
 
         Self {
             bytes_transferred,
+            request_telemetry,
             lag_seconds,
             failures,
             chunk_send_latency_seconds,
@@ -725,6 +781,10 @@ impl SnapshotStreamMetrics {
         self.bytes_transferred
             .get_or_create(&labels)
             .inc_by(bytes as u64);
+    }
+
+    fn telemetry(&self) -> SnapshotRequestTelemetry {
+        self.request_telemetry.clone()
     }
 
     fn observe_lag(&self, lag: Duration) {
@@ -756,6 +816,126 @@ impl SnapshotStreamMetrics {
 
     fn record_queue_depth(&self, depth: usize) {
         self.chunk_send_queue_depth.set(depth as u64);
+    }
+}
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+#[derive(Clone)]
+struct SnapshotRequestTelemetry {
+    bytes_total: Family<Vec<(String, String, String)>, Counter>,
+    rtt_seconds: Family<Vec<(String, String)>, Histogram>,
+    throughput_bytes_per_second: Family<Vec<(String, String)>, Histogram>,
+}
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+impl SnapshotRequestTelemetry {
+    fn register(registry: &mut Registry) -> Self {
+        let bytes_total = Family::<Vec<(String, String, String)>, Counter>::default();
+        registry.register_with_unit(
+            "snapshot_message_bytes_total",
+            "Total snapshot request and response payload bytes grouped by direction, flow, and item kind",
+            Unit::Bytes,
+            bytes_total.clone(),
+        );
+
+        let rtt_seconds = Family::<Vec<(String, String)>, Histogram>::new_with_constructor(|| {
+            Histogram::new(exponential_buckets(0.001, 2.0, 16))
+        });
+        registry.register_with_unit(
+            "snapshot_request_rtt_seconds",
+            "Round-trip time in seconds for snapshot requests grouped by direction and item kind",
+            Unit::Seconds,
+            rtt_seconds.clone(),
+        );
+
+        let throughput_bytes_per_second =
+            Family::<Vec<(String, String)>, Histogram>::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(1024.0, 2.0, 16))
+            });
+        registry.register(
+            "snapshot_response_throughput_bytes_per_second",
+            "Observed throughput in bytes per second for snapshot responses grouped by direction and item kind",
+            throughput_bytes_per_second.clone(),
+        );
+
+        Self {
+            bytes_total,
+            rtt_seconds,
+            throughput_bytes_per_second,
+        }
+    }
+
+    fn observe(
+        &self,
+        direction: &str,
+        request_kind: SnapshotItemKind,
+        response_kind: SnapshotItemKind,
+        request_bytes: usize,
+        response_bytes: usize,
+        elapsed: Duration,
+        throughput: Option<f64>,
+    ) {
+        let request_flow = if direction == "outbound" {
+            "sent"
+        } else {
+            "received"
+        };
+        let response_flow = if direction == "outbound" {
+            "received"
+        } else {
+            "sent"
+        };
+        let request_labels = vec![
+            ("direction".to_string(), direction.to_string()),
+            ("flow".to_string(), request_flow.to_string()),
+            (
+                "kind".to_string(),
+                SnapshotRequestTelemetry::kind_label(request_kind).to_string(),
+            ),
+        ];
+        let response_labels = vec![
+            ("direction".to_string(), direction.to_string()),
+            ("flow".to_string(), response_flow.to_string()),
+            (
+                "kind".to_string(),
+                SnapshotRequestTelemetry::kind_label(response_kind).to_string(),
+            ),
+        ];
+
+        self.bytes_total
+            .get_or_create(&request_labels)
+            .inc_by(request_bytes as u64);
+        self.bytes_total
+            .get_or_create(&response_labels)
+            .inc_by(response_bytes as u64);
+
+        let response_metrics_labels = vec![
+            ("direction".to_string(), direction.to_string()),
+            (
+                "kind".to_string(),
+                SnapshotRequestTelemetry::kind_label(response_kind).to_string(),
+            ),
+        ];
+        self.rtt_seconds
+            .get_or_create(&response_metrics_labels)
+            .observe(elapsed.as_secs_f64());
+
+        if let Some(throughput) = throughput {
+            self.throughput_bytes_per_second
+                .get_or_create(&response_metrics_labels)
+                .observe(throughput);
+        }
+    }
+
+    fn kind_label(kind: SnapshotItemKind) -> &'static str {
+        match kind {
+            SnapshotItemKind::Plan => "plan",
+            SnapshotItemKind::Chunk => "chunk",
+            SnapshotItemKind::LightClientUpdate => "light_client_update",
+            SnapshotItemKind::Resume => "resume",
+            SnapshotItemKind::Ack => "ack",
+            SnapshotItemKind::Error => "error",
+        }
     }
 }
 
@@ -818,14 +998,18 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     pub fn new(provider: P, registry: Option<&mut Registry>) -> Self {
         let protocols = vec![(SNAPSHOTS_PROTOCOL_ID.to_string(), ProtocolSupport::Full)];
         let config = RequestResponseConfig::default();
+        let metrics = registry.map(SnapshotStreamMetrics::register);
+        let request_metrics = SnapshotRequestMetrics::with_telemetry(
+            metrics.as_ref().map(SnapshotStreamMetrics::telemetry),
+        );
         Self {
             inner: RequestResponseBehaviour::new(protocols, config),
             provider,
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
-            request_metrics: SnapshotRequestMetrics::default(),
-            metrics: registry.map(SnapshotStreamMetrics::register),
+            request_metrics,
+            metrics,
             response_timers: HashMap::new(),
         }
     }
