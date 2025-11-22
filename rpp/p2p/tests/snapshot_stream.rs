@@ -204,6 +204,9 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
         _plan_id: &str,
         chunk_index: u64,
         update_index: u64,
+        _chunk_size: Option<u64>,
+        _min_chunk_size: Option<u64>,
+        _max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error> {
         self.flow
             .lock()
