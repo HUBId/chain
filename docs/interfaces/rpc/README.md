@@ -56,6 +56,27 @@ Clients should treat a `429` as a temporary condition. Retry only after waiting
 for at least the advertised reset window and prefer exponential backoff to avoid
 immediate re-throttling.
 
+## Snapshot and state sync RPC errors
+
+Snapshot operations expose structured error payloads. When a request fails the
+response body always includes an `error` string and may also carry a
+machine-readable `code` to simplify automation and runbook lookups. The
+snapshot-related codes and their typical triggers are:
+
+| Code | HTTP status | Typical message | Description |
+| --- | --- | --- | --- |
+| `state_sync_plan_invalid` | `400`/`404` | `chunk index <N> out of range (total <T>)`, `chunk <N> missing`, `invalid manifest` | The published snapshot plan or manifest does not match the requested chunk window. |
+| `state_sync_metadata_mismatch` | `500` | `snapshot root mismatch: expected <expected>, found <actual>` | The local snapshot metadata (root or receipts) diverges from the advertised plan. |
+| `state_sync_proof_encoding_invalid` | `503` | `failed to decode proof chunk` | Snapshot verification failed because the proof stream could not be decoded. |
+| `state_sync_verification_incomplete` | `503` | `state sync verification failed` | The verifier stopped before producing a complete proof. |
+| `state_sync_verifier_io` | `500` | `disk unavailable`, `ProofError::IO(...)` | I/O errors while reading snapshot chunks or verification inputs. |
+| `state_sync_pipeline_error` | `500` | `snapshot store error: ...` | Internal orchestration errors while serving or verifying snapshot chunks. |
+| `state_sync_pruner_state_error` | `500` | `pruner state unavailable` | Snapshot verification failed because pruning metadata was missing or inconsistent. |
+
+The `/p2p/snapshots*` and `/state-sync/*` handlers surface these codes so
+operators can map RPC responses directly to the remediation steps in the
+troubleshooting guide.
+
 ## Live API key rotation
 
 RPC authentication secrets are only loaded during process startup; there is no

@@ -3638,35 +3638,47 @@ fn chunk_error_to_state_sync(err: StateSyncChunkError) -> StateSyncError {
             StateSyncErrorKind::NoActiveSession,
             Some("state sync session unavailable".into()),
         ),
-        StateSyncChunkError::ChunkIndexOutOfRange { index, total } => StateSyncError::new(
+        StateSyncChunkError::ChunkIndexOutOfRange { index, total } => StateSyncError::with_code(
             StateSyncErrorKind::ChunkIndexOutOfRange { index, total },
+            RpcErrorCode::StateSyncPlanInvalid,
             Some(format!("chunk index {index} out of range (total {total})")),
         ),
-        StateSyncChunkError::ChunkNotFound { index, reason } => {
-            StateSyncError::new(StateSyncErrorKind::ChunkNotFound { index }, Some(reason))
-        }
+        StateSyncChunkError::ChunkNotFound { index, reason } => StateSyncError::with_code(
+            StateSyncErrorKind::ChunkNotFound { index },
+            RpcErrorCode::StateSyncPlanInvalid,
+            Some(reason),
+        ),
         StateSyncChunkError::SnapshotRootMismatch { expected, actual } => {
             let expected_hex = hex::encode(expected.as_bytes());
             let actual_hex = hex::encode(actual.as_bytes());
-            StateSyncError::new(
+            StateSyncError::with_code(
                 StateSyncErrorKind::Internal,
+                RpcErrorCode::StateSyncMetadataMismatch,
                 Some(format!(
                     "snapshot root mismatch: expected {expected_hex}, found {actual_hex}"
                 )),
             )
         }
-        StateSyncChunkError::ManifestViolation { reason } => {
-            StateSyncError::new(StateSyncErrorKind::Internal, Some(reason))
-        }
-        StateSyncChunkError::Io(err) => {
-            StateSyncError::new(StateSyncErrorKind::Internal, Some(err.to_string()))
-        }
-        StateSyncChunkError::IoProof { message, .. } => {
-            StateSyncError::new(StateSyncErrorKind::Internal, Some(message))
-        }
-        StateSyncChunkError::Internal(message) => {
-            StateSyncError::new(StateSyncErrorKind::Internal, Some(message))
-        }
+        StateSyncChunkError::ManifestViolation { reason } => StateSyncError::with_code(
+            StateSyncErrorKind::Internal,
+            RpcErrorCode::StateSyncPlanInvalid,
+            Some(reason),
+        ),
+        StateSyncChunkError::Io(err) => StateSyncError::with_code(
+            StateSyncErrorKind::Internal,
+            RpcErrorCode::StateSyncVerifierIo,
+            Some(err.to_string()),
+        ),
+        StateSyncChunkError::IoProof { message, .. } => StateSyncError::with_code(
+            StateSyncErrorKind::Internal,
+            RpcErrorCode::StateSyncVerifierIo,
+            Some(message),
+        ),
+        StateSyncChunkError::Internal(message) => StateSyncError::with_code(
+            StateSyncErrorKind::Internal,
+            RpcErrorCode::StateSyncPipelineError,
+            Some(message),
+        ),
     }
 }
 
@@ -3689,6 +3701,27 @@ mod tests {
             build_error_code,
             Some(RpcErrorCode::StateSyncMetadataMismatch)
         );
+    }
+
+    #[test]
+    fn chunk_errors_emit_snapshot_codes() {
+        let mismatch =
+            super::chunk_error_to_state_sync(StateSyncChunkError::SnapshotRootMismatch {
+                expected: Blake3Hash::from([0u8; 32]),
+                actual: Blake3Hash::from([1u8; 32]),
+            });
+        assert_eq!(mismatch.code, Some(RpcErrorCode::StateSyncMetadataMismatch));
+
+        let manifest = super::chunk_error_to_state_sync(StateSyncChunkError::ManifestViolation {
+            reason: "invalid manifest".into(),
+        });
+        assert_eq!(manifest.code, Some(RpcErrorCode::StateSyncPlanInvalid));
+
+        let io = super::chunk_error_to_state_sync(StateSyncChunkError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "disk unavailable",
+        )));
+        assert_eq!(io.code, Some(RpcErrorCode::StateSyncVerifierIo));
     }
 }
 
