@@ -1395,6 +1395,8 @@ pub struct NetworkStateSyncPlan {
     pub tip: NetworkBlockMetadata,
     pub chunks: Vec<NetworkStateSyncChunk>,
     pub light_client_updates: Vec<NetworkLightClientUpdate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u64>,
 }
 
 pub trait RecursiveProofVerifier: std::fmt::Debug + Send + Sync + 'static {
@@ -2272,6 +2274,7 @@ mod tests {
                 previous_commitment: None,
                 recursive_proof: String::new(),
             }],
+            max_concurrent_requests: None,
         };
 
         let plan_payload = serde_json::to_vec(&plan).expect("plan encode");

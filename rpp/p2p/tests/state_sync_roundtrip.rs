@@ -109,6 +109,7 @@ fn state_sync_plan_roundtrip() {
             previous_commitment: Some("aa".repeat(32)),
             recursive_proof: String::new(),
         }],
+        max_concurrent_requests: Some(3),
     };
 
     let encoded = serde_json::to_vec(&plan).expect("encode plan");
@@ -116,6 +117,10 @@ fn state_sync_plan_roundtrip() {
     assert_eq!(decoded.snapshot.block_hash, plan.snapshot.block_hash);
     assert_eq!(decoded.chunks.len(), 1);
     assert_eq!(decoded.light_client_updates.len(), 1);
+    assert_eq!(
+        decoded.max_concurrent_requests,
+        plan.max_concurrent_requests
+    );
 }
 
 #[test]
