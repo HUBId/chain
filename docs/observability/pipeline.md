@@ -54,6 +54,7 @@ endpoint is enabled.
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `snapshot_verify_failures_total` | Counter (u64) | `manifest` (relative path), `exit_code` (`signature_invalid`, `chunk_mismatch`, `fatal`) | Counts snapshot verifier failures during `scripts/build_release.sh` runs. The counter increments before the CLI exits so even fatal errors (missing manifests, malformed signatures) are captured. |
+| `snapshot_verify_results_total` | Counter (u64) | `manifest` (relative path), `result` (`success`, `failure`), `error` (`none`, `signature_invalid`, `chunk_mismatch`, `fatal`) | Totals snapshot verification attempts across release packaging, tagging each run as a success or failure with the error type attached for triage. |
 | `worm_export_failures_total` | Counter (u64) | `reason` (`create_dir`, `write_body`, `serialize_index`, …) | Totals WORM export stub errors observed by the nightly `worm-export` job. Labels summarise the failing stage (directory creation, payload write, index rotation) to aid triage without exploding cardinality. |
 | `worm_retention_checks_total` | Counter (u64) | _none_ | Incremented by `cargo xtask worm-retention-check` every time the nightly compliance pipeline inspects WORM export artefacts. Serves as the heartbeat for the retention verification job. |
 | `worm_retention_failures_total` | Counter (u64) | _none_ | Recorded when the retention check surfaces stale, unsigned, or orphaned audit entries. Alerts fire immediately so the compliance rotation can react before the next archive window. |
@@ -66,6 +67,12 @@ so any increase automatically pages the release/compliance rotation and links to
 the Phase‑A runbook checklist. Additional rules cover missing retention or
 chaos drill runs (no increase in the counters over a 36‑hour window) and
 critical failures (non-zero `*_failures_total` within the last day).
+`SnapshotVerifierFailureRate{Warning,Critical}` now evaluate
+`snapshot_verify_results_total` to catch elevated failure ratios (10% and 25%
+over a 30‑minute window across at least three runs), ensuring short-lived spikes
+do not silently blend into rolling totals. Pair these alerts with the Grafana
+failure-rate panel from `pipeline_grafana.json` to spot whether signature errors
+or chunk mismatches are driving the regressions.
 
 Nightly automation exports these counters whenever at least one of the
 `OBSERVABILITY_METRICS_*` environment variables is present. Set

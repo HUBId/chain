@@ -21,6 +21,38 @@ spec:
               Inspect the release job logs, the aggregated snapshot verify report, and
               rerun the manifest validation before promoting the build.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md
+        - alert: SnapshotVerifierFailureRateWarning
+          expr: |
+            (sum(increase(snapshot_verify_results_total{result="failure"}[30m]))
+              / sum(increase(snapshot_verify_results_total[30m]))) > 0.1
+              and sum(increase(snapshot_verify_results_total[30m])) >= 3
+          for: 10m
+          labels:
+            severity: warning
+            service: release
+          annotations:
+            summary: Snapshot verification failure rate has spiked
+            description: |
+              More than 10% of snapshot verification runs failed within the last 30 minutes,
+              across at least three total runs. Inspect the error breakdown (signature
+              vs chunk mismatch vs fatal) and pause promotion until the failure rate drops.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md
+        - alert: SnapshotVerifierFailureRateCritical
+          expr: |
+            (sum(increase(snapshot_verify_results_total{result="failure"}[30m]))
+              / sum(increase(snapshot_verify_results_total[30m]))) > 0.25
+              and sum(increase(snapshot_verify_results_total[30m])) >= 3
+          for: 10m
+          labels:
+            severity: critical
+            service: release
+          annotations:
+            summary: Snapshot verification failure rate is above 25%
+            description: |
+              The snapshot verifier is reporting a sustained failure rate above 25% within the
+              last 30 minutes across multiple runs. Halt release packaging until the root cause
+              (signature mismatch, chunk checksum drift, or tooling regression) is resolved.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md
         - alert: WormExportNightlyFailure
           expr: increase(worm_export_failures_total[1h]) > 0
           for: 5m

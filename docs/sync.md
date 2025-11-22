@@ -59,6 +59,14 @@ the new key, and republishing the `{manifest, manifest.sig}` pair; the runtime
 rejects snapshots signed with older key versions so stale signatures cannot be
 served once the version changes.
 
+Each invocation records `snapshot_verify_results_total` with a `result`
+(`success`/`failure`) and `error` label (`none`, `signature_invalid`,
+`chunk_mismatch`, `fatal`). Operators scraping Prometheus or OTLP exporters can
+track how many manifests succeeded during a build and which error class is
+dominating failures. The compliance alert bundle surfaces warning/critical
+conditions when more than 10%/25% of runs fail across at least three attempts in
+30 minutes.
+
 ## Snapshot download retries
 
 The `rpp-node validator snapshot` commands use an HTTP client to start, poll,

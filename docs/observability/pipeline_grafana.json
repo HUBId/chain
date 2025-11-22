@@ -56,6 +56,45 @@
           "legendFormat": "Leader rotations"
         }
       ]
+    },
+    {
+      "type": "stat",
+      "title": "Snapshot Verify Failure Rate (30m)",
+      "description": "Failure ratio for snapshot verification runs over the last 30 minutes.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "targets": [
+        {
+          "expr": "sum(increase(snapshot_verify_results_total{result=\"failure\"}[30m])) / sum(increase(snapshot_verify_results_total[30m]))",
+          "legendFormat": "Failure rate"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 0.1 },
+          { "color": "red", "value": 0.25 }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Snapshot Verify Failures by Error (30m)",
+      "description": "Per-error breakdown of snapshot verification failures over the last 30 minutes.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "targets": [
+        {
+          "expr": "sum by (error)(increase(snapshot_verify_results_total{result=\"failure\"}[30m]))",
+          "legendFormat": "{{error}}"
+        }
+      ]
     }
   ]
 }
