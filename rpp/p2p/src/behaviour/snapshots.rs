@@ -524,8 +524,8 @@ struct SessionState {
     peer: PeerId,
     next_chunk_index: u64,
     next_update_index: u64,
-    pending_chunks: VecDeque<u64>,
-    pending_updates: VecDeque<u64>,
+    pending_chunks: VecDeque<PendingRequest>,
+    pending_updates: VecDeque<PendingRequest>,
     in_flight_chunks: usize,
     in_flight_updates: usize,
     in_flight_control: usize,
@@ -535,6 +535,13 @@ struct SessionState {
     capabilities: SnapshotChunkCapabilities,
     plan_max_concurrent_requests: Option<usize>,
     chunk_sizing: ChunkSizingStrategy,
+}
+
+#[cfg(feature = "request-response")]
+#[derive(Clone, Copy, Debug)]
+struct PendingRequest {
+    index: u64,
+    enqueued_at: Instant,
 }
 
 #[cfg(feature = "request-response")]
@@ -600,14 +607,18 @@ impl SessionState {
     }
 
     fn enqueue(&mut self, kind: SnapshotItemKind, index: u64) {
+        let request = PendingRequest {
+            index,
+            enqueued_at: Instant::now(),
+        };
         match kind {
-            SnapshotItemKind::Chunk => self.pending_chunks.push_back(index),
-            SnapshotItemKind::LightClientUpdate => self.pending_updates.push_back(index),
+            SnapshotItemKind::Chunk => self.pending_chunks.push_back(request),
+            SnapshotItemKind::LightClientUpdate => self.pending_updates.push_back(request),
             _ => {}
         }
     }
 
-    fn pop_next_pending(&mut self) -> Option<(SnapshotItemKind, u64)> {
+    fn pop_next_pending(&mut self) -> Option<(SnapshotItemKind, PendingRequest)> {
         let next_kind = match (
             self.pending_chunks.front().copied(),
             self.pending_updates.front().copied(),
@@ -623,13 +634,13 @@ impl SessionState {
         };
 
         match next_kind {
-            SnapshotItemKind::Chunk => self.pending_chunks.pop_front().map(|index| {
+            SnapshotItemKind::Chunk => self.pending_chunks.pop_front().map(|request| {
                 self.last_dispatched_kind = Some(SnapshotItemKind::Chunk);
-                (SnapshotItemKind::Chunk, index)
+                (SnapshotItemKind::Chunk, request)
             }),
-            SnapshotItemKind::LightClientUpdate => self.pending_updates.pop_front().map(|index| {
+            SnapshotItemKind::LightClientUpdate => self.pending_updates.pop_front().map(|request| {
                 self.last_dispatched_kind = Some(SnapshotItemKind::LightClientUpdate);
-                (SnapshotItemKind::LightClientUpdate, index)
+                (SnapshotItemKind::LightClientUpdate, request)
             }),
             _ => None,
         }
@@ -678,6 +689,41 @@ impl SessionState {
     fn has_capacity(&self, configured_limit: Option<usize>) -> bool {
         self.total_in_flight() < self.effective_concurrency_limit(configured_limit)
     }
+
+    fn queue_depths(&self) -> (usize, usize) {
+        (self.pending_chunks.len(), self.pending_updates.len())
+    }
+
+    fn backpressure_since(&self, kind: SnapshotItemKind) -> Option<Duration> {
+        match kind {
+            SnapshotItemKind::Chunk => self
+                .pending_chunks
+                .front()
+                .map(|request| request.enqueued_at.elapsed()),
+            SnapshotItemKind::LightClientUpdate => self
+                .pending_updates
+                .front()
+                .map(|request| request.enqueued_at.elapsed()),
+            _ => None,
+        }
+    }
+
+    fn lag_since_last_progress(&self) -> Duration {
+        self.last_progress.elapsed()
+    }
+
+    fn lag_since_oldest_pending(&self) -> Duration {
+        let oldest_pending = [
+            self.backpressure_since(SnapshotItemKind::Chunk),
+            self.backpressure_since(SnapshotItemKind::LightClientUpdate),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or_else(|| Duration::from_secs(0));
+
+        self.lag_since_last_progress().max(oldest_pending)
+    }
 }
 
 #[cfg(all(feature = "metrics", feature = "request-response"))]
@@ -689,6 +735,10 @@ struct SnapshotStreamMetrics {
     failures: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
+    request_queue_depth: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
+    in_flight_requests: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
+    concurrency_limit: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
+    backpressure_seconds: Family<Vec<(String, String)>, Gauge<f64, AtomicU64>>,
     negotiated_chunk_size_bytes: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
     negotiated_chunk_size_bytes_histogram: Histogram,
     adaptive_chunk_size_bytes: Gauge<u64, AtomicU64>,
@@ -917,6 +967,36 @@ impl SnapshotStreamMetrics {
             chunk_send_queue_depth.clone(),
         );
 
+        let request_queue_depth = Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
+        registry.register(
+            "snapshot_request_queue_depth",
+            "Number of snapshot protocol requests queued by the consumer grouped by item kind",
+            request_queue_depth.clone(),
+        );
+
+        let in_flight_requests = Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
+        registry.register(
+            "snapshot_in_flight_requests",
+            "Number of snapshot protocol requests in flight grouped by item kind",
+            in_flight_requests.clone(),
+        );
+
+        let concurrency_limit = Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
+        registry.register(
+            "snapshot_concurrency_limit",
+            "Effective snapshot request concurrency limits grouped by source",
+            concurrency_limit.clone(),
+        );
+
+        let backpressure_seconds =
+            Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
+        registry.register_with_unit(
+            "snapshot_request_backpressure_seconds",
+            "Age in seconds of the oldest pending snapshot request grouped by item kind",
+            Unit::Seconds,
+            backpressure_seconds.clone(),
+        );
+
         let negotiated_chunk_size_bytes =
             Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
         registry.register_with_unit(
@@ -959,6 +1039,10 @@ impl SnapshotStreamMetrics {
             failures,
             chunk_send_latency_seconds,
             chunk_send_queue_depth,
+            request_queue_depth,
+            in_flight_requests,
+            concurrency_limit,
+            backpressure_seconds,
             negotiated_chunk_size_bytes,
             negotiated_chunk_size_bytes_histogram,
             adaptive_chunk_size_bytes,
@@ -1032,6 +1116,69 @@ impl SnapshotStreamMetrics {
 
     fn record_queue_depth(&self, depth: usize) {
         self.chunk_send_queue_depth.set(depth as u64);
+    }
+
+    fn record_request_queue_depths(&self, chunks: usize, updates: usize, control: usize) {
+        for (kind, depth) in [
+            ("chunk", chunks),
+            ("light_client_update", updates),
+            ("control", control),
+        ] {
+            let labels = vec![("kind".to_string(), kind.to_string())];
+            self.request_queue_depth
+                .get_or_create(&labels)
+                .set(depth as u64);
+        }
+    }
+
+    fn record_in_flight_requests(&self, chunks: usize, updates: usize, control: usize) {
+        for (kind, total) in [
+            ("chunk", chunks),
+            ("light_client_update", updates),
+            ("control", control),
+        ] {
+            let labels = vec![("kind".to_string(), kind.to_string())];
+            self.in_flight_requests
+                .get_or_create(&labels)
+                .set(total as u64);
+        }
+    }
+
+    fn record_concurrency_limits(
+        &self,
+        configured: usize,
+        provider: Option<usize>,
+        plan: Option<usize>,
+        effective: usize,
+    ) {
+        for (source, value) in [
+            ("configured", Some(configured)),
+            ("provider", provider),
+            ("plan", plan),
+            ("effective", Some(effective)),
+        ] {
+            if let Some(limit) = value {
+                let labels = vec![("source".to_string(), source.to_string())];
+                self.concurrency_limit
+                    .get_or_create(&labels)
+                    .set(limit as u64);
+            }
+        }
+    }
+
+    fn record_backpressure(&self, kind: SnapshotItemKind, age: Duration) {
+        let label = match kind {
+            SnapshotItemKind::Chunk => Some("chunk"),
+            SnapshotItemKind::LightClientUpdate => Some("light_client_update"),
+            _ => None,
+        };
+
+        if let Some(kind_label) = label {
+            let labels = vec![("kind".to_string(), kind_label.to_string())];
+            self.backpressure_seconds
+                .get_or_create(&labels)
+                .set(age.as_secs_f64());
+        }
     }
 }
 
@@ -1351,6 +1498,105 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     #[cfg(not(feature = "metrics"))]
     fn record_adaptive_chunk_size(&self, _size: u64) {}
 
+    #[cfg(feature = "metrics")]
+    fn update_stream_metrics(&mut self) {
+        if let Some(metrics) = &self.metrics {
+            let configured_limit = self.configured_concurrency_limit().unwrap_or(1);
+            let mut lag = Duration::from_secs(0);
+            let mut pending_chunks = 0;
+            let mut pending_updates = 0;
+            let mut in_flight_chunks = 0;
+            let mut in_flight_updates = 0;
+            let mut in_flight_control = 0;
+            let mut provider_limit: Option<usize> = None;
+            let mut plan_limit: Option<usize> = None;
+            let mut effective_limit: Option<usize> = None;
+            let mut backpressure_chunks = Duration::from_secs(0);
+            let mut backpressure_updates = Duration::from_secs(0);
+
+            for state in self.sessions.values() {
+                lag = lag.max(state.lag_since_oldest_pending());
+                let (chunk_depth, update_depth) = state.queue_depths();
+                pending_chunks += chunk_depth;
+                pending_updates += update_depth;
+                in_flight_chunks += state.in_flight_chunks;
+                in_flight_updates += state.in_flight_updates;
+                in_flight_control += state.in_flight_control;
+
+                if let Some(limit) = state
+                    .capabilities
+                    .max_concurrent_requests
+                    .and_then(|value| usize::try_from(value).ok())
+                {
+                    provider_limit = Some(provider_limit.map_or(limit, |current| current.min(limit)));
+                }
+
+                if let Some(limit) = state.plan_max_concurrent_requests {
+                    plan_limit = Some(plan_limit.map_or(limit, |current| current.min(limit)));
+                }
+
+                let state_limit = state.effective_concurrency_limit(self.configured_concurrency_limit());
+                effective_limit = Some(effective_limit.map_or(state_limit, |current| current.min(state_limit)));
+
+                if let Some(age) = state.backpressure_since(SnapshotItemKind::Chunk) {
+                    backpressure_chunks = backpressure_chunks.max(age);
+                }
+                if let Some(age) = state.backpressure_since(SnapshotItemKind::LightClientUpdate) {
+                    backpressure_updates = backpressure_updates.max(age);
+                }
+            }
+
+            metrics.observe_lag(lag);
+            metrics.record_request_queue_depths(pending_chunks, pending_updates, 0);
+            metrics.record_in_flight_requests(
+                in_flight_chunks,
+                in_flight_updates,
+                in_flight_control,
+            );
+            metrics.record_concurrency_limits(
+                configured_limit,
+                provider_limit,
+                plan_limit,
+                effective_limit.unwrap_or(configured_limit),
+            );
+            metrics.record_backpressure(SnapshotItemKind::Chunk, backpressure_chunks);
+            metrics.record_backpressure(
+                SnapshotItemKind::LightClientUpdate,
+                backpressure_updates,
+            );
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn update_stream_metrics(&mut self) {}
+
+    fn record_request_update(
+        &mut self,
+        session_id: SnapshotSessionId,
+        kind: SnapshotItemKind,
+        stage: &str,
+    ) {
+        #[cfg(feature = "metrics")]
+        self.update_stream_metrics();
+
+        if let Some(state) = self.sessions.get(&session_id) {
+            debug!(
+                target: "telemetry.snapshots",
+                %session_id,
+                %stage,
+                kind = ?kind,
+                peer = ?state.peer,
+                pending_chunks = state.pending_chunks.len(),
+                pending_updates = state.pending_updates.len(),
+                in_flight_chunks = state.in_flight_chunks,
+                in_flight_updates = state.in_flight_updates,
+                in_flight_control = state.in_flight_control,
+                effective_limit = state.effective_concurrency_limit(self.configured_concurrency_limit()),
+                "snapshot_request_progress"
+            );
+        }
+    }
+
     fn configured_concurrency_limit(&self) -> Option<usize> {
         self.config
             .max_concurrent_requests
@@ -1371,7 +1617,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         self.requests.insert(request_id, (session_id, kind));
         #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
+        self.update_stream_metrics();
     }
 
     fn finish_outbound_request(&mut self, session_id: SnapshotSessionId, kind: SnapshotItemKind) {
@@ -1400,9 +1646,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     ) -> Option<RequestResponseId> {
         let configured_limit = self.configured_concurrency_limit();
         let mut target_request_id = None;
+        let mut dispatched = false;
 
         loop {
-            let (peer, kind, index) = {
+            let (peer, kind, request) = {
                 let state = match self.sessions.get_mut(&session_id) {
                     Some(state) => state,
                     None => break,
@@ -1413,7 +1660,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 }
 
                 match state.pop_next_pending() {
-                    Some((kind, index)) => (state.peer.clone(), kind, index),
+                    Some((kind, request)) => (state.peer.clone(), kind, request),
                     None => break,
                 }
             };
@@ -1424,7 +1671,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     session_id,
                     SnapshotsRequest::Chunk {
                         session_id,
-                        chunk_index: index,
+                        chunk_index: request.index,
                     },
                     kind,
                 ),
@@ -1433,7 +1680,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     session_id,
                     SnapshotsRequest::LightClientUpdate {
                         session_id,
-                        update_index: index,
+                        update_index: request.index,
                     },
                     kind,
                 ),
@@ -1441,10 +1688,18 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             };
 
             if target.is_some_and(|(target_kind, target_index)| {
-                target_kind == kind && target_index == index
+                target_kind == kind && target_index == request.index
             }) {
                 target_request_id = Some(request_id);
             }
+
+            self.record_request_update(session_id, kind, "dispatched");
+            dispatched = true;
+        }
+
+        if dispatched {
+            #[cfg(feature = "metrics")]
+            self.update_stream_metrics();
         }
 
         target_request_id
@@ -1465,22 +1720,6 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         sent
     }
-
-    #[cfg(feature = "metrics")]
-    fn update_stream_lag_metric(&mut self) {
-        if let Some(metrics) = &self.metrics {
-            let lag = self
-                .sessions
-                .values()
-                .map(|state| state.last_progress.elapsed())
-                .max()
-                .unwrap_or_else(|| Duration::from_secs(0));
-            metrics.observe_lag(lag);
-        }
-    }
-
-    #[cfg(not(feature = "metrics"))]
-    fn update_stream_lag_metric(&mut self) {}
 
     fn negotiate_chunk_size(
         capabilities: SnapshotChunkCapabilities,
@@ -1588,7 +1827,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        Some(self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Plan))
+        let request_id = self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Plan);
+        self.record_request_update(session_id, SnapshotItemKind::Plan, "dispatched");
+        Some(request_id)
     }
 
     /// Requests a chunk from the remote peer.
@@ -1608,6 +1849,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if let Some(entry) = self.sessions.get_mut(&session_id) {
             entry.enqueue(SnapshotItemKind::Chunk, chunk_index);
+            self.record_request_update(session_id, SnapshotItemKind::Chunk, "enqueued");
         }
 
         self.dispatch_pending_requests(session_id, Some((SnapshotItemKind::Chunk, chunk_index)))
@@ -1630,6 +1872,11 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if let Some(entry) = self.sessions.get_mut(&session_id) {
             entry.enqueue(SnapshotItemKind::LightClientUpdate, update_index);
+            self.record_request_update(
+                session_id,
+                SnapshotItemKind::LightClientUpdate,
+                "enqueued",
+            );
         }
 
         self.dispatch_pending_requests(
@@ -1661,7 +1908,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        Some(self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume))
+        let request_id = self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume);
+        self.record_request_update(session_id, SnapshotItemKind::Resume, "dispatched");
+        Some(request_id)
     }
 
     /// Cancels a snapshot session by notifying the remote peer.
@@ -1692,7 +1941,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Error));
         #[cfg(feature = "metrics")]
-        self.update_stream_lag_metric();
+        self.update_stream_metrics();
+        self.record_request_update(session_id, SnapshotItemKind::Error, "dispatched");
         Some(request_id)
     }
 
@@ -1742,6 +1992,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         );
                         self.handle_response(peer, session_id, response, timing);
                         self.dispatch_pending_requests(session_id, None);
+                        self.record_request_update(session_id, kind, "completed");
                     }
                 }
             },
@@ -1761,6 +2012,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         error: SnapshotProtocolError::Outbound { kind, error },
                     });
                     self.dispatch_pending_requests(session_id, None);
+                    self.record_request_update(session_id, kind, "failed");
                 }
             }
             RequestResponseEvent::InboundFailure { request_id, .. } => {
@@ -2218,7 +2470,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     state.next_chunk_index = 0;
                     state.next_update_index = 0;
                     state.mark_progress();
-                    self.update_stream_lag_metric();
+                    self.update_stream_metrics();
                     self.pending_events.push_back(SnapshotsEvent::Plan {
                         peer,
                         session_id,
@@ -2249,7 +2501,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         state.mark_progress();
                     }
                     self.record_bytes("inbound", SnapshotItemKind::Chunk, chunk.len());
-                    self.update_stream_lag_metric();
+                    self.update_stream_metrics();
                     self.pending_events.push_back(SnapshotsEvent::Chunk {
                         peer,
                         session_id,
@@ -2277,7 +2529,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         state.mark_progress();
                     }
                     self.record_bytes("inbound", SnapshotItemKind::LightClientUpdate, update.len());
-                    self.update_stream_lag_metric();
+                    self.update_stream_metrics();
                     self.pending_events
                         .push_back(SnapshotsEvent::LightClientUpdate {
                             peer,
@@ -2319,7 +2571,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     state.next_update_index = update_index;
                     state.mark_progress();
                 }
-                self.update_stream_lag_metric();
+                self.update_stream_metrics();
                 self.pending_events.push_back(SnapshotsEvent::Resume {
                     peer,
                     session_id,
@@ -2331,7 +2583,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 if let Some(state) = self.sessions.get_mut(&session_id) {
                     state.mark_progress();
                 }
-                self.update_stream_lag_metric();
+                self.update_stream_metrics();
                 self.pending_events.push_back(SnapshotsEvent::Ack {
                     peer,
                     session_id,
@@ -2349,7 +2601,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if matches!(kind, SnapshotItemKind::Ack | SnapshotItemKind::Error) {
             self.sessions.remove(&session_id);
-            self.update_stream_lag_metric();
+            self.update_stream_metrics();
         }
     }
 }
@@ -2437,7 +2689,7 @@ impl<P: SnapshotProvider> NetworkBehaviour for SnapshotsBehaviour<P> {
     ) -> std::task::Poll<
         ToSwarm<Self::ToSwarm, <Self::ConnectionHandler as ConnectionHandler>::InEvent>,
     > {
-        self.update_stream_lag_metric();
+        self.update_stream_metrics();
         if let Some(event) = self.pending_events.pop_front() {
             return std::task::Poll::Ready(ToSwarm::GenerateEvent(event));
         }
@@ -2825,5 +3077,87 @@ mod tests {
             metric_value(&buffer, "snapshot_adaptive_chunk_size_bytes_histogram_sum")
                 .expect("adaptive histogram updated");
         assert!(adaptive_sum >= 192.0);
+    }
+
+    #[test]
+    fn stream_metrics_cover_queue_depths_and_backpressure() {
+        let mut registry = Registry::default();
+        let mut behaviour =
+            SnapshotsBehaviour::new(NullSnapshotProvider::default(), Some(&mut registry));
+
+        let session_id = SnapshotSessionId::new(42);
+        let peer = PeerId::random();
+        let state = behaviour
+            .sessions
+            .entry(session_id)
+            .or_insert_with(|| SessionState::new(peer));
+
+        state.enqueue(SnapshotItemKind::Chunk, 0);
+        state.enqueue(SnapshotItemKind::LightClientUpdate, 0);
+        state.record_outbound(SnapshotItemKind::Chunk);
+        state.record_outbound(SnapshotItemKind::LightClientUpdate);
+
+        sleep(Duration::from_millis(5));
+        behaviour.update_stream_metrics();
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_request_queue_depth",
+                &[("kind", "chunk")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_request_queue_depth",
+                &[("kind", "light_client_update")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_in_flight_requests",
+                &[("kind", "chunk")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_in_flight_requests",
+                &[("kind", "light_client_update")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_concurrency_limit",
+                &[("source", "configured")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_concurrency_limit",
+                &[("source", "effective")],
+            ),
+            Some(1.0)
+        );
+
+        let chunk_backpressure = metric_value_with_labels(
+            &buffer,
+            "snapshot_request_backpressure_seconds",
+            &[("kind", "chunk")],
+        )
+        .expect("backpressure recorded");
+        assert!(chunk_backpressure > 0.0);
     }
 }
