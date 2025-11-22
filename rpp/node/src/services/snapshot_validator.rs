@@ -60,8 +60,12 @@ struct ChunkFailure {
     kind: FailureKind,
 }
 
+const SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+
 #[derive(Debug, Deserialize)]
 struct SnapshotChunkManifest {
+    #[serde(default)]
+    version: u32,
     #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
@@ -132,6 +136,15 @@ impl SnapshotValidator {
                                     "snapshot chunk directory not present; skipping validation"
                                 );
                             }
+                            Ok(Err(ScanError::VersionMismatch { expected, actual })) => {
+                                warn!(
+                                    target = "snapshot_validator",
+                                    manifest = %worker_settings.manifest_path.display(),
+                                    expected_version = expected,
+                                    actual_version = actual,
+                                    "snapshot manifest version mismatch"
+                                );
+                            }
                             Ok(Err(ScanError::Decode(err))) => {
                                 warn!(
                                     target = "snapshot_validator",
@@ -188,6 +201,7 @@ impl SnapshotValidator {
 enum ScanError {
     ManifestMissing,
     ChunkDirectoryMissing,
+    VersionMismatch { expected: u32, actual: u32 },
     Decode(serde_json::Error),
     Io(io::Error),
 }
@@ -203,6 +217,13 @@ fn scan_once(settings: &SnapshotValidatorSettings) -> Result<Vec<ChunkFailure>, 
     let data = fs::read(&settings.manifest_path).map_err(ScanError::Io)?;
     let manifest: SnapshotChunkManifest =
         serde_json::from_slice(&data).map_err(ScanError::Decode)?;
+
+    if manifest.version != SNAPSHOT_MANIFEST_VERSION {
+        return Err(ScanError::VersionMismatch {
+            expected: SNAPSHOT_MANIFEST_VERSION,
+            actual: manifest.version,
+        });
+    }
 
     let mut failures = Vec::new();
     for segment in manifest.segments {

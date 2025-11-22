@@ -1134,8 +1134,12 @@ pub(crate) enum StateSyncChunkError {
     Internal(String),
 }
 
+const SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+
 #[derive(Debug, Deserialize)]
 struct SnapshotChunkManifest {
+    #[serde(default)]
+    version: u32,
     #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
@@ -1152,6 +1156,10 @@ struct ManifestSegment {
 
 #[derive(Debug)]
 enum SnapshotManifestError {
+    VersionMismatch {
+        expected: u32,
+        actual: u32,
+    },
     MissingChunkDirectory(PathBuf),
     MissingChunk {
         name: String,
@@ -1192,6 +1200,10 @@ impl fmt::Display for SnapshotManifestError {
             SnapshotManifestError::MissingChunkDirectory(dir) => {
                 write!(f, "snapshot chunk directory missing at {}", dir.display())
             }
+            SnapshotManifestError::VersionMismatch { expected, actual } => write!(
+                f,
+                "snapshot manifest version mismatch (expected {expected}, found {actual})"
+            ),
             SnapshotManifestError::MissingChunk { name, path } => {
                 write!(f, "snapshot chunk '{name}' missing at {}", path.display())
             }
@@ -1241,6 +1253,15 @@ fn log_manifest_error(manifest_path: &Path, err: &SnapshotManifestError) {
                 path = %manifest_path.display(),
                 chunk_dir = %dir.display(),
                 "snapshot manifest chunk directory missing",
+            );
+        }
+        SnapshotManifestError::VersionMismatch { expected, actual } => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                expected_version = expected,
+                actual_version = actual,
+                "snapshot manifest version mismatch",
             );
         }
         SnapshotManifestError::MissingChunk { name, path } => {
@@ -5084,6 +5105,13 @@ impl NodeInner {
     ) -> Result<(), SnapshotManifestError> {
         let manifest: SnapshotChunkManifest =
             serde_json::from_slice(manifest_bytes).map_err(SnapshotManifestError::Decode)?;
+
+        if manifest.version != SNAPSHOT_MANIFEST_VERSION {
+            return Err(SnapshotManifestError::VersionMismatch {
+                expected: SNAPSHOT_MANIFEST_VERSION,
+                actual: manifest.version,
+            });
+        }
 
         if !chunk_root.exists() {
             return Err(SnapshotManifestError::MissingChunkDirectory(

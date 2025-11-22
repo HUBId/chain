@@ -17,6 +17,12 @@ from disk before chunks are served, so the runtime enforces two invariants:
    `sha256`. The runtime refuses to serve a snapshot when any manifest entry is
    stale or tampered, returning a structured error instead of streaming
    corrupted data.
+4. The manifest format version must match the runtime expectation (currently
+   `version=1`). Validators refuse to serve manifests with any other version
+   and surface the mismatch instead of streaming chunks. The `rpp-node
+   validator snapshot verify` command and `snapshot-verify` tool abort with a
+   fatal error when the version field is missing or bumped, making mismatches
+   obvious during automation.
 
 The validator runtime refuses to serve snapshots when the `.sig` companion is
 missing or malformed. Operators must publish both files together, keep their
@@ -58,6 +64,17 @@ pipelines and post-incident audits. Rotate signing keys by bumping the
 the new key, and republishing the `{manifest, manifest.sig}` pair; the runtime
 rejects snapshots signed with older key versions so stale signatures cannot be
 served once the version changes.
+
+### Manifest versions and upgrades
+
+Snapshots currently use manifest format version `1`. Providers and consumers
+must keep this value in sync with their binaries: state sync servers emit
+`ManifestViolation` errors when the on-disk version differs, and consumers abort
+verification runs with a fatal "version mismatch" message. When introducing a
+new manifest format, publish the updated manifest and signature only after
+rolling out binaries that understand the new version. Avoid serving mixed
+versions from the same directory to prevent clients from encountering fatal
+errors mid-download.
 
 Each invocation records `snapshot_verify_results_total` with a `result`
 (`success`/`failure`) and `error` label (`none`, `signature_invalid`,

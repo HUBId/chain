@@ -15,6 +15,8 @@ struct SnapshotFixture {
     temp: TempDir,
     config_path: PathBuf,
     chunk_path: PathBuf,
+    manifest_path: PathBuf,
+    signature_path: PathBuf,
 }
 
 impl SnapshotFixture {
@@ -34,6 +36,7 @@ impl SnapshotFixture {
 
         let checksum = sha256_hex(chunk_data);
         let manifest = json!({
+            "version": 1,
             "segments": [{
                 "segment_name": "chunk-000.bin",
                 "size_bytes": chunk_data.len(),
@@ -77,7 +80,34 @@ impl SnapshotFixture {
             temp,
             config_path,
             chunk_path,
+            manifest_path,
+            signature_path,
         })
+    }
+
+    fn rewrite_manifest_version(&self, version: u32) -> Result<()> {
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&self.manifest_path).context("read manifest bytes")?)
+                .context("decode manifest")?;
+
+        manifest
+            .as_object_mut()
+            .expect("manifest object")
+            .insert("version".to_string(), version.into());
+
+        fs::write(
+            &self.manifest_path,
+            serde_json::to_vec_pretty(&manifest).context("encode manifest")?,
+        )
+        .context("write manifest with new version")?;
+
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let manifest_bytes = fs::read(&self.manifest_path).context("read updated manifest")?;
+        let signature = signing_key.sign(&manifest_bytes);
+        fs::write(&self.signature_path, hex::encode(signature.to_bytes()))
+            .context("write updated manifest signature")?;
+
+        Ok(())
     }
 }
 
@@ -116,6 +146,29 @@ fn snapshot_verify_command_detects_mismatch() -> Result<()> {
         .failure()
         .code(3)
         .stdout(contains("\"checksum_mismatches\": 1"));
+
+    drop(fixture);
+    Ok(())
+}
+
+#[test]
+fn snapshot_verify_command_rejects_version_mismatch() -> Result<()> {
+    let fixture = SnapshotFixture::new()?;
+
+    fixture
+        .rewrite_manifest_version(2)
+        .context("rewrite manifest with mismatched version")?;
+
+    AssertCommand::cargo_bin("rpp-node")?
+        .arg("validator")
+        .arg("snapshot")
+        .arg("verify")
+        .arg("--config")
+        .arg(&fixture.config_path)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(contains("version mismatch"));
 
     drop(fixture);
     Ok(())

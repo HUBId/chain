@@ -67,10 +67,11 @@ fn write_signature_with_version(
     fs::write(signature_path, versioned).expect("write snapshot signature");
 }
 
-fn write_snapshot_manifest(
+fn write_snapshot_manifest_with_version(
     snapshot_dir: &Path,
     chunk_name: &str,
     chunk_bytes: &[u8],
+    version: u32,
 ) -> SnapshotManifestFiles {
     let chunk_dir = snapshot_dir.join("chunks");
     fs::create_dir_all(&chunk_dir).expect("chunk directory");
@@ -82,7 +83,7 @@ fn write_snapshot_manifest(
     let checksum = hex::encode(hasher.finalize());
 
     let manifest = serde_json::json!({
-        "version": 1,
+        "version": version,
         "generated_at": "1970-01-01T00:00:00Z",
         "segments": [
             {
@@ -117,6 +118,14 @@ fn write_snapshot_manifest(
         manifest_bytes,
         root,
     }
+}
+
+fn write_snapshot_manifest(
+    snapshot_dir: &Path,
+    chunk_name: &str,
+    chunk_bytes: &[u8],
+) -> SnapshotManifestFiles {
+    write_snapshot_manifest_with_version(snapshot_dir, chunk_name, chunk_bytes, 1)
 }
 
 #[test]
@@ -370,6 +379,43 @@ fn state_sync_rejects_manifest_with_chunk_checksum_mismatch() {
             assert!(
                 reason.contains("size mismatch") || reason.contains("checksum mismatch"),
                 "unexpected manifest validation message: {reason}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+#[test]
+fn state_sync_rejects_manifest_with_version_mismatch() {
+    let fixture = StateSyncFixture::new();
+    let handle = fixture.handle();
+    let signing_key = fixture.snapshot_signing_key();
+
+    let chunk_size = fixture.chunk_size();
+    let total_chunks = fixture.chunk_count();
+    assert!(
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk",
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    let files = write_snapshot_manifest_with_version(
+        snapshot_dir,
+        "version-mismatch.bin",
+        b"versioned-chunk",
+        2,
+    );
+    configure_snapshot_session(&handle, files.root, chunk_size, total_chunks);
+
+    write_signature(&files.signature_path, &signing_key, &files.manifest_bytes);
+
+    let result = handle.state_sync_session_chunk(0);
+    let err = result.expect_err("manifest version mismatch should fail");
+    match err {
+        StateSyncChunkError::ManifestViolation { reason } => {
+            assert!(
+                reason.contains("version"),
+                "unexpected manifest validation message: {reason}",
             );
         }
         other => panic!("unexpected error variant: {other:?}"),
