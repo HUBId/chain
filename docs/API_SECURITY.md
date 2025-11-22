@@ -19,6 +19,9 @@ or they are rejected with `401` responses.【F:config/validator.toml†L1-L34】
 - Per-endpoint authorisation is currently coarse-grained; protect critical
   methods (e.g., `/consensus/*`, `/validator/*`) by keeping the token secret and
   restricting network-level access (mTLS or IP allow lists).
+- For live rotations, follow the [RPC API key rotation](./interfaces/rpc/README.md#live-api-key-rotation)
+  checklist so updated secrets roll out without service interruption or stale
+  limiter caches.
 
 ## Rate limiting and abuse protections
 

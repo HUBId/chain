@@ -56,6 +56,50 @@ Clients should treat a `429` as a temporary condition. Retry only after waiting
 for at least the advertised reset window and prefer exponential backoff to avoid
 immediate re-throttling.
 
+## Live API key rotation
+
+RPC authentication secrets are only loaded during process startup; there is no
+`SIGHUP`/on-the-fly reload path. Rotate bearer tokens or wallet API keys by
+shipping updated configuration and rolling the fleet so each instance clears its
+in-memory limiters and rejects the retired credential. The steps below avoid
+interrupting traffic and ensure caches are refreshed as soon as a node adopts
+the new secret.
+
+### Rotation checklist
+
+- **Prepare a new token and publish it to clients.** Distribute the credential
+  via your secret store and update any reverse proxies that inject
+  `Authorization`/`X-Api-Key` headers.
+- **Stage configuration with the replacement secret.** Edit the active
+  `network.rpc.auth_token` (or wallet `requests_per_minute` API key map) in the
+  config profile or supply the new value via `--rpc-auth-token` at startup.
+- **Roll nodes one at a time.** Drain each instance, start it with the updated
+  token, and wait for `/health/ready` before moving to the next host. The reboot
+  clears the per-tenant token-bucket cache so only the new key accrues quota.
+- **Validate both paths during the overlap.** Use canary clients to confirm the
+  new token returns `200` responses and the retired token immediately receives
+  `401` or `429` responses once its host restarts.
+- **Flush dependent caches.** If you front RPC with a proxy/CDN that caches
+  `401`/`429` decisions, purge entries for RPC paths after the first host rolls
+  so stale authorisation results do not linger.
+- **Tear down the old secret.** After every node has restarted, revoke the prior
+  token in the secret manager and remove any emergency overrides or temporary
+  CORS origins added for the rotation.
+
+### Example rotation timeline (rolling, zero-downtime)
+
+- **T‑30 m** – Announce rotation window, push new token to clients, and lower
+  proxy cache TTLs for RPC responses to ≤30 seconds.
+- **T‑15 m** – Apply configuration with the new token to the first node and
+  restart it with `--rpc-auth-token <new>` (or the updated config file); verify
+  `/health/ready` and successful RPC requests with the new credential.
+- **T‑10 m** – Restart remaining nodes sequentially. Monitor `401`/`429`
+  counters to confirm the old token is rejected as each instance comes back.
+- **T+5 m** – Purge any residual proxy/CDN caches for RPC paths and validate that
+  quota/limit metrics reference only the new key.
+- **T+30 m** – Revoke the old token in the secret store and delete temporary
+  client allow lists or observability silences created for the rotation.
+
 ## Snapshot Regression Fixtures
 
 Critical request/response shapes for the public RPC are captured as JSON fixtures
