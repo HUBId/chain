@@ -27,6 +27,10 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
   laufen `cargo fuzz`-Targets für P2P-Decoder, Wallet-RPC (`wallet_rpc`), das ZSI-Lifecycle-Handling (`zsi_lifecycle`) sowie den
   STWO/Plonky3-Beweisparser (`stwo_circuit_loader`). Lokal lassen sich die Läufe über `cargo fuzz run wallet_rpc` bzw.
   `cargo fuzz run zsi_lifecycle` im Wallet-Crate und `cargo fuzz run stwo_circuit_loader` unter `prover/fuzz` reproduzieren.
+  Für den RPP-STARK-Backendpfad sind separate Fuzz-Builds hinterlegt; kurze Repros (32 Iterationen, 5 s Timeout) lassen sich mit
+  `cargo fuzz run handle_meta --features backend-rpp-stark -- -runs=32 -timeout=5` aus `rpp/p2p` sowie
+  `cargo fuzz run wallet_rpc --features backend-rpp-stark -- -runs=32 -timeout=5` aus `rpp/wallet` starten, um die STARK-
+  spezifischen Decoderwege auf Build- und API-Regressionsfreiheit zu prüfen.
 - **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) bündelt `ci_block_pipeline.ron`, `ci_state_sync_guard.ron` und den Phase‑2-Stresslauf `consensus_quorum_stress.ron`. Die ersten beiden orchestrieren Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz); der dritte injiziert VRF-/Quorum-Manipulationen und misst Prover/Verifier-Latenzen inklusive CSV-/JSON-Summaries.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:tools/simnet/src/main.rs†L1-L86】
 
 ### 1.4 Feature-Matrix & Laufzeiten

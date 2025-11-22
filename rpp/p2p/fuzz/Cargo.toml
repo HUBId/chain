@@ -8,6 +8,9 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+backend-rpp-stark = ["rpp-chain/backend-rpp-stark"]
+
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }

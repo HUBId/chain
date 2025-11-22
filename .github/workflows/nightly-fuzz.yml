@@ -71,3 +71,26 @@ jobs:
         with:
           name: nightly-fuzz-failures
           path: ci-artifacts/nightly-fuzz-failures.tar.gz
+
+  fuzz-backend-rpp-stark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NIGHTLY_TOOLCHAIN: nightly-2025-07-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        run: rustup toolchain install "$NIGHTLY_TOOLCHAIN" --profile minimal
+
+      - name: Install cargo-fuzz
+        run: cargo +"$NIGHTLY_TOOLCHAIN" install cargo-fuzz --locked
+
+      - name: Run backend-rpp-stark P2P fuzz build
+        working-directory: rpp/p2p
+        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta --features backend-rpp-stark -- -runs=32 -timeout=5
+
+      - name: Run backend-rpp-stark wallet fuzz build
+        working-directory: rpp/wallet
+        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc --features backend-rpp-stark -- -runs=32 -timeout=5
