@@ -13,14 +13,16 @@ pub struct SimnetRunner {
     config: SimnetConfig,
     artifacts_dir: PathBuf,
     handles: Vec<ProcessHandle>,
+    seed_override: Option<u64>,
 }
 
 impl SimnetRunner {
-    pub fn new(config: SimnetConfig, artifacts_dir: PathBuf) -> Self {
+    pub fn new(config: SimnetConfig, artifacts_dir: PathBuf, seed_override: Option<u64>) -> Self {
         Self {
             config,
             artifacts_dir,
             handles: Vec::new(),
+            seed_override,
         }
     }
 
@@ -123,7 +125,10 @@ impl SimnetRunner {
         }
 
         let summary_clone = summary_path.clone();
-        let config_clone = config.clone();
+        let mut config_clone = config.clone();
+        if let Some(seed) = self.seed_override {
+            config_clone.seed = Some(seed);
+        }
         let summary = tokio::task::spawn_blocking(move || {
             run_consensus_load(config_clone, summary_clone, csv_path)
         })
@@ -155,6 +160,9 @@ impl SimnetRunner {
             .with_context(|| format!("load p2p scenario {}", scenario_path.display()))?;
         if let Some(mode) = &config.mode {
             scenario.sim.mode = Some(mode.clone());
+        }
+        if let Some(seed) = self.seed_override {
+            scenario.sim.seed = seed;
         }
 
         let harness = rpp_sim::SimHarness;
