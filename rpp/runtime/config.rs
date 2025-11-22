@@ -1709,6 +1709,7 @@ pub const DEFAULT_SNAPSHOT_VALIDATOR_CADENCE_SECS: u64 = 300;
 pub const DEFAULT_SNAPSHOT_CHUNK_SIZE: usize = 16;
 pub const DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 pub const DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
+pub const DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS: usize = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -1761,6 +1762,8 @@ pub struct NodeConfig {
     pub snapshot_validator: SnapshotValidatorConfig,
     #[serde(default)]
     pub snapshot_sizing: SnapshotSizingConfig,
+    #[serde(default)]
+    pub snapshot_download: SnapshotDownloadConfig,
     #[serde(default)]
     pub governance: GovernanceConfig,
 }
@@ -2120,6 +2123,7 @@ impl NodeConfig {
         self.admission_reconciler.validate()?;
         self.snapshot_validator.validate()?;
         self.snapshot_sizing.validate()?;
+        self.snapshot_download.validate()?;
         self.governance.validate()?;
         Ok(())
     }
@@ -2212,6 +2216,7 @@ impl Default for NodeConfig {
             admission_reconciler: AdmissionReconcilerConfig::default(),
             snapshot_validator: SnapshotValidatorConfig::default(),
             snapshot_sizing: SnapshotSizingConfig::default(),
+            snapshot_download: SnapshotDownloadConfig::default(),
             governance: GovernanceConfig::default(),
         }
     }
@@ -2364,6 +2369,36 @@ impl Default for SnapshotSizingConfig {
             default_chunk_size: DEFAULT_SNAPSHOT_CHUNK_SIZE,
             min_chunk_size: DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE,
             max_chunk_size: DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnapshotDownloadConfig {
+    #[serde(default = "default_max_concurrent_chunk_downloads")]
+    pub max_concurrent_chunk_downloads: usize,
+}
+
+fn default_max_concurrent_chunk_downloads() -> usize {
+    DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS
+}
+
+impl SnapshotDownloadConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.max_concurrent_chunk_downloads == 0 {
+            return Err(ChainError::Config(
+                "snapshot_download.max_concurrent_chunk_downloads must be greater than 0".into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for SnapshotDownloadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_chunk_downloads: DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
         }
     }
 }

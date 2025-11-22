@@ -470,7 +470,7 @@ async fn snapshot_stream_pause_and_resume() {
 
     let session = SnapshotSessionId::new(7);
     client
-        .start_snapshot_stream(session, server.local_peer_id(), root_hex)
+        .start_snapshot_stream(session, server.local_peer_id(), root_hex, 4)
         .expect("start stream");
 
     let mut plan_event: Option<NetworkStateSyncPlan> = None;
@@ -623,7 +623,7 @@ async fn snapshot_resume_rejects_invalid_offsets() {
 
     let session = SnapshotSessionId::new(11);
     client
-        .start_snapshot_stream(session, server.local_peer_id(), root_hex)
+        .start_snapshot_stream(session, server.local_peer_id(), root_hex, 4)
         .expect("start stream");
 
     let mut resume_attempted = false;
