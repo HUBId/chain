@@ -2151,6 +2151,11 @@ mod tests {
         unsafe { std::mem::transmute(id) }
     }
 
+    fn outbound_request_id(id: u64) -> RequestResponseId {
+        // `RequestResponseId` does not expose a public constructor; this is only used in tests.
+        unsafe { std::mem::transmute(id) }
+    }
+
     fn metric_value(metrics: &str, name: &str) -> Option<f64> {
         metrics.lines().find_map(|line| {
             let trimmed = line.trim();
@@ -2158,6 +2163,31 @@ mod tests {
                 return None;
             }
             if trimmed.starts_with(name) {
+                trimmed
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse::<f64>().ok())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn metric_value_with_labels(metrics: &str, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
+        metrics.lines().find_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                return None;
+            }
+
+            if !trimmed.starts_with(name) {
+                return None;
+            }
+
+            if labels.iter().all(|(key, value)| {
+                let label = format!("{key}=\"{value}\"");
+                trimmed.contains(&label)
+            }) {
                 trimmed
                     .split_whitespace()
                     .nth(1)
@@ -2208,5 +2238,179 @@ mod tests {
             latency_sum > 0.0,
             "latency histogram updated: {latency_sum}"
         );
+    }
+
+    #[test]
+    fn request_response_telemetry_tracks_bytes_and_rtts() {
+        let mut registry = Registry::default();
+        let stream_metrics = SnapshotStreamMetrics::register(&mut registry);
+        let mut request_metrics =
+            SnapshotRequestMetrics::with_telemetry(Some(stream_metrics.telemetry()));
+
+        let plan_request_bytes = 32_usize;
+        let plan_response_bytes = 96_usize;
+        let outbound_plan = outbound_request_id(11);
+        request_metrics.start_outbound(outbound_plan, SnapshotItemKind::Plan, plan_request_bytes);
+        sleep(Duration::from_millis(10));
+        request_metrics.finish_outbound(outbound_plan, SnapshotItemKind::Plan, plan_response_bytes);
+        stream_metrics.record_bytes("inbound", SnapshotItemKind::Plan, plan_response_bytes);
+
+        let chunk_request_bytes = 64_usize;
+        let chunk_response_bytes = 128_usize;
+        let inbound_chunk = inbound_request_id(12);
+        request_metrics.start_inbound(inbound_chunk, SnapshotItemKind::Chunk, chunk_request_bytes);
+        request_metrics.record_inbound_response(
+            inbound_chunk,
+            SnapshotItemKind::Chunk,
+            chunk_response_bytes,
+        );
+        sleep(Duration::from_millis(5));
+        request_metrics.finish_inbound(inbound_chunk);
+        stream_metrics.record_bytes("outbound", SnapshotItemKind::Chunk, chunk_response_bytes);
+
+        let resume_request_bytes = 48_usize;
+        let resume_response_bytes = 24_usize;
+        let outbound_resume = outbound_request_id(13);
+        request_metrics.start_outbound(
+            outbound_resume,
+            SnapshotItemKind::Resume,
+            resume_request_bytes,
+        );
+        sleep(Duration::from_millis(8));
+        request_metrics.finish_outbound(
+            outbound_resume,
+            SnapshotItemKind::Resume,
+            resume_response_bytes,
+        );
+        stream_metrics.record_bytes("inbound", SnapshotItemKind::Resume, resume_response_bytes);
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        // Bytes per message (request + response) recorded by the telemetry helper.
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "outbound"),
+                    ("flow", "sent"),
+                    ("kind", "plan")
+                ],
+            ),
+            Some(plan_request_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "outbound"),
+                    ("flow", "received"),
+                    ("kind", "plan")
+                ],
+            ),
+            Some(plan_response_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "inbound"),
+                    ("flow", "received"),
+                    ("kind", "chunk")
+                ],
+            ),
+            Some(chunk_request_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "inbound"),
+                    ("flow", "sent"),
+                    ("kind", "chunk")
+                ],
+            ),
+            Some(chunk_response_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "outbound"),
+                    ("flow", "sent"),
+                    ("kind", "resume")
+                ],
+            ),
+            Some(resume_request_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_message_bytes_total",
+                &[
+                    ("direction", "outbound"),
+                    ("flow", "received"),
+                    ("kind", "resume")
+                ],
+            ),
+            Some(resume_response_bytes as f64)
+        );
+
+        // Stream-level bytes transferred counters for inbound responses and outbound sends.
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_bytes_sent_total",
+                &[("direction", "outbound"), ("kind", "chunk")],
+            ),
+            Some(chunk_response_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_bytes_sent_total",
+                &[("direction", "inbound"), ("kind", "plan")],
+            ),
+            Some(plan_response_bytes as f64)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_bytes_sent_total",
+                &[("direction", "inbound"), ("kind", "resume")],
+            ),
+            Some(resume_response_bytes as f64)
+        );
+
+        // Histograms capture non-zero RTTs and throughput for each observed response.
+        for (direction, kind) in [
+            ("outbound", "plan"),
+            ("inbound", "chunk"),
+            ("outbound", "resume"),
+        ] {
+            let rtt_sum = metric_value_with_labels(
+                &buffer,
+                "snapshot_request_rtt_seconds_sum",
+                &[("direction", direction), ("kind", kind)],
+            )
+            .expect("rtt histogram has data");
+            assert!(rtt_sum > 0.0, "rtt recorded for {direction} {kind}");
+
+            let throughput_sum = metric_value_with_labels(
+                &buffer,
+                "snapshot_response_throughput_bytes_per_second_sum",
+                &[("direction", direction), ("kind", kind)],
+            )
+            .expect("throughput histogram has data");
+            assert!(
+                throughput_sum > 0.0,
+                "throughput recorded for {direction} {kind}"
+            );
+        }
     }
 }
