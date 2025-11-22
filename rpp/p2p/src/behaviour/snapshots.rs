@@ -231,6 +231,9 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         plan_id: &str,
         chunk_index: u64,
         update_index: u64,
+        chunk_size: Option<u64>,
+        min_chunk_size: Option<u64>,
+        max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error>;
 
     fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
@@ -285,8 +288,19 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
         plan_id: &str,
         chunk_index: u64,
         update_index: u64,
+        chunk_size: Option<u64>,
+        min_chunk_size: Option<u64>,
+        max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error> {
-        (**self).resume_session(session_id, plan_id, chunk_index, update_index)
+        (**self).resume_session(
+            session_id,
+            plan_id,
+            chunk_index,
+            update_index,
+            chunk_size,
+            min_chunk_size,
+            max_chunk_size,
+        )
     }
 
     fn acknowledge(
@@ -339,6 +353,9 @@ impl SnapshotProvider for NullSnapshotProvider {
         _plan_id: &str,
         _chunk_index: u64,
         _update_index: u64,
+        _chunk_size: Option<u64>,
+        _min_chunk_size: Option<u64>,
+        _max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error> {
         Err(PipelineError::SnapshotNotFound)
     }
@@ -1772,10 +1789,15 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 };
                 state.chunk_size = negotiated_chunk_size;
 
-                match self
-                    .provider
-                    .resume_session(session_id, &plan_id, chunk_index, update_index)
-                {
+                match self.provider.resume_session(
+                    session_id,
+                    &plan_id,
+                    chunk_index,
+                    update_index,
+                    negotiated_chunk_size,
+                    capabilities.min_chunk_size,
+                    capabilities.max_chunk_size,
+                ) {
                     Ok(resume) => {
                         if self.send_response_with_metrics(
                             request_id,

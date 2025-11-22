@@ -980,10 +980,12 @@ impl StateSyncSessionCache {
         root: Option<Hash>,
     ) {
         if let Some(size) = chunk_size {
-            if self.chunk_size != Some(size) {
+            let safe_to_update = self.status != StateSyncVerificationStatus::Verifying
+                || self.served_chunks.is_empty();
+            if self.chunk_size != Some(size) && safe_to_update {
                 self.snapshot_store = None;
+                self.chunk_size = Some(size);
             }
-            self.chunk_size = Some(size);
         }
         if let Some(count) = total_chunks {
             self.total_chunks = Some(count);
@@ -1425,6 +1427,9 @@ struct RuntimeSnapshotSession {
     snapshot_root: Hash,
     plan_id: String,
     peer: NetworkPeerId,
+    chunk_size: u64,
+    min_chunk_size: u64,
+    max_chunk_size: u64,
     total_chunks: u64,
     total_updates: u64,
     last_chunk_index: Option<u64>,
@@ -1440,6 +1445,9 @@ impl RuntimeSnapshotSession {
             peer: self.peer.to_base58(),
             root: self.snapshot_root.to_hex().to_string(),
             plan_id: Some(self.plan_id.clone()),
+            chunk_size: Some(self.chunk_size),
+            min_chunk_size: Some(self.min_chunk_size),
+            max_chunk_size: Some(self.max_chunk_size),
             total_chunks: self.total_chunks,
             total_updates: self.total_updates,
             last_chunk_index: self.last_chunk_index,
@@ -1457,6 +1465,12 @@ struct StoredSnapshotSession {
     root: String,
     #[serde(default)]
     plan_id: Option<String>,
+    #[serde(default)]
+    chunk_size: Option<u64>,
+    #[serde(default)]
+    min_chunk_size: Option<u64>,
+    #[serde(default)]
+    max_chunk_size: Option<u64>,
     total_chunks: u64,
     total_updates: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1544,6 +1558,9 @@ impl SnapshotSessionStore {
                 peer: record.peer.clone(),
                 root: record.root.clone(),
                 plan_id: record.plan_id.clone(),
+                chunk_size: record.chunk_size,
+                min_chunk_size: record.min_chunk_size,
+                max_chunk_size: record.max_chunk_size,
                 total_chunks: record.total_chunks,
                 total_updates: record.total_updates,
                 last_chunk_index: record.last_chunk_index,
@@ -1683,6 +1700,17 @@ impl RuntimeSnapshotProvider {
             .clone()
             .unwrap_or_else(|| record.root.clone());
 
+        let chunk_size = record
+            .chunk_size
+            .unwrap_or(sizing.default_chunk_size as u64)
+            .clamp(sizing.min_chunk_size as u64, sizing.max_chunk_size as u64);
+        let min_chunk_size = record
+            .min_chunk_size
+            .unwrap_or(sizing.min_chunk_size as u64);
+        let max_chunk_size = record
+            .max_chunk_size
+            .unwrap_or(sizing.max_chunk_size as u64);
+
         let state_plan = inner
             .state_sync_plan(sizing.default_chunk_size)
             .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
@@ -1761,6 +1789,9 @@ impl RuntimeSnapshotProvider {
             snapshot_root,
             plan_id,
             peer,
+            chunk_size,
+            min_chunk_size,
+            max_chunk_size,
             total_chunks,
             total_updates,
             last_chunk_index,
@@ -1835,6 +1866,9 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                 snapshot_root,
                 plan_id: plan_id.clone(),
                 peer: peer.clone(),
+                chunk_size: self.sizing.default_chunk_size as u64,
+                min_chunk_size: self.sizing.min_chunk_size as u64,
+                max_chunk_size: self.sizing.max_chunk_size as u64,
                 total_chunks,
                 total_updates,
                 last_chunk_index: None,
@@ -1847,6 +1881,12 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         session.snapshot_root = snapshot_root;
         session.plan_id = plan_id;
         session.peer = peer;
+        session.chunk_size = session.chunk_size.clamp(
+            self.sizing.min_chunk_size as u64,
+            self.sizing.max_chunk_size as u64,
+        );
+        session.min_chunk_size = self.sizing.min_chunk_size as u64;
+        session.max_chunk_size = self.sizing.max_chunk_size as u64;
         session.total_chunks = total_chunks;
         session.total_updates = total_updates;
         session.last_chunk_index = if total_chunks == 0 {
@@ -1984,6 +2024,9 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         plan_id: &str,
         chunk_index: u64,
         update_index: u64,
+        chunk_size: Option<u64>,
+        min_chunk_size: Option<u64>,
+        max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error> {
         let sessions = self.sessions.lock();
         let session = sessions
@@ -2039,6 +2082,22 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                 "resume update index {update_index} skips ahead of next expected update {expected_update_index}"
             )));
         }
+        drop(sessions);
+
+        let mut sessions = self.sessions.lock();
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or(PipelineError::SnapshotNotFound)?;
+        let resolved_chunk_size = chunk_size.unwrap_or(session.chunk_size);
+        let resolved_min_chunk_size = min_chunk_size.unwrap_or(session.min_chunk_size);
+        let resolved_max_chunk_size = max_chunk_size.unwrap_or(session.max_chunk_size);
+        session.chunk_size = resolved_chunk_size.clamp(
+            self.sizing.min_chunk_size as u64,
+            self.sizing.max_chunk_size as u64,
+        );
+        session.min_chunk_size = resolved_min_chunk_size;
+        session.max_chunk_size = resolved_max_chunk_size;
+        self.persist_session(session_id, session)?;
         Ok(SnapshotResumeState {
             next_chunk_index: chunk_index,
             next_update_index: update_index,
@@ -8982,6 +9041,82 @@ mod tests {
                 Some(index) => assert_eq!(record.confirmed_update_index, Some(index)),
                 None => assert!(record.confirmed_update_index.is_none()),
             }
+        }
+    }
+
+    #[test]
+    fn state_sync_cache_updates_chunk_size_after_verification() {
+        let mut cache = StateSyncSessionCache::default();
+        cache.configure(Some(16), Some(4), None);
+        cache.mark_chunk_served(0);
+        cache.set_status(StateSyncVerificationStatus::Verifying);
+
+        cache.configure(Some(32), None, None);
+        assert_eq!(cache.chunk_size, Some(16));
+
+        cache.set_status(StateSyncVerificationStatus::Verified);
+        cache.configure(Some(32), None, None);
+        assert_eq!(cache.chunk_size, Some(32));
+        assert!(cache.served_chunks.contains(&0));
+    }
+
+    #[test]
+    fn snapshot_provider_persists_chunk_sizing_over_resume() {
+        let tempdir = tempdir().expect("tempdir");
+        let mut config = sample_node_config(tempdir.path());
+        config.snapshot_sizing = SnapshotSizingConfig {
+            default_chunk_size: 24,
+            min_chunk_size: 16,
+            max_chunk_size: 64,
+        };
+        let mut config_restart = config.clone();
+        config_restart.snapshot_sizing.default_chunk_size = 20;
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node init");
+        let provider = RuntimeSnapshotProvider::new_arc(
+            Arc::clone(&node.inner),
+            node.inner.config.snapshot_sizing.clone(),
+        );
+
+        let session = SnapshotSessionId::new(11);
+        let peer = NetworkPeerId::random();
+
+        provider.open_session(session, &peer).expect("open session");
+        let plan = SnapshotProvider::fetch_plan(&*provider, session).expect("fetch plan");
+
+        SnapshotProvider::resume_session(
+            &*provider,
+            session,
+            &plan.snapshot.commitments.global_state_root,
+            0,
+            0,
+            Some(48),
+            Some(16),
+            Some(64),
+        )
+        .expect("resume session");
+
+        {
+            let sessions = provider.sessions.lock();
+            let record = sessions.get(&session).expect("session state");
+            assert_eq!(record.chunk_size, 48);
+            assert_eq!(record.min_chunk_size, 16);
+            assert_eq!(record.max_chunk_size, 64);
+        }
+
+        drop(provider);
+        drop(node);
+
+        let node = Node::new(config_restart, RuntimeMetrics::noop()).expect("node restart");
+        let provider = RuntimeSnapshotProvider::new_arc(
+            Arc::clone(&node.inner),
+            node.inner.config.snapshot_sizing.clone(),
+        );
+        {
+            let sessions = provider.sessions.lock();
+            let record = sessions.get(&session).expect("restored session state");
+            assert_eq!(record.chunk_size, 48);
+            assert_eq!(record.min_chunk_size, 16);
+            assert_eq!(record.max_chunk_size, 64);
         }
     }
 }
