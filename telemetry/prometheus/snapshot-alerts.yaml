@@ -1,0 +1,51 @@
+groups:
+  - name: snapshot-saturation
+    interval: 30s
+    rules:
+      - record: snapshot:denial_rate:5m
+        expr: |
+          sum by (reason, kind) (rate(snapshot_inbound_request_rejections_total[5m]))
+        labels:
+          component: snapshots
+
+      - alert: SnapshotDenialsSustained
+        expr: sum(rate(snapshot_inbound_request_rejections_total{kind="denied"}[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          component: snapshots
+        annotations:
+          summary: "Sustained snapshot request denials"
+          description: |
+            Snapshot provider responses have been denying more than 0.05 requests per
+            second for at least 15 minutes ({{ $value }} req/s). Inspect circuit breaker
+            status, provider capacity, and inbound limits before consumers stall.
+
+      - alert: SnapshotCapacityCapped
+        expr: snapshot_chunk_send_queue_depth > 0 and snapshot_request_backpressure_seconds{kind="chunk"} > 300
+        for: 20m
+        labels:
+          severity: critical
+          component: snapshots
+        annotations:
+          summary: "Snapshot serving saturated for chunk responses"
+          description: |
+            Chunk responses have been queued for more than five minutes while backlog
+            remains non-zero. Investigate provider throughput, chunk sizing, or
+            concurrency limits before download sessions time out.
+
+      - alert: SnapshotActiveSessionsStuck
+        expr: |
+          delta(snapshot_active_sessions[30m]) == 0
+            and snapshot_active_sessions > 0
+            and snapshot_request_backpressure_seconds{kind="light_client_update"} > 300
+        for: 30m
+        labels:
+          severity: warning
+          component: snapshots
+        annotations:
+          summary: "Snapshot sessions stalled with persistent backpressure"
+          description: |
+            Active snapshot sessions have not drained for 30 minutes while light client
+            update backpressure exceeds five minutes. Check for saturated peers,
+            concurrency caps, or failing updates.

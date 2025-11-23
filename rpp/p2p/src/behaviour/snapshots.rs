@@ -761,6 +761,8 @@ struct SnapshotStreamMetrics {
     lag_seconds: Gauge<f64, AtomicU64>,
     resume_events: Family<Vec<(String, String)>, Counter>,
     failures: Family<Vec<(String, String)>, Counter>,
+    active_sessions: Gauge<u64, AtomicU64>,
+    inbound_request_rejections: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
     request_queue_depth: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
@@ -989,6 +991,20 @@ impl SnapshotStreamMetrics {
             failures.clone(),
         );
 
+        let active_sessions = Gauge::<u64, AtomicU64>::default();
+        registry.register(
+            "snapshot_active_sessions",
+            "Number of active snapshot sessions tracked by the behaviour",
+            active_sessions.clone(),
+        );
+
+        let inbound_request_rejections = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "snapshot_inbound_request_rejections_total",
+            "Count of inbound snapshot requests that were denied or limited grouped by reason",
+            inbound_request_rejections.clone(),
+        );
+
         let chunk_send_latency_seconds = Histogram::new(exponential_buckets(0.001, 2.0, 16));
         registry.register_with_unit(
             "snapshot_chunk_send_latency_seconds",
@@ -1089,6 +1105,8 @@ impl SnapshotStreamMetrics {
             lag_seconds,
             resume_events,
             failures,
+            active_sessions,
+            inbound_request_rejections,
             chunk_send_latency_seconds,
             chunk_send_queue_depth,
             request_queue_depth,
@@ -1133,6 +1151,18 @@ impl SnapshotStreamMetrics {
     fn record_resume(&self, result: &str) {
         let labels = vec![("result".to_string(), result.to_string())];
         self.resume_events.get_or_create(&labels).inc();
+    }
+
+    fn record_active_sessions(&self, total: usize) {
+        self.active_sessions.set(total as u64);
+    }
+
+    fn record_request_rejection(&self, reason: &str, kind: &str) {
+        let labels = vec![
+            ("reason".to_string(), reason.to_string()),
+            ("kind".to_string(), kind.to_string()),
+        ];
+        self.inbound_request_rejections.get_or_create(&labels).inc();
     }
 
     fn record_failure(&self, direction: &str, kind: SnapshotItemKind) {
@@ -1544,6 +1574,26 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     fn record_failure(&self, _direction: &str, _kind: SnapshotItemKind) {}
 
     #[cfg(feature = "metrics")]
+    fn record_active_sessions(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_active_sessions(self.sessions.len());
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_active_sessions(&self) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_inbound_rejection(&self, reason: &str, kind: &str) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_request_rejection(reason, kind);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_inbound_rejection(&self, _reason: &str, _kind: &str) {}
+
+    #[cfg(feature = "metrics")]
     fn record_negotiated_chunk_size(&self, role: &str, size: u64) {
         if let Some(metrics) = &self.metrics {
             metrics.record_negotiated_chunk_size(role, size);
@@ -1578,6 +1628,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             let mut effective_limit: Option<usize> = None;
             let mut backpressure_chunks = Duration::from_secs(0);
             let mut backpressure_updates = Duration::from_secs(0);
+
+            metrics.record_active_sessions(self.sessions.len());
 
             for state in self.sessions.values() {
                 lag = lag.max(state.lag_since_oldest_pending());
@@ -2004,6 +2056,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             return None;
         }
         self.sessions.remove(&session_id)?;
+        self.record_active_sessions();
         let request = SnapshotsRequest::Error {
             session_id,
             message: reason,
@@ -2121,6 +2174,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             | SnapshotsRequest::Error { session_id, .. } => *session_id,
         };
 
+        let is_new_session = !self.sessions.contains_key(&session_id);
+
         let capabilities = self.provider.chunk_capabilities();
         self.record_breaker_metrics();
 
@@ -2149,6 +2204,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 error: SnapshotProtocolError::Provider(message),
             });
             self.record_breaker_metrics();
+            self.record_inbound_rejection("breaker_open", "denied");
+            self.record_active_sessions();
             return;
         }
         let state = self
@@ -2181,7 +2238,16 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 session_id,
                 error: SnapshotProtocolError::Provider(message),
             });
+            if is_new_session {
+                self.sessions.remove(&session_id);
+            }
+            self.record_inbound_rejection("session_open_failed", "denied");
+            self.record_active_sessions();
             return;
+        }
+
+        if is_new_session {
+            self.record_active_sessions();
         }
 
         match request {
@@ -2199,6 +2265,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ) {
                     Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
                     Err(message) => {
+                        self.record_inbound_rejection("unsupported_chunk_size", "limited");
                         let _ = self.send_response_with_metrics(
                             request_id,
                             channel,
@@ -2411,6 +2478,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 ) {
                     Ok(size) => size.or(state.chunk_size).or(capabilities.chunk_size),
                     Err(message) => {
+                        self.record_inbound_rejection("unsupported_chunk_size", "limited");
                         let _ = self.send_response_with_metrics(
                             request_id,
                             channel,
@@ -2717,6 +2785,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if matches!(kind, SnapshotItemKind::Ack | SnapshotItemKind::Error) {
             self.sessions.remove(&session_id);
+            self.record_active_sessions();
             self.update_stream_metrics();
         }
     }
