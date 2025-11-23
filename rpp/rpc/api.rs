@@ -199,6 +199,7 @@ pub struct StateSyncSessionInfo {
     pub message: Option<String>,
     pub served_chunks: Vec<u64>,
     pub progress_log: Vec<String>,
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4097,6 +4098,7 @@ impl StateSyncApi for NodeHandle {
             message,
             served_chunks,
             progress_log: cache.progress_log.clone(),
+            request_id: cache.request_id.clone(),
         })
     }
 

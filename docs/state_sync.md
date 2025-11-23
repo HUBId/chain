@@ -77,6 +77,12 @@ Runtime nodes expose the verification status over REST and an SSE head stream:
   served. Each chunk event embeds the same status payload as the REST response
   so clients can track progress without polling.【F:rpp/rpc/src/routes/state_sync.rs†L20-L204】【F:rpp/rpc/api.rs†L122-L162】
 
+Every verification run now exposes a `request_id` in the session payloads above.
+The same identifier is logged by the verifier and attached to the
+`rpp_node_pipeline_root_io_errors_total` and
+`rpp_node_pipeline_state_sync_tamper_total` counters, allowing operators to
+cross-reference client reports with dashboard spikes and runtime logs.
+
 The runtime records dedicated telemetry while serving chunks: stream starts,
 per-chunk counters, per-stream chunk totals, active stream samples, last-chunk
 age, and backpressure events are exported via the

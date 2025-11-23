@@ -65,6 +65,7 @@ async fn state_sync_session_respects_auth() {
         message: None,
         served_chunks: Vec::new(),
         progress_log: Vec::new(),
+        request_id: Some("auth-test-request".to_string()),
     };
     let api = Arc::new(FakeStateSyncApi::new(
         sender,
@@ -276,6 +277,7 @@ fn hydrated_state_sync_api() -> Arc<dyn StateSyncApi> {
         message: None,
         served_chunks: Vec::new(),
         progress_log: Vec::new(),
+        request_id: Some("hydrated-session".to_string()),
     };
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     Arc::new(FakeStateSyncApi::new(
@@ -424,6 +426,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
         message: Some("verification complete".to_string()),
         served_chunks: vec![0],
         progress_log: progress_log.clone(),
+        request_id: Some("session-status".to_string()),
     };
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let api = Arc::new(FakeStateSyncApi::new(
@@ -475,6 +478,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
     assert_eq!(status["served_chunks"], Value::Array(vec![Value::from(0)]));
     let expected_log: Vec<Value> = progress_log.iter().cloned().map(Value::String).collect();
     assert_eq!(status["progress_log"], Value::Array(expected_log));
+    assert_eq!(status["request_id"], Value::String("session-status".into()));
 
     let session_info = api.state_sync_active_session().unwrap();
     assert_eq!(session_info.root, Some(root));
@@ -504,6 +508,7 @@ async fn state_sync_session_status_returns_details() {
         message: Some("ready".to_string()),
         served_chunks: vec![0, 1],
         progress_log: progress_log.clone(),
+        request_id: Some("status-details".to_string()),
     };
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let api = Arc::new(FakeStateSyncApi::new(
@@ -548,6 +553,7 @@ async fn state_sync_session_status_returns_details() {
         json["last_completed_step"],
         Value::String("plan loaded: snapshot height 42, 4 chunks, 2 updates".to_string(),)
     );
+    assert_eq!(json["request_id"], Value::String("status-details".into()));
 }
 
 #[tokio::test]
@@ -589,6 +595,7 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         message: None,
         served_chunks: Vec::new(),
         progress_log: Vec::new(),
+        request_id: Some("chunk-range".to_string()),
     };
     let api = Arc::new(FakeStateSyncApi::new(
         sender,
@@ -627,6 +634,7 @@ async fn state_sync_chunk_missing_returns_error_code() {
         message: None,
         served_chunks: Vec::new(),
         progress_log: Vec::new(),
+        request_id: Some("chunk-missing".to_string()),
     };
     let api = Arc::new(FakeStateSyncApi::new(
         sender,
@@ -670,6 +678,7 @@ async fn state_sync_chunk_error_includes_snapshot_code() {
         message: None,
         served_chunks: Vec::new(),
         progress_log: Vec::new(),
+        request_id: Some("chunk-error".to_string()),
     };
     let chunk_error = StateSyncError::with_code(
         StateSyncErrorKind::Internal,
@@ -840,6 +849,7 @@ async fn state_sync_session_reset_on_new_plan_metadata() {
         message: Some("verified".into()),
         served_chunks: vec![0],
         progress_log: vec!["complete".into()],
+        request_id: Some("session-reset".to_string()),
     };
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let api = Arc::new(FakeStateSyncApi::new(

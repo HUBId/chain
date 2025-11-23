@@ -81,13 +81,19 @@ impl PipelineMetrics {
         }
     }
 
-    pub fn record_root_io_error(&self) {
-        self.root_io_errors_total.add(1, &[]);
+    pub fn record_root_io_error(&self, request_id: Option<&str>) {
+        let attrs = request_id
+            .map(|id| vec![KeyValue::new("request_id", id.to_string())])
+            .unwrap_or_default();
+        self.root_io_errors_total.add(1, &attrs);
     }
 
-    pub fn record_state_sync_tamper(&self, reason: &'static str) {
-        self.state_sync_tamper_total
-            .add(1, &[KeyValue::new("reason", reason)]);
+    pub fn record_state_sync_tamper(&self, reason: &'static str, request_id: Option<&str>) {
+        let mut attrs = vec![KeyValue::new("reason", reason)];
+        if let Some(id) = request_id {
+            attrs.push(KeyValue::new("request_id", id.to_string()));
+        }
+        self.state_sync_tamper_total.add(1, &attrs);
     }
 }
 

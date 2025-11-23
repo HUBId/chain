@@ -42,6 +42,8 @@ pub struct StateSyncStatusResponse {
     pub progress_log: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl From<&StateSyncSessionInfo> for StateSyncStatusResponse {
@@ -62,6 +64,7 @@ impl From<&StateSyncSessionInfo> for StateSyncStatusResponse {
             served_chunks: session.served_chunks.clone(),
             progress_log: session.progress_log.clone(),
             last_error: session.message.clone(),
+            request_id: session.request_id.clone(),
         }
     }
 }
