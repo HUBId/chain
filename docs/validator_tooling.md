@@ -155,4 +155,5 @@ tier check can succeed.【F:rpp/rpc/api.rs†L73-L94】
   store.【F:rpp/node/src/main.rs†L124-L158】
 * **Rate limiting**: telemetry requests respect the global RPC rate limiter, so
   avoid polling the endpoint faster than the configured
-  `network.limits.per_ip_token_bucket.replenish_per_minute`.
+  `network.limits.per_ip_token_bucket.read.replenish_per_minute` (or the write
+  budget, if telemetry is pushed via POST).

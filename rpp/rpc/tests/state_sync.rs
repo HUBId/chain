@@ -765,7 +765,8 @@ async fn state_sync_chunk_failure_surfaces_structured_code() {
 async fn snapshot_rate_limit_throttles_by_identity() {
     let api = hydrated_state_sync_api();
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
     limits.snapshot_token_bucket.burst = 1;
     limits.snapshot_token_bucket.replenish_per_minute = 1;
     limits.snapshot_token_bucket.prefer_auth_identity = true;
@@ -809,7 +810,8 @@ async fn snapshot_rate_limit_throttles_by_identity() {
 async fn snapshot_rate_limit_falls_back_to_ip_when_anonymous() {
     let api = hydrated_state_sync_api();
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
     limits.snapshot_token_bucket.burst = 1;
     limits.snapshot_token_bucket.replenish_per_minute = 1;
     limits.snapshot_token_bucket.prefer_auth_identity = false;

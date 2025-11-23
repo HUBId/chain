@@ -63,18 +63,25 @@ checks on every PR so any incompatible change is caught before landing.
 
 ## Rate Limiting Semantics
 
-The public RPC is protected by a per-IP token bucket. When a request depletes
-the bucket and is throttled, the server responds with `429 Too Many Requests`
-and the following headers:
+The public RPC is protected by per-IP token buckets split into **read**
+(`GET`/`HEAD`) and **write** (mutating) classes. Configure independent bursts
+and replenish rates via `[network.limits.per_ip_token_bucket.read]` and
+`[network.limits.per_ip_token_bucket.write]` in the node configuration; legacy
+single-bucket configs map to both classes automatically.【F:config/node.toml†L37-L55】【F:rpp/runtime/config.rs†L1767-L1909】
+When a request depletes the relevant bucket and is throttled, the server
+responds with `429 Too Many Requests` and the following headers:
 
 * `X-RateLimit-Limit` – Maximum tokens in the bucket (the burst size).
 * `X-RateLimit-Remaining` – Tokens still available for the current bucket.
 * `X-RateLimit-Reset` – Seconds until a token is replenished and the bucket is
   usable again.
+* `X-RateLimit-Class` – The request class (`read` or `write`) that triggered the
+  throttle.
 
-Clients should treat a `429` as a temporary condition. Retry only after waiting
-for at least the advertised reset window and prefer exponential backoff to avoid
-immediate re-throttling.
+The response body spells out the class as well (for example, `write rate limit
+exceeded`). Clients should treat a `429` as a temporary condition. Retry only
+after waiting for at least the advertised reset window and prefer exponential
+backoff to avoid immediate re-throttling.
 
 SDK-oriented helpers that parse the headers and clamp backoff are documented in
 [`rpp/chain-cli/SDK.md`](../../../rpp/chain-cli/SDK.md); the code samples are

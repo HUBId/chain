@@ -41,7 +41,12 @@ write_timeout_ms = 15000
 max_header_bytes = 16384
 max_body_bytes = 2097152
 
-[network.limits.per_ip_token_bucket]
+[network.limits.per_ip_token_bucket.read]
+enabled = true
+burst = 120
+replenish_per_minute = 60
+
+[network.limits.per_ip_token_bucket.write]
 enabled = true
 burst = 120
 replenish_per_minute = 60

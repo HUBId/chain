@@ -37,7 +37,8 @@ async fn rate_limit_metrics_capture_method_and_status() {
 
     let addr = random_loopback();
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
     let request_limit = NonZeroU64::new(1).expect("non-zero rate limit");
     let (shutdown_tx, handle) = spawn_server_with_metrics(
         addr,
@@ -52,6 +53,7 @@ async fn rate_limit_metrics_capture_method_and_status() {
 
     let health = format!("http://{addr}/health");
     let proof = format!("http://{addr}/proofs/block/0");
+    let transactions = format!("http://{addr}/transactions");
 
     let _ = client
         .get(&health)
@@ -87,6 +89,25 @@ async fn rate_limit_metrics_capture_method_and_status() {
         reqwest::StatusCode::TOO_MANY_REQUESTS,
     );
 
+    let _ = client
+        .post(&transactions)
+        .header("Authorization", "Bearer tenant-c")
+        .body("{}")
+        .send()
+        .await
+        .expect("first transaction request");
+    let throttled_tx = client
+        .post(&transactions)
+        .header("Authorization", "Bearer tenant-c")
+        .body("{}")
+        .send()
+        .await
+        .expect("second transaction request");
+    assert_eq!(
+        throttled_tx.status(),
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+    );
+
     let _ = shutdown_tx.send(());
     let _ = handle.await;
 
@@ -101,25 +122,61 @@ async fn rate_limit_metrics_capture_method_and_status() {
 
     assert_eq!(
         rate_limit_counts
-            .get(&("other".to_string(), "allowed".to_string()))
+            .get(&(
+                "read".to_string(),
+                "other".to_string(),
+                "allowed".to_string()
+            ))
             .copied(),
         Some(1)
     );
     assert_eq!(
         rate_limit_counts
-            .get(&("other".to_string(), "throttled".to_string()))
+            .get(&(
+                "read".to_string(),
+                "other".to_string(),
+                "throttled".to_string()
+            ))
             .copied(),
         Some(1)
     );
     assert_eq!(
         rate_limit_counts
-            .get(&("proof".to_string(), "allowed".to_string()))
+            .get(&(
+                "read".to_string(),
+                "proof".to_string(),
+                "allowed".to_string()
+            ))
             .copied(),
         Some(1)
     );
     assert_eq!(
         rate_limit_counts
-            .get(&("proof".to_string(), "throttled".to_string()))
+            .get(&(
+                "read".to_string(),
+                "proof".to_string(),
+                "throttled".to_string()
+            ))
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        rate_limit_counts
+            .get(&(
+                "write".to_string(),
+                "other".to_string(),
+                "allowed".to_string()
+            ))
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        rate_limit_counts
+            .get(&(
+                "write".to_string(),
+                "other".to_string(),
+                "throttled".to_string()
+            ))
             .copied(),
         Some(1)
     );
@@ -171,7 +228,7 @@ async fn spawn_server_with_metrics(
 
 fn extract_rate_limit_counts(
     exported: Vec<opentelemetry_sdk::metrics::data::ResourceMetrics>,
-) -> std::collections::HashMap<(String, String), u64> {
+) -> std::collections::HashMap<(String, String, String), u64> {
     let mut counts = std::collections::HashMap::new();
 
     for resource in exported {
@@ -183,18 +240,20 @@ fn extract_rate_limit_counts(
 
                 if let Metric::Sum(Sum { data_points, .. }) = metric.data {
                     for point in data_points {
+                        let mut class = None;
                         let mut method = None;
                         let mut status = None;
                         for KeyValue { key, value } in point.attributes {
                             match key.as_str() {
+                                "class" => class = Some(value.to_string()),
                                 "method" => method = Some(value.to_string()),
                                 "status" => status = Some(value.to_string()),
                                 _ => {}
                             }
                         }
 
-                        if let (Some(method), Some(status)) = (method, status) {
-                            counts.insert((method, status), point.value);
+                        if let (Some(class), Some(method), Some(status)) = (class, method, status) {
+                            counts.insert((class, method, status), point.value);
                         }
                     }
                 }

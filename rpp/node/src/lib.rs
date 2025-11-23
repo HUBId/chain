@@ -551,12 +551,22 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         rpc_auth = config.network.rpc.auth_token.clone();
         rpc_auth_required = config.network.rpc.require_auth;
         rpc_origin = config.network.rpc.allowed_origin.clone();
-        if config.network.limits.per_ip_token_bucket.enabled {
+        if config.network.limits.per_ip_token_bucket.read.enabled {
             rpc_requests_per_minute = NonZeroU64::new(
                 config
                     .network
                     .limits
                     .per_ip_token_bucket
+                    .read
+                    .replenish_per_minute,
+            );
+        } else if config.network.limits.per_ip_token_bucket.write.enabled {
+            rpc_requests_per_minute = NonZeroU64::new(
+                config
+                    .network
+                    .limits
+                    .per_ip_token_bucket
+                    .write
                     .replenish_per_minute,
             );
         }
