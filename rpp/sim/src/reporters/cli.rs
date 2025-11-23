@@ -110,6 +110,7 @@ mod tests {
             total_receives: 420,
             duplicates: 7,
             chunk_retries: 3,
+            replay_guard: None,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 120.5,
                 p95_ms: 240.75,
@@ -172,6 +173,7 @@ mod tests {
             total_receives: 24,
             duplicates: 2,
             chunk_retries: 1,
+            replay_guard: None,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 110.0,
                 p95_ms: 210.0,

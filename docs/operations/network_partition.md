@@ -59,6 +59,9 @@ Document the incident outcome, the duration of the partition, and any configurat
 Exercise this runbook ahead of time with the partition simulations:
 
 * **Partitioned flood (`partitioned_flood`).** Run `cargo run --locked --package simnet -- --scenario tools/simnet/scenarios/partitioned_flood.ron --artifacts-dir target/simnet/partitioned-flood` followed by `python3 scripts/analyze_simnet.py target/simnet/partitioned-flood/summaries/partitioned_flood.json` to replay the transient-partition plus flood scenario used by Nightly.【F:docs/networking.md†L9-L28】
+  The analyzer now enforces replay-guard limits per peer class (trusted ≤120,
+  untrusted ≤160, replay window fill <0.85) so we can spot meshes that fail to
+  reset counters after the partition heals.【F:scripts/analyze_simnet.py†L170-L185】
   Use the `[traffic.tx.payload]` block in the TOML to toggle gossip message sizes;
   the default 256–1024 byte envelope keeps CI affordable, while the
   `compound_partitioned_backpressure` profile pushes 16–64 KiB payloads for

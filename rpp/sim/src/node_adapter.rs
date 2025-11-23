@@ -8,6 +8,7 @@ use futures::StreamExt;
 use rpp_p2p::vendor::core::transport::memory::MemoryTransport;
 use rpp_p2p::vendor::core::upgrade::Version;
 use rpp_p2p::vendor::core::Transport;
+use rpp_p2p::peerstore::peer_class::PeerClass;
 use rpp_p2p::vendor::gossipsub::{
     self, Behaviour as GossipsubBehaviour, ConfigBuilder, IdentTopic, MessageAuthenticity,
 };
@@ -309,6 +310,7 @@ fn handle_gossipsub_event(
                 message_id: id,
                 timestamp: Instant::now(),
                 duplicate: !is_new,
+                peer_class: classify_peer(&propagation_source),
             });
         }
         gossipsub::Event::Subscribed { peer_id, topic } => {
@@ -343,5 +345,15 @@ fn handle_gossipsub_event(
         gossipsub::Event::GossipsubNotSupported { peer_id } => {
             debug!(target = "rpp::sim::node", %peer_id, "peer does not support gossipsub");
         }
+    }
+}
+
+fn classify_peer(peer_id: &PeerId) -> PeerClass {
+    let bytes = peer_id.to_bytes();
+    let last = bytes.last().copied().unwrap_or_default();
+    if last % 2 == 0 {
+        PeerClass::Trusted
+    } else {
+        PeerClass::Untrusted
     }
 }

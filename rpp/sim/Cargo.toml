@@ -13,13 +13,7 @@ ci-sim = []
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3"
-rpp-p2p = { path = "../p2p", default-features = false, features = [
-    "gossipsub",
-    "identify",
-    "ping",
-    "plaintext",
-    "yamux",
-] }
+rpp-p2p = { path = "../p2p" }
 rand = { version = "0.7", features = ["std"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
