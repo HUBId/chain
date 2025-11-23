@@ -19,6 +19,8 @@ feature gate is enabled.
 | `snapshot_chunk_send_queue_depth` | Gauge (u64) | _none_ | Current number of chunk responses buffered by the provider because the consumer cannot accept them yet. Rising depth signals backpressure or stalled consumers. |
 | `snapshot_chunk_send_latency_seconds` | Histogram (f64) | _none_ | Time to flush a chunk response to the consumer. Captures transport- and consumer-side backpressure; sustained elevation indicates slow receivers. |
 | `light_client_chunk_failures_total` | Counter (u64) | `direction`, `kind` (`chunk`, `light_client_update`) | Count of failed fetches, serialisation, or decode operations for chunks and light-client updates. A sustained increase requires investigation. |
+| `snapshot_provider_circuit_open` | Gauge (u64) | _none_ | `1` when the snapshot provider circuit breaker is open after repeated errors (for example, manifest mismatch or authentication failures), `0` otherwise. |
+| `snapshot_provider_consecutive_failures` | Gauge (u64) | _none_ | Number of consecutive snapshot serving failures tracked by the circuit breaker. Resets to zero after a successful response or manual reset. |
 
 All metrics reset when a node restarts. The counter cardinality is limited to a
 small number of enumerated labels, making them safe to record at 10s scrape
@@ -88,3 +90,9 @@ critical pages to the snapshot on-call rotation:
 - Surface the gauges on the pipeline overview dashboard (see
   `docs/observability/pipeline.md`) to provide an end-to-end picture from wallet
   intake through snapshot distribution.
+- Watch the circuit breaker gauges when inbound requests fail repeatedly.
+  `snapshot_provider_circuit_open` flips to `1` once three consecutive failures
+  occur; the companion health endpoint (`/health` and `/health/ready`) surfaces
+  the same status under the `snapshot_breaker` field. When the circuit is open
+  all inbound snapshot requests receive an error until it is manually reset via
+  `POST /p2p/snapshots/breaker/reset`.

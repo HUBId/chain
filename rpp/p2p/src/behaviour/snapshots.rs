@@ -203,6 +203,15 @@ pub enum SnapshotsResponse {
     },
 }
 
+/// Status snapshot for the snapshot serving circuit breaker.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotBreakerStatus {
+    pub open: bool,
+    pub consecutive_failures: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// Trait describing a provider that can service snapshot data requests.
 pub trait SnapshotProvider: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
@@ -253,6 +262,14 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         kind: SnapshotItemKind,
         index: u64,
     ) -> Result<(), Self::Error>;
+
+    fn breaker_status(&self) -> SnapshotBreakerStatus {
+        SnapshotBreakerStatus::default()
+    }
+
+    fn reset_breaker(&self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
@@ -321,6 +338,14 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
 
     fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
         (**self).chunk_capabilities()
+    }
+
+    fn breaker_status(&self) -> SnapshotBreakerStatus {
+        (**self).breaker_status()
+    }
+
+    fn reset_breaker(&self) -> Result<(), Self::Error> {
+        (**self).reset_breaker()
     }
 }
 
@@ -745,6 +770,8 @@ struct SnapshotStreamMetrics {
     negotiated_chunk_size_bytes_histogram: Histogram,
     adaptive_chunk_size_bytes: Gauge<u64, AtomicU64>,
     adaptive_chunk_size_bytes_histogram: Histogram,
+    breaker_open: Gauge<u64, AtomicU64>,
+    breaker_consecutive_failures: Gauge<u64, AtomicU64>,
 }
 
 #[cfg(feature = "request-response")]
@@ -1034,6 +1061,20 @@ impl SnapshotStreamMetrics {
             adaptive_chunk_size_bytes_histogram.clone(),
         );
 
+        let breaker_open = Gauge::<u64, AtomicU64>::default();
+        registry.register(
+            "snapshot_provider_circuit_open",
+            "Whether the snapshot serving circuit breaker is open (1) or closed (0)",
+            breaker_open.clone(),
+        );
+
+        let breaker_consecutive_failures = Gauge::<u64, AtomicU64>::default();
+        registry.register(
+            "snapshot_provider_consecutive_failures",
+            "Consecutive snapshot serving failures observed by the circuit breaker",
+            breaker_consecutive_failures.clone(),
+        );
+
         Self {
             bytes_transferred,
             request_telemetry,
@@ -1049,6 +1090,8 @@ impl SnapshotStreamMetrics {
             negotiated_chunk_size_bytes_histogram,
             adaptive_chunk_size_bytes,
             adaptive_chunk_size_bytes_histogram,
+            breaker_open,
+            breaker_consecutive_failures,
         }
     }
 
@@ -1181,6 +1224,12 @@ impl SnapshotStreamMetrics {
                 .get_or_create(&labels)
                 .set(age.as_secs_f64());
         }
+    }
+
+    fn record_breaker(&self, status: &SnapshotBreakerStatus) {
+        self.breaker_open.set(if status.open { 1 } else { 0 });
+        self.breaker_consecutive_failures
+            .set(status.consecutive_failures);
     }
 }
 
@@ -1723,6 +1772,16 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         sent
     }
 
+    #[cfg(all(feature = "metrics", feature = "request-response"))]
+    fn record_breaker_metrics(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_breaker(&self.provider.breaker_status());
+        }
+    }
+
+    #[cfg(not(all(feature = "metrics", feature = "request-response")))]
+    fn record_breaker_metrics(&self) {}
+
     fn negotiate_chunk_size(
         capabilities: SnapshotChunkCapabilities,
         requested_chunk_size: Option<u64>,
@@ -2045,6 +2104,35 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         };
 
         let capabilities = self.provider.chunk_capabilities();
+        self.record_breaker_metrics();
+
+        let breaker_status = self.provider.breaker_status();
+        if breaker_status.open {
+            let suffix = breaker_status
+                .last_error
+                .as_deref()
+                .map(|err| format!(": {err}"))
+                .unwrap_or_default();
+            let message = format!(
+                "snapshot serving circuit open after {} failures{suffix}",
+                breaker_status.consecutive_failures
+            );
+            let _ = self.send_response_with_metrics(
+                request_id,
+                channel,
+                SnapshotsResponse::Error {
+                    session_id,
+                    message: message.clone(),
+                },
+            );
+            self.pending_events.push_back(SnapshotsEvent::Error {
+                peer,
+                session_id,
+                error: SnapshotProtocolError::Provider(message),
+            });
+            self.record_breaker_metrics();
+            return;
+        }
         let state = self
             .sessions
             .entry(session_id)
@@ -2319,6 +2407,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             error: SnapshotProtocolError::Provider(message),
                         });
                         self.record_failure("outbound", SnapshotItemKind::Resume);
+                        self.record_breaker_metrics();
                         return;
                     }
                 };
@@ -2432,6 +2521,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 }
             }
         }
+
+        self.record_breaker_metrics();
     }
 
     fn handle_response(
@@ -3077,6 +3168,32 @@ mod tests {
             metric_value(&buffer, "snapshot_adaptive_chunk_size_bytes_histogram_sum")
                 .expect("adaptive histogram updated");
         assert!(adaptive_sum >= 192.0);
+    }
+
+    #[test]
+    fn breaker_metrics_reflect_status() {
+        let mut registry = Registry::default();
+        let metrics = SnapshotStreamMetrics::register(&mut registry);
+
+        let status = SnapshotBreakerStatus {
+            open: true,
+            consecutive_failures: 4,
+            last_error: Some("auth failed".to_string()),
+        };
+
+        metrics.record_breaker(&status);
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        assert_eq!(
+            metric_value(&buffer, "snapshot_provider_circuit_open"),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value(&buffer, "snapshot_provider_consecutive_failures"),
+            Some(4.0)
+        );
     }
 
     #[test]
