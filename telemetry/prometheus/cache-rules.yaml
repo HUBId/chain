@@ -38,3 +38,31 @@ groups:
           description: |
             Cache evictions have exceeded 50 per minute for 10 minutes.
             This may indicate memory pressure or poorly tuned retention.
+
+  - name: zk-proof-footprint
+    interval: 30s
+    rules:
+      - record: zk:proof_total_bytes:p90:5m
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, proof_backend, proof_kind) (
+              rate(rpp_stark_proof_total_bytes_bucket[5m])
+            )
+          )
+        labels:
+          component: proofs
+
+      - alert: ProofSizeRegression
+        expr: zk:proof_total_bytes:p90:5m > 1500000
+        for: 10m
+        labels:
+          severity: warning
+          component: proofs
+        annotations:
+          summary: "Proof byte size p90 exceeded 1.5MiB for {{ $labels.proof_backend }} {{ $labels.proof_kind }} proofs"
+          description: |
+            The 5m p90 of proof byte size is elevated, which may indicate
+            compression regressions or unexpected payload growth. Investigate
+            recent releases or proof generation configuration before this trend
+            saturates network or storage capacity.

@@ -96,7 +96,8 @@ Prometheus datasource or adjusting the datasource UID during import.
 - **Verification footprint.** Visualise the STARK verification histograms—
   `rpp_stark_verify_duration_seconds`, `rpp_stark_proof_total_bytes`,
   `rpp_stark_params_bytes`, `rpp_stark_public_inputs_bytes`, and
-  `rpp_stark_payload_bytes`—to catch regressions in verifier cost.【F:rpp/runtime/telemetry/metrics.rs†L389-L409】
+  `rpp_stark_payload_bytes`—to catch regressions in verifier cost.
+  Use `proof_backend` to compare STWO byte growth against RPP-STARK artifacts side-by-side.【F:rpp/runtime/telemetry/metrics.rs†L389-L409】【F:rpp/runtime/node.rs†L5513-L5534】
 - **Verification stage quality.** Count
   `rpp_stark_stage_checks_total{proof_stage,proof_outcome}` to expose which phases
   fail during verification and whether failures cluster around a specific proof
