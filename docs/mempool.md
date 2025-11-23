@@ -23,6 +23,11 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   drained while the probe operates.【F:tests/mempool/status_probe.rs†L77-L163】 Use the same thresholds
   (80% warning, 100% critical by default) when wiring dashboards so that operator alerts align with
   the regression harness.【F:tests/mempool/status_probe.rs†L38-L74】
+* The probe now exercises the full recovery loop: raising `mempool_limit`, rebalancing queue weights,
+  and restarting with the recovered configuration to confirm alerts clear, queue depth metrics match
+  `/status/node`, and the restart surface returns the adjusted weights without firing new alerts.
+  Mirror the same steps in production to validate that alert fatigue has been addressed before
+  closing an incident.【F:tests/mempool/status_probe.rs†L165-L263】
 * A restart probe captures the saturated transaction queue, restores it after a node restart in
   fee-descending order, and persists the observed vs. expected ordering (plus any generated alerts)
   to `target/artifacts/mempool-ordering-probe/ordering.json` (or the directory set via
@@ -111,7 +116,13 @@ post-mortem analysis.【F:tests/mempool/spam_recovery.rs†L66-L72】
 3. Watch `/status/node` and `/status/mempool` until the backlog stabilises and high-fee entries are
    present again, signalling recovery.【F:tests/mempool/spam_recovery.rs†L110-L123】
 4. Once traffic normalises, reduce the limit back to the desired steady-state value and continue
-   monitoring the queue weight telemetry if priority/fee weighting was adjusted.
+   monitoring the queue weight telemetry if priority/fee weighting was adjusted. The regression probe
+   mirrors this flow by clearing alerts after the limit/weight changes and confirming `/status/node`
+   matches the per-queue counts reported by `/status/mempool`; expect the same signals before closing
+   a production incident.【F:tests/mempool/status_probe.rs†L165-L248】
+5. Restart with the recovered configuration to ensure the alert surface stays clear and queue weights
+   remain in effect; the probe validates this by asserting empty alerts and matching weights directly
+   after restart.【F:tests/mempool/status_probe.rs†L249-L263】
 
 By mirroring the behaviour exercised in the integration test, operators can close spam incidents
 quickly: detect the limiter via error telemetry, verify gossip events for accepted resubmissions,
