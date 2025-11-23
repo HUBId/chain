@@ -70,14 +70,12 @@ impl FileBacked {
     /// Acquire an advisory lock on the underlying file to prevent multiple processes
     /// from accessing it simultaneously
     pub fn lock(&self) -> Result<(), FileIoError> {
-        self.fd
-            .try_lock_exclusive()
-            .map_err(|error| {
-                let context =
-                    "unable to obtain advisory lock: database may be opened by another instance"
-                        .to_string();
-                self.file_io_error(error, 0, Some(context))
-            })
+        self.fd.try_lock_exclusive().map_err(|error| {
+            let context =
+                "unable to obtain advisory lock: database may be opened by another instance"
+                    .to_string();
+            self.file_io_error(error, 0, Some(context))
+        })
     }
 
     /// Make a write operation from a raw data buffer for this file

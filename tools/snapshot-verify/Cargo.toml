@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22.1"
+blake2 = "=0.10.6"
 clap.workspace = true
 ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std", "rand_core"] }
 hex.workspace = true

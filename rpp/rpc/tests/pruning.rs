@@ -3,24 +3,16 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
     routing::post,
+    Router,
 };
 use hyper::body::to_bytes;
 use parking_lot::RwLock;
-use rpp_chain::api::{
-    self,
-    ApiContext,
-    PruningServiceApi,
-    PruningServiceError,
-};
+use rpp_chain::api::{self, ApiContext, PruningServiceApi, PruningServiceError};
 use rpp_chain::runtime::RuntimeMode;
-use rpp_chain::storage::pruner::receipt::{
-    SnapshotRebuildReceipt,
-    SnapshotTriggerReceipt,
-};
+use rpp_chain::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -46,14 +38,12 @@ impl PruningServiceApi for FakePruningService {
         &self,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<SnapshotRebuildReceipt, PruningServiceError>> + Send + 'static,
+            dyn Future<Output = Result<SnapshotRebuildReceipt, PruningServiceError>>
+                + Send
+                + 'static,
         >,
     > {
-        let result = self
-            .rebuild
-            .lock()
-            .expect("rebuild lock poisoned")
-            .clone();
+        let result = self.rebuild.lock().expect("rebuild lock poisoned").clone();
         Box::pin(async move { result })
     }
 
@@ -61,7 +51,9 @@ impl PruningServiceApi for FakePruningService {
         &self,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<SnapshotTriggerReceipt, PruningServiceError>> + Send + 'static,
+            dyn Future<Output = Result<SnapshotTriggerReceipt, PruningServiceError>>
+                + Send
+                + 'static,
         >,
     > {
         let result = self

@@ -35,7 +35,8 @@ pub struct ComponentProvers<'a, B: Backend> {
 
 impl<B: Backend> ComponentProvers<'_, B> {
     pub fn components(&self) -> Components<'_, (dyn ComponentProver<B> + '_)> {
-        let components: Vec<&(dyn ComponentProver<B> + '_)> = self.components.iter().copied().collect();
+        let components: Vec<&(dyn ComponentProver<B> + '_)> =
+            self.components.iter().copied().collect();
         Components {
             components,
             n_preprocessed_columns: self.n_preprocessed_columns,

@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use assert_cmd::Command as AssertCommand;
+use blake2::Blake2b256;
 use ed25519_dalek::{Signer, SigningKey};
+use hex;
 use predicates::str::contains;
-use rpp_chain::runtime::config::NodeConfig;
+use rpp_chain::runtime::config::{NodeConfig, SnapshotChecksumAlgorithm};
 use rpp_node::RuntimeMode;
 use serde_json::json;
-use sha2::{Digest, Sha256};
+use sha2::Digest as ShaDigest;
 use tempfile::TempDir;
 
 struct SnapshotFixture {
@@ -21,6 +23,10 @@ struct SnapshotFixture {
 
 impl SnapshotFixture {
     fn new() -> Result<Self> {
+        Self::new_with_algorithm(SnapshotChecksumAlgorithm::Sha256)
+    }
+
+    fn new_with_algorithm(algorithm: SnapshotChecksumAlgorithm) -> Result<Self> {
         let temp = TempDir::new().context("create temp dir")?;
         let base = temp.path();
 
@@ -34,14 +40,25 @@ impl SnapshotFixture {
         let chunk_data = b"consistent payload";
         fs::write(&chunk_path, chunk_data).context("write chunk file")?;
 
-        let checksum = sha256_hex(chunk_data);
+        let checksum = match algorithm {
+            SnapshotChecksumAlgorithm::Sha256 => sha256_hex(chunk_data),
+            SnapshotChecksumAlgorithm::Blake2b => hex::encode(Blake2b256::digest(chunk_data)),
+        };
+        let mut segment = json!({
+            "segment_name": "chunk-000.bin",
+            "size_bytes": chunk_data.len(),
+            "checksum": checksum,
+        });
+        if algorithm == SnapshotChecksumAlgorithm::Sha256 {
+            segment
+                .as_object_mut()
+                .expect("segment object")
+                .insert("sha256".to_string(), json!(checksum));
+        }
         let manifest = json!({
             "version": 1,
-            "segments": [{
-                "segment_name": "chunk-000.bin",
-                "size_bytes": chunk_data.len(),
-                "sha256": checksum,
-            }],
+            "checksum_algorithm": algorithm.as_str(),
+            "segments": [segment],
         });
         let manifest_path = manifest_dir.join("chunks.json");
         fs::write(
@@ -63,6 +80,7 @@ impl SnapshotFixture {
         let mut config = NodeConfig::for_mode(RuntimeMode::Validator);
         config.data_dir = base.join("data");
         config.snapshot_dir = snapshot_dir;
+        config.snapshot_checksum_algorithm = algorithm;
         config.timetoke_snapshot_key_path = key_path;
         config.key_path = base.join("keys/node.toml");
         config.p2p_key_path = base.join("keys/p2p.toml");
@@ -174,6 +192,51 @@ fn snapshot_verify_command_rejects_version_mismatch() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn snapshot_verify_command_supports_blake2b() -> Result<()> {
+    let fixture = SnapshotFixture::new_with_algorithm(SnapshotChecksumAlgorithm::Blake2b)?;
+
+    AssertCommand::cargo_bin("rpp-node")?
+        .arg("validator")
+        .arg("snapshot")
+        .arg("verify")
+        .arg("--config")
+        .arg(&fixture.config_path)
+        .assert()
+        .success()
+        .stdout(contains("\"signature_valid\": true"))
+        .stdout(contains("\"checksum_mismatches\": 0"))
+        .stdout(contains("blake2b"));
+
+    drop(fixture);
+    Ok(())
+}
+
+#[test]
+fn snapshot_verify_command_rejects_algorithm_mismatch() -> Result<()> {
+    let fixture = SnapshotFixture::new_with_algorithm(SnapshotChecksumAlgorithm::Blake2b)?;
+
+    let mut config = NodeConfig::load(&fixture.config_path).map_err(|err| anyhow::anyhow!(err))?;
+    config.snapshot_checksum_algorithm = SnapshotChecksumAlgorithm::Sha256;
+    config
+        .save(&fixture.config_path)
+        .map_err(|err| anyhow::anyhow!(err))?;
+
+    AssertCommand::cargo_bin("rpp-node")?
+        .arg("validator")
+        .arg("snapshot")
+        .arg("verify")
+        .arg("--config")
+        .arg(&fixture.config_path)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(contains("checksum algorithm mismatch"));
+
+    drop(fixture);
+    Ok(())
+}
+
 fn write_signing_key(path: &Path, signing_key: &SigningKey) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("create key directory")?;
@@ -186,7 +249,5 @@ fn write_signing_key(path: &Path, signing_key: &SigningKey) -> Result<()> {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
+    hex::encode(ShaDigest::digest(data))
 }

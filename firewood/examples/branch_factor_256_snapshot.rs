@@ -6,12 +6,9 @@ use firewood::v2::api::{Db as _, Proposal as _};
 use firewood_storage::noop_storage_metrics;
 
 fn main() {
-    let out_path = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from("tests/storage/fixtures/branch_factor_256/snapshot.firewood")
-        });
+    let out_path = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from("tests/storage/fixtures/branch_factor_256/snapshot.firewood")
+    });
 
     if let Some(parent) = out_path.parent() {
         fs::create_dir_all(parent).expect("create fixture directory");
@@ -20,9 +17,7 @@ fn main() {
         fs::remove_file(&out_path).expect("remove existing snapshot");
     }
 
-    let manager_cfg = RevisionManagerConfig::builder()
-        .max_revisions(4)
-        .build();
+    let manager_cfg = RevisionManagerConfig::builder().max_revisions(4).build();
     let db_cfg = DbConfig::builder().manager(manager_cfg).build();
     let db = Db::new(&out_path, db_cfg, noop_storage_metrics()).expect("create fixture db");
 

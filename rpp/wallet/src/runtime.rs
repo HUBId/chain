@@ -4,9 +4,9 @@ use std::path::Path;
 
 pub mod config {
     use super::{anyhow, fs, Context, Path, Result};
+    pub use rpp_wallet_interface::runtime_config::*;
     use serde::de::DeserializeOwned;
     use serde_ignored;
-    pub use rpp_wallet_interface::runtime_config::*;
 
     /// Extension trait providing convenience helpers around [`WalletConfig`].
     pub trait WalletConfigExt {
@@ -100,9 +100,8 @@ backend = "mock"
 unknown_toggle = true
 "#;
 
-        let err =
-            parse_strict_wallet_config::<WalletConfig>(toml, Path::new("unknown"))
-                .expect_err("unknown keys should fail");
+        let err = parse_strict_wallet_config::<WalletConfig>(toml, Path::new("unknown"))
+            .expect_err("unknown keys should fail");
         let message = err.to_string();
         assert!(message.contains("unknown configuration key"), "{message}");
         assert!(

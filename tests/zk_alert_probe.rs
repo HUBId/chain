@@ -31,10 +31,12 @@ struct AlertPayload {
 
 #[test]
 fn zk_alerts_are_backend_scoped() -> Result<()> {
-    let rpp_alerts: AlertRuleFile = serde_yaml::from_str(include_str!("../ops/alerts/zk/rpp_stark.yaml"))
-        .context("parse RPP-STARK alert definitions")?;
-    let stwo_alerts: AlertRuleFile = serde_yaml::from_str(include_str!("../ops/alerts/zk/stwo.yaml"))
-        .context("parse STWO prover alert definitions")?;
+    let rpp_alerts: AlertRuleFile =
+        serde_yaml::from_str(include_str!("../ops/alerts/zk/rpp_stark.yaml"))
+            .context("parse RPP-STARK alert definitions")?;
+    let stwo_alerts: AlertRuleFile =
+        serde_yaml::from_str(include_str!("../ops/alerts/zk/stwo.yaml"))
+            .context("parse STWO prover alert definitions")?;
 
     let rpp_samples = HashMap::from([
         ("ZkRppStarkVerificationFailuresWarning".to_string(), 2.0),
@@ -47,11 +49,17 @@ fn zk_alerts_are_backend_scoped() -> Result<()> {
     ]);
 
     let rpp_payloads = simulate_backend_alerts(&rpp_alerts, "rpp-stark", &rpp_samples)?;
-    assert_eq!(rpp_payloads.len(), 3, "all RPP-STARK alerts should fire for matching backend");
-    assert!(rpp_payloads
-        .iter()
-        .all(|payload| payload.backend == "rpp-stark"),
-        "RPP-STARK alerts must carry the backend identifier");
+    assert_eq!(
+        rpp_payloads.len(),
+        3,
+        "all RPP-STARK alerts should fire for matching backend"
+    );
+    assert!(
+        rpp_payloads
+            .iter()
+            .all(|payload| payload.backend == "rpp-stark"),
+        "RPP-STARK alerts must carry the backend identifier"
+    );
 
     let stwo_payloads_from_rpp = simulate_backend_alerts(&rpp_alerts, "stwo", &rpp_samples)?;
     assert!(
@@ -60,11 +68,17 @@ fn zk_alerts_are_backend_scoped() -> Result<()> {
     );
 
     let stwo_payloads = simulate_backend_alerts(&stwo_alerts, "stwo", &stwo_samples)?;
-    assert_eq!(stwo_payloads.len(), 2, "all STWO prover alerts should fire for matching backend");
-    assert!(stwo_payloads
-        .iter()
-        .all(|payload| payload.backend == "stwo"),
-        "STWO alerts must carry the backend identifier");
+    assert_eq!(
+        stwo_payloads.len(),
+        2,
+        "all STWO prover alerts should fire for matching backend"
+    );
+    assert!(
+        stwo_payloads
+            .iter()
+            .all(|payload| payload.backend == "stwo"),
+        "STWO alerts must carry the backend identifier"
+    );
 
     let rpp_payloads_from_stwo = simulate_backend_alerts(&stwo_alerts, "rpp-stark", &stwo_samples)?;
     assert!(
