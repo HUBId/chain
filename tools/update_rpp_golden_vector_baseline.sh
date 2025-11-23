@@ -13,7 +13,7 @@ BASELINE="$REPO_ROOT/tests/baselines/rpp_golden_vector_checksums.log"
 if [ ! -f "$LOG_PATH" ]; then
   cat >&2 <<'ERR'
 error: logs/rpp_golden_vector_checksums.log is missing
-hint: run the backend-rpp-stark golden vector tests first, for example:
+hint: run the backend-rpp-stark golden vector tests first so the metadata section is populated, for example:
   cargo test --locked --features backend-rpp-stark --test interop_rpp_stark
 ERR
   exit 1

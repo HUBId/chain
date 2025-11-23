@@ -8,7 +8,7 @@ use rpp_stark::params::{deserialize_params, StarkParamsBuilder};
 
 #[path = "rpp_vectors.rs"]
 mod rpp_vectors;
-use rpp_vectors::{load_bytes, log_vector_checksums};
+use rpp_vectors::{load_bytes, log_vector_checksums, log_vector_report};
 
 #[test]
 fn verify_smoke_ok_with_golden_vector() -> anyhow::Result<()> {
@@ -32,6 +32,8 @@ fn verify_smoke_ok_with_golden_vector() -> anyhow::Result<()> {
     assert!(report.composition_ok());
     assert_eq!(report.total_bytes() as usize, proof.len());
     assert_eq!(report.notes(), None);
+
+    log_vector_report(&report)?;
 
     Ok(())
 }

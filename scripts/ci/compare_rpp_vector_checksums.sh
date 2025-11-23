@@ -25,8 +25,8 @@ fi
 
 if ! diff -u "$BASELINE" "$LOG_PATH"; then
   cat >&2 <<'ERR'
-error: rpp golden vector checksums differ from baseline
-hint: if the vectors legitimately changed, regenerate the baseline via tools/update_rpp_golden_vector_baseline.sh and include the update in your commit.
+error: rpp golden vector checksums/metadata differ from baseline
+hint: if the vectors or verification metadata legitimately changed, regenerate the baseline via tools/update_rpp_golden_vector_baseline.sh and include the update in your commit.
 ERR
   exit 1
 fi
