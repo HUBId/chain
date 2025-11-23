@@ -2332,8 +2332,23 @@ async fn build_tls_acceptor(config: &NetworkTlsConfig) -> ChainResult<Option<Tls
 
     let _ = aws_lc_rs::default_provider().install_default();
 
-    let mut builder = ServerConfig::builder()
-        .with_safe_default_protocol_versions()
+    let versions = config.resolved_rustls_versions();
+    let version_labels: Vec<_> = config
+        .enabled_versions()
+        .into_iter()
+        .map(|version| version.as_str().to_string())
+        .collect();
+    let cipher_suites = config.resolved_cipher_suites();
+    let cipher_labels: Vec<_> = cipher_suites
+        .iter()
+        .map(|suite| format!("{:?}", suite.suite()))
+        .collect();
+
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    provider.cipher_suites = cipher_suites;
+
+    let mut builder = ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&versions)
         .map_err(|err| {
             ChainError::Config(format!("failed to configure TLS protocol versions: {err}"))
         })?;
@@ -2357,6 +2372,13 @@ async fn build_tls_acceptor(config: &NetworkTlsConfig) -> ChainResult<Option<Tls
         .map_err(|err| ChainError::Config(format!("failed to build TLS server config: {err}")))?;
 
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    info!(
+        versions = ?version_labels,
+        cipher_suites = ?cipher_labels,
+        client_auth = config.require_client_auth,
+        "snapshot TLS settings resolved",
+    );
 
     Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
 }

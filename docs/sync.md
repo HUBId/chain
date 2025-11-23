@@ -122,6 +122,29 @@ feeds the existing rate-limit alerting policy. Dashboards can filter on
 `method="snapshot"` to distinguish abusive chunk/download callers from other RPC
 traffic and tune burst/replenish values accordingly.
 
+### TLS hardening for snapshot endpoints
+
+Snapshot RPC servers can pin their TLS policy through `[network.tls]`:
+
+```toml
+[network.tls]
+enabled = true
+min_tls_version = "tls13"
+cipher_suites = [
+  "tls13_chacha20_poly1305_sha256",
+  "tls13_aes_256_gcm_sha384",
+  "tls13_aes_128_gcm_sha256",
+]
+```
+
+The runtime refuses to boot when cipher suites and the minimum TLS version are
+incompatible (for example, a TLS1.2 cipher with `min_tls_version = "tls13"`) and
+logs the resolved protocol versions and cipher suites at startup. Operators that
+must retain TLS1.2 support can relax the profile (for example,
+`cipher_suites = ["tls13_aes_128_gcm_sha256", "tls12_aes_256_gcm_sha384"]`), and
+the `--rpc-min-tls-version`/`--rpc-tls-cipher-suites` CLI flags mirror these
+settings for temporary overrides during rollouts.
+
 ## Snapshot download retries
 
 The `rpp-node validator snapshot` commands use an HTTP client to start, poll,

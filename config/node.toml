@@ -52,6 +52,12 @@ replenish_per_minute = 60
 [network.tls]
 enabled = false
 require_client_auth = false
+# min_tls_version = "tls13"
+# cipher_suites = [
+#     "tls13_chacha20_poly1305_sha256",
+#     "tls13_aes_256_gcm_sha384",
+#     "tls13_aes_128_gcm_sha256",
+# ]
 
 [network.admission]
 policy_path = "./data/p2p/admission_policies.json"
