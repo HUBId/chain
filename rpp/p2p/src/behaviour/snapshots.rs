@@ -759,6 +759,7 @@ struct SnapshotStreamMetrics {
     bytes_transferred: Family<Vec<(String, String)>, Counter>,
     request_telemetry: SnapshotRequestTelemetry,
     lag_seconds: Gauge<f64, AtomicU64>,
+    resume_events: Family<Vec<(String, String)>, Counter>,
     failures: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
@@ -966,6 +967,13 @@ impl SnapshotStreamMetrics {
 
         let request_telemetry = SnapshotRequestTelemetry::register(registry);
 
+        let resume_events = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "snapshot_resume_events_total",
+            "Snapshot resume attempts grouped by result",
+            resume_events.clone(),
+        );
+
         let lag_seconds = Gauge::<f64, AtomicU64>::default();
         registry.register_with_unit(
             "snapshot_stream_lag_seconds",
@@ -1079,6 +1087,7 @@ impl SnapshotStreamMetrics {
             bytes_transferred,
             request_telemetry,
             lag_seconds,
+            resume_events,
             failures,
             chunk_send_latency_seconds,
             chunk_send_queue_depth,
@@ -1119,6 +1128,11 @@ impl SnapshotStreamMetrics {
 
     fn observe_lag(&self, lag: Duration) {
         self.lag_seconds.set(lag.as_secs_f64());
+    }
+
+    fn record_resume(&self, result: &str) {
+        let labels = vec![("result".to_string(), result.to_string())];
+        self.resume_events.get_or_create(&labels).inc();
     }
 
     fn record_failure(&self, direction: &str, kind: SnapshotItemKind) {
@@ -1969,6 +1983,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         let request_id =
             self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume);
         self.record_request_update(session_id, SnapshotItemKind::Resume, "dispatched");
+        self.record_resume_attempt();
         Some(request_id)
     }
 
@@ -2065,6 +2080,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     self.finish_outbound_request(session_id, kind);
                     self.request_metrics.fail_outbound(request_id);
                     self.record_failure("outbound", kind);
+                    if matches!(kind, SnapshotItemKind::Resume) {
+                        self.record_resume_failure();
+                    }
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
@@ -2663,6 +2681,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     state.mark_progress();
                 }
                 self.update_stream_metrics();
+                self.record_resume_success();
                 self.pending_events.push_back(SnapshotsEvent::Resume {
                     peer,
                     session_id,
@@ -2683,6 +2702,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 });
             }
             SnapshotsResponse::Error { message, .. } => {
+                if matches!(
+                    timing.as_ref().map(|timing| timing.request_kind),
+                    Some(SnapshotItemKind::Resume)
+                ) {
+                    self.record_resume_failure();
+                }
                 self.pending_events.push_back(SnapshotsEvent::Error {
                     peer,
                     session_id,
@@ -2695,6 +2720,36 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             self.update_stream_metrics();
         }
     }
+
+    #[cfg(feature = "metrics")]
+    fn record_resume_attempt(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_resume("attempt");
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_resume_attempt(&self) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_resume_success(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_resume("success");
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_resume_success(&self) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_resume_failure(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_resume("failure");
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_resume_failure(&self) {}
 }
 
 #[cfg(feature = "request-response")]
@@ -3121,6 +3176,89 @@ mod tests {
                 "throughput recorded for {direction} {kind}"
             );
         }
+    }
+
+    #[test]
+    fn resume_metrics_track_attempts_and_outcomes() {
+        let mut registry = Registry::default();
+        let provider = NullSnapshotProvider::default();
+        let mut behaviour = SnapshotsBehaviour::with_config(
+            provider,
+            SnapshotsBehaviourConfig::default(),
+            Some(&mut registry),
+        );
+
+        let peer = PeerId::random();
+        let session = SnapshotSessionId::new(41);
+        behaviour
+            .sessions
+            .insert(session, SessionState::new(peer.clone()));
+
+        behaviour
+            .request_resume(peer.clone(), session, "plan-a".to_string())
+            .expect("resume attempt dispatched");
+
+        behaviour.handle_response(
+            peer.clone(),
+            session,
+            SnapshotsResponse::Resume {
+                session_id: session,
+                chunk_index: 2,
+                update_index: 1,
+                chunk_size: Some(8),
+                min_chunk_size: Some(4),
+                max_chunk_size: Some(16),
+                max_concurrent_requests: Some(2),
+            },
+            None,
+        );
+
+        let failed_session = SnapshotSessionId::new(42);
+        behaviour
+            .sessions
+            .insert(failed_session, SessionState::new(peer.clone()));
+        behaviour
+            .request_resume(peer.clone(), failed_session, "plan-b".to_string())
+            .expect("second resume attempt dispatched");
+
+        let timing = SnapshotRequestTiming::with_request(SnapshotItemKind::Resume, 0);
+        behaviour.handle_response(
+            peer,
+            failed_session,
+            SnapshotsResponse::Error {
+                session_id: failed_session,
+                message: "resume failed".into(),
+            },
+            Some(timing),
+        );
+
+        let mut buffer = String::new();
+        encode(&mut buffer, &registry).expect("encode metrics");
+
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_resume_events_total",
+                &[("result", "attempt")],
+            ),
+            Some(2.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_resume_events_total",
+                &[("result", "success")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_resume_events_total",
+                &[("result", "failure")],
+            ),
+            Some(1.0)
+        );
     }
 
     #[test]

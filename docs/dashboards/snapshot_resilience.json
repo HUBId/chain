@@ -155,6 +155,70 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Resume Success Rate (6h)",
+      "description": "Percentage of snapshot resume attempts that succeeded in the last 6 hours.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.95 },
+              { "color": "green", "value": 0.99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(snapshot_resume_events_total{result=\"success\"}[6h])) / clamp_min(sum(rate(snapshot_resume_events_total{result=~\"success|failure\"}[6h])), 0.0001)",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Resume Attempts vs Failures",
+      "description": "Resume attempts, successes, and failures over the last 24 hours.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 9, "w": 18, "x": 6, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "drawStyle": "line", "showPoints": "auto" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (result)(increase(snapshot_resume_events_total[24h]))" }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      }
     }
   ]
 }
