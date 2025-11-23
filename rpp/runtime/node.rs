@@ -158,6 +158,26 @@ use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
 pub const DEFAULT_STATE_SYNC_CHUNK: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
+
+#[cfg(feature = "backend-rpp-stark")]
+const RPP_STARK_PROOF_BUCKETS: [u64; 4] =
+    [512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024];
+
+#[cfg(feature = "backend-rpp-stark")]
+fn proof_size_bucket(bytes: u64) -> &'static str {
+    if bytes <= RPP_STARK_PROOF_BUCKETS[0] {
+        "le_512_kib"
+    } else if bytes <= RPP_STARK_PROOF_BUCKETS[1] {
+        "le_1_mib"
+    } else if bytes <= RPP_STARK_PROOF_BUCKETS[2] {
+        "le_2_mib"
+    } else if bytes <= RPP_STARK_PROOF_BUCKETS[3] {
+        "le_4_mib"
+    } else {
+        "gt_4_mib"
+    }
+}
+
 const PROOF_IO_MARKER: &str = "ProofError::IO";
 #[derive(Clone)]
 struct ChainTip {
@@ -2763,6 +2783,92 @@ mod zk_backend_validation_tests {
         validate_zk_backend_support(&ZkBackendSupport::compiled())
             .expect("compiled zk backend set should be valid");
     }
+    #[test]
+    fn rpp_stark_failure_size_metrics_are_bucketed() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("rpp-stark-size-metrics");
+        let metrics = RuntimeMetrics::from_meter(&meter);
+        let proof_metrics = metrics.proofs();
+
+        proof_metrics.observe_verification_total_bytes_by_result(
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            ProofVerificationOutcome::Fail,
+            5 * 1024 * 1024,
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut saw_fail_bucket = false;
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    if metric.name != "rpp_stark_proof_total_bytes_by_result" {
+                        continue;
+                    }
+                    if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                        for point in data_points {
+                            let mut attrs = HashMap::new();
+                            for attribute in point.attributes {
+                                attrs
+                                    .insert(attribute.key.to_string(), attribute.value.to_string());
+                            }
+                            if attrs.get(ProofVerificationOutcome::KEY)
+                                == Some(&ProofVerificationOutcome::Fail.as_str().to_string())
+                                && attrs.get(ProofVerificationBackend::KEY)
+                                    == Some(
+                                        &ProofVerificationBackend::RppStark.as_str().to_string(),
+                                    )
+                                && attrs.get(ProofVerificationKind::KEY)
+                                    == Some(&ProofVerificationKind::Consensus.as_str().to_string())
+                                && point.count > 0
+                            {
+                                saw_fail_bucket = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_fail_bucket,
+            "expected histogram bucket for failing proof bytes"
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[traced_test]
+    fn oversized_failure_logs_include_bucket() {
+        let failure = RppStarkVerifyFailure::ProofTooLarge {
+            max_kib: 4096,
+            got_kib: 6144,
+        };
+        let proof_bytes = 5 * 1024 * 1024 + 12;
+        let size_bucket = proof_size_bucket(proof_bytes);
+
+        warn!(
+            target = "proofs",
+            proof_backend = "rpp-stark",
+            proof_kind = ProofVerificationKind::Consensus.as_str(),
+            valid = false,
+            proof_bytes,
+            size_bucket,
+            params_bytes = 1024u64,
+            public_inputs_bytes = 2048u64,
+            payload_bytes = 4096u64,
+            verify_duration_ms = 7u64,
+            error = %failure,
+            "rpp-stark proof verification failed"
+        );
+
+        assert!(logs_contain("size_bucket=gt_4_mib"));
+    }
 }
 
 #[cfg(test)]
@@ -4214,13 +4320,18 @@ impl NodeInner {
             .and_then(|len| u64::try_from(len).ok());
 
         if let Some(bytes) = size {
-            self.runtime_metrics
-                .proofs()
-                .observe_verification_total_bytes(
-                    ProofVerificationBackend::Stwo,
-                    proof_kind,
-                    bytes,
-                );
+            let proof_metrics = self.runtime_metrics.proofs();
+            proof_metrics.observe_verification_total_bytes(
+                ProofVerificationBackend::Stwo,
+                proof_kind,
+                bytes,
+            );
+            proof_metrics.observe_verification_total_bytes_by_result(
+                ProofVerificationBackend::Stwo,
+                proof_kind,
+                ProofVerificationOutcome::Ok,
+                bytes,
+            );
         }
     }
 
@@ -4299,6 +4410,12 @@ impl NodeInner {
             );
         }
         proof_metrics.observe_verification_total_bytes(backend, proof_kind, report.total_bytes());
+        proof_metrics.observe_verification_total_bytes_by_result(
+            backend,
+            proof_kind,
+            ProofVerificationOutcome::from_bool(report.is_verified()),
+            report.total_bytes(),
+        );
         record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
 
         if let Ok(artifact) = proof.expect_rpp_stark() {
@@ -4307,6 +4424,8 @@ impl NodeInner {
             let public_inputs_bytes =
                 u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+            let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+            let size_bucket = proof_size_bucket(proof_bytes);
 
             proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
             proof_metrics.observe_verification_public_inputs_bytes(
@@ -4326,7 +4445,8 @@ impl NodeInner {
                 merkle_ok = flags.merkle(),
                 fri_ok = flags.fri(),
                 composition_ok = flags.composition(),
-                proof_bytes = report.total_bytes(),
+                proof_bytes,
+                size_bucket,
                 params_bytes,
                 public_inputs_bytes,
                 payload_bytes,
@@ -4345,7 +4465,8 @@ impl NodeInner {
                 merkle_ok = flags.merkle(),
                 fri_ok = flags.fri(),
                 composition_ok = flags.composition(),
-                proof_bytes = report.total_bytes(),
+                proof_bytes,
+                size_bucket,
                 params_bytes,
                 public_inputs_bytes,
                 payload_bytes,
@@ -4404,10 +4525,17 @@ impl NodeInner {
                         u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
                     let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
                     let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+                    let size_bucket = proof_size_bucket(proof_bytes);
 
                     proof_metrics.observe_verification_total_bytes(
                         backend,
                         proof_kind,
+                        proof_bytes,
+                    );
+                    proof_metrics.observe_verification_total_bytes_by_result(
+                        backend,
+                        proof_kind,
+                        ProofVerificationOutcome::Fail,
                         proof_bytes,
                     );
                     proof_metrics.observe_verification_params_bytes(
@@ -4432,6 +4560,7 @@ impl NodeInner {
                         proof_kind = proof_kind.as_str(),
                         valid = false,
                         proof_bytes,
+                        size_bucket,
                         params_bytes,
                         public_inputs_bytes,
                         payload_bytes,
@@ -4445,6 +4574,7 @@ impl NodeInner {
                         proof_kind = proof_kind.as_str(),
                         valid = false,
                         proof_bytes,
+                        size_bucket,
                         params_bytes,
                         public_inputs_bytes,
                         payload_bytes,
@@ -8585,8 +8715,8 @@ mod telemetry_metrics_tests {
     };
     use crate::types::Address;
     use crate::zk::rpp_verifier::RppStarkVerificationFlags;
-    use crate::zk::rpp_verifier::RppStarkVerifierError;
-    use opentelemetry_sdk::metrics::data::Data;
+    use crate::zk::rpp_verifier::{RppStarkVerifierError, RppStarkVerifyFailure};
+    use opentelemetry_sdk::metrics::data::{Data, Histogram};
     use opentelemetry_sdk::metrics::{
         InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
     };
@@ -8594,6 +8724,7 @@ mod telemetry_metrics_tests {
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tracing_test::{logs_contain, traced_test};
 
     #[test]
     fn consensus_telemetry_records_metrics() -> std::result::Result<(), MetricError> {
@@ -8707,6 +8838,92 @@ mod telemetry_metrics_tests {
         );
 
         Ok(())
+    }
+    #[test]
+    fn rpp_stark_failure_size_metrics_are_bucketed() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("rpp-stark-size-metrics");
+        let metrics = RuntimeMetrics::from_meter(&meter);
+        let proof_metrics = metrics.proofs();
+
+        proof_metrics.observe_verification_total_bytes_by_result(
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            ProofVerificationOutcome::Fail,
+            5 * 1024 * 1024,
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut saw_fail_bucket = false;
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    if metric.name != "rpp_stark_proof_total_bytes_by_result" {
+                        continue;
+                    }
+                    if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                        for point in data_points {
+                            let mut attrs = HashMap::new();
+                            for attribute in point.attributes {
+                                attrs
+                                    .insert(attribute.key.to_string(), attribute.value.to_string());
+                            }
+                            if attrs.get(ProofVerificationOutcome::KEY)
+                                == Some(&ProofVerificationOutcome::Fail.as_str().to_string())
+                                && attrs.get(ProofVerificationBackend::KEY)
+                                    == Some(
+                                        &ProofVerificationBackend::RppStark.as_str().to_string(),
+                                    )
+                                && attrs.get(ProofVerificationKind::KEY)
+                                    == Some(&ProofVerificationKind::Consensus.as_str().to_string())
+                                && point.count > 0
+                            {
+                                saw_fail_bucket = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_fail_bucket,
+            "expected histogram bucket for failing proof bytes"
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[traced_test]
+    fn oversized_failure_logs_include_bucket() {
+        let failure = RppStarkVerifyFailure::ProofTooLarge {
+            max_kib: 4096,
+            got_kib: 6144,
+        };
+        let proof_bytes = 5 * 1024 * 1024 + 12;
+        let size_bucket = proof_size_bucket(proof_bytes);
+
+        warn!(
+            target = "proofs",
+            proof_backend = "rpp-stark",
+            proof_kind = ProofVerificationKind::Consensus.as_str(),
+            valid = false,
+            proof_bytes,
+            size_bucket,
+            params_bytes = 1024u64,
+            public_inputs_bytes = 2048u64,
+            payload_bytes = 4096u64,
+            verify_duration_ms = 7u64,
+            error = %failure,
+            "rpp-stark proof verification failed"
+        );
+
+        assert!(logs_contain("size_bucket=gt_4_mib"));
     }
 }
 
