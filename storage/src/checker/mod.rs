@@ -678,27 +678,32 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                     let header = self.header_mut();
                     let mut allocator = NodeAllocator::new(storage.as_ref(), header);
                     let mut io_errors = Vec::new();
+                    let mut successes = 0_u64;
 
                     for (address, area_index) in leaked_areas {
-                        if let Err(err) = allocator.add_free_block(address, area_index) {
-                            warn!(
-                                "Failed to enqueue leaked area at {address:?} (size {area_index:?}): {err}"
-                            );
-                            io_errors.push(err);
+                        match allocator.add_free_block(address, area_index) {
+                            Ok(()) => successes = successes.saturating_add(1),
+                            Err(err) => {
+                                warn!(
+                                    "Failed to enqueue leaked area at {address:?} (size {area_index:?}): {err}"
+                                );
+                                io_errors.push(err);
+                            }
                         }
                     }
 
-                    if io_errors.is_empty() {
-                        #[allow(clippy::cast_possible_truncation)]
+                    if successes > 0 {
                         firewood_counter!(
                             "firewood.checker.leaked_areas.fixed",
                             "count of leaked areas successfully enqueued back into free lists"
                         )
-                        .increment(leaked_area_count as u64);
+                        .increment(successes);
+                    }
+
+                    if io_errors.is_empty() {
                         fixed.push(CheckerError::AreaLeaks(ranges));
                     } else {
                         let failed = io_errors.len().max(1);
-                        #[allow(clippy::cast_possible_truncation)]
                         firewood_counter!(
                             "firewood.checker.leaked_areas.failed_to_fix",
                             "count of leaked areas the checker could not enqueue into free lists"

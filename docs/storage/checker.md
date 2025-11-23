@@ -28,3 +28,22 @@ verification still reports issues—the command exits with a non-zero status so 
 can be chained with orchestration tooling. Use `--hash-check` alongside `--fix`
 to rehash all nodes before persisting the repaired state when deeper validation
 is required.
+
+### IO failures during leak repair
+
+When `--fix` is set the checker re-queues leaked ranges into the free list. If an
+IO error occurs while writing a recovered block, the checker keeps enqueuing the
+remaining blocks and records the partial progress in Prometheus metrics:
+
+* `firewood_checker_leaked_areas_detected` reports the number of individual
+  areas discovered inside leaked ranges.
+* `firewood_checker_leaked_areas_fixed` increments for each block successfully
+  re-enqueued, even if later writes fail.
+* `firewood_checker_leaked_areas_failed_to_fix` counts the blocks that could not
+  be written back.
+
+Operators should re-run the checker after addressing the underlying storage
+issue and confirm that the `*_failed_to_fix` counter remains flat while the
+detected and fixed counts converge. Persistent failures indicate that a manual
+free-list rebuild or node replacement is required before returning the database
+to service.
