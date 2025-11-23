@@ -87,8 +87,8 @@ use crate::runtime::config::{
 };
 use crate::runtime::node::{StateSyncChunkError, StateSyncVerificationStatus};
 use crate::runtime::node_runtime::node::{
-    NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotSessionId,
-    SnapshotStreamStatus,
+    NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotDownloadErrorCode,
+    SnapshotSessionId, SnapshotStreamStatus,
 };
 use crate::runtime::sync::StateSyncServer;
 use crate::runtime::{
@@ -902,20 +902,35 @@ struct ErrorResponse {
     error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<RpcErrorCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_error: Option<SnapshotDownloadErrorCode>,
 }
 
 impl ErrorResponse {
     fn new(message: impl Into<String>) -> Self {
-        Self {
-            error: message.into(),
-            ..Default::default()
-        }
+        Self::with_download_error(message, None)
     }
 
     fn with_code(message: impl Into<String>, code: RpcErrorCode) -> Self {
+        Self::with_code_and_download(message, Some(code), None)
+    }
+
+    fn with_download_error(
+        message: impl Into<String>,
+        download_error: Option<SnapshotDownloadErrorCode>,
+    ) -> Self {
+        Self::with_code_and_download(message, None, download_error)
+    }
+
+    fn with_code_and_download(
+        message: impl Into<String>,
+        code: Option<RpcErrorCode>,
+        download_error: Option<SnapshotDownloadErrorCode>,
+    ) -> Self {
         Self {
             error: message.into(),
-            code: Some(code),
+            code,
+            download_error,
         }
     }
 }
@@ -3485,11 +3500,45 @@ fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorRespo
     (status, Json(error))
 }
 
+fn download_error_from_pipeline(err: &PipelineError) -> SnapshotDownloadErrorCode {
+    match err {
+        PipelineError::SnapshotVerification(message) => {
+            let lowercase = message.to_ascii_lowercase();
+            if lowercase.contains("resume plan id") {
+                SnapshotDownloadErrorCode::ResumeMismatch
+            } else if lowercase.contains("checksum")
+                || lowercase.contains("digest")
+                || lowercase.contains("size mismatch")
+            {
+                SnapshotDownloadErrorCode::Checksum
+            } else {
+                SnapshotDownloadErrorCode::Network
+            }
+        }
+        PipelineError::ResumeBoundsExceeded { .. } => SnapshotDownloadErrorCode::ResumeMismatch,
+        _ => SnapshotDownloadErrorCode::Network,
+    }
+}
+
+fn download_error_from_node(error: &P2pNodeError) -> Option<SnapshotDownloadErrorCode> {
+    match error {
+        P2pNodeError::NetworkSetup(_) | P2pNodeError::Network(_) | P2pNodeError::Peerstore(_) => {
+            Some(SnapshotDownloadErrorCode::Network)
+        }
+        P2pNodeError::Pipeline(err) => Some(download_error_from_pipeline(err)),
+        _ => None,
+    }
+}
+
 fn node_error_to_http(error: P2pNodeError) -> (StatusCode, Json<ErrorResponse>) {
+    let download_error = download_error_from_node(&error);
     match error {
         P2pNodeError::SnapshotStreamNotFound => (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("snapshot stream not found")),
+            Json(ErrorResponse::with_download_error(
+                "snapshot stream not found",
+                download_error,
+            )),
         ),
         P2pNodeError::GossipDisabled => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3503,11 +3552,18 @@ fn node_error_to_http(error: P2pNodeError) -> (StatusCode, Json<ErrorResponse>) 
         | P2pNodeError::Network(err)
         | P2pNodeError::Peerstore(err) => (
             StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse::new(err.to_string())),
+            Json(ErrorResponse::with_download_error(
+                err.to_string(),
+                download_error,
+            )),
         ),
         P2pNodeError::Pipeline(err) => (
             StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse::new(err.to_string())),
+            Json(ErrorResponse::with_code_and_download(
+                err.to_string(),
+                Some(RpcErrorCode::StateSyncPipelineError),
+                download_error,
+            )),
         ),
     }
 }
