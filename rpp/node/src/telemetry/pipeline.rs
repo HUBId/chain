@@ -13,6 +13,7 @@ pub struct PipelineMetrics {
     stage_total: Counter<u64>,
     commit_height: Histogram<u64>,
     root_io_errors_total: Counter<u64>,
+    state_sync_tamper_total: Counter<u64>,
 }
 
 impl PipelineMetrics {
@@ -41,12 +42,20 @@ impl PipelineMetrics {
             )
             .with_unit("1")
             .build();
+        let state_sync_tamper_total = meter
+            .u64_counter("rpp_node_pipeline_state_sync_tamper_total")
+            .with_description(
+                "Total number of tamper events detected while verifying state-sync manifests or chunks",
+            )
+            .with_unit("1")
+            .build();
 
         Self {
             stage_latency_ms,
             stage_total,
             commit_height,
             root_io_errors_total,
+            state_sync_tamper_total,
         }
     }
 
@@ -74,6 +83,11 @@ impl PipelineMetrics {
 
     pub fn record_root_io_error(&self) {
         self.root_io_errors_total.add(1, &[]);
+    }
+
+    pub fn record_state_sync_tamper(&self, reason: &'static str) {
+        self.state_sync_tamper_total
+            .add(1, &[KeyValue::new("reason", reason)]);
     }
 }
 
