@@ -46,7 +46,7 @@ body = """
         {% set wallet_has = true -%}
     {% endif -%}
 {% endfor -%}
-{% if wallet_has -%}
+    {% if wallet_has -%}
 
     ### 👛 Wallet readiness
     {% set wallet_sections = [
@@ -71,7 +71,22 @@ body = """
             {% endif -%}
         {% endif -%}
     {% endfor -%}
-{% endif -%}\n
+    {% endif -%}\n
+    {% set vector_rendered = false -%}
+    {% for commit in commits -%}
+        {% if commit.message is containing("vector") or (commit.body and (commit.body is containing("vector"))) -%}
+            {% if not vector_rendered -%}
+    ### 🧬 ZK vectors
+            {% set vector_rendered = true -%}
+            {% endif -%}
+{{ wallet_commit_line(commit) }}
+        {% endif -%}
+    {% endfor -%}
+    {% if not vector_rendered -%}
+
+    ### 🧬 ZK vectors
+    _Add entries for deterministic vector refreshes when `vendor/rpp-stark/vectors/` changes._
+    {% endif -%}\n
 """
 # A Tera template to be rendered as the changelog's footer.
 # See https://keats.github.io/tera/docs/#introduction
