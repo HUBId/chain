@@ -156,14 +156,11 @@ fn eviction_policy_is_fifo_and_hits_survive_eviction() {
     let metrics = ProofCacheMetrics::default();
     let validator = Arc::new(AcceptAllValidator::default());
     let storage = Arc::new(BoundedProofStorage::with_capacity(4));
-    let mut mempool =
-        ProofMempool::new_with_metrics(validator, storage.clone(), metrics.clone())
-            .expect("mempool");
+    let mut mempool = ProofMempool::new_with_metrics(validator, storage.clone(), metrics.clone())
+        .expect("mempool");
 
     let peer = PeerId::random();
-    let initial_payloads: Vec<String> =
-        (0..6).map(|idx| format!("payload-{idx}"))
-            .collect();
+    let initial_payloads: Vec<String> = (0..6).map(|idx| format!("payload-{idx}")).collect();
     ingest_many(
         &mut mempool,
         peer,
@@ -219,9 +216,7 @@ fn eviction_hit_rate_stays_stable_under_pressure() {
         ProofMempool::new_with_metrics(validator, storage, metrics.clone()).expect("mempool");
 
     let peer = PeerId::random();
-    let unique: Vec<String> = (0..20)
-        .map(|idx| format!("burst-{idx}"))
-        .collect();
+    let unique: Vec<String> = (0..20).map(|idx| format!("burst-{idx}")).collect();
     ingest_many(
         &mut mempool,
         peer,
@@ -241,9 +236,11 @@ fn eviction_hit_rate_stays_stable_under_pressure() {
         "duplicates across eviction cycles should still increment hits",
     );
     assert_eq!(
-        snapshot.misses,
-        20,
+        snapshot.misses, 20,
         "only the first wave of unique payloads should count as misses",
     );
-    assert!(snapshot.evictions >= 12, "stress burst should evict earlier records");
+    assert!(
+        snapshot.evictions >= 12,
+        "stress burst should evict earlier records"
+    );
 }

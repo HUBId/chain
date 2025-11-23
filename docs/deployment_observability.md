@@ -78,9 +78,13 @@ effect.【F:rpp/node/src/lib.rs†L1134-L1259】
 
 Expose `/health/live` for liveness and `/health/ready` for readiness in your
 orchestrator; both endpoints are served by the RPC layer and reflect the active
-runtime pipelines (node, wallet, orchestrator). The legacy `/health` endpoint is
-preserved for smoke tests but does not expose failure states, so migrate
-automation to the new probes where possible.【F:rpp/rpc/api.rs†L512-L583】
+runtime pipelines (node, wallet, orchestrator). The JSON payloads now expose the
+active proof backend, the last verification outcome (accepted/rejected, noting
+when bypass was enabled), and the proof-cache counters (hits/misses/evictions)
+so probes can flag stale caches or repeated verification failures alongside the
+HTTP status. The legacy `/health` endpoint is preserved for smoke tests but does
+not expose failure states, so migrate automation to the new probes where
+possible.【F:rpp/rpc/api.rs†L2250-L2316】【F:rpp/rpc/api.rs†L2318-L2348】
 
 ## Port & Endpoint Usage
 

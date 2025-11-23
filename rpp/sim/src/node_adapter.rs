@@ -5,10 +5,10 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
+use rpp_p2p::peerstore::peer_class::PeerClass;
 use rpp_p2p::vendor::core::transport::memory::MemoryTransport;
 use rpp_p2p::vendor::core::upgrade::Version;
 use rpp_p2p::vendor::core::Transport;
-use rpp_p2p::peerstore::peer_class::PeerClass;
 use rpp_p2p::vendor::gossipsub::{
     self, Behaviour as GossipsubBehaviour, ConfigBuilder, IdentTopic, MessageAuthenticity,
 };
