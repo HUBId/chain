@@ -1,3 +1,5 @@
+#![doc = include_str!("../SDK.md")]
+
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
@@ -36,6 +38,9 @@ use snapshot_verify::{
     VerifyArgs as SnapshotVerifyArgs,
 };
 use tokio::task;
+
+mod rate_limit;
+pub use rate_limit::{compute_retry_delay, rate_limit_window, RateLimitWindow};
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
 const DEFAULT_WALLET_CONFIG: &str = "config/wallet.toml";
