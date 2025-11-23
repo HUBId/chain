@@ -56,6 +56,10 @@ Clients should treat a `429` as a temporary condition. Retry only after waiting
 for at least the advertised reset window and prefer exponential backoff to avoid
 immediate re-throttling.
 
+SDK-oriented helpers that parse the headers and clamp backoff are documented in
+[`rpp/chain-cli/SDK.md`](../../../rpp/chain-cli/SDK.md); the code samples are
+doctested so they stay aligned with the server’s token-bucket semantics.
+
 ## Snapshot and state sync RPC errors
 
 Snapshot operations expose structured error payloads. When a request fails the
