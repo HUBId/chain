@@ -12,8 +12,12 @@ configured RPC listener as soon as startup completes. Integration coverage in
 `tests/node_lifecycle.rs::node_process_handles_health_probes_and_ctrl_c` asserts that
 both endpoints return HTTP 200 while the node is serving traffic, then flip to
 `503 Service Unavailable` once a CTRL+C signal is delivered and the process
-shuts down cleanly. The test also verifies that the TCP listener is released so
-orchestrators can bind the port again immediately after shutdown.
+shuts down cleanly. The payloads now include the active proof backend, the last
+verification outcome (including bypass signalling), and proof-cache counters;
+flag deployments where `last_verification.outcome` reports `Rejected` or
+`cache.evictions` spikes despite a 200/OK status. The test also verifies that
+the TCP listener is released so orchestrators can bind the port again
+immediately after shutdown.
 
 Configuration changes are exercised by
 `tests/node_lifecycle.rs::node_restart_applies_feature_gate_changes`. The workflow

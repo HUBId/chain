@@ -153,10 +153,10 @@ use rpp_chain::stwo::{params::StarkParameters, FieldElement};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, ResumeBoundKind,
-    SnapshotChunk, SnapshotChunkCapabilities, SnapshotChunkStream, SnapshotItemKind,
-    SnapshotProvider, SnapshotProviderHandle, SnapshotResumeState, SnapshotSessionId,
-    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT, ProofCacheMetricsSnapshot,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError,
+    ProofCacheMetricsSnapshot, ResumeBoundKind, SnapshotChunk, SnapshotChunkCapabilities,
+    SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
+    SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
@@ -3770,6 +3770,10 @@ impl NodeHandle {
         self.inner.node_status()
     }
 
+    pub fn verifier_metrics(&self) -> VerifierMetricsSnapshot {
+        self.inner.verifiers.metrics_snapshot()
+    }
+
     pub fn mempool_status(&self) -> ChainResult<MempoolStatus> {
         self.inner.mempool_status()
     }
@@ -4188,9 +4192,7 @@ impl NodeInner {
         let mut checkpoint = self.cache_metrics_checkpoint.lock();
         let delta_hits = snapshot.hits.saturating_sub(checkpoint.hits);
         let delta_misses = snapshot.misses.saturating_sub(checkpoint.misses);
-        let delta_evictions = snapshot
-            .evictions
-            .saturating_sub(checkpoint.evictions);
+        let delta_evictions = snapshot.evictions.saturating_sub(checkpoint.evictions);
 
         *checkpoint = snapshot.clone();
 

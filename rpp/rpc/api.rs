@@ -78,7 +78,10 @@ use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
     PipelineTelemetrySummary,
 };
-use crate::proof_system::VerifierMetricsSnapshot;
+use crate::proof_system::{
+    BackendVerificationMetrics, BackendVerificationOutcome, BackendVerificationSnapshot,
+    VerifierMetricsSnapshot,
+};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
 use crate::runtime::config::{
@@ -124,6 +127,7 @@ use rpp_consensus::timetoke::replay::{timetoke_replay_telemetry, TimetokeReplayT
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 #[cfg(test)]
 use rpp_p2p::Peerstore;
+use rpp_p2p::ProofCacheMetricsSnapshot;
 use rpp_p2p::{
     AdmissionApproval, AdmissionAuditTrail, AllowlistedPeer, DualControlApprovalService,
     LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk,
@@ -655,6 +659,11 @@ impl ApiContext {
         Arc::clone(&self.metrics)
     }
 
+    fn backend_status(&self) -> Option<HealthBackendStatus> {
+        self.node_for_mode()
+            .map(|node| health_backend_status(node.verifier_metrics()))
+    }
+
     fn require_state_sync_api(
         &self,
     ) -> Result<Arc<dyn StateSyncApi>, (StatusCode, Json<ErrorResponse>)> {
@@ -972,6 +981,25 @@ struct HealthResponse {
     status: &'static str,
     address: String,
     role: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<HealthBackendStatus>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct HealthBackendStatus {
+    active_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_verification: Option<BackendVerificationSnapshot>,
+    cache: ProofCacheMetricsSnapshot,
+}
+
+#[derive(Serialize)]
+struct HealthReadyResponse {
+    status: &'static str,
+    ready: bool,
+    role: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<HealthBackendStatus>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2257,6 +2285,7 @@ async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
         status: "ok",
         address: health_address(&state),
         role: mode.as_str(),
+        backend: state.backend_status(),
     })
 }
 
@@ -2286,6 +2315,20 @@ fn health_address(state: &ApiContext) -> String {
     }
 }
 
+fn health_backend_status(snapshot: VerifierMetricsSnapshot) -> HealthBackendStatus {
+    let active_backend = snapshot
+        .last
+        .as_ref()
+        .map(|last| last.backend.clone())
+        .or_else(|| snapshot.per_backend.keys().next().cloned());
+
+    HealthBackendStatus {
+        active_backend,
+        last_verification: snapshot.last,
+        cache: snapshot.cache,
+    }
+}
+
 async fn health_live(State(state): State<ApiContext>) -> StatusCode {
     match state.node_for_mode() {
         Some(node) => match node.node_status() {
@@ -2296,7 +2339,7 @@ async fn health_live(State(state): State<ApiContext>) -> StatusCode {
     }
 }
 
-async fn health_ready(State(state): State<ApiContext>) -> StatusCode {
+async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<HealthReadyResponse>) {
     let mode = state.current_mode();
 
     let node_ready = !mode.includes_node() || state.node_enabled();
@@ -2304,11 +2347,22 @@ async fn health_ready(State(state): State<ApiContext>) -> StatusCode {
     let orchestrator_ready =
         !matches!(mode, RuntimeMode::Validator) || state.orchestrator_enabled();
 
-    if node_ready && wallet_ready && orchestrator_ready {
+    let ready = node_ready && wallet_ready && orchestrator_ready;
+    let status = if ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
-    }
+    };
+
+    (
+        status,
+        Json(HealthReadyResponse {
+            status: if ready { "ok" } else { "unavailable" },
+            ready,
+            role: mode.as_str(),
+            backend: state.backend_status(),
+        }),
+    )
 }
 
 async fn runtime_mode(State(state): State<ApiContext>) -> Json<RuntimeModeResponse> {
@@ -3878,6 +3932,51 @@ impl StateSyncApi for NodeHandle {
     async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError> {
         self.state_sync_session_chunk(index)
             .map_err(chunk_error_to_state_sync)
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn backend_status_uses_last_verification_snapshot() {
+        let snapshot = VerifierMetricsSnapshot {
+            per_backend: BTreeMap::from([(
+                "rpp-stark".to_string(),
+                BackendVerificationMetrics::default(),
+            )]),
+            cache: ProofCacheMetricsSnapshot {
+                hits: 1,
+                misses: 2,
+                evictions: 0,
+            },
+            last: Some(BackendVerificationSnapshot {
+                backend: "rpp-stark".to_string(),
+                outcome: BackendVerificationOutcome::Rejected,
+                bypassed: false,
+            }),
+        };
+
+        let status = health_backend_status(snapshot.clone());
+        assert_eq!(status.active_backend.as_deref(), Some("rpp-stark"));
+        assert_eq!(status.last_verification.as_ref(), snapshot.last.as_ref());
+        assert_eq!(status.cache, snapshot.cache);
+    }
+
+    #[test]
+    fn backend_status_handles_missing_backends() {
+        let snapshot = VerifierMetricsSnapshot {
+            per_backend: BTreeMap::new(),
+            cache: ProofCacheMetricsSnapshot::default(),
+            last: None,
+        };
+
+        let status = health_backend_status(snapshot);
+        assert!(status.active_backend.is_none());
+        assert!(status.last_verification.is_none());
+        assert_eq!(status.cache, ProofCacheMetricsSnapshot::default());
     }
 }
 

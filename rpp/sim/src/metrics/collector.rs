@@ -157,7 +157,8 @@ impl Collector {
                 self.total_receives += 1;
                 match peer_class {
                     rpp_p2p::peerstore::peer_class::PeerClass::Trusted => {
-                        self.replay_trusted_receives = self.replay_trusted_receives.saturating_add(1);
+                        self.replay_trusted_receives =
+                            self.replay_trusted_receives.saturating_add(1);
                     }
                     rpp_p2p::peerstore::peer_class::PeerClass::Untrusted => {
                         self.replay_untrusted_receives =
@@ -169,8 +170,7 @@ impl Collector {
                     self.chunk_retries += 1;
                     match peer_class {
                         rpp_p2p::peerstore::peer_class::PeerClass::Trusted => {
-                            self.replay_trusted_drops =
-                                self.replay_trusted_drops.saturating_add(1);
+                            self.replay_trusted_drops = self.replay_trusted_drops.saturating_add(1);
                         }
                         rpp_p2p::peerstore::peer_class::PeerClass::Untrusted => {
                             self.replay_untrusted_drops =

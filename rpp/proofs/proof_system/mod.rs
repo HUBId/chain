@@ -349,10 +349,26 @@ pub struct BackendVerificationMetrics {
     pub total_duration_ms: u64,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub enum BackendVerificationOutcome {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct BackendVerificationSnapshot {
+    pub backend: String,
+    pub outcome: BackendVerificationOutcome,
+    #[serde(skip_serializing_if = "|b: &bool| !*b")]
+    pub bypassed: bool,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct VerifierMetricsSnapshot {
     pub per_backend: BTreeMap<String, BackendVerificationMetrics>,
     pub cache: ProofCacheMetricsSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<BackendVerificationSnapshot>,
 }
 
 impl Default for VerifierMetricsSnapshot {
@@ -367,6 +383,7 @@ impl Default for VerifierMetricsSnapshot {
         Self {
             per_backend,
             cache: ProofCacheMetricsSnapshot::default(),
+            last: None,
         }
     }
 }
@@ -375,6 +392,7 @@ impl Default for VerifierMetricsSnapshot {
 struct VerifierMetrics {
     inner: Arc<Mutex<BTreeMap<String, BackendVerificationMetrics>>>,
     cache: ProofCacheMetrics,
+    last: Arc<Mutex<Option<BackendVerificationSnapshot>>>,
 }
 
 impl VerifierMetrics {
@@ -389,6 +407,7 @@ impl VerifierMetrics {
         Self {
             inner: Arc::new(Mutex::new(per_backend)),
             cache: ProofCacheMetrics::default(),
+            last: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -409,6 +428,16 @@ impl VerifierMetrics {
         entry.total_duration_ms = entry
             .total_duration_ms
             .saturating_add(duration_to_millis(duration));
+
+        *self.last.lock() = Some(BackendVerificationSnapshot {
+            backend: label,
+            outcome: if succeeded {
+                BackendVerificationOutcome::Accepted
+            } else {
+                BackendVerificationOutcome::Rejected
+            },
+            bypassed: bypass,
+        });
     }
 
     fn snapshot(&self) -> VerifierMetricsSnapshot {
@@ -423,6 +452,7 @@ impl VerifierMetrics {
         VerifierMetricsSnapshot {
             per_backend,
             cache: self.cache.snapshot(),
+            last: self.last.lock().clone(),
         }
     }
 
