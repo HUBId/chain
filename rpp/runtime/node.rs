@@ -4198,6 +4198,32 @@ impl NodeInner {
         Ok(())
     }
 
+    fn record_stwo_proof_size(
+        &self,
+        proof_kind: ProofVerificationKind,
+        proof: &ChainProof,
+        proof_bytes: Option<&[u8]>,
+    ) {
+        if !matches!(proof, ChainProof::Stwo(_)) {
+            return;
+        }
+
+        let size = proof_bytes
+            .map(|bytes| bytes.len())
+            .or_else(|| serde_json::to_vec(proof).ok().map(Vec::len))
+            .and_then(|len| u64::try_from(len).ok());
+
+        if let Some(bytes) = size {
+            self.runtime_metrics
+                .proofs()
+                .observe_verification_total_bytes(
+                    ProofVerificationBackend::Stwo,
+                    proof_kind,
+                    bytes,
+                );
+        }
+    }
+
     #[cfg(feature = "backend-rpp-stark")]
     fn verify_rpp_stark_with_metrics(
         &self,
@@ -5557,6 +5583,12 @@ impl NodeInner {
                         ProofVerificationStage::Adapter,
                         Duration::from_millis(0),
                     );
+                    let proof_bytes = bundle.stwo_proof_bytes().map(Vec::as_slice);
+                    self.record_stwo_proof_size(
+                        ProofVerificationKind::Transaction,
+                        &bundle.proof,
+                        proof_bytes,
+                    );
                 }
                 if !matches!(bundle.proof, ChainProof::RppStark(_)) {
                     Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
@@ -5595,6 +5627,12 @@ impl NodeInner {
                     ProofVerificationKind::Transaction,
                     ProofVerificationStage::Adapter,
                     Duration::from_millis(0),
+                );
+                let proof_bytes = bundle.stwo_proof_bytes().map(Vec::as_slice);
+                self.record_stwo_proof_size(
+                    ProofVerificationKind::Transaction,
+                    &bundle.proof,
+                    proof_bytes,
                 );
                 Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
             }
@@ -7688,6 +7726,7 @@ impl NodeInner {
             );
             return Err(err);
         }
+        self.record_stwo_proof_size(ProofVerificationKind::State, &state_proof, None);
 
         let pruning_stark = stark_bundle.pruning_proof.clone();
         #[cfg(feature = "backend-rpp-stark")]
@@ -7708,6 +7747,7 @@ impl NodeInner {
             );
             return Err(err);
         }
+        self.record_stwo_proof_size(ProofVerificationKind::Pruning, &pruning_stark, None);
 
         let recursive_stark = stark_bundle.recursive_proof.clone();
         #[cfg(feature = "backend-rpp-stark")]
@@ -7728,6 +7768,7 @@ impl NodeInner {
             );
             return Err(err);
         }
+        self.record_stwo_proof_size(ProofVerificationKind::Recursive, &recursive_stark, None);
 
         #[cfg(feature = "backend-rpp-stark")]
         let consensus_result = match &consensus_proof {
@@ -7747,6 +7788,7 @@ impl NodeInner {
             );
             return Err(err);
         }
+        self.record_stwo_proof_size(ProofVerificationKind::Consensus, &consensus_proof, None);
 
         let recursive_proof = match previous_block.as_ref() {
             Some(block) => RecursiveProof::extend(
@@ -7938,6 +7980,8 @@ impl NodeInner {
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
         }
+        self.record_stwo_proof_size(ProofVerificationKind::State, &block.stark.state_proof, None);
+
         #[cfg(feature = "backend-rpp-stark")]
         let pruning_result = match &block.stark.pruning_proof {
             ChainProof::RppStark(_) => self
@@ -7962,6 +8006,12 @@ impl NodeInner {
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
         }
+        self.record_stwo_proof_size(
+            ProofVerificationKind::Pruning,
+            &block.stark.pruning_proof,
+            None,
+        );
+
         #[cfg(feature = "backend-rpp-stark")]
         let recursive_result = match &block.stark.recursive_proof {
             ChainProof::RppStark(_) => self
@@ -7990,6 +8040,12 @@ impl NodeInner {
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
         }
+        self.record_stwo_proof_size(
+            ProofVerificationKind::Recursive,
+            &block.stark.recursive_proof,
+            None,
+        );
+
         if let Some(proof) = &block.consensus_proof {
             #[cfg(feature = "backend-rpp-stark")]
             let consensus_result = match proof {
@@ -8012,6 +8068,9 @@ impl NodeInner {
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
                 return Err(err);
             }
+        }
+        if let Some(proof) = &block.consensus_proof {
+            self.record_stwo_proof_size(ProofVerificationKind::Consensus, proof, None);
         }
 
         self.ledger.sync_epoch_for_height(height);
