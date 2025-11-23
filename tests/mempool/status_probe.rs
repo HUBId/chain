@@ -5,6 +5,7 @@ use tempfile::tempdir;
 
 use rpp_chain::consensus::BftVoteKind;
 use rpp_chain::node::Node;
+use rpp_chain::runtime::config::QueueWeightsConfig;
 use rpp_chain::runtime::node::{
     MempoolStatus, PendingIdentitySummary, PendingUptimeSummary, PendingVoteSummary,
 };
@@ -397,9 +398,104 @@ async fn mempool_status_probe_flags_queue_saturation_alerts_inner(
         "multi-queue payload should emit identity saturation entries"
     );
 
+    let recovered_limit = mempool_limit * 2;
+    let recovered_weights = QueueWeightsConfig {
+        priority: 0.6,
+        fee: 0.4,
+    };
+    handle
+        .update_queue_weights(recovered_weights.clone())
+        .expect("adjust queue weights for recovery");
+    handle
+        .update_mempool_limit(recovered_limit)
+        .expect("expand mempool limit during recovery");
+
+    let recovered_snapshot = handle
+        .mempool_status()
+        .expect("mempool status after recovery tuning");
+    assert_eq!(
+        recovered_snapshot.transactions.len(),
+        mempool_limit,
+        "recovery tuning should retain the existing backlog while creating headroom",
+    );
+    assert_eq!(
+        recovered_snapshot.queue_weights, recovered_weights,
+        "queue weight telemetry should reflect the recovery tuning",
+    );
+    let recovered_alerts = probe.evaluate(&recovered_snapshot, recovered_limit);
+    artifacts.record_payload("recovered", encode_alert_payload(&recovered_alerts));
+    assert!(
+        recovered_alerts.is_empty(),
+        "raising limits and rebalancing fees should clear mempool saturation alerts",
+    );
+
+    let recovered_metrics = handle
+        .node_status()
+        .expect("node metrics after recovery tuning");
+    assert_eq!(
+        recovered_metrics.pending_transactions,
+        recovered_snapshot.transactions.len(),
+        "node status pending_transactions should align with mempool status after recovery",
+    );
+    assert_eq!(
+        recovered_metrics.pending_identities,
+        recovered_snapshot.identities.len(),
+        "node status pending_identities should align with mempool status after recovery",
+    );
+    assert_eq!(
+        recovered_metrics.pending_votes,
+        recovered_snapshot.votes.len(),
+        "node status pending_votes should align with mempool status after recovery",
+    );
+    assert_eq!(
+        recovered_metrics.pending_uptime_proofs,
+        recovered_snapshot.uptime_proofs.len(),
+        "node status pending_uptime_proofs should align with mempool status after recovery",
+    );
+
     drop(witness_rx);
     drop(handle);
     drop(node);
+
+    let mut restart_config = config.clone();
+    restart_config.mempool_limit = recovered_limit;
+    restart_config.queue_weights = recovered_weights;
+    let restarted_node = tokio::task::spawn_blocking({
+        let restart_config = restart_config.clone();
+        move || Node::new(restart_config, RuntimeMetrics::noop())
+    })
+    .await??;
+    let restarted_handle = restarted_node.handle();
+
+    let restarted_snapshot = restarted_handle
+        .mempool_status()
+        .expect("mempool status after restart with recovery tuning");
+    let restarted_alerts = probe.evaluate(&restarted_snapshot, recovered_limit);
+    assert!(
+        restarted_alerts.is_empty(),
+        "restart with recovered configuration should not trigger mempool alerts",
+    );
+    assert_eq!(
+        restarted_snapshot.queue_weights, recovered_weights,
+        "restart should preserve queue weight configuration",
+    );
+
+    let restarted_metrics = restarted_handle
+        .node_status()
+        .expect("node metrics after restart");
+    assert_eq!(
+        restarted_metrics.pending_transactions,
+        restarted_snapshot.transactions.len(),
+        "node status should report empty transaction backlog after restart",
+    );
+    assert_eq!(
+        restarted_metrics.pending_identities,
+        restarted_snapshot.identities.len(),
+        "node status should report empty identity backlog after restart",
+    );
+
+    drop(restarted_handle);
+    drop(restarted_node);
 
     Ok(())
 }
