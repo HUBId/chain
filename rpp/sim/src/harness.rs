@@ -253,6 +253,7 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let mut traffic = scenario.traffic_program()?;
+    let mut payload_generator = scenario.payload_generator();
     let total_duration = Duration::from_millis(scenario.sim.duration_ms);
     let mut elapsed = Duration::ZERO;
     let mut message_counter: u64 = 0;
@@ -296,7 +297,7 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
         let Some(publisher_idx) = publisher_idx else {
             continue;
         };
-        let payload = format!("{{\"message\":{message_counter}}}").into_bytes();
+        let payload = payload_generator.next_payload(message_counter);
         handles[publisher_idx]
             .publish(payload.clone())
             .await

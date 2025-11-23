@@ -54,6 +54,10 @@ validations before starting any processes:
   `rpp-sim`. Simnet validates the profile up front, rejecting zero-peer
   topologies, degree values greater than or equal to the node count, and link
   loss rates outside the `0.0..=1.0` range.
+- Traffic payloads: `[traffic.tx.payload]` exposes `min_bytes`/`max_bytes`
+  bounds for gossip messages. The partitioned flood drills now pin the range in
+  the TOML profiles so CI can alternate between small (KiB-scale) and large
+  (tens-of-KiB) payload pressure without editing the RON wrapper.
 - Consensus section: defaults are `runs = 64`, `validators = 64`,
   `witness_commitments = 192`, and tamper `every_n = 8`. All consensus counts
   must be greater than zero.

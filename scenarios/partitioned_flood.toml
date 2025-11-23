@@ -23,6 +23,10 @@ A-B = { delay_ms = 140, jitter_ms = 35, loss = 0.04 }
 [traffic.tx]
 publisher_bias = { type = "zipf", s = 1.05 }
 
+[traffic.tx.payload]
+min_bytes = 256
+max_bytes = 1024
+
 [[traffic.tx.phases]]
 name = "flood"
 duration_ms = 28000

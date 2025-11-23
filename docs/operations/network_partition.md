@@ -59,6 +59,10 @@ Document the incident outcome, the duration of the partition, and any configurat
 Exercise this runbook ahead of time with the partition simulations:
 
 * **Partitioned flood (`partitioned_flood`).** Run `cargo run --locked --package simnet -- --scenario tools/simnet/scenarios/partitioned_flood.ron --artifacts-dir target/simnet/partitioned-flood` followed by `python3 scripts/analyze_simnet.py target/simnet/partitioned-flood/summaries/partitioned_flood.json` to replay the transient-partition plus flood scenario used by Nightly.【F:docs/networking.md†L9-L28】
+  Use the `[traffic.tx.payload]` block in the TOML to toggle gossip message sizes;
+  the default 256–1024 byte envelope keeps CI affordable, while the
+  `compound_partitioned_backpressure` profile pushes 16–64 KiB payloads for
+  nightly large-message drills.【F:scenarios/partitioned_flood.toml†L23-L42】【F:scenarios/compound_partitioned_backpressure.toml†L23-L46】
 * **Snapshot partition (`snapshot_partition`).** Use `tools/simnet/scenarios/snapshot_partition.ron` to practise state-sync recovery while the mesh is partitioned; the generated summaries include the same `resume_events` and latency metrics exposed in production chaos drills.【F:tools/simnet/scenarios/snapshot_partition.ron†L1-L13】【F:docs/testing/simulations.md†L59-L140】
 
 Capture the resume latency charts and rejected gossip counts during rehearsals so you can compare them against production incidents.
