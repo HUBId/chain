@@ -1845,6 +1845,16 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
     }
 
+    fn start_provider_session(
+        &self,
+        session_id: SnapshotSessionId,
+        peer: &PeerId,
+    ) -> Result<(), String> {
+        self.provider
+            .open_session(session_id, peer)
+            .map_err(|err| err.to_string())
+    }
+
     #[cfg(not(all(feature = "metrics", feature = "request-response")))]
     fn record_breaker_metrics(&self) {}
 
@@ -2223,8 +2233,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             state.peer = peer.clone();
         }
 
-        if let Err(err) = self.provider.open_session(session_id, &peer) {
-            let message = err.to_string();
+        if let Err(message) = self.start_provider_session(session_id, &peer) {
             let _ = self.send_response_with_metrics(
                 request_id,
                 channel,
