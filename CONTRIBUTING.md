@@ -130,6 +130,16 @@ checklist. Capture sign-off on the operator guide, security runbooks, and RPC
 policy updates in your release tracking issue or PR description so the audit
 trail stays visible to reviewers.
 
+### RPC schema changes
+
+Breaking RPC changes must document the expected removal version and a concrete
+deprecation window. When deprecating a field, add an entry to
+`tests/rpc/deprecated_fields.toml` with the target removal version and expiry
+date. The `deprecated_fields_require_version_bump_or_expiry` test fails CI if a
+field disappears before the allowed version or if an expiry date passes without
+action. Update the release notes alongside the allowlist entry so downstream
+clients can schedule migrations.
+
 ## [How to report a bug]
 
 Please use the [issue tracker](https://github.com/ava-labs/chain/issues) for reporting issues.

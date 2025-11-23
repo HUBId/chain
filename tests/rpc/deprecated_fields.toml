@@ -1,0 +1,16 @@
+# Deprecated RPC fields that must remain in published schemas until either
+# their removal_version ships or the expiry date is reached.
+#
+# Add a new entry using the following template:
+# [[deprecated_fields]]
+# schema = "rpc/<schema-file>.jsonschema"
+# field = "outer.inner"                 # dotted path through nested properties
+# removal_version = "0.0.14"           # workspace version that permits removal
+# expires_on = "2025-01-15"            # YYYY-MM-DD
+# rationale = "Why the field is being removed"
+#
+# Keep this allowlist in sync with the release notes so downstream clients can
+# plan migrations ahead of any breaking removal. Expired entries should be
+# removed or updated in the same PR that changes the schema.
+
+deprecated_fields = []

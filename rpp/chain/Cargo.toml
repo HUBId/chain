@@ -155,6 +155,7 @@ p3-util = { workspace = true, optional = true }
 plonky3-backend = { path = "../../prover/plonky3_backend", optional = true }
 
 [dev-dependencies]
+chrono = "=0.4.42"
 tempfile.workspace = true
 tracing-test = "=0.2.5"
 jsonschema = "=0.17.1"
