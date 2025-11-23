@@ -86,7 +86,7 @@ use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
 use crate::runtime::config::{
     NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
-    SecretsBackendConfig, SecretsConfig,
+    SecretsBackendConfig, SecretsConfig, SnapshotTokenBucketConfig,
 };
 use crate::runtime::node::{StateSyncChunkError, StateSyncVerificationStatus};
 use crate::runtime::node_runtime::node::{
@@ -1318,6 +1318,10 @@ fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
         return RpcMethod::Proof(proof);
     }
 
+    if path.starts_with("/snapshots/") || path.starts_with("/state-sync/") {
+        return RpcMethod::Snapshot;
+    }
+
     RpcMethod::Other
 }
 
@@ -1595,6 +1599,10 @@ where
     }
 
     fn try_acquire(&self, key: K) -> Result<(), RateLimitSnapshot> {
+        self.try_acquire_with_snapshot(key).map(|_| ())
+    }
+
+    fn try_acquire_with_snapshot(&self, key: K) -> Result<RateLimitSnapshot, RateLimitSnapshot> {
         let mut buckets = self.buckets.lock();
         let bucket = buckets.entry(key).or_insert_with(|| TokenBucket {
             tokens: self.burst,
@@ -1611,21 +1619,25 @@ where
 
         if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
-            Ok(())
+            Ok(RateLimitSnapshot {
+                limit: self.burst as u64,
+                remaining: bucket.tokens.floor() as u64,
+                reset_seconds: self.reset_seconds(bucket.tokens),
+            })
         } else {
-            let reset_seconds = if self.replenish_per_second > 0.0 {
-                ((1.0 - bucket.tokens) / self.replenish_per_second)
-                    .ceil()
-                    .max(0.0) as u64
-            } else {
-                0
-            };
-
             Err(RateLimitSnapshot {
                 limit: self.burst as u64,
                 remaining: bucket.tokens.floor() as u64,
-                reset_seconds,
+                reset_seconds: self.reset_seconds(bucket.tokens),
             })
+        }
+    }
+
+    fn reset_seconds(&self, tokens: f64) -> u64 {
+        if self.replenish_per_second > 0.0 {
+            ((1.0 - tokens) / self.replenish_per_second).ceil().max(0.0) as u64
+        } else {
+            0
         }
     }
 }
@@ -1642,6 +1654,66 @@ struct RateLimitSnapshot {
     limit: u64,
     remaining: u64,
     reset_seconds: u64,
+}
+
+fn attach_rate_limit_headers(headers: &mut HeaderMap, snapshot: &RateLimitSnapshot) {
+    let _ = headers.insert(
+        "X-RateLimit-Limit",
+        HeaderValue::from_str(&snapshot.limit.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    let _ = headers.insert(
+        "X-RateLimit-Remaining",
+        HeaderValue::from_str(&snapshot.remaining.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    let _ = headers.insert(
+        "X-RateLimit-Reset",
+        HeaderValue::from_str(&snapshot.reset_seconds.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+}
+
+fn rate_limit_response(snapshot: RateLimitSnapshot) -> Response {
+    let mut response = Response::builder()
+        .status(StatusCode::TOO_MANY_REQUESTS)
+        .body(Body::from("rate limit exceeded"))
+        .unwrap();
+    attach_rate_limit_headers(response.headers_mut(), &snapshot);
+    response
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+enum SnapshotRateLimitKey {
+    Auth(ApiKey),
+    Ip(IpAddr),
+}
+
+impl SnapshotRateLimitKey {
+    fn from_request(
+        request: &Request<Body>,
+        prefer_auth_identity: bool,
+    ) -> Option<SnapshotRateLimitKey> {
+        if prefer_auth_identity {
+            let api_key = extract_api_key(request);
+            if api_key != ApiKey::Anonymous {
+                return Some(Self::Auth(api_key));
+            }
+        }
+
+        request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|info| Self::Ip(info.0.ip()))
+            .or_else(|| {
+                if prefer_auth_identity {
+                    None
+                } else {
+                    let api_key = extract_api_key(request);
+                    (api_key != ApiKey::Anonymous).then_some(Self::Auth(api_key))
+                }
+            })
+    }
 }
 
 fn extract_api_key(request: &Request<Body>) -> ApiKey {
@@ -1726,15 +1798,7 @@ where
                 }
                 Err(snapshot) => {
                     metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
-                    let response = Response::builder()
-                        .status(StatusCode::TOO_MANY_REQUESTS)
-                        .header("X-RateLimit-Limit", snapshot.limit.to_string())
-                        .header("X-RateLimit-Remaining", snapshot.remaining.to_string())
-                        .header("X-RateLimit-Reset", snapshot.reset_seconds.to_string())
-                        .body(Body::from("rate limit exceeded"))
-                        .unwrap();
-
-                    Ok(response)
+                    Ok(rate_limit_response(snapshot))
                 }
             }
         })
@@ -1779,14 +1843,7 @@ where
                     }
                     Err(snapshot) => {
                         metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
-                        let response = Response::builder()
-                            .status(StatusCode::TOO_MANY_REQUESTS)
-                            .header("X-RateLimit-Limit", snapshot.limit.to_string())
-                            .header("X-RateLimit-Remaining", snapshot.remaining.to_string())
-                            .header("X-RateLimit-Reset", snapshot.reset_seconds.to_string())
-                            .body(Body::from("rate limit exceeded"))
-                            .unwrap();
-                        return Ok(response);
+                        return Ok(rate_limit_response(snapshot));
                     }
                 }
             } else {
@@ -1794,6 +1851,89 @@ where
             }
 
             inner.call(request).await
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SnapshotRateLimitLayer {
+    state: Arc<TokenBucketState<SnapshotRateLimitKey>>,
+    prefer_auth_identity: bool,
+    metrics: Arc<RuntimeMetrics>,
+}
+
+impl SnapshotRateLimitLayer {
+    fn new(config: &SnapshotTokenBucketConfig, metrics: Arc<RuntimeMetrics>) -> Self {
+        Self {
+            state: Arc::new(TokenBucketState::new(
+                config.burst,
+                config.replenish_per_minute,
+            )),
+            prefer_auth_identity: config.prefer_auth_identity,
+            metrics,
+        }
+    }
+}
+
+impl<S> Layer<S> for SnapshotRateLimitLayer {
+    type Service = SnapshotRateLimitService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        SnapshotRateLimitService {
+            inner,
+            state: self.state.clone(),
+            prefer_auth_identity: self.prefer_auth_identity,
+            metrics: self.metrics.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SnapshotRateLimitService<S> {
+    inner: S,
+    state: Arc<TokenBucketState<SnapshotRateLimitKey>>,
+    prefer_auth_identity: bool,
+    metrics: Arc<RuntimeMetrics>,
+}
+
+impl<S> Service<Request<Body>> for SnapshotRateLimitService<S>
+where
+    S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let bucket_key = SnapshotRateLimitKey::from_request(&request, self.prefer_auth_identity);
+        let rpc_method = RpcMethod::Snapshot;
+        let mut inner = self.inner.clone();
+        let state = self.state.clone();
+        let metrics = self.metrics.clone();
+
+        Box::pin(async move {
+            let Some(key) = bucket_key else {
+                metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                return inner.call(request).await;
+            };
+
+            match state.try_acquire_with_snapshot(key) {
+                Ok(snapshot) => {
+                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                    let mut response = inner.call(request).await?;
+                    attach_rate_limit_headers(response.headers_mut(), &snapshot);
+                    Ok(response)
+                }
+                Err(snapshot) => {
+                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
+                    Ok(rate_limit_response(snapshot))
+                }
+            }
         })
     }
 }
@@ -1842,15 +1982,7 @@ where
     let metrics = context.metrics();
     let enable_wallet_routes = context.wallet_routes_enabled();
 
-    let mut router = Router::new()
-        .route("/health", get(health))
-        .route("/health/live", get(health_live))
-        .route("/health/ready", get(health_ready))
-        .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
-        .route("/ui/node", get(ui_node_status))
-        .route("/ui/reputation", get(ui_reputation))
-        .route("/ui/bft/membership", get(ui_bft_membership))
-        .route("/proofs/block/:height", get(block_proofs))
+    let mut snapshot_router = Router::new()
         .route("/snapshots/plan", get(snapshot_plan))
         .route("/snapshots/jobs", get(snapshot_jobs))
         .route("/snapshots/rebuild", post(routes::state::rebuild_snapshots))
@@ -1872,7 +2004,24 @@ where
         .route(
             "/state-sync/chunk/:id",
             get(routes::state_sync::chunk_by_id),
-        )
+        );
+
+    if limits.snapshot_token_bucket.enabled {
+        snapshot_router = snapshot_router.layer(SnapshotRateLimitLayer::new(
+            &limits.snapshot_token_bucket,
+            metrics.clone(),
+        ));
+    }
+
+    let mut router = Router::new()
+        .route("/health", get(health))
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health_ready))
+        .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
+        .route("/ui/node", get(ui_node_status))
+        .route("/ui/reputation", get(ui_reputation))
+        .route("/ui/bft/membership", get(ui_bft_membership))
+        .route("/proofs/block/:height", get(block_proofs))
         .route("/validator/status", get(validator_status))
         .route("/validator/proofs", get(validator_proofs))
         .route("/validator/peers", get(validator_peers))
@@ -1939,7 +2088,8 @@ where
         .route("/observability/audits/slashing", get(slashing_audit_stream))
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
-        .route("/accounts/:address", get(account_info));
+        .route("/accounts/:address", get(account_info))
+        .merge(snapshot_router);
 
     #[cfg(feature = "wallet-integration")]
     {

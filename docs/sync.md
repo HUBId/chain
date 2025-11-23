@@ -104,6 +104,24 @@ dominating failures. The compliance alert bundle surfaces warning/critical
 conditions when more than 10%/25% of runs fail across at least three attempts in
 30 minutes.
 
+### Rate limiting snapshot RPCs
+
+Providers expose per-tenant snapshot throttling via `[network.limits.snapshot_token_bucket]`:
+
+* `burst` – maximum burst of snapshot RPCs a single identity (bearer token or
+  `x-api-key`) can issue before throttling.
+* `replenish_per_minute` – steady-state allowance per minute.
+* `prefer_auth_identity` – when `true` (default), buckets key off the
+  Authorization/X-API-Key value and fall back to the caller’s IP when absent.
+  Set to `false` to always prefer IP-based bucketing.
+
+Responses include `X-RateLimit-{Limit,Remaining,Reset}` headers so clients can
+back off before receiving a `429`. Throttle events increment
+`rpp.runtime.rpc.rate_limit.total{method="snapshot",status="throttled"}`, which
+feeds the existing rate-limit alerting policy. Dashboards can filter on
+`method="snapshot"` to distinguish abusive chunk/download callers from other RPC
+traffic and tune burst/replenish values accordingly.
+
 ## Snapshot download retries
 
 The `rpp-node validator snapshot` commands use an HTTP client to start, poll,

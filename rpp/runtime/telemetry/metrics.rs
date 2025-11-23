@@ -1375,6 +1375,8 @@ pub enum RpcMethod {
     Wallet(WalletRpcMethod),
     /// Proof related RPC handlers.
     Proof(ProofRpcMethod),
+    /// Snapshot/state-sync related handlers.
+    Snapshot,
     /// Any other handler that is not explicitly categorised.
     Other,
 }
@@ -1386,6 +1388,7 @@ impl MetricLabel for RpcMethod {
         match self {
             Self::Wallet(method) => method.as_str(),
             Self::Proof(method) => method.as_str(),
+            Self::Snapshot => "snapshot",
             Self::Other => "other",
         }
     }
