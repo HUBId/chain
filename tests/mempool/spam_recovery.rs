@@ -1,4 +1,7 @@
+use std::{env, fs, path::PathBuf};
+
 use anyhow::Result;
+use serde_json::json;
 use tempfile::tempdir;
 
 use rpp_chain::errors::ChainError;
@@ -7,8 +10,9 @@ use rpp_chain::runtime::RuntimeMetrics;
 
 use super::helpers::{
     drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
-    witness_topic,
+    sort_bundles_by_fee_desc, witness_topic,
 };
+use super::status_probe::{AlertSeverity, MempoolStatusProbe};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
@@ -157,6 +161,169 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
     drop(witness_rx);
     drop(handle);
     drop(node);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
+    let tempdir = tempdir()?;
+    let mempool_limit = 6usize;
+    let overflow = 3usize;
+    let expanded_limit = mempool_limit + overflow;
+
+    let config = sample_node_config(tempdir.path(), mempool_limit);
+    let node = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || Node::new(config, RuntimeMetrics::noop())
+    })
+    .await??;
+    let handle = node.handle();
+    let mut witness_rx = handle.subscribe_witness_gossip(witness_topic());
+
+    let recipient = handle.address().to_string();
+    let mut restoration_bundles = Vec::new();
+
+    for index in 0..mempool_limit {
+        let fee = 10 + index as u64;
+        let bundle = sample_transaction_bundle(&recipient, index as u64, fee);
+        restoration_bundles.push(bundle.clone());
+        let hash = handle
+            .submit_transaction(bundle)
+            .expect("initial transaction accepted before reaching mempool capacity");
+
+        let event = recv_witness_transaction(&mut witness_rx)
+            .await
+            .expect("witness gossip event for accepted transaction");
+        assert_eq!(
+            event.hash, hash,
+            "gossip event should include submitted hash"
+        );
+        assert_eq!(event.fee, fee, "gossip event should report transaction fee");
+    }
+
+    let mut rejected_bundles = Vec::new();
+    for index in 0..overflow {
+        let fee = 100 + index as u64;
+        let bundle = sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee);
+        rejected_bundles.push(bundle.clone());
+        match handle.submit_transaction(bundle) {
+            Err(ChainError::Transaction(message)) => {
+                assert_eq!(message, "mempool full", "overflow should be rate limited");
+            }
+            Err(other) => panic!("unexpected submission error: {other:?}"),
+            Ok(hash) => panic!("overflow transaction unexpectedly accepted: {hash}"),
+        }
+    }
+
+    drain_witness_channel(&mut witness_rx);
+
+    handle
+        .update_mempool_limit(expanded_limit)
+        .expect("expand mempool limit for recovery");
+
+    for bundle in &rejected_bundles {
+        let hash = handle
+            .submit_transaction(bundle.clone())
+            .expect("transaction should be accepted after expanding mempool limit");
+        restoration_bundles.push(bundle.clone());
+        let event = recv_witness_transaction(&mut witness_rx)
+            .await
+            .expect("witness event after mempool recovery");
+        assert_eq!(
+            event.hash, hash,
+            "recovery gossip should include transaction hash"
+        );
+    }
+
+    let recovered_snapshot = handle
+        .mempool_status()
+        .expect("mempool status after recovery");
+    assert_eq!(
+        recovered_snapshot.transactions.len(),
+        expanded_limit,
+        "recovery should leave a full mempool before restart",
+    );
+
+    drop(witness_rx);
+    drop(handle);
+    drop(node);
+
+    let restart_config = sample_node_config(tempdir.path(), expanded_limit);
+    let restarted_node = tokio::task::spawn_blocking({
+        let restart_config = restart_config.clone();
+        move || Node::new(restart_config, RuntimeMetrics::noop())
+    })
+    .await??;
+    let restarted_handle = restarted_node.handle();
+
+    let ordered_bundles = sort_bundles_by_fee_desc(restoration_bundles.clone());
+    for bundle in ordered_bundles.clone() {
+        restarted_handle
+            .submit_transaction(bundle)
+            .expect("restoration bundle should be accepted after restart");
+    }
+
+    let restored_snapshot = restarted_handle
+        .mempool_status()
+        .expect("mempool status after restart");
+    let observed_order: Vec<_> = restored_snapshot
+        .transactions
+        .iter()
+        .map(|tx| (tx.hash.clone(), tx.fee))
+        .collect();
+    let expected_order: Vec<_> = ordered_bundles
+        .iter()
+        .map(|bundle| (bundle.hash(), bundle.transaction.payload.fee))
+        .collect();
+
+    let ordering_artifact_dir = env::var("MEMPOOL_ORDERING_ARTIFACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target/artifacts/mempool-ordering-probe")
+        });
+    fs::create_dir_all(&ordering_artifact_dir).expect("create mempool ordering artifact directory");
+
+    let probe = MempoolStatusProbe::new(0.8, 1.0);
+    let probe_alerts = probe.evaluate(&restored_snapshot, expanded_limit);
+
+    let ordering_log = json!({
+        "expected_fee_order": expected_order,
+        "observed_fee_order": observed_order,
+        "pending_after_restart": restored_snapshot.transactions.len(),
+        "mempool_limit": expanded_limit,
+        "alerts": probe_alerts
+            .iter()
+            .map(|alert| json!({
+                "queue": alert.queue,
+                "severity": match alert.severity {
+                    AlertSeverity::Warning => "warning",
+                    AlertSeverity::Critical => "critical",
+                },
+                "summary": alert.summary(),
+            }))
+            .collect::<Vec<_>>()
+    });
+    fs::write(
+        ordering_artifact_dir.join("ordering.json"),
+        serde_json::to_vec_pretty(&ordering_log).expect("serialize ordering log"),
+    )
+    .expect("persist mempool ordering artifact");
+
+    assert_eq!(
+        observed_order, expected_order,
+        "restored mempool should preserve fee-priority ordering",
+    );
+    assert!(
+        probe_alerts
+            .iter()
+            .any(|alert| alert.queue == "transactions" && alert.severity == AlertSeverity::Critical),
+        "full restored mempool should trigger critical transaction alerts",
+    );
+
+    drop(restarted_handle);
+    drop(restarted_node);
 
     Ok(())
 }
