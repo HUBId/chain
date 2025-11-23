@@ -7,16 +7,18 @@ use rpp_p2p::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{
-    calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, RecoveryMetrics,
-    ReplayGuardDrops, ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics,
+    calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, PeerTrafficRecord,
+    RecoveryMetrics, ReplayGuardDrops, ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics,
     SimulationSummary,
 };
+use rpp_p2p::peerstore::peer_class::PeerClass;
 
 #[derive(Debug, Clone)]
 pub enum SimEvent {
     Publish {
         peer_id: PeerId,
         message_id: String,
+        payload_bytes: usize,
         timestamp: Instant,
     },
     Receive {
@@ -26,6 +28,7 @@ pub enum SimEvent {
         timestamp: Instant,
         duplicate: bool,
         peer_class: rpp_p2p::peerstore::peer_class::PeerClass,
+        payload_bytes: usize,
     },
     MeshChange {
         peer_id: PeerId,
@@ -105,6 +108,7 @@ pub struct Collector {
     slow_peer_queue_full: usize,
     slow_peer_timeouts: usize,
     resource_usage: Option<ResourceUsageMetrics>,
+    peer_traffic: HashMap<String, PeerTraffic>,
 }
 
 impl Collector {
@@ -132,6 +136,7 @@ impl Collector {
             slow_peer_queue_full: 0,
             slow_peer_timeouts: 0,
             resource_usage: None,
+            peer_traffic: HashMap::new(),
         }
     }
 
@@ -140,15 +145,18 @@ impl Collector {
             SimEvent::Publish {
                 peer_id,
                 message_id,
+                payload_bytes,
                 timestamp,
             } => {
                 self.total_publishes += 1;
                 self.publications.insert(message_id, timestamp);
+                self.record_outbound(&peer_id, payload_bytes);
                 tracing::trace!(target = "rpp::sim::metrics", %peer_id, "publish recorded");
             }
             SimEvent::Receive {
                 peer_id,
                 message_id,
+                payload_bytes,
                 timestamp,
                 duplicate,
                 peer_class,
@@ -187,6 +195,7 @@ impl Collector {
                         timestamp.duration_since(partition_end).as_secs_f64() * 1_000.0;
                     self.resume_latencies_ms.push(resume_latency);
                 }
+                self.record_inbound(&peer_id, payload_bytes);
                 tracing::trace!(target = "rpp::sim::metrics", %peer_id, duplicate, "receive recorded");
             }
             SimEvent::MeshChange {
@@ -345,6 +354,18 @@ impl Collector {
             }
         };
 
+        let mut peer_traffic: Vec<PeerTrafficRecord> = self
+            .peer_traffic
+            .iter()
+            .map(|(peer_id, traffic)| PeerTrafficRecord {
+                peer_id: peer_id.clone(),
+                peer_class: peer_class_label(traffic.peer_class).to_string(),
+                bytes_in: traffic.bytes_in,
+                bytes_out: traffic.bytes_out,
+            })
+            .collect();
+        peer_traffic.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
+
         SimulationSummary {
             total_publishes: self.total_publishes,
             total_receives: self.total_receives,
@@ -357,10 +378,55 @@ impl Collector {
             recovery,
             bandwidth,
             gossip_backpressure,
+            peer_traffic,
             slow_peer_records: self.slow_peer_records,
             resource_usage: self.resource_usage,
             comparison: None,
         }
+    }
+
+    fn traffic_entry(&mut self, peer_id: &PeerId) -> &mut PeerTraffic {
+        let key = peer_id.to_string();
+        self.peer_traffic
+            .entry(key.clone())
+            .or_insert_with(|| PeerTraffic {
+                peer_class: peer_class_from_id(peer_id),
+                ..Default::default()
+            })
+    }
+
+    fn record_outbound(&mut self, peer_id: &PeerId, payload_bytes: usize) {
+        let entry = self.traffic_entry(peer_id);
+        entry.bytes_out = entry.bytes_out.saturating_add(payload_bytes as u64);
+    }
+
+    fn record_inbound(&mut self, peer_id: &PeerId, payload_bytes: usize) {
+        let entry = self.traffic_entry(peer_id);
+        entry.bytes_in = entry.bytes_in.saturating_add(payload_bytes as u64);
+    }
+}
+
+#[derive(Debug, Default)]
+struct PeerTraffic {
+    peer_class: PeerClass,
+    bytes_in: u64,
+    bytes_out: u64,
+}
+
+fn peer_class_from_id(peer_id: &PeerId) -> PeerClass {
+    let bytes = peer_id.to_bytes();
+    let last = bytes.last().copied().unwrap_or_default();
+    if last % 2 == 0 {
+        PeerClass::Trusted
+    } else {
+        PeerClass::Untrusted
+    }
+}
+
+fn peer_class_label(class: PeerClass) -> &'static str {
+    match class {
+        PeerClass::Trusted => "trusted",
+        PeerClass::Untrusted => "untrusted",
     }
 }
 

@@ -189,6 +189,7 @@ mod tests {
                 forward_failures: 7,
                 timeout_failures: 1,
             }),
+            peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
             comparison: None,

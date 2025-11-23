@@ -67,3 +67,29 @@ validations before starting any processes:
 The `cargo xtask test-simnet` entry point used in CI and nightly workflows calls
 the same wrapper to run the canonical suite of profiles. When adding new
 presets, update the table above so local runs and automation stay aligned.
+
+## Inspecting per-peer traffic metrics
+
+Simnet now records the total bytes in/out for every simulated peer, along with
+its derived peer class (trusted/untrusted). Each harness run emits a `peer
+traffic totals` log line per peer and persists the structured values in the
+JSON summaries written under `target/simnet/<scenario>/summaries/*.json`.
+
+- Use the analyzer helper to print the heaviest peers and enforce limits in the
+  partition/flood drills:
+
+  ```
+  python3 scripts/analyze_simnet.py target/simnet/partitioned-flood/summaries/partitioned_flood.json \
+    --peer-bytes-multiplier 4 --min-peer-bytes 1024
+  ```
+
+- Export the raw per-peer table for dashboards or spreadsheets with `jq`:
+
+  ```
+  jq -r '.peer_traffic[] | [.peer_id, .peer_class, .bytes_in, .bytes_out] | @csv' \
+    target/simnet/partitioned-flood/summaries/partitioned_flood.json > peer_traffic.csv
+  ```
+
+The CI jobs bundle the `summaries/` directory (including the peer traffic block)
+in their artifacts, so the same commands work on downloaded runs without
+rerunning the scenarios locally.

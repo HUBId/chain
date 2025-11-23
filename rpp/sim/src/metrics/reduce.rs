@@ -47,6 +47,8 @@ pub struct SimulationSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gossip_backpressure: Option<GossipBackpressureMetrics>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_traffic: Vec<PeerTrafficRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slow_peer_records: Vec<SlowPeerRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_usage: Option<ResourceUsageMetrics>,
@@ -86,6 +88,14 @@ pub struct GossipBackpressureMetrics {
     pub publish_failures: usize,
     pub forward_failures: usize,
     pub timeout_failures: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PeerTrafficRecord {
+    pub peer_id: String,
+    pub peer_class: String,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -232,6 +242,7 @@ mod tests {
             recovery: None,
             bandwidth: None,
             gossip_backpressure: None,
+            peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
             comparison: None,
@@ -251,6 +262,7 @@ mod tests {
             recovery: None,
             bandwidth: None,
             gossip_backpressure: None,
+            peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
             comparison: None,

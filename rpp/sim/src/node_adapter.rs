@@ -209,6 +209,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                             }
                         }
                         Some(NodeCommand::Publish { data }) => {
+                            let payload_bytes = data.len();
                             match swarm
                                 .behaviour_mut()
                                 .gossipsub
@@ -218,6 +219,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                                     let _ = event_tx.send(SimEvent::Publish {
                                         peer_id: local_peer,
                                         message_id: message_id.to_string(),
+                                        payload_bytes,
                                         timestamp: Instant::now(),
                                     });
                                 }
@@ -300,6 +302,7 @@ fn handle_gossipsub_event(
         gossipsub::Event::Message {
             propagation_source,
             message_id,
+            message,
             ..
         } => {
             let id = message_id.to_string();
@@ -311,6 +314,7 @@ fn handle_gossipsub_event(
                 timestamp: Instant::now(),
                 duplicate: !is_new,
                 peer_class: classify_peer(&propagation_source),
+                payload_bytes: message.data.len(),
             });
         }
         gossipsub::Event::Subscribed { peer_id, topic } => {

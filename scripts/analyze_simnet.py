@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+def median(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
 def load_summary(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -59,6 +69,19 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
             f"queue_full={backpressure.get('queue_full_messages', 0)}"
         )
 
+    peer_traffic = summary.get("peer_traffic") or []
+    if peer_traffic:
+        top_out = max(peer_traffic, key=lambda record: record.get("bytes_out", 0))
+        top_in = max(peer_traffic, key=lambda record: record.get("bytes_in", 0))
+        lines.append(
+            "  peer_bytes_out_max: "
+            f"{top_out.get('bytes_out', 0)} ({top_out.get('peer_id')} [{top_out.get('peer_class')}])"
+        )
+        lines.append(
+            "  peer_bytes_in_max: "
+            f"{top_in.get('bytes_in', 0)} ({top_in.get('peer_id')} [{top_in.get('peer_class')}])"
+        )
+
     resource_usage = summary.get("resource_usage") or {}
     if resource_usage:
         max_rss = resource_usage.get("max_rss_bytes")
@@ -99,6 +122,55 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
                 f"p95={deltas.get('propagation_p95_ms'):.2f}"
             )
     return "\n".join(lines)
+
+
+def check_peer_traffic(
+    path: Path, summary: Dict[str, Any], args: argparse.Namespace, failures: List[str]
+) -> None:
+    peer_traffic = summary.get("peer_traffic") or []
+    if not peer_traffic:
+        failures.append(f"{path} missing peer_traffic metrics")
+        return
+
+    inbound = [record.get("bytes_in", 0) for record in peer_traffic]
+    outbound = [record.get("bytes_out", 0) for record in peer_traffic]
+    med_in = median(inbound)
+    med_out = median(outbound)
+
+    for record in peer_traffic:
+        peer_id = record.get("peer_id", "unknown")
+        if record.get("bytes_in", 0) < args.min_peer_bytes:
+            failures.append(
+                f"{path} peer {peer_id} inbound bytes {record.get('bytes_in', 0)} "
+                f"below floor {args.min_peer_bytes}"
+            )
+        if record.get("bytes_out", 0) < args.min_peer_bytes:
+            failures.append(
+                f"{path} peer {peer_id} outbound bytes {record.get('bytes_out', 0)} "
+                f"below floor {args.min_peer_bytes}"
+            )
+
+        if med_in > 0 and record.get("bytes_in", 0) > med_in * args.peer_bytes_multiplier:
+            failures.append(
+                f"{path} peer {peer_id} inbound bytes {record.get('bytes_in', 0)} "
+                f"exceeds median {med_in:.0f} by >{args.peer_bytes_multiplier}x"
+            )
+        if med_out > 0 and record.get("bytes_out", 0) > med_out * args.peer_bytes_multiplier:
+            failures.append(
+                f"{path} peer {peer_id} outbound bytes {record.get('bytes_out', 0)} "
+                f"exceeds median {med_out:.0f} by >{args.peer_bytes_multiplier}x"
+            )
+
+        if med_in > 0 and record.get("bytes_in", 0) < med_in / args.peer_bytes_multiplier:
+            failures.append(
+                f"{path} peer {peer_id} inbound bytes {record.get('bytes_in', 0)} "
+                f"lags median {med_in:.0f} by >{args.peer_bytes_multiplier}x"
+            )
+        if med_out > 0 and record.get("bytes_out", 0) < med_out / args.peer_bytes_multiplier:
+            failures.append(
+                f"{path} peer {peer_id} outbound bytes {record.get('bytes_out', 0)} "
+                f"lags median {med_out:.0f} by >{args.peer_bytes_multiplier}x"
+            )
 
 
 def render_consensus_report(path: Path, summary: Dict[str, Any]) -> str:
@@ -196,6 +268,18 @@ def main(argv: List[str]) -> int:
         type=float,
         default=3500.0,
         help="Fail if simnet RSS exceeds this many MiB",
+    )
+    parser.add_argument(
+        "--peer-bytes-multiplier",
+        type=float,
+        default=4.0,
+        help="Fail if a peer's bytes in/out diverge from the median by this multiple",
+    )
+    parser.add_argument(
+        "--min-peer-bytes",
+        type=int,
+        default=1024,
+        help="Fail if per-peer byte counters stay below this floor in flood/partition drills",
     )
     parser.add_argument(
         "--capture-dir",
@@ -307,6 +391,10 @@ def main(argv: List[str]) -> int:
                 failures.append(
                     f"{path} reported gossip backpressure metrics without queue-full samples"
                 )
+
+        scenario_slug = path.stem.lower()
+        if "flood" in scenario_slug or "partition" in scenario_slug:
+            check_peer_traffic(path, summary, args, failures)
 
         resource_usage = summary.get("resource_usage")
         if not resource_usage:
