@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use rpp_chain::config::{NodeConfig, QueueWeightsConfig};
+use rpp_chain::consensus::{BftVote, BftVoteKind, SignedBftVote};
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
 use rpp_chain::types::{
     Account, ChainProof, ExecutionTrace, PendingTransactionSummary, ProofKind, ProofPayload,
@@ -122,4 +123,27 @@ pub(super) fn sort_bundles_by_fee_desc(
             )
     });
     bundles
+}
+
+pub(super) fn sample_vote(height: u64, round: u64) -> SignedBftVote {
+    let keypair = generate_keypair();
+    let voter = address_from_public_key(&keypair.public);
+    let vote = BftVote {
+        round,
+        height,
+        block_hash: format!("block-{height:08x}-{round:04x}"),
+        voter: voter.clone(),
+        kind: if round % 2 == 0 {
+            BftVoteKind::PreVote
+        } else {
+            BftVoteKind::PreCommit
+        },
+    };
+    let signature = sign_message(&keypair, &vote.message_bytes());
+
+    SignedBftVote {
+        vote,
+        public_key: hex::encode(keypair.public.to_bytes()),
+        signature: hex::encode(signature.to_bytes()),
+    }
 }
