@@ -23,7 +23,7 @@ use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -92,9 +92,25 @@ pub use state_sync::light_client::{
 
 const WORM_EXPORT_MISCONFIGURED_METRIC: &str = "worm_export_misconfigured_total";
 const TELEMETRY_FAILURE_METRIC: &str = "telemetry_otlp_failures_total";
+static TELEMETRY_ERROR_HANDLER: Once = Once::new();
 
 fn record_otlp_failure(sink: &'static str, phase: &'static str) {
     metrics::counter!(TELEMETRY_FAILURE_METRIC, "sink" => sink, "phase" => phase).increment(1);
+}
+
+fn install_telemetry_error_handler() {
+    TELEMETRY_ERROR_HANDLER.call_once(|| {
+        if let Err(error) = opentelemetry::global::set_error_handler(|err| {
+            warn!(
+                target = "telemetry",
+                phase = "export",
+                error = %err,
+                "telemetry exporter error; will retry with exponential backoff"
+            );
+        }) {
+            eprintln!("failed to install telemetry error handler: {error}");
+        }
+    });
 }
 
 pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
@@ -1675,6 +1691,8 @@ fn init_tracing(
         );
         return Ok(None);
     }
+
+    install_telemetry_error_handler();
 
     let prometheus_guard = install_prometheus_recorder(&telemetry_config)
         .context("failed to initialise Prometheus recorder")?;

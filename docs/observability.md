@@ -82,6 +82,25 @@ CI automatically uploads the `telemetry-chaos` artifact bundle for every chaos
 test invocation so responders can download and review the run without
 reproducing it locally, even when the test succeeds.【F:.github/workflows/nightly.yml†L92-L112】
 
+## OTLP exporter timeout and backpressure drill
+
+The `telemetry_otlp_timeouts_backoff_and_buffer` chaos test holds both the
+OTLP/HTTP and OTLP/gRPC collectors in a stalled state, forcing exporter
+requests to time out until the collectors become responsive again. The
+runtime’s global telemetry error handler logs every export error and uses the
+OTLP client backoff to avoid hammering an unhealthy collector.【F:rpp/node/src/lib.rs†L80-L106】
+
+- Logs: during the blackout the node emits `telemetry exporter error; will
+  retry with exponential backoff`, confirming exporters are buffering and
+  backing off instead of dropping the runtime.【F:tests/observability_otlp_failures.rs†L90-L181】
+- Recovery: once the collectors start responding, the test waits for successful
+  OTLP/HTTP and OTLP/gRPC exports and captures the Prometheus scrape alongside
+  the alert payload used in the chaos artifact bundle.【F:tests/observability_otlp_failures.rs†L183-L263】
+
+The nightly chaos workflow executes the entire OTLP failure suite (initial
+startup failures, failover, and timeout recovery) so regressions in telemetry
+backpressure or alerting surface without blocking day-to-day development.
+
 ## Telemetry schema allowlist
 
 Runtime metrics exported by the node are validated against an allowlist stored
