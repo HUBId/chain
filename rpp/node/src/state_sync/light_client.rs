@@ -21,6 +21,8 @@ use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 use storage::snapshots::{known_snapshot_sets, SnapshotSet};
 use storage_firewood::pruning::{PersistedPrunerSnapshot, PersistedPrunerState};
 use thiserror::Error;
+use tracing::info;
+use uuid::Uuid;
 
 const PRUNER_STATE_KEY: &[u8] = b"pruner_state";
 const SNAPSHOT_PREFIX: &[u8] = b"fw-pruning-snapshot";
@@ -51,7 +53,24 @@ impl LightClientVerifier {
 
     /// Executes the verification pipeline and returns a detailed report of the run.
     pub fn run(&self, chunk_size: usize) -> Result<StateSyncVerificationReport, VerificationError> {
-        let mut builder = ReportBuilder::default();
+        self.run_with_request(chunk_size, None)
+    }
+
+    /// Executes the verification pipeline with a provided request identifier.
+    pub fn run_with_request(
+        &self,
+        chunk_size: usize,
+        request_id: Option<String>,
+    ) -> Result<StateSyncVerificationReport, VerificationError> {
+        let request_id = request_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let mut builder = ReportBuilder::with_request_id(request_id.clone());
+
+        info!(
+            target: "node",
+            %request_id,
+            chunk_size,
+            "starting state sync verification run",
+        );
         let engine = match self.snapshot_dir.clone() {
             Some(dir) => ReconstructionEngine::with_snapshot_dir(self.storage.clone(), dir),
             None => ReconstructionEngine::new(self.storage.clone()),
@@ -100,7 +119,7 @@ impl LightClientVerifier {
 
         let verified = light_client
             .verify()
-            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err, builder.request_id())))?;
         if !verified {
             return Err(builder.fail(VerificationErrorKind::Incomplete(
                 "light client verification incomplete".to_string(),
@@ -113,6 +132,13 @@ impl LightClientVerifier {
         builder.record_event(LightClientVerificationEvent::VerificationCompleted {
             snapshot_root: hex::encode(snapshot_root),
         });
+
+        info!(
+            target: "node",
+            %request_id,
+            snapshot_root = %hex::encode(snapshot_root),
+            "state sync verification completed",
+        );
 
         Ok(builder.into_success())
     }
@@ -144,7 +170,7 @@ fn ingest_plan(
     })?;
     light_client
         .ingest_plan(&payload)
-        .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
+        .map_err(|err| builder.fail(classify_pipeline_error(err, builder.request_id())))?;
     builder.record_event(LightClientVerificationEvent::PlanIngested {
         chunk_count: plan.chunks.len(),
         update_count: plan.light_client_updates.len(),
@@ -167,7 +193,7 @@ fn ingest_chunks(
         })?;
         light_client
             .ingest_chunk(&payload)
-            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err, builder.request_id())))?;
 
         let mut leaves = Vec::with_capacity(chunk.proofs.len());
         for proof in &chunk.proofs {
@@ -200,7 +226,7 @@ fn ingest_light_client_updates(
         })?;
         light_client
             .ingest_light_client_update(&payload)
-            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err, builder.request_id())))?;
         builder.note_update(update.height);
         builder.record_event(LightClientVerificationEvent::RecursiveProofVerified {
             height: update.height,
@@ -383,22 +409,22 @@ fn decode_commitment_base64(value: &str) -> Result<[u8; DIGEST_LENGTH], Verifica
     Ok(digest)
 }
 
-fn classify_pipeline_error(err: PipelineError) -> VerificationErrorKind {
+fn classify_pipeline_error(err: PipelineError, request_id: Option<&str>) -> VerificationErrorKind {
     match err {
         PipelineError::SnapshotVerification(message) if message.contains(PROOF_IO_MARKER) => {
-            PipelineMetrics::global().record_root_io_error();
+            PipelineMetrics::global().record_root_io_error(request_id);
             VerificationErrorKind::Io(message)
         }
         PipelineError::SnapshotVerification(message) => {
-            PipelineMetrics::global().record_state_sync_tamper("snapshot_verification");
+            PipelineMetrics::global().record_state_sync_tamper("snapshot_verification", request_id);
             VerificationErrorKind::Pipeline(message)
         }
         PipelineError::Validation(message) if message.contains(PROOF_IO_MARKER) => {
-            PipelineMetrics::global().record_root_io_error();
+            PipelineMetrics::global().record_root_io_error(request_id);
             VerificationErrorKind::Io(message)
         }
         PipelineError::Persistence(message) if message.contains(PROOF_IO_MARKER) => {
-            PipelineMetrics::global().record_root_io_error();
+            PipelineMetrics::global().record_root_io_error(request_id);
             VerificationErrorKind::Io(message)
         }
         other => VerificationErrorKind::Pipeline(other.to_string()),
@@ -461,9 +487,17 @@ struct ReportBuilder {
     update_heights: Vec<u64>,
     snapshot_height: Option<u64>,
     snapshot_root: Option<[u8; DIGEST_LENGTH]>,
+    request_id: Option<String>,
 }
 
 impl ReportBuilder {
+    fn with_request_id(request_id: String) -> Self {
+        Self {
+            request_id: Some(request_id),
+            ..Self::default()
+        }
+    }
+
     fn record_event(&mut self, event: LightClientVerificationEvent) {
         self.events.push(event);
     }
@@ -487,6 +521,10 @@ impl ReportBuilder {
         self.snapshot_root = Some(root);
     }
 
+    fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
     fn fail(&mut self, kind: VerificationErrorKind) -> VerificationError {
         let builder = mem::replace(self, ReportBuilder::default());
         let report = builder.finish(Some(kind.to_string()));
@@ -505,6 +543,7 @@ impl ReportBuilder {
             verified_chunk_ranges: self.chunk_ranges,
             verified_light_client_heights: self.update_heights,
             failure,
+            request_id: self.request_id,
         };
         StateSyncVerificationReport {
             events: self.events,
@@ -593,6 +632,7 @@ pub struct StateSyncVerificationSummary {
     pub verified_chunk_ranges: Vec<VerifiedChunkRange>,
     pub verified_light_client_heights: Vec<u64>,
     pub failure: Option<String>,
+    pub request_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -605,13 +645,14 @@ pub struct StateSyncVerificationReport {
 mod tests {
     use super::*;
     use opentelemetry::{global, Context};
-    use opentelemetry_sdk::metrics::data::ResourceMetrics;
+    use opentelemetry_sdk::metrics::data::{Data, ResourceMetrics};
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MeterProvider, PeriodicReader};
     use rpp_chain::runtime::sync::{ReconstructionEngine, RuntimeRecursiveProofVerifier};
     use rpp_chain::storage::Storage;
     use rpp_p2p::LightClientSync;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tracing_test::{logs_contain, traced_test};
 
     mod support {
         include!(concat!(
@@ -624,6 +665,8 @@ mod tests {
     fn mid_stream_tamper_aborts_and_records_metric() {
         let (exporter, provider) = setup_metrics();
         global::set_meter_provider(provider.clone());
+
+        let request_id = "tamper-run";
 
         let tempdir = TempDir::new().expect("temp dir");
         let storage = Storage::open(tempdir.path()).expect("open storage");
@@ -678,7 +721,7 @@ mod tests {
             "unexpected tamper error: {message}",
         );
 
-        let _ = super::classify_pipeline_error(err);
+        let _ = super::classify_pipeline_error(err, Some(request_id));
 
         provider
             .force_flush(&Context::current())
@@ -687,6 +730,11 @@ mod tests {
         assert!(metric_observed(
             &exported,
             "rpp_node_pipeline_state_sync_tamper_total"
+        ));
+        assert!(metric_has_request_id(
+            &exported,
+            "rpp_node_pipeline_state_sync_tamper_total",
+            request_id
         ));
     }
 
@@ -703,5 +751,27 @@ mod tests {
             .flat_map(|resource| resource.scope_metrics())
             .flat_map(|scope| scope.metrics())
             .any(|metric| metric.name() == name)
+    }
+
+    fn metric_has_request_id(exported: &[ResourceMetrics], name: &str, request_id: &str) -> bool {
+        exported
+            .iter()
+            .flat_map(|resource| resource.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .filter(|metric| metric.name() == name)
+            .flat_map(|metric| match metric.data() {
+                Data::Sum(sum) => sum.data_points().iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .any(|point| {
+                point.attributes().iter().any(|kv| {
+                    kv.key.as_str() == "request_id"
+                        && kv
+                            .value
+                            .as_str()
+                            .map(|value| value == request_id)
+                            .unwrap_or(false)
+                })
+            })
     }
 }

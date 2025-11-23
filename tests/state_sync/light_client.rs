@@ -21,6 +21,7 @@ use serde_json::{from_str, Value};
 use storage::snapshots::{known_snapshot_sets, SnapshotEntry, SnapshotSet};
 use storage_firewood::pruning::PersistedPrunerState;
 use tempfile::TempDir;
+use tracing_test::{logs_contain, traced_test};
 
 #[path = "../support/mod.rs"]
 mod support;
@@ -283,6 +284,22 @@ fn expect_success_report(context: &PreparedContext) -> StateSyncVerificationRepo
     verifier
         .run(DEFAULT_STATE_SYNC_CHUNK)
         .expect("verification succeeds")
+}
+
+#[traced_test]
+fn light_client_verifier_propagates_request_id_and_logs() {
+    let state = load_recorded_pruner_state();
+    let context = prepare_context(state);
+    let request_id = "light-client-log";
+
+    let verifier = LightClientVerifier::new(context.storage.clone());
+    let report = verifier
+        .run_with_request(DEFAULT_STATE_SYNC_CHUNK, Some(request_id.to_string()))
+        .expect("verification succeeds");
+
+    assert_eq!(report.summary.request_id.as_deref(), Some(request_id));
+    assert!(logs_contain(request_id));
+    assert!(logs_contain("state sync verification completed"));
 }
 
 #[test]

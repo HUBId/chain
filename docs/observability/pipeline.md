@@ -17,7 +17,8 @@ unter `/metrics` bereit und tragen die Präfixe `pipeline_*` beziehungsweise
 | `rpp.node.pipeline.stage_latency_ms` | Histogram (f64) | `phase` (`wallet`, `proof`, `consensus`, `storage`) | End-to-end latency in milliseconds from bundle ingestion until the stage was first observed. |
 | `rpp.node.pipeline.stage_total` | Counter (u64) | `phase` (`wallet`, `proof`, `consensus`, `storage`) | Total number of stage observations. Useful for rate panels and alert ratios. |
 | `rpp.node.pipeline.commit_height` | Histogram (u64) | `phase="storage"` | Firewood commit height reported once the storage stage completes. Confirms persistence progress. |
-| `rpp_node_pipeline_root_io_errors_total` | Counter (u64) | _none_ | Total Firewood root IO errors surfaced by the state-sync verifier. Alerts operators to snapshot corruption or storage outages. |
+| `rpp_node_pipeline_root_io_errors_total` | Counter (u64) | `request_id` | Total Firewood root IO errors surfaced by the state-sync verifier. Alerts operators to snapshot corruption or storage outages. |
+| `rpp_node_pipeline_state_sync_tamper_total` | Counter (u64) | `reason`, `request_id` | Total number of tamper events detected while verifying state-sync manifests or chunks. |
 
 The latency and count instruments apply to every stage; the commit height bucket
 is only populated when Firewood commits the block. Metrics share the
@@ -34,6 +35,12 @@ when Prometheus scraping is enabled:
 | `snapshot_bytes_sent_total` | Counter (u64) | `direction` (`outbound`, `inbound`), `kind` (`plan`, `chunk`, `light_client_update`, `resume`, `ack`, `error`) | Captures throughput for producers (outbound) and consumers (inbound). Chunk throughput should rise steadily during light-client syncs. |
 | `snapshot_stream_lag_seconds` | Gauge (f64) | _none_ | Maximum observed delay since the last successful chunk/update/ack across active sessions. Healthy streams remain below 30 seconds. |
 | `light_client_chunk_failures_total` | Counter (u64) | `direction`, `kind` (`chunk`, `light_client_update`) | Counts failed fetches or decode errors. Any sustained increase indicates unhealthy peers or corrupt artefacts. |
+
+Each state-sync verification run attaches a `request_id` that flows through the
+runtime logs, REST responses (`/state-sync/session` and `/state-sync/chunk/:id`),
+and the pipeline counters above. When investigating tamper events or root IO
+errors, pivot on the `request_id` label to correlate dashboard anomalies with
+client-facing responses and the corresponding verifier logs.
 
 See `docs/observability/network_snapshots.md` for detailed queries, alert
 thresholds, and dashboard examples that tie these metrics back into the pipeline

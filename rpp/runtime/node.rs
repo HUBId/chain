@@ -39,6 +39,7 @@ use tracing::instrument;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::{debug, error, info, info_span, warn};
+use uuid::Uuid;
 
 use blake2::{
     digest::{consts::U32, Digest},
@@ -1008,6 +1009,7 @@ pub struct StateSyncSessionCache {
     status: StateSyncVerificationStatus,
     error: Option<String>,
     error_kind: Option<VerificationErrorKind>,
+    request_id: Option<String>,
 }
 
 impl Default for StateSyncSessionCache {
@@ -1024,6 +1026,7 @@ impl Default for StateSyncSessionCache {
             status: StateSyncVerificationStatus::Idle,
             error: None,
             error_kind: None,
+            request_id: None,
         }
     }
 }
@@ -1084,6 +1087,9 @@ impl StateSyncSessionCache {
             if let Some(root) = Self::decode_snapshot_root(root_hex) {
                 self.snapshot_root = Some(root);
             }
+        }
+        if self.request_id.is_none() {
+            self.request_id = report.summary.request_id.clone();
         }
         self.report = Some(report);
     }
@@ -5672,7 +5678,7 @@ impl NodeInner {
         let expected_root = Hash::from(plan.snapshot.commitments.global_state_root);
         let expected_chunks = plan.chunks.len();
 
-        loop {
+        let request_id = loop {
             {
                 let mut cache = self.state_sync_session.lock();
                 if cache.chunk_size == Some(chunk_size)
@@ -5698,6 +5704,12 @@ impl NodeInner {
                     continue;
                 }
 
+                let request_id = cache.request_id.clone().unwrap_or_else(|| {
+                    let id = Uuid::new_v4().to_string();
+                    cache.request_id = Some(id.clone());
+                    id
+                });
+
                 cache.set_status(StateSyncVerificationStatus::Verifying);
                 cache.chunk_size = Some(chunk_size);
                 cache.snapshot_root = Some(expected_root);
@@ -5705,9 +5717,18 @@ impl NodeInner {
                 cache.served_chunks.clear();
                 cache.progress_log.clear();
                 cache.last_completed_step = None;
+                break request_id;
             }
-            break;
-        }
+        };
+
+        info!(
+            target: "node",
+            %request_id,
+            chunk_size,
+            snapshot_root = %hex::encode(expected_root),
+            expected_chunks,
+            "state sync verification session started",
+        );
 
         let verifier = if self.config.snapshot_dir.as_os_str().is_empty() {
             LightClientVerifier::new(self.storage.clone())
@@ -5718,7 +5739,7 @@ impl NodeInner {
             )
         };
 
-        let result = verifier.run(chunk_size);
+        let result = verifier.run_with_request(chunk_size, Some(request_id.clone()));
 
         let mut cache = self.state_sync_session.lock();
         match result {
@@ -5740,6 +5761,13 @@ impl NodeInner {
                 cache.progress_log.clear();
                 cache.last_completed_step = None;
                 cache.set_status(StateSyncVerificationStatus::Verified);
+                info!(
+                    target: "node",
+                    %request_id,
+                    snapshot_root = %hex::encode(derived_root),
+                    chunk_count,
+                    "state sync verification completed successfully",
+                );
                 Ok(StateSyncVerificationStatus::Verified)
             }
             Err(err) => {
@@ -5772,6 +5800,12 @@ impl NodeInner {
                 cache.status = StateSyncVerificationStatus::Failed;
                 cache.error = Some(err.to_string());
                 cache.error_kind = Some(err.kind().clone());
+                error!(
+                    target: "node",
+                    %request_id,
+                    error = %err,
+                    "state sync verification failed",
+                );
                 Ok(StateSyncVerificationStatus::Failed)
             }
         }

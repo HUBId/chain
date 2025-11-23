@@ -52,6 +52,10 @@
     "last_error": {
       "type": ["string", "null"],
       "description": "Last verification error emitted by the runtime, if any."
+    },
+    "request_id": {
+      "type": ["string", "null"],
+      "description": "Correlation identifier for the current verification run exposed in logs and metrics."
     }
   },
   "additionalProperties": false
