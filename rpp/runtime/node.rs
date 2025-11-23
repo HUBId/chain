@@ -154,15 +154,17 @@ use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError,
-    ProofCacheMetricsSnapshot, ResumeBoundKind, SnapshotChunk, SnapshotChunkCapabilities,
-    SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
-    SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    ProofCacheMetricsSnapshot, ResumeBoundKind, SnapshotBreakerStatus, SnapshotChunk,
+    SnapshotChunkCapabilities, SnapshotChunkStream, SnapshotItemKind, SnapshotProvider,
+    SnapshotProviderHandle, SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel,
+    VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
 pub const DEFAULT_STATE_SYNC_CHUNK: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
+const SNAPSHOT_BREAKER_THRESHOLD: u64 = 3;
 
 #[cfg(feature = "backend-rpp-stark")]
 const RPP_STARK_PROOF_BUCKETS: [u64; 4] =
@@ -1553,6 +1555,7 @@ pub(crate) struct NodeInner {
     cache_metrics_checkpoint: ParkingMutex<ProofCacheMetricsSnapshot>,
     state_sync_session: ParkingMutex<StateSyncSessionCache>,
     state_sync_server: OnceCell<Arc<StateSyncServer>>,
+    snapshot_breaker: SnapshotCircuitBreaker,
 }
 
 #[cfg_attr(not(feature = "prover-stwo"), allow(dead_code))]
@@ -1759,6 +1762,91 @@ impl SnapshotSessionStore {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SnapshotCircuitBreaker {
+    threshold: u64,
+    state: Arc<ParkingMutex<SnapshotCircuitState>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SnapshotCircuitState {
+    consecutive_failures: u64,
+    open: bool,
+    last_error: Option<String>,
+}
+
+impl SnapshotCircuitBreaker {
+    fn new(threshold: u64) -> Self {
+        Self {
+            threshold,
+            state: Arc::new(ParkingMutex::new(SnapshotCircuitState::default())),
+        }
+    }
+
+    fn guard(&self) -> Result<(), PipelineError> {
+        let state = self.state.lock();
+        if state.open {
+            let last_error = state
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string());
+            return Err(PipelineError::SnapshotVerification(format!(
+                "snapshot serving circuit open after {} failures: {last_error}",
+                state.consecutive_failures
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn record_success(&self) {
+        let mut state = self.state.lock();
+        if state.open {
+            return;
+        }
+        state.consecutive_failures = 0;
+    }
+
+    fn record_failure(&self, error: PipelineError) -> PipelineError {
+        let message = error.to_string();
+        let mut state = self.state.lock();
+        state.last_error = Some(message);
+        if !state.open {
+            state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+            if state.consecutive_failures >= self.threshold {
+                state.open = true;
+            }
+        }
+
+        if state.open {
+            let last_error = state
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string());
+            return PipelineError::SnapshotVerification(format!(
+                "snapshot serving circuit open after {} failures: {last_error}",
+                state.consecutive_failures
+            ));
+        }
+
+        error
+    }
+
+    fn status(&self) -> SnapshotBreakerStatus {
+        let state = self.state.lock();
+        SnapshotBreakerStatus {
+            open: state.open,
+            consecutive_failures: state.consecutive_failures,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    fn reset(&self) {
+        let mut state = self.state.lock();
+        *state = SnapshotCircuitState::default();
+    }
+}
+
 struct RuntimeSnapshotProvider {
     inner: Arc<NodeInner>,
     sizing: SnapshotSizingConfig,
@@ -1766,10 +1854,15 @@ struct RuntimeSnapshotProvider {
     snapshots: RwLock<SnapshotStore>,
     session_store: Arc<SnapshotSessionStore>,
     session_peers: ParkingMutex<HashMap<SnapshotSessionId, NetworkPeerId>>,
+    breaker: SnapshotCircuitBreaker,
 }
 
 impl RuntimeSnapshotProvider {
-    fn build(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> Arc<Self> {
+    fn build(
+        inner: Arc<NodeInner>,
+        sizing: SnapshotSizingConfig,
+        breaker: SnapshotCircuitBreaker,
+    ) -> Arc<Self> {
         let store_path = inner.config.snapshot_dir.join("snapshot_sessions.json");
         let chunk_size = sizing.default_chunk_size;
         let (store, persisted) = match SnapshotSessionStore::open(store_path.clone()) {
@@ -1824,16 +1917,25 @@ impl RuntimeSnapshotProvider {
             snapshots: RwLock::new(SnapshotStore::new(chunk_size)),
             session_store: store,
             session_peers: ParkingMutex::new(peers),
+            breaker,
         })
     }
 
-    fn new(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> SnapshotProviderHandle {
-        Self::build(inner, sizing) as SnapshotProviderHandle
+    fn new(
+        inner: Arc<NodeInner>,
+        sizing: SnapshotSizingConfig,
+        breaker: SnapshotCircuitBreaker,
+    ) -> SnapshotProviderHandle {
+        Self::build(inner, sizing, breaker) as SnapshotProviderHandle
     }
 
     #[cfg(test)]
-    fn new_arc(inner: Arc<NodeInner>, sizing: SnapshotSizingConfig) -> Arc<Self> {
-        Self::build(inner, sizing)
+    fn new_arc(
+        inner: Arc<NodeInner>,
+        sizing: SnapshotSizingConfig,
+        breaker: SnapshotCircuitBreaker,
+    ) -> Arc<Self> {
+        Self::build(inner, sizing, breaker)
     }
 
     fn decode_root(plan: &NetworkStateSyncPlan) -> Result<Hash, PipelineError> {
@@ -1993,132 +2095,159 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         session_id: SnapshotSessionId,
         peer: &NetworkPeerId,
     ) -> Result<(), Self::Error> {
-        {
-            let mut peers = self.session_peers.lock();
-            peers.insert(session_id, peer.clone());
-        }
-        let mut sessions = self.sessions.lock();
-        if let Some(session) = sessions.get_mut(&session_id) {
-            if session.peer != *peer {
-                session.peer = peer.clone();
-                self.persist_session(session_id, session)?;
+        self.breaker.guard()?;
+
+        let result: Result<(), PipelineError> = (|| {
+            {
+                let mut peers = self.session_peers.lock();
+                peers.insert(session_id, peer.clone());
             }
+            let mut sessions = self.sessions.lock();
+            if let Some(session) = sessions.get_mut(&session_id) {
+                if session.peer != *peer {
+                    session.peer = peer.clone();
+                    self.persist_session(session_id, session)?;
+                }
+            }
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.breaker.record_success();
+                Ok(())
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
         }
-        Ok(())
     }
 
     fn fetch_plan(
         &self,
         session_id: SnapshotSessionId,
     ) -> Result<NetworkStateSyncPlan, Self::Error> {
-        let state_plan = self
-            .inner
-            .state_sync_plan(self.sizing.default_chunk_size)
-            .map_err(|err| {
+        self.breaker.guard()?;
+
+        let result: Result<NetworkStateSyncPlan, PipelineError> = (|| {
+            let state_plan = self
+                .inner
+                .state_sync_plan(self.sizing.default_chunk_size)
+                .map_err(|err| {
+                    PipelineError::SnapshotVerification(format!(
+                        "failed to build state sync plan: {err}"
+                    ))
+                })?;
+            let mut network_plan = state_plan.to_network_plan().map_err(|err| {
                 PipelineError::SnapshotVerification(format!(
-                    "failed to build state sync plan: {err}"
+                    "failed to encode state sync plan: {err}"
                 ))
             })?;
-        let mut network_plan = state_plan.to_network_plan().map_err(|err| {
-            PipelineError::SnapshotVerification(format!("failed to encode state sync plan: {err}"))
-        })?;
-        network_plan.max_concurrent_requests = self.chunk_capabilities().max_concurrent_requests;
-        let updates = state_plan.light_client_messages().map_err(|err| {
-            PipelineError::SnapshotVerification(format!(
-                "failed to encode light client updates: {err}"
-            ))
-        })?;
-        let snapshot_root = Self::decode_root(&network_plan)?;
-        let plan_id = network_plan.snapshot.commitments.global_state_root.clone();
-        let total_chunks = u64::try_from(network_plan.chunks.len())
-            .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
-        let total_updates = u64::try_from(updates.len())
-            .map_err(|_| PipelineError::SnapshotVerification("update count overflow".into()))?;
-        let peer = {
-            let peers = self.session_peers.lock();
-            peers.get(&session_id).cloned().ok_or_else(|| {
-                PipelineError::SnapshotVerification("unknown snapshot session peer".into())
-            })?
-        };
+            network_plan.max_concurrent_requests =
+                self.chunk_capabilities().max_concurrent_requests;
+            let updates = state_plan.light_client_messages().map_err(|err| {
+                PipelineError::SnapshotVerification(format!(
+                    "failed to encode light client updates: {err}"
+                ))
+            })?;
+            let snapshot_root = Self::decode_root(&network_plan)?;
+            let plan_id = network_plan.snapshot.commitments.global_state_root.clone();
+            let total_chunks = u64::try_from(network_plan.chunks.len())
+                .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
+            let total_updates = u64::try_from(updates.len())
+                .map_err(|_| PipelineError::SnapshotVerification("update count overflow".into()))?;
+            let peer = {
+                let peers = self.session_peers.lock();
+                peers.get(&session_id).cloned().ok_or_else(|| {
+                    PipelineError::SnapshotVerification("unknown snapshot session peer".into())
+                })?
+            };
 
-        let mut sessions = self.sessions.lock();
-        let session = sessions
-            .entry(session_id)
-            .or_insert_with(|| RuntimeSnapshotSession {
-                plan: network_plan.clone(),
-                updates: updates.clone(),
-                snapshot_root,
-                plan_id: plan_id.clone(),
-                peer: peer.clone(),
-                chunk_size: self.sizing.default_chunk_size as u64,
-                min_chunk_size: self.sizing.min_chunk_size as u64,
-                max_chunk_size: self.sizing.max_chunk_size as u64,
-                total_chunks,
-                total_updates,
-                last_chunk_index: None,
-                last_update_index: None,
-                confirmed_chunk_index: None,
-                confirmed_update_index: None,
-            });
-        session.plan = network_plan.clone();
-        session.updates = updates.clone();
-        session.snapshot_root = snapshot_root;
-        session.plan_id = plan_id;
-        session.peer = peer;
-        session.chunk_size = session.chunk_size.clamp(
-            self.sizing.min_chunk_size as u64,
-            self.sizing.max_chunk_size as u64,
-        );
-        session.min_chunk_size = self.sizing.min_chunk_size as u64;
-        session.max_chunk_size = self.sizing.max_chunk_size as u64;
-        session.total_chunks = total_chunks;
-        session.total_updates = total_updates;
-        session.last_chunk_index = if total_chunks == 0 {
-            None
-        } else {
-            session.last_chunk_index.and_then(|index| {
-                if index < total_chunks {
-                    Some(index)
-                } else {
-                    total_chunks.checked_sub(1)
-                }
-            })
-        };
-        session.last_update_index = if total_updates == 0 {
-            None
-        } else {
-            session.last_update_index.and_then(|index| {
-                if index < total_updates {
-                    Some(index)
-                } else {
-                    total_updates.checked_sub(1)
-                }
-            })
-        };
-        session.confirmed_chunk_index = if total_chunks == 0 {
-            None
-        } else {
-            session.confirmed_chunk_index.and_then(|index| {
-                if index < total_chunks {
-                    Some(index)
-                } else {
-                    total_chunks.checked_sub(1)
-                }
-            })
-        };
-        session.confirmed_update_index = if total_updates == 0 {
-            None
-        } else {
-            session.confirmed_update_index.and_then(|index| {
-                if index < total_updates {
-                    Some(index)
-                } else {
-                    total_updates.checked_sub(1)
-                }
-            })
-        };
-        self.persist_session(session_id, session)?;
-        Ok(network_plan)
+            let mut sessions = self.sessions.lock();
+            let session = sessions
+                .entry(session_id)
+                .or_insert_with(|| RuntimeSnapshotSession {
+                    plan: network_plan.clone(),
+                    updates: updates.clone(),
+                    snapshot_root,
+                    plan_id: plan_id.clone(),
+                    peer: peer.clone(),
+                    chunk_size: self.sizing.default_chunk_size as u64,
+                    min_chunk_size: self.sizing.min_chunk_size as u64,
+                    max_chunk_size: self.sizing.max_chunk_size as u64,
+                    total_chunks,
+                    total_updates,
+                    last_chunk_index: None,
+                    last_update_index: None,
+                    confirmed_chunk_index: None,
+                    confirmed_update_index: None,
+                });
+            session.plan = network_plan.clone();
+            session.updates = updates.clone();
+            session.snapshot_root = snapshot_root;
+            session.plan_id = plan_id;
+            session.peer = peer;
+            session.chunk_size = session.chunk_size.clamp(
+                self.sizing.min_chunk_size as u64,
+                self.sizing.max_chunk_size as u64,
+            );
+            session.min_chunk_size = self.sizing.min_chunk_size as u64;
+            session.max_chunk_size = self.sizing.max_chunk_size as u64;
+            session.total_chunks = total_chunks;
+            session.total_updates = total_updates;
+            session.last_chunk_index = if total_chunks == 0 {
+                None
+            } else {
+                session.last_chunk_index.and_then(|index| {
+                    if index < total_chunks {
+                        Some(index)
+                    } else {
+                        total_chunks.checked_sub(1)
+                    }
+                })
+            };
+            session.last_update_index = if total_updates == 0 {
+                None
+            } else {
+                session.last_update_index.and_then(|index| {
+                    if index < total_updates {
+                        Some(index)
+                    } else {
+                        total_updates.checked_sub(1)
+                    }
+                })
+            };
+            session.confirmed_chunk_index = if total_chunks == 0 {
+                None
+            } else {
+                session.confirmed_chunk_index.and_then(|index| {
+                    if index < total_chunks {
+                        Some(index)
+                    } else {
+                        total_chunks.checked_sub(1)
+                    }
+                })
+            };
+            session.confirmed_update_index = if total_updates == 0 {
+                None
+            } else {
+                session.confirmed_update_index.and_then(|index| {
+                    if index < total_updates {
+                        Some(index)
+                    } else {
+                        total_updates.checked_sub(1)
+                    }
+                })
+            };
+            self.persist_session(session_id, session)?;
+            Ok(network_plan)
+        })();
+
+        match result {
+            Ok(plan) => {
+                self.breaker.record_success();
+                Ok(plan)
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
+        }
     }
 
     fn fetch_chunk(
@@ -2126,51 +2255,63 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         session_id: SnapshotSessionId,
         chunk_index: u64,
     ) -> Result<SnapshotChunk, Self::Error> {
-        let snapshot_root = {
-            let sessions = self.sessions.lock();
-            let session = sessions
-                .get(&session_id)
-                .ok_or(PipelineError::SnapshotNotFound)?;
-            session.snapshot_root
-        };
-        let store = self.snapshots.read();
-        let stream = self
-            .inner
-            .stream_state_sync_chunks(&*store, &snapshot_root)
-            .map_err(|err| {
-                PipelineError::SnapshotVerification(format!(
-                    "failed to stream state sync chunks: {err}"
-                ))
-            })?;
-        let total = stream.total();
-        if chunk_index >= total {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "state sync chunk {chunk_index} out of range (total {total})"
-            )));
-        }
-        let chunk = self
-            .inner
-            .state_sync_chunk_by_index(&*store, &snapshot_root, chunk_index)
-            .map_err(|err| {
-                PipelineError::SnapshotVerification(format!(
-                    "failed to fetch state sync chunk {chunk_index}: {err}"
-                ))
-            })?;
+        self.breaker.guard()?;
 
-        {
-            let mut sessions = self.sessions.lock();
-            let session = sessions
-                .get_mut(&session_id)
-                .ok_or(PipelineError::SnapshotNotFound)?;
-            let updated = session
-                .last_chunk_index
-                .map(|current| current.max(chunk_index))
-                .or(Some(chunk_index));
-            session.last_chunk_index = updated;
-            self.persist_session(session_id, session)?;
-        }
+        let result: Result<SnapshotChunk, PipelineError> = (|| {
+            let snapshot_root = {
+                let sessions = self.sessions.lock();
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or(PipelineError::SnapshotNotFound)?;
+                session.snapshot_root
+            };
+            let store = self.snapshots.read();
+            let stream = self
+                .inner
+                .stream_state_sync_chunks(&*store, &snapshot_root)
+                .map_err(|err| {
+                    PipelineError::SnapshotVerification(format!(
+                        "failed to stream state sync chunks: {err}"
+                    ))
+                })?;
+            let total = stream.total();
+            if chunk_index >= total {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "state sync chunk {chunk_index} out of range (total {total})"
+                )));
+            }
+            let chunk = self
+                .inner
+                .state_sync_chunk_by_index(&*store, &snapshot_root, chunk_index)
+                .map_err(|err| {
+                    PipelineError::SnapshotVerification(format!(
+                        "failed to fetch state sync chunk {chunk_index}: {err}"
+                    ))
+                })?;
 
-        Ok(chunk)
+            {
+                let mut sessions = self.sessions.lock();
+                let session = sessions
+                    .get_mut(&session_id)
+                    .ok_or(PipelineError::SnapshotNotFound)?;
+                let updated = session
+                    .last_chunk_index
+                    .map(|current| current.max(chunk_index))
+                    .or(Some(chunk_index));
+                session.last_chunk_index = updated;
+                self.persist_session(session_id, session)?;
+            }
+
+            Ok(chunk)
+        })();
+
+        match result {
+            Ok(chunk) => {
+                self.breaker.record_success();
+                Ok(chunk)
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
+        }
     }
 
     fn fetch_update(
@@ -2178,28 +2319,40 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         session_id: SnapshotSessionId,
         update_index: u64,
     ) -> Result<NetworkLightClientUpdate, Self::Error> {
-        let index = usize::try_from(update_index).map_err(|_| {
-            PipelineError::SnapshotVerification(format!(
-                "light client update index {update_index} exceeds addressable range"
-            ))
-        })?;
-        let sessions = self.sessions.lock();
-        let session = sessions
-            .get(&session_id)
-            .ok_or(PipelineError::SnapshotNotFound)?;
-        let update = session.updates.get(index).cloned().ok_or_else(|| {
-            PipelineError::SnapshotVerification(format!(
-                "light client update index {update_index} out of range (total {})",
-                session.updates.len()
-            ))
-        })?;
-        let updated = session
-            .last_update_index
-            .map(|current| current.max(update_index))
-            .or(Some(update_index));
-        session.last_update_index = updated;
-        self.persist_session(session_id, session)?;
-        Ok(update)
+        self.breaker.guard()?;
+
+        let result: Result<NetworkLightClientUpdate, PipelineError> = (|| {
+            let index = usize::try_from(update_index).map_err(|_| {
+                PipelineError::SnapshotVerification(format!(
+                    "light client update index {update_index} exceeds addressable range"
+                ))
+            })?;
+            let sessions = self.sessions.lock();
+            let session = sessions
+                .get(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            let update = session.updates.get(index).cloned().ok_or_else(|| {
+                PipelineError::SnapshotVerification(format!(
+                    "light client update index {update_index} out of range (total {})",
+                    session.updates.len()
+                ))
+            })?;
+            let updated = session
+                .last_update_index
+                .map(|current| current.max(update_index))
+                .or(Some(update_index));
+            session.last_update_index = updated;
+            self.persist_session(session_id, session)?;
+            Ok(update)
+        })();
+
+        match result {
+            Ok(update) => {
+                self.breaker.record_success();
+                Ok(update)
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
+        }
     }
 
     fn resume_session(
@@ -2212,80 +2365,92 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         min_chunk_size: Option<u64>,
         max_chunk_size: Option<u64>,
     ) -> Result<SnapshotResumeState, Self::Error> {
-        let sessions = self.sessions.lock();
-        let session = sessions
-            .get(&session_id)
-            .ok_or(PipelineError::SnapshotNotFound)?;
-        if session.plan_id != plan_id {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume plan id {plan_id} does not match persisted plan {}",
-                session.plan_id
-            )));
-        }
-        if chunk_index > session.total_chunks {
-            return Err(PipelineError::ResumeBoundsExceeded {
-                kind: ResumeBoundKind::Chunk,
-                requested: chunk_index,
-                total: session.total_chunks,
-            });
-        }
-        if update_index > session.total_updates {
-            return Err(PipelineError::ResumeBoundsExceeded {
-                kind: ResumeBoundKind::Update,
-                requested: update_index,
-                total: session.total_updates,
-            });
-        }
-        let expected_chunk_index = session
-            .confirmed_chunk_index
-            .or(session.last_chunk_index)
-            .map(|index| index.saturating_add(1).min(session.total_chunks))
-            .unwrap_or(0);
-        if chunk_index < expected_chunk_index {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume chunk index {chunk_index} precedes next expected chunk {expected_chunk_index}"
-            )));
-        }
-        if chunk_index > expected_chunk_index {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume chunk index {chunk_index} skips ahead of next expected chunk {expected_chunk_index}"
-            )));
-        }
-        let expected_update_index = session
-            .confirmed_update_index
-            .or(session.last_update_index)
-            .map(|index| index.saturating_add(1).min(session.total_updates))
-            .unwrap_or(0);
-        if update_index < expected_update_index {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume update index {update_index} precedes next expected update {expected_update_index}"
-            )));
-        }
-        if update_index > expected_update_index {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume update index {update_index} skips ahead of next expected update {expected_update_index}"
-            )));
-        }
-        drop(sessions);
+        self.breaker.guard()?;
 
-        let mut sessions = self.sessions.lock();
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or(PipelineError::SnapshotNotFound)?;
-        let resolved_chunk_size = chunk_size.unwrap_or(session.chunk_size);
-        let resolved_min_chunk_size = min_chunk_size.unwrap_or(session.min_chunk_size);
-        let resolved_max_chunk_size = max_chunk_size.unwrap_or(session.max_chunk_size);
-        session.chunk_size = resolved_chunk_size.clamp(
-            self.sizing.min_chunk_size as u64,
-            self.sizing.max_chunk_size as u64,
-        );
-        session.min_chunk_size = resolved_min_chunk_size;
-        session.max_chunk_size = resolved_max_chunk_size;
-        self.persist_session(session_id, session)?;
-        Ok(SnapshotResumeState {
-            next_chunk_index: chunk_index,
-            next_update_index: update_index,
-        })
+        let result: Result<SnapshotResumeState, PipelineError> = (|| {
+            let sessions = self.sessions.lock();
+            let session = sessions
+                .get(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            if session.plan_id != plan_id {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "resume plan id {plan_id} does not match persisted plan {}",
+                    session.plan_id
+                )));
+            }
+            if chunk_index > session.total_chunks {
+                return Err(PipelineError::ResumeBoundsExceeded {
+                    kind: ResumeBoundKind::Chunk,
+                    requested: chunk_index,
+                    total: session.total_chunks,
+                });
+            }
+            if update_index > session.total_updates {
+                return Err(PipelineError::ResumeBoundsExceeded {
+                    kind: ResumeBoundKind::Update,
+                    requested: update_index,
+                    total: session.total_updates,
+                });
+            }
+            let expected_chunk_index = session
+                .confirmed_chunk_index
+                .or(session.last_chunk_index)
+                .map(|index| index.saturating_add(1).min(session.total_chunks))
+                .unwrap_or(0);
+            if chunk_index < expected_chunk_index {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "resume chunk index {chunk_index} precedes next expected chunk {expected_chunk_index}"
+                )));
+            }
+            if chunk_index > expected_chunk_index {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "resume chunk index {chunk_index} skips ahead of next expected chunk {expected_chunk_index}"
+                )));
+            }
+            let expected_update_index = session
+                .confirmed_update_index
+                .or(session.last_update_index)
+                .map(|index| index.saturating_add(1).min(session.total_updates))
+                .unwrap_or(0);
+            if update_index < expected_update_index {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "resume update index {update_index} precedes next expected update {expected_update_index}"
+                )));
+            }
+            if update_index > expected_update_index {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "resume update index {update_index} skips ahead of next expected update {expected_update_index}"
+                )));
+            }
+            drop(sessions);
+
+            let mut sessions = self.sessions.lock();
+            let session = sessions
+                .get_mut(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            let resolved_chunk_size = chunk_size.unwrap_or(session.chunk_size);
+            let resolved_min_chunk_size = min_chunk_size.unwrap_or(session.min_chunk_size);
+            let resolved_max_chunk_size = max_chunk_size.unwrap_or(session.max_chunk_size);
+            session.chunk_size = resolved_chunk_size.clamp(
+                self.sizing.min_chunk_size as u64,
+                self.sizing.max_chunk_size as u64,
+            );
+            session.min_chunk_size = resolved_min_chunk_size;
+            session.max_chunk_size = resolved_max_chunk_size;
+            self.persist_session(session_id, session)?;
+            Ok(SnapshotResumeState {
+                next_chunk_index: chunk_index,
+                next_update_index: update_index,
+            })
+        })();
+
+        match result {
+            Ok(state) => {
+                self.breaker.record_success();
+                Ok(state)
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
+        }
     }
 
     fn acknowledge(
@@ -2294,50 +2459,62 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         kind: SnapshotItemKind,
         index: u64,
     ) -> Result<(), Self::Error> {
-        let mut sessions = self.sessions.lock();
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or(PipelineError::SnapshotNotFound)?;
-        match kind {
-            SnapshotItemKind::Chunk => {
-                if index >= session.total_chunks {
-                    return Err(PipelineError::SnapshotVerification(format!(
-                        "acknowledged chunk index {index} exceeds total {}",
-                        session.total_chunks
-                    )));
+        self.breaker.guard()?;
+
+        let result: Result<(), PipelineError> = (|| {
+            let mut sessions = self.sessions.lock();
+            let session = sessions
+                .get_mut(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            match kind {
+                SnapshotItemKind::Chunk => {
+                    if index >= session.total_chunks {
+                        return Err(PipelineError::SnapshotVerification(format!(
+                            "acknowledged chunk index {index} exceeds total {}",
+                            session.total_chunks
+                        )));
+                    }
+                    let updated = session
+                        .last_chunk_index
+                        .map(|current| current.max(index))
+                        .or(Some(index));
+                    session.last_chunk_index = updated;
+                    let confirmed = session
+                        .confirmed_chunk_index
+                        .map(|current| current.max(index))
+                        .or(Some(index));
+                    session.confirmed_chunk_index = confirmed;
                 }
-                let updated = session
-                    .last_chunk_index
-                    .map(|current| current.max(index))
-                    .or(Some(index));
-                session.last_chunk_index = updated;
-                let confirmed = session
-                    .confirmed_chunk_index
-                    .map(|current| current.max(index))
-                    .or(Some(index));
-                session.confirmed_chunk_index = confirmed;
-            }
-            SnapshotItemKind::LightClientUpdate => {
-                if index >= session.total_updates {
-                    return Err(PipelineError::SnapshotVerification(format!(
-                        "acknowledged update index {index} exceeds total {}",
-                        session.total_updates
-                    )));
+                SnapshotItemKind::LightClientUpdate => {
+                    if index >= session.total_updates {
+                        return Err(PipelineError::SnapshotVerification(format!(
+                            "acknowledged update index {index} exceeds total {}",
+                            session.total_updates
+                        )));
+                    }
+                    let updated = session
+                        .last_update_index
+                        .map(|current| current.max(index))
+                        .or(Some(index));
+                    session.last_update_index = updated;
+                    let confirmed = session
+                        .confirmed_update_index
+                        .map(|current| current.max(index))
+                        .or(Some(index));
+                    session.confirmed_update_index = confirmed;
                 }
-                let updated = session
-                    .last_update_index
-                    .map(|current| current.max(index))
-                    .or(Some(index));
-                session.last_update_index = updated;
-                let confirmed = session
-                    .confirmed_update_index
-                    .map(|current| current.max(index))
-                    .or(Some(index));
-                session.confirmed_update_index = confirmed;
+                _ => {}
             }
-            _ => {}
+            self.persist_session(session_id, session)
+        })();
+
+        match result {
+            Ok(()) => {
+                self.breaker.record_success();
+                Ok(())
+            }
+            Err(err) => Err(self.breaker.record_failure(err)),
         }
-        self.persist_session(session_id, session)
     }
 
     fn chunk_capabilities(&self) -> SnapshotChunkCapabilities {
@@ -2350,6 +2527,15 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             max_chunk_size: Some(max_chunk_size),
             max_concurrent_requests: None,
         }
+    }
+
+    fn breaker_status(&self) -> SnapshotBreakerStatus {
+        self.breaker.status()
+    }
+
+    fn reset_breaker(&self) -> Result<(), Self::Error> {
+        self.breaker.reset();
+        Ok(())
     }
 }
 
@@ -2758,6 +2944,7 @@ impl Node {
             cache_metrics_checkpoint: ParkingMutex::new(ProofCacheMetricsSnapshot::default()),
             state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
             state_sync_server: OnceCell::new(),
+            snapshot_breaker: SnapshotCircuitBreaker::new(SNAPSHOT_BREAKER_THRESHOLD),
         });
         let server = Arc::new(StateSyncServer::new(
             Arc::downgrade(&inner),
@@ -4154,6 +4341,14 @@ impl NodeHandle {
         self.inner.state_sync_server()
     }
 
+    pub fn snapshot_breaker_status(&self) -> SnapshotBreakerStatus {
+        self.inner.snapshot_breaker.status()
+    }
+
+    pub fn reset_snapshot_breaker(&self) {
+        self.inner.snapshot_breaker.reset();
+    }
+
     pub fn network_state_sync_plan(&self, chunk_size: usize) -> ChainResult<NetworkStateSyncPlan> {
         self.inner.network_state_sync_plan(chunk_size)
     }
@@ -4424,6 +4619,7 @@ impl NodeInner {
         config.snapshot_provider = Some(RuntimeSnapshotProvider::new(
             Arc::clone(self),
             self.config.snapshot_sizing.clone(),
+            self.snapshot_breaker.clone(),
         ));
         Ok(config)
     }
@@ -9626,6 +9822,37 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_breaker_state_tracks_failures() {
+        let breaker = SnapshotCircuitBreaker::new(2);
+        assert!(!breaker.status().open);
+
+        let first_error = PipelineError::SnapshotVerification("manifest mismatch".into());
+        let _ = breaker.record_failure(first_error);
+        assert_eq!(breaker.status().consecutive_failures, 1);
+
+        let second_error = PipelineError::SnapshotVerification("auth failed".into());
+        let open_error = breaker.record_failure(second_error);
+        assert!(matches!(open_error, PipelineError::SnapshotVerification(_)));
+        let status = breaker.status();
+        assert!(status.open);
+        assert_eq!(status.consecutive_failures, 2);
+        assert!(status
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("auth failed")));
+        assert!(breaker.guard().is_err());
+
+        breaker.record_success();
+        assert!(breaker.status().open, "circuit stays open until reset");
+
+        breaker.reset();
+        let reset_status = breaker.status();
+        assert!(!reset_status.open);
+        assert_eq!(reset_status.consecutive_failures, 0);
+        assert!(reset_status.last_error.is_none());
+    }
+
+    #[test]
     fn mempool_status_exposes_witness_metadata_with_and_without_cache() {
         let tempdir = tempdir().expect("tempdir");
         let config = sample_node_config(tempdir.path());
@@ -9682,6 +9909,7 @@ mod tests {
         let provider = RuntimeSnapshotProvider::new_arc(
             Arc::clone(&node.inner),
             node.inner.config.snapshot_sizing.clone(),
+            SnapshotCircuitBreaker::new(SNAPSHOT_BREAKER_THRESHOLD),
         );
 
         let session = SnapshotSessionId::new(7);
@@ -9733,6 +9961,7 @@ mod tests {
         let provider = RuntimeSnapshotProvider::new_arc(
             Arc::clone(&node.inner),
             node.inner.config.snapshot_sizing.clone(),
+            SnapshotCircuitBreaker::new(SNAPSHOT_BREAKER_THRESHOLD),
         );
         {
             let sessions = provider.sessions.lock();
@@ -9776,6 +10005,7 @@ mod tests {
         let provider = RuntimeSnapshotProvider::new_arc(
             Arc::clone(&node.inner),
             node.inner.config.snapshot_sizing.clone(),
+            SnapshotCircuitBreaker::new(SNAPSHOT_BREAKER_THRESHOLD),
         );
 
         let session = SnapshotSessionId::new(11);
@@ -9811,6 +10041,7 @@ mod tests {
         let provider = RuntimeSnapshotProvider::new_arc(
             Arc::clone(&node.inner),
             node.inner.config.snapshot_sizing.clone(),
+            SnapshotCircuitBreaker::new(SNAPSHOT_BREAKER_THRESHOLD),
         );
         {
             let sessions = provider.sessions.lock();

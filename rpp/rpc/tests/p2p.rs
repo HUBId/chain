@@ -204,6 +204,49 @@ async fn start_snapshot_stream_returns_status() {
 }
 
 #[tokio::test]
+async fn snapshot_breaker_routes_require_node() {
+    let peer = NetworkPeerId::random();
+    let session = 7u64;
+    let runtime = Arc::new(FakeSnapshotRuntime::new(
+        Ok(sample_status(session, &peer)),
+        HashMap::new(),
+    ));
+    let context = test_context(runtime);
+    let app = Router::new()
+        .route("/p2p/snapshots/breaker", get(api::snapshot_breaker_status))
+        .route(
+            "/p2p/snapshots/breaker/reset",
+            post(api::reset_snapshot_breaker),
+        )
+        .with_state(context);
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/p2p/snapshots/breaker")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let reset_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/p2p/snapshots/breaker/reset")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reset_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn resume_snapshot_stream_returns_status() {
     let peer = NetworkPeerId::random();
     let session = 17u64;

@@ -15,6 +15,10 @@ Investigate a failover when any of the following signals trigger:
 - Spikes in `light_client_chunk_failures_total{kind="chunk"}` or
   `snapshot_bytes_sent_total{kind="chunk"}` dropping to zero while a session
   remains active.
+- The snapshot circuit breaker opening (`snapshot_provider_circuit_open == 1`),
+  which also surfaces on `/health` and `/health/ready` under the
+  `snapshot_breaker` field. An open breaker means the producer is refusing all
+  inbound snapshot requests until it is reset.
 - `rpp_node_pipeline_root_io_errors_total` increments, indicating Firewood
   storage or snapshot corruption during chunk replay.
 - `snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}` increases,
@@ -137,6 +141,20 @@ Release-Workflow veröffentlicht zusätzlich das Artefakt
    fields and propagates RPC failures verbatim (for example: `RPC returned 404:
    snapshot session <session> not found`). Record any `error:` value for the
    incident log.
+
+3. If the breaker is open, snapshot requests will fail immediately. Confirm its
+   state and clear it only after the root cause is understood:
+
+   ```sh
+   curl -sS \
+     -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     http://<consumer-host>:<port>/p2p/snapshots/breaker | jq
+
+   # Reset after fixing manifest/auth issues
+   curl -sS -X POST \
+     -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     http://<consumer-host>:<port>/p2p/snapshots/breaker/reset
+   ```
 
 ## Step 2 – Restart the producer (if required)
 

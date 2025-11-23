@@ -22,7 +22,8 @@ use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AdmissionApproval, AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry,
-    AllowlistedPeer, DualControlError, PendingPolicyChange, PolicySignature, TierLevel,
+    AllowlistedPeer, DualControlError, PendingPolicyChange, PolicySignature, SnapshotBreakerStatus,
+    TierLevel,
 };
 
 #[derive(Debug, Deserialize)]
@@ -493,6 +494,21 @@ pub(super) async fn cancel_snapshot_stream(
         .await
         .map_err(snapshot_runtime_error_to_http)?;
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn snapshot_breaker_status(
+    State(state): State<ApiContext>,
+) -> Result<Json<SnapshotBreakerStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    Ok(Json(node.snapshot_breaker_status()))
+}
+
+pub(super) async fn reset_snapshot_breaker(
+    State(state): State<ApiContext>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    node.reset_snapshot_breaker();
     Ok(StatusCode::NO_CONTENT)
 }
 

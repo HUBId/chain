@@ -105,8 +105,8 @@ pub use admission::{
     ReputationOutcome,
 };
 pub use behaviour::snapshots::{
-    NullSnapshotProvider, SnapshotItemKind, SnapshotProvider, SnapshotResumeState,
-    SnapshotSessionId, SnapshotsRequest, SnapshotsResponse,
+    NullSnapshotProvider, SnapshotBreakerStatus, SnapshotItemKind, SnapshotProvider,
+    SnapshotResumeState, SnapshotSessionId, SnapshotsRequest, SnapshotsResponse,
 };
 #[cfg(feature = "request-response")]
 pub use behaviour::snapshots::{

@@ -115,6 +115,7 @@ use crate::wallet::{
 };
 #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
+use rpp_p2p::SnapshotBreakerStatus;
 #[cfg(not(feature = "wallet-integration"))]
 mod wallet_stub {
     #[derive(Debug)]
@@ -152,8 +153,8 @@ use wallet_stub::Wallet;
 mod routes;
 pub use routes::p2p::{
     admission_audit_log, approve_pending_admission_policies, cancel_snapshot_stream,
-    snapshot_stream_status, start_snapshot_stream, submit_pending_admission_policies,
-    update_admission_policies,
+    reset_snapshot_breaker, snapshot_breaker_status, snapshot_stream_status, start_snapshot_stream,
+    submit_pending_admission_policies, update_admission_policies,
 };
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 pub use routes::state_sync::{
@@ -546,6 +547,12 @@ impl ApiContext {
 
     fn node_available(&self) -> bool {
         self.node.is_some() || self.wallet_node_running()
+    }
+
+    fn snapshot_breaker_status(&self) -> Option<SnapshotBreakerStatus> {
+        self.node
+            .as_ref()
+            .map(|handle| handle.snapshot_breaker_status())
     }
 
     #[cfg(feature = "wallet-integration")]
@@ -983,6 +990,8 @@ struct HealthResponse {
     role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     backend: Option<HealthBackendStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_breaker: Option<SnapshotBreakerStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1000,6 +1009,8 @@ struct HealthReadyResponse {
     role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     backend: Option<HealthBackendStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_breaker: Option<SnapshotBreakerStatus>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2056,6 +2067,14 @@ where
             "/p2p/snapshots/:id",
             get(routes::p2p::snapshot_stream_status).delete(routes::p2p::cancel_snapshot_stream),
         )
+        .route(
+            "/p2p/snapshots/breaker",
+            get(routes::p2p::snapshot_breaker_status),
+        )
+        .route(
+            "/p2p/snapshots/breaker/reset",
+            post(routes::p2p::reset_snapshot_breaker),
+        )
         .route("/p2p/access-lists", post(update_access_lists))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
@@ -2436,6 +2455,7 @@ async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
         address: health_address(&state),
         role: mode.as_str(),
         backend: state.backend_status(),
+        snapshot_breaker: state.snapshot_breaker_status(),
     })
 }
 
@@ -2511,6 +2531,7 @@ async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<Heal
             ready,
             role: mode.as_str(),
             backend: state.backend_status(),
+            snapshot_breaker: state.snapshot_breaker_status(),
         }),
     )
 }
