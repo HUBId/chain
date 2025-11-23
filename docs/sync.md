@@ -170,6 +170,15 @@ and plan identifier after restarts or transport interruptions; the runtime
 maintains the offsets on disk and will reject regressed or skipped ranges while
 continuing from the next expected chunk.
 
+Resume traffic is now instrumented via `snapshot_resume_events_total` with a
+`result` label of `attempt`, `success`, or `failure`. The accompanying
+Prometheus rules (`snapshot-resume` group) alert when failures persist for 10
+minutes or when the 5m success rate drops below 95%, and Grafana's Snapshot
+Resilience dashboard charts the success rate alongside 24-hour attempt and
+failure counts. The `resume_metrics_track_attempts_and_outcomes` test exercises
+interrupted downloads to ensure attempts and failures register correctly before
+retries restore the stream.
+
 ### Adaptive chunk sizing
 
 Snapshot streams adapt chunk sizes to the observed bandwidth-delay product so

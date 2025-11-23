@@ -92,3 +92,39 @@ groups:
             compression regressions or unexpected payload growth. Investigate
             recent releases or proof generation configuration before this trend
             saturates network or storage capacity.
+
+  - name: snapshot-resume
+    interval: 30s
+    rules:
+      - record: snapshot:resume_success_rate:5m
+        expr: |
+          sum(rate(snapshot_resume_events_total{result="success"}[5m]))
+            /
+          clamp_min(sum(rate(snapshot_resume_events_total{result=~"success|failure"}[5m])), 0.0001)
+        labels:
+          component: snapshots
+
+      - alert: SnapshotResumeFailures
+        expr: sum(rate(snapshot_resume_events_total{result="failure"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: snapshots
+        annotations:
+          summary: "Snapshot resume failures detected"
+          description: |
+            Snapshot resume requests have been failing for 10 minutes. Inspect the
+            consumer logs for download_error=resume_mismatch or transport errors and
+            compare plan_id values before retrying.
+
+      - alert: SnapshotResumeSuccessDrop
+        expr: snapshot:resume_success_rate:5m < 0.95
+        for: 15m
+        labels:
+          severity: critical
+          component: snapshots
+        annotations:
+          summary: "Snapshot resume success rate below 95%"
+          description: |
+            Resume attempts are not succeeding reliably. Check provider availability,
+            resume plan identifiers, and recent deploys before restarting consumers.
