@@ -14,9 +14,9 @@ from disk before chunks are served, so the runtime enforces two invariants:
    version is treated as corruption.
 3. Every chunk referenced in `manifest/chunks.json` must exist under
    `<snapshot_dir>/chunks`, match the recorded size, and hash to the recorded
-   `sha256`. The runtime refuses to serve a snapshot when any manifest entry is
-   stale or tampered, returning a structured error instead of streaming
-   corrupted data.
+   checksum using the manifest’s `checksum_algorithm` (default: `sha256`). The
+   runtime refuses to serve a snapshot when any manifest entry is stale or
+   tampered, returning a structured error instead of streaming corrupted data.
 4. The manifest format version must match the runtime expectation (currently
    `version=1`). Validators refuse to serve manifests with any other version
    and surface the mismatch instead of streaming chunks. The `rpp-node
@@ -77,6 +77,13 @@ pipelines and post-incident audits. Rotate signing keys by bumping the
 the new key, and republishing the `{manifest, manifest.sig}` pair; the runtime
 rejects snapshots signed with older key versions so stale signatures cannot be
 served once the version changes.
+
+Manifests include a `checksum_algorithm` header and per-segment `checksum`
+entries so providers can opt into stronger digests like `blake2b` while keeping
+`sha256` as the default. The validator config key
+`snapshot_checksum_algorithm` selects the fallback when older manifests omit
+the field, and the `validator snapshot verify`/`snapshot-verify`
+`--checksum-algorithm` flag provides the equivalent override for CLI audits.
 
 ### Manifest versions and upgrades
 

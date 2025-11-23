@@ -71,4 +71,3 @@ pub struct SwarmBuilder<Provider, Phase> {
     phantom: PhantomData<Provider>,
     phase: Phase,
 }
-

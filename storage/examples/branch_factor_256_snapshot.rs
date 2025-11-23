@@ -18,9 +18,7 @@ fn main() {
     options.sync_policy = SyncPolicy::Always;
 
     let storage = Storage::open_with_options(
-        out_dir
-            .to_str()
-            .expect("fixture path must be valid UTF-8"),
+        out_dir.to_str().expect("fixture path must be valid UTF-8"),
         options,
     )
     .expect("open fixture storage");

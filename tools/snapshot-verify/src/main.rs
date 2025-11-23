@@ -4,8 +4,8 @@ use std::process;
 use clap::Parser;
 
 use snapshot_verify::{
-    record_verification_outcome, run_verification, write_report, DataSource, Execution,
-    VerificationReport, VerifyArgs,
+    record_verification_outcome, run_verification, write_report, ChecksumAlgorithm, DataSource,
+    Execution, VerificationReport, VerifyArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -34,6 +34,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     verbose_progress: bool,
 
+    /// Override the checksum algorithm when the manifest omits the field
+    #[arg(long, value_enum)]
+    checksum_algorithm: Option<ChecksumAlgorithm>,
+
     /// Optional path to write the JSON verification report to. Defaults to stdout.
     #[arg(long)]
     output: Option<PathBuf>,
@@ -47,6 +51,7 @@ fn main() {
         public_key: DataSource::Path(args.public_key.clone()),
         chunk_root: args.chunk_root.clone(),
         verbose_progress: args.verbose_progress,
+        checksum_algorithm: args.checksum_algorithm,
     };
 
     let mut report = VerificationReport::new(&verify_args);

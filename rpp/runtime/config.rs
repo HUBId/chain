@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "runtime-cli")]
+use clap::ValueEnum;
 use hex;
 use http::Uri;
 use semver::{Version, VersionReq};
@@ -1724,6 +1726,8 @@ pub struct NodeConfig {
     pub secrets: SecretsConfig,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
+    #[serde(default)]
+    pub snapshot_checksum_algorithm: SnapshotChecksumAlgorithm,
     #[serde(default = "default_timetoke_snapshot_key_path")]
     pub timetoke_snapshot_key_path: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
@@ -1786,6 +1790,29 @@ fn default_snapshot_dir() -> PathBuf {
 
 fn default_proof_cache_dir() -> PathBuf {
     PathBuf::from("./data/proofs")
+}
+
+#[cfg_attr(feature = "runtime-cli", derive(ValueEnum))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotChecksumAlgorithm {
+    Sha256,
+    Blake2b,
+}
+
+impl SnapshotChecksumAlgorithm {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SnapshotChecksumAlgorithm::Sha256 => "sha256",
+            SnapshotChecksumAlgorithm::Blake2b => "blake2b",
+        }
+    }
+}
+
+impl Default for SnapshotChecksumAlgorithm {
+    fn default() -> Self {
+        Self::Sha256
+    }
 }
 
 fn default_p2p_key_path() -> PathBuf {
@@ -2196,6 +2223,7 @@ impl Default for NodeConfig {
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             secrets: SecretsConfig::default(),
             snapshot_dir: default_snapshot_dir(),
+            snapshot_checksum_algorithm: SnapshotChecksumAlgorithm::default(),
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
             block_time_ms: 5_000,

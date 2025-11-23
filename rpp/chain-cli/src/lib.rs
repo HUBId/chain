@@ -19,8 +19,8 @@ use rpp_chain::crypto::{
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeyStore, VrfKeypair,
 };
 use rpp_chain::runtime::config::{
-    NodeConfig, SecretsBackendConfig, SecretsConfig, TelemetryConfig, WalletConfig,
-    WalletConfigExt, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
+    NodeConfig, SecretsBackendConfig, SecretsConfig, SnapshotChecksumAlgorithm, TelemetryConfig,
+    WalletConfig, WalletConfigExt, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
 };
 use rpp_chain::runtime::{RuntimeMetrics, TelemetryExporterBuilder};
 use rpp_chain::storage::Storage;
@@ -33,9 +33,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snapshot_verify::{
     run_verification as run_snapshot_verification, write_report as write_snapshot_report,
-    DataSource as SnapshotVerifySource, Execution as SnapshotVerifyExecution,
-    ExitCode as SnapshotVerifyExitCode, VerificationReport as SnapshotVerificationReport,
-    VerifyArgs as SnapshotVerifyArgs,
+    ChecksumAlgorithm as SnapshotVerifyChecksumAlgorithm, DataSource as SnapshotVerifySource,
+    Execution as SnapshotVerifyExecution, ExitCode as SnapshotVerifyExitCode,
+    VerificationReport as SnapshotVerificationReport, VerifyArgs as SnapshotVerifyArgs,
 };
 use tokio::task;
 
@@ -482,6 +482,10 @@ struct SnapshotVerifyCommand {
     /// Emit verbose checksum progress while validating snapshot chunks
     #[arg(long, default_value_t = false)]
     verbose_progress: bool,
+
+    /// Override the checksum algorithm when the manifest omits the field
+    #[arg(long, value_enum)]
+    checksum_algorithm: Option<SnapshotChecksumAlgorithm>,
 }
 
 #[derive(Args, Clone)]
@@ -1310,12 +1314,17 @@ async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
         }
     };
 
+    let checksum_algorithm = args
+        .checksum_algorithm
+        .unwrap_or(config.snapshot_checksum_algorithm);
+
     let verify_args = SnapshotVerifyArgs {
         manifest: manifest_path.clone(),
         signature: signature_path.clone(),
         public_key: public_key_source,
         chunk_root: Some(chunk_root.clone()),
         verbose_progress: args.verbose_progress,
+        checksum_algorithm: Some(to_snapshot_verify_algorithm(checksum_algorithm)),
     };
 
     let mut report = SnapshotVerificationReport::new(&verify_args);
@@ -1339,6 +1348,15 @@ async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
         Ok(())
     } else {
         std::process::exit(exit_code.code());
+    }
+}
+
+fn to_snapshot_verify_algorithm(
+    algorithm: SnapshotChecksumAlgorithm,
+) -> SnapshotVerifyChecksumAlgorithm {
+    match algorithm {
+        SnapshotChecksumAlgorithm::Sha256 => SnapshotVerifyChecksumAlgorithm::Sha256,
+        SnapshotChecksumAlgorithm::Blake2b => SnapshotVerifyChecksumAlgorithm::Blake2b,
     }
 }
 

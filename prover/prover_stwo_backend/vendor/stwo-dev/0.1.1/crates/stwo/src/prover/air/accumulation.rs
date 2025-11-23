@@ -80,9 +80,7 @@ impl<B: Backend> DomainEvaluationAccumulator<B> {
             });
         }
 
-        accumulators
-            .try_into()
-            .unwrap_or_else(|_| unreachable!())
+        accumulators.try_into().unwrap_or_else(|_| unreachable!())
     }
 
     /// Returns the log size of the resulting polynomial.

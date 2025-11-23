@@ -4,14 +4,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use blake2::{
+    digest::{consts::U32, Digest},
+    Blake2b,
+};
+use hex;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, SnapshotChecksumAlgorithm};
 
 use crate::telemetry::snapshots::SnapshotValidatorMetrics;
 
@@ -20,6 +25,7 @@ pub struct SnapshotValidatorSettings {
     pub cadence: Duration,
     pub manifest_path: PathBuf,
     pub chunk_dir: PathBuf,
+    pub checksum_algorithm: SnapshotChecksumAlgorithm,
 }
 
 impl SnapshotValidatorSettings {
@@ -31,6 +37,7 @@ impl SnapshotValidatorSettings {
             cadence,
             manifest_path,
             chunk_dir,
+            checksum_algorithm: config.snapshot_checksum_algorithm,
         }
     }
 }
@@ -67,6 +74,8 @@ struct SnapshotChunkManifest {
     #[serde(default)]
     version: u32,
     #[serde(default)]
+    checksum_algorithm: Option<SnapshotChecksumAlgorithm>,
+    #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
 
@@ -77,7 +86,55 @@ struct ManifestSegment {
     #[serde(default)]
     size_bytes: Option<u64>,
     #[serde(default)]
+    checksum: Option<String>,
+    #[serde(default)]
     sha256: Option<String>,
+}
+
+type Blake2b256 = Blake2b<U32>;
+
+fn resolve_manifest_algorithm(
+    manifest_algorithm: Option<SnapshotChecksumAlgorithm>,
+    configured_algorithm: SnapshotChecksumAlgorithm,
+) -> Result<SnapshotChecksumAlgorithm, ScanError> {
+    match manifest_algorithm {
+        Some(actual) if actual != configured_algorithm => {
+            Err(ScanError::ChecksumAlgorithmMismatch {
+                expected: configured_algorithm,
+                actual,
+            })
+        }
+        Some(actual) => Ok(actual),
+        None => Ok(configured_algorithm),
+    }
+}
+
+enum SnapshotChecksumHasher {
+    Sha256(Sha256),
+    Blake2b(Blake2b256),
+}
+
+impl SnapshotChecksumHasher {
+    fn new(algorithm: SnapshotChecksumAlgorithm) -> Self {
+        match algorithm {
+            SnapshotChecksumAlgorithm::Sha256 => Self::Sha256(Sha256::new()),
+            SnapshotChecksumAlgorithm::Blake2b => Self::Blake2b(Blake2b256::new()),
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            SnapshotChecksumHasher::Sha256(hasher) => hasher.update(bytes),
+            SnapshotChecksumHasher::Blake2b(hasher) => hasher.update(bytes),
+        }
+    }
+
+    fn finalize(self) -> String {
+        match self {
+            SnapshotChecksumHasher::Sha256(hasher) => hex::encode(hasher.finalize()),
+            SnapshotChecksumHasher::Blake2b(hasher) => hex::encode(hasher.finalize()),
+        }
+    }
 }
 
 pub struct SnapshotValidator {
@@ -118,7 +175,7 @@ impl SnapshotValidator {
                                         expected_size = failure.expected_size,
                                         expected_checksum = %failure.expected_checksum,
                                         kind = failure.kind.as_str(),
-                                        "snapshot chunk validation failed"
+                                        "snapshot chunk validation failed",
                                     );
                                 }
                             }
@@ -126,14 +183,14 @@ impl SnapshotValidator {
                                 debug!(
                                     target = "snapshot_validator",
                                     manifest = %worker_settings.manifest_path.display(),
-                                    "snapshot manifest not present; skipping validation"
+                                    "snapshot manifest not present; skipping validation",
                                 );
                             }
                             Ok(Err(ScanError::ChunkDirectoryMissing)) => {
                                 debug!(
                                     target = "snapshot_validator",
                                     chunk_dir = %worker_settings.chunk_dir.display(),
-                                    "snapshot chunk directory not present; skipping validation"
+                                    "snapshot chunk directory not present; skipping validation",
                                 );
                             }
                             Ok(Err(ScanError::VersionMismatch { expected, actual })) => {
@@ -142,7 +199,16 @@ impl SnapshotValidator {
                                     manifest = %worker_settings.manifest_path.display(),
                                     expected_version = expected,
                                     actual_version = actual,
-                                    "snapshot manifest version mismatch"
+                                    "snapshot manifest version mismatch",
+                                );
+                            }
+                            Ok(Err(ScanError::ChecksumAlgorithmMismatch { expected, actual })) => {
+                                warn!(
+                                    target = "snapshot_validator",
+                                    manifest = %worker_settings.manifest_path.display(),
+                                    expected_algorithm = %expected.as_str(),
+                                    actual_algorithm = %actual.as_str(),
+                                    "snapshot manifest checksum algorithm mismatch",
                                 );
                             }
                             Ok(Err(ScanError::Decode(err))) => {
@@ -150,7 +216,7 @@ impl SnapshotValidator {
                                     target = "snapshot_validator",
                                     manifest = %worker_settings.manifest_path.display(),
                                     error = %err,
-                                    "snapshot manifest decode failed"
+                                    "snapshot manifest decode failed",
                                 );
                             }
                             Ok(Err(ScanError::Io(err))) => {
@@ -158,19 +224,19 @@ impl SnapshotValidator {
                                     target = "snapshot_validator",
                                     manifest = %worker_settings.manifest_path.display(),
                                     error = %err,
-                                    "snapshot validation I/O failure"
+                                    "snapshot validation I/O failure",
                                 );
                             }
                             Err(err) => {
                                 warn!(
                                     target = "snapshot_validator",
                                     error = %err,
-                                    "snapshot validator worker task failed"
+                                    "snapshot validator worker task failed",
                                 );
                             }
                         }
                     }
-                    changed = shutdown_rx.changed() => {
+                    changed = shutdown_rx                    changed = shutdown_rx.changed() => {
                         if changed.is_ok() && *shutdown_rx.borrow() {
                             break;
                         }
@@ -201,7 +267,14 @@ impl SnapshotValidator {
 enum ScanError {
     ManifestMissing,
     ChunkDirectoryMissing,
-    VersionMismatch { expected: u32, actual: u32 },
+    VersionMismatch {
+        expected: u32,
+        actual: u32,
+    },
+    ChecksumAlgorithmMismatch {
+        expected: SnapshotChecksumAlgorithm,
+        actual: SnapshotChecksumAlgorithm,
+    },
     Decode(serde_json::Error),
     Io(io::Error),
 }
@@ -225,6 +298,9 @@ fn scan_once(settings: &SnapshotValidatorSettings) -> Result<Vec<ChunkFailure>, 
         });
     }
 
+    let checksum_algorithm =
+        resolve_manifest_algorithm(manifest.checksum_algorithm, settings.checksum_algorithm)?;
+
     let mut failures = Vec::new();
     for segment in manifest.segments {
         let Some(name) = segment.name.as_ref() else {
@@ -233,12 +309,13 @@ fn scan_once(settings: &SnapshotValidatorSettings) -> Result<Vec<ChunkFailure>, 
         let Some(expected_size) = segment.size_bytes else {
             continue;
         };
-        let Some(expected_checksum) = segment.sha256.as_ref() else {
+        let Some(expected_checksum) = segment.checksum.as_ref().or(segment.sha256.as_ref()) else {
             continue;
         };
+        let expected_checksum = expected_checksum.to_lowercase();
 
         let path = settings.chunk_dir.join(name);
-        match validate_chunk(&path, expected_size, expected_checksum) {
+        match validate_chunk(&path, expected_size, &expected_checksum, checksum_algorithm) {
             Ok(Some(kind)) => failures.push(ChunkFailure {
                 segment: name.clone(),
                 expected_size,
@@ -259,6 +336,7 @@ fn validate_chunk(
     path: &Path,
     expected_size: u64,
     expected_checksum: &str,
+    algorithm: SnapshotChecksumAlgorithm,
 ) -> Result<Option<FailureKind>, io::Error> {
     if !path.exists() {
         return Ok(Some(FailureKind::Missing));
@@ -270,7 +348,7 @@ fn validate_chunk(
     }
 
     let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
+    let mut hasher = SnapshotChecksumHasher::new(algorithm);
     let mut buffer = [0u8; 8 * 1024];
     loop {
         let read = file.read(&mut buffer)?;
@@ -279,8 +357,8 @@ fn validate_chunk(
         }
         hasher.update(&buffer[..read]);
     }
-    let digest = hex::encode(hasher.finalize());
-    if digest != expected_checksum {
+    let digest = hasher.finalize();
+    if !digest.eq_ignore_ascii_case(expected_checksum) {
         return Ok(Some(FailureKind::ChecksumMismatch));
     }
 

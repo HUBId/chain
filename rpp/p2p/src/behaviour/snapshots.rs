@@ -638,10 +638,12 @@ impl SessionState {
                 self.last_dispatched_kind = Some(SnapshotItemKind::Chunk);
                 (SnapshotItemKind::Chunk, request)
             }),
-            SnapshotItemKind::LightClientUpdate => self.pending_updates.pop_front().map(|request| {
-                self.last_dispatched_kind = Some(SnapshotItemKind::LightClientUpdate);
-                (SnapshotItemKind::LightClientUpdate, request)
-            }),
+            SnapshotItemKind::LightClientUpdate => {
+                self.pending_updates.pop_front().map(|request| {
+                    self.last_dispatched_kind = Some(SnapshotItemKind::LightClientUpdate);
+                    (SnapshotItemKind::LightClientUpdate, request)
+                })
+            }
             _ => None,
         }
     }
@@ -1528,15 +1530,18 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     .max_concurrent_requests
                     .and_then(|value| usize::try_from(value).ok())
                 {
-                    provider_limit = Some(provider_limit.map_or(limit, |current| current.min(limit)));
+                    provider_limit =
+                        Some(provider_limit.map_or(limit, |current| current.min(limit)));
                 }
 
                 if let Some(limit) = state.plan_max_concurrent_requests {
                     plan_limit = Some(plan_limit.map_or(limit, |current| current.min(limit)));
                 }
 
-                let state_limit = state.effective_concurrency_limit(self.configured_concurrency_limit());
-                effective_limit = Some(effective_limit.map_or(state_limit, |current| current.min(state_limit)));
+                let state_limit =
+                    state.effective_concurrency_limit(self.configured_concurrency_limit());
+                effective_limit =
+                    Some(effective_limit.map_or(state_limit, |current| current.min(state_limit)));
 
                 if let Some(age) = state.backpressure_since(SnapshotItemKind::Chunk) {
                     backpressure_chunks = backpressure_chunks.max(age);
@@ -1560,10 +1565,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 effective_limit.unwrap_or(configured_limit),
             );
             metrics.record_backpressure(SnapshotItemKind::Chunk, backpressure_chunks);
-            metrics.record_backpressure(
-                SnapshotItemKind::LightClientUpdate,
-                backpressure_updates,
-            );
+            metrics.record_backpressure(SnapshotItemKind::LightClientUpdate, backpressure_updates);
         }
     }
 
@@ -1827,7 +1829,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        let request_id = self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Plan);
+        let request_id =
+            self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Plan);
         self.record_request_update(session_id, SnapshotItemKind::Plan, "dispatched");
         Some(request_id)
     }
@@ -1872,11 +1875,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if let Some(entry) = self.sessions.get_mut(&session_id) {
             entry.enqueue(SnapshotItemKind::LightClientUpdate, update_index);
-            self.record_request_update(
-                session_id,
-                SnapshotItemKind::LightClientUpdate,
-                "enqueued",
-            );
+            self.record_request_update(session_id, SnapshotItemKind::LightClientUpdate, "enqueued");
         }
 
         self.dispatch_pending_requests(
@@ -1908,7 +1907,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             min_chunk_size: Some(min_chunk_size as u64),
             max_chunk_size: Some(max_chunk_size as u64),
         };
-        let request_id = self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume);
+        let request_id =
+            self.send_outbound_request(&peer, session_id, request, SnapshotItemKind::Resume);
         self.record_request_update(session_id, SnapshotItemKind::Resume, "dispatched");
         Some(request_id)
     }
@@ -3120,11 +3120,7 @@ mod tests {
             Some(1.0)
         );
         assert_eq!(
-            metric_value_with_labels(
-                &buffer,
-                "snapshot_in_flight_requests",
-                &[("kind", "chunk")],
-            ),
+            metric_value_with_labels(&buffer, "snapshot_in_flight_requests", &[("kind", "chunk")],),
             Some(1.0)
         );
         assert_eq!(

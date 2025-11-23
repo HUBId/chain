@@ -31,13 +31,14 @@ fn branch_factor_256_snapshot_roundtrip() {
     let temp = tempdir().expect("create scratch directory");
     let snapshot_path = write_fixture(&temp);
 
-    let manager_cfg = RevisionManagerConfig::builder()
-        .max_revisions(4)
-        .build();
+    let manager_cfg = RevisionManagerConfig::builder().max_revisions(4).build();
     let db_cfg = DbConfig::builder().manager(manager_cfg).build();
     let db = Db::new(&snapshot_path, db_cfg, noop_storage_metrics()).expect("open fixture db");
 
-    let root = db.root_hash().expect("root lookup").expect("non-empty root");
+    let root = db
+        .root_hash()
+        .expect("root lookup")
+        .expect("non-empty root");
     assert_eq!(
         hex::encode(root.as_ref()),
         "bfe9062561ae077a339ce49786f7287bc54711e4a50129bd8fb31daea5a66ac9",

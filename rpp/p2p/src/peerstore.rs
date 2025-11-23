@@ -19,11 +19,11 @@ use crate::handshake::{
     emit_handshake_telemetry, HandshakeOutcome, HandshakePayload, TelemetryMetadata,
     VRF_HANDSHAKE_CONTEXT,
 };
+use crate::peerstore::peer_class::PeerClass;
 use crate::policy_log::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
     AdmissionPolicyLogError, AdmissionPolicyLogOptions, PolicyAllowlistState,
 };
-use crate::peerstore::peer_class::PeerClass;
 use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
 use crate::worm_export::WormExportSettings;
@@ -2351,10 +2351,8 @@ mod tests {
             tier: TierLevel::Tl3,
         });
 
-        let store = Peerstore::open(
-            PeerstoreConfig::memory().with_allowlist(allowlist.clone()),
-        )
-        .expect("open");
+        let store = Peerstore::open(PeerstoreConfig::memory().with_allowlist(allowlist.clone()))
+            .expect("open");
 
         assert_eq!(store.peer_class(&trusted_peer), PeerClass::Trusted);
         let unknown_peer = PeerId::random();

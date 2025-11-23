@@ -40,15 +40,20 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::{debug, error, info, info_span, warn};
 
+use blake2::{
+    digest::{consts::U32, Digest},
+    Blake2b,
+};
 use hex;
 use rpp_wallet_interface::runtime_config::MempoolStatus;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{self, Value};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
-    SnapshotSigningKey, SnapshotSizingConfig, DEFAULT_SNAPSHOT_CHUNK_SIZE,
+    SnapshotChecksumAlgorithm, SnapshotSigningKey, SnapshotSizingConfig,
+    DEFAULT_SNAPSHOT_CHUNK_SIZE,
 };
 use crate::consensus::messages::compute_consensus_bindings;
 use crate::consensus::{
@@ -1161,6 +1166,8 @@ struct SnapshotChunkManifest {
     #[serde(default)]
     version: u32,
     #[serde(default)]
+    checksum_algorithm: Option<SnapshotChecksumAlgorithm>,
+    #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
 
@@ -1171,7 +1178,73 @@ struct ManifestSegment {
     #[serde(default)]
     size_bytes: Option<u64>,
     #[serde(default)]
+    checksum: Option<String>,
+    #[serde(default)]
     sha256: Option<String>,
+}
+
+type Blake2b256 = Blake2b<U32>;
+
+fn resolve_manifest_algorithm(
+    manifest_algorithm: Option<SnapshotChecksumAlgorithm>,
+    configured_algorithm: SnapshotChecksumAlgorithm,
+) -> Result<SnapshotChecksumAlgorithm, SnapshotManifestError> {
+    match manifest_algorithm {
+        Some(actual) if actual != configured_algorithm => {
+            Err(SnapshotManifestError::ChecksumAlgorithmMismatch {
+                expected: configured_algorithm,
+                actual,
+            })
+        }
+        Some(actual) => Ok(actual),
+        None => Ok(configured_algorithm),
+    }
+}
+
+enum SnapshotChecksumHasher {
+    Sha256(Sha256),
+    Blake2b(Blake2b256),
+}
+
+impl SnapshotChecksumHasher {
+    fn new(algorithm: SnapshotChecksumAlgorithm) -> Self {
+        match algorithm {
+            SnapshotChecksumAlgorithm::Sha256 => Self::Sha256(Sha256::new()),
+            SnapshotChecksumAlgorithm::Blake2b => Self::Blake2b(Blake2b256::new()),
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            SnapshotChecksumHasher::Sha256(hasher) => hasher.update(bytes),
+            SnapshotChecksumHasher::Blake2b(hasher) => hasher.update(bytes),
+        }
+    }
+
+    fn finalize(self) -> String {
+        match self {
+            SnapshotChecksumHasher::Sha256(hasher) => hex::encode(hasher.finalize()),
+            SnapshotChecksumHasher::Blake2b(hasher) => hex::encode(hasher.finalize()),
+        }
+    }
+}
+
+fn compute_manifest_checksum(
+    path: &Path,
+    algorithm: SnapshotChecksumAlgorithm,
+) -> Result<String, SnapshotManifestError> {
+    let mut file = fs::File::open(path).map_err(SnapshotManifestError::Io)?;
+    let mut hasher = SnapshotChecksumHasher::new(algorithm);
+    let mut buffer = [0u8; 8 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(SnapshotManifestError::Io)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hasher.finalize())
 }
 
 #[derive(Debug)]
@@ -1179,6 +1252,10 @@ enum SnapshotManifestError {
     VersionMismatch {
         expected: u32,
         actual: u32,
+    },
+    ChecksumAlgorithmMismatch {
+        expected: SnapshotChecksumAlgorithm,
+        actual: SnapshotChecksumAlgorithm,
     },
     MissingChunkDirectory(PathBuf),
     MissingChunk {
@@ -1223,6 +1300,12 @@ impl fmt::Display for SnapshotManifestError {
             SnapshotManifestError::VersionMismatch { expected, actual } => write!(
                 f,
                 "snapshot manifest version mismatch (expected {expected}, found {actual})"
+            ),
+            SnapshotManifestError::ChecksumAlgorithmMismatch { expected, actual } => write!(
+                f,
+                "snapshot manifest checksum algorithm mismatch (expected {}, found {})",
+                expected.as_str(),
+                actual.as_str()
             ),
             SnapshotManifestError::MissingChunk { name, path } => {
                 write!(f, "snapshot chunk '{name}' missing at {}", path.display())
@@ -1282,6 +1365,15 @@ fn log_manifest_error(manifest_path: &Path, err: &SnapshotManifestError) {
                 expected_version = expected,
                 actual_version = actual,
                 "snapshot manifest version mismatch",
+            );
+        }
+        SnapshotManifestError::ChecksumAlgorithmMismatch { expected, actual } => {
+            error!(
+                target: "node",
+                path = %manifest_path.display(),
+                expected_algorithm = %expected.as_str(),
+                actual_algorithm = %actual.as_str(),
+                "snapshot manifest checksum algorithm mismatch",
             );
         }
         SnapshotManifestError::MissingChunk { name, path } => {
@@ -5271,6 +5363,11 @@ impl NodeInner {
             });
         }
 
+        let checksum_algorithm = resolve_manifest_algorithm(
+            manifest.checksum_algorithm,
+            self.config.snapshot_checksum_algorithm,
+        )?;
+
         if !chunk_root.exists() {
             return Err(SnapshotManifestError::MissingChunkDirectory(
                 chunk_root.to_path_buf(),
@@ -5282,9 +5379,10 @@ impl NodeInner {
             let Some(expected_size) = segment.size_bytes else {
                 continue;
             };
-            let Some(expected_checksum) = segment.sha256 else {
+            let Some(expected_checksum) = segment.checksum.or(segment.sha256) else {
                 continue;
             };
+            let expected_checksum = expected_checksum.to_lowercase();
 
             let path = chunk_root.join(&name);
             if !path.exists() {
@@ -5301,18 +5399,8 @@ impl NodeInner {
                 });
             }
 
-            let mut file = fs::File::open(&path).map_err(SnapshotManifestError::Io)?;
-            let mut hasher = Sha256::new();
-            let mut buffer = [0u8; 8 * 1024];
-            loop {
-                let read = file.read(&mut buffer).map_err(SnapshotManifestError::Io)?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..read]);
-            }
-            let digest = hex::encode(hasher.finalize());
-            if digest != expected_checksum {
+            let digest = compute_manifest_checksum(&path, checksum_algorithm)?;
+            if !digest.eq_ignore_ascii_case(&expected_checksum) {
                 return Err(SnapshotManifestError::ChecksumMismatch {
                     name,
                     path,

@@ -5,11 +5,16 @@ use std::sync::Once;
 
 use anyhow::Context;
 use base64::Engine;
+use blake2::{
+    digest::{consts::U32, Digest},
+    Blake2b,
+};
+use clap::ValueEnum;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH};
 use hex::FromHexError;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use thiserror::Error;
 
 const SNAPSHOT_VERIFY_RESULTS_METRIC: &str = "snapshot_verify_results_total";
@@ -20,6 +25,52 @@ static SNAPSHOT_METRIC_REGISTER: Once = Once::new();
 pub enum DataSource {
     Path(PathBuf),
     Inline { label: String, data: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecksumAlgorithm {
+    Sha256,
+    Blake2b,
+}
+
+type Blake2b256 = Blake2b<U32>;
+
+impl ChecksumAlgorithm {
+    fn description(self) -> &'static str {
+        match self {
+            ChecksumAlgorithm::Sha256 => "sha256",
+            ChecksumAlgorithm::Blake2b => "blake2b",
+        }
+    }
+}
+
+enum EitherHasher {
+    Sha256(Sha256),
+    Blake2b(Blake2b256),
+}
+
+impl EitherHasher {
+    fn new(algorithm: ChecksumAlgorithm) -> Self {
+        match algorithm {
+            ChecksumAlgorithm::Sha256 => Self::Sha256(Sha256::new()),
+            ChecksumAlgorithm::Blake2b => Self::Blake2b(Blake2b256::new()),
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            EitherHasher::Sha256(hasher) => hasher.update(data),
+            EitherHasher::Blake2b(hasher) => hasher.update(data),
+        }
+    }
+
+    fn finalize(self) -> Vec<u8> {
+        match self {
+            EitherHasher::Sha256(hasher) => hasher.finalize().to_vec(),
+            EitherHasher::Blake2b(hasher) => hasher.finalize().to_vec(),
+        }
+    }
 }
 
 impl DataSource {
@@ -46,6 +97,7 @@ pub struct VerifyArgs {
     pub public_key: DataSource,
     pub chunk_root: Option<PathBuf>,
     pub verbose_progress: bool,
+    pub checksum_algorithm: Option<ChecksumAlgorithm>,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +107,7 @@ pub struct VerificationReport {
     pub public_key_path: String,
     pub chunk_root: Option<String>,
     pub manifest_sha256: Option<String>,
+    pub checksum_algorithm: Option<ChecksumAlgorithm>,
     pub signature: Option<SignatureReport>,
     pub segments: Vec<SegmentReport>,
     pub summary: Option<SegmentSummary>,
@@ -72,6 +125,7 @@ impl VerificationReport {
                 .as_ref()
                 .map(|path| path.display().to_string()),
             manifest_sha256: None,
+            checksum_algorithm: None,
             signature: None,
             segments: Vec::new(),
             summary: None,
@@ -92,6 +146,7 @@ pub struct SignatureReport {
 #[derive(Debug, Serialize)]
 pub struct SegmentSummary {
     pub segments_total: usize,
+    pub checksum_algorithm: ChecksumAlgorithm,
     pub metadata_incomplete: usize,
     pub verified: usize,
     pub missing_files: usize,
@@ -104,6 +159,7 @@ pub struct SegmentSummary {
 pub struct SegmentReport {
     pub segment: String,
     pub path: String,
+    pub checksum_algorithm: ChecksumAlgorithm,
     pub status: SegmentStatus,
     pub expected_size: Option<u64>,
     pub actual_size: Option<u64>,
@@ -132,11 +188,14 @@ pub enum DecodeError {
 }
 
 const SNAPSHOT_MANIFEST_VERSION: u32 = 1;
+const DEFAULT_CHECKSUM_ALGORITHM: ChecksumAlgorithm = ChecksumAlgorithm::Sha256;
 
 #[derive(Debug, Deserialize)]
 struct SnapshotManifest {
     #[serde(default)]
     version: u32,
+    #[serde(default)]
+    checksum_algorithm: Option<ChecksumAlgorithm>,
     #[serde(default)]
     segments: Vec<ManifestSegment>,
 }
@@ -148,7 +207,25 @@ struct ManifestSegment {
     #[serde(default)]
     size_bytes: Option<u64>,
     #[serde(default)]
+    checksum: Option<String>,
+    #[serde(default)]
     sha256: Option<String>,
+}
+
+fn resolve_checksum_algorithm(
+    manifest: &SnapshotManifest,
+    override_algorithm: Option<ChecksumAlgorithm>,
+) -> Result<ChecksumAlgorithm, String> {
+    match (manifest.checksum_algorithm, override_algorithm) {
+        (Some(manifest_alg), Some(requested)) if manifest_alg != requested => Err(format!(
+            "snapshot manifest checksum algorithm mismatch (manifest={}, requested={})",
+            manifest_alg.description(),
+            requested.description(),
+        )),
+        (Some(manifest_alg), _) => Ok(manifest_alg),
+        (None, Some(requested)) => Ok(requested),
+        (None, None) => Ok(DEFAULT_CHECKSUM_ALGORITHM),
+    }
 }
 
 #[derive(Debug)]
@@ -251,6 +328,17 @@ pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> E
         };
     }
 
+    let checksum_algorithm = match resolve_checksum_algorithm(&manifest, args.checksum_algorithm) {
+        Ok(algorithm) => algorithm,
+        Err(err) => {
+            return Execution::Fatal {
+                exit_code: ExitCode::Fatal,
+                error: err,
+            };
+        }
+    };
+    report.checksum_algorithm = Some(checksum_algorithm);
+
     let chunk_root = match determine_chunk_root(args) {
         Ok(root) => root,
         Err(err) => {
@@ -286,7 +374,12 @@ pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> E
         }
     }
 
-    let (segments, summary) = verify_segments(&manifest, &chunk_root, args.verbose_progress);
+    let (segments, summary) = verify_segments(
+        &manifest,
+        &chunk_root,
+        checksum_algorithm,
+        args.verbose_progress,
+    );
     if summary.metadata_incomplete > 0
         || summary.missing_files > 0
         || summary.size_mismatches > 0
@@ -387,6 +480,7 @@ fn verify_signature(
 fn verify_segments(
     manifest: &SnapshotManifest,
     chunk_root: &Path,
+    checksum_algorithm: ChecksumAlgorithm,
     verbose_progress: bool,
 ) -> (Vec<SegmentReport>, SegmentSummary) {
     let mut reports = Vec::new();
@@ -404,7 +498,11 @@ fn verify_segments(
             .cloned()
             .unwrap_or_else(|| format!("segment_{index}"));
         let expected_size = segment.size_bytes;
-        let expected_checksum = segment.sha256.as_ref().map(|s| s.to_lowercase());
+        let expected_checksum = segment
+            .checksum
+            .as_ref()
+            .or(segment.sha256.as_ref())
+            .map(|s| s.to_lowercase());
         let path = chunk_root.join(&name);
 
         if segment.name.is_none() || expected_size.is_none() || expected_checksum.is_none() {
@@ -412,10 +510,11 @@ fn verify_segments(
             reports.push(SegmentReport {
                 segment: name,
                 path: path.display().to_string(),
+                checksum_algorithm,
                 status: SegmentStatus::MissingMetadata,
                 expected_size,
                 actual_size: None,
-                expected_checksum: segment.sha256.clone(),
+                expected_checksum: expected_checksum.clone(),
                 actual_checksum: None,
                 error: Some("segment missing required metadata".to_string()),
             });
@@ -428,7 +527,12 @@ fn verify_segments(
                 if size != expected_size.unwrap() {
                     (SegmentStatus::SizeMismatch, Some(size), None, None)
                 } else {
-                    match compute_sha256(&path, expected_size, verbose_progress) {
+                    match compute_checksum(
+                        &path,
+                        expected_size,
+                        checksum_algorithm,
+                        verbose_progress,
+                    ) {
                         Ok(actual_hash) => {
                             if actual_hash == expected_checksum.as_deref().unwrap() {
                                 (SegmentStatus::Verified, Some(size), Some(actual_hash), None)
@@ -466,6 +570,7 @@ fn verify_segments(
         reports.push(SegmentReport {
             segment: name,
             path: path.display().to_string(),
+            checksum_algorithm,
             status,
             expected_size,
             actual_size,
@@ -477,6 +582,7 @@ fn verify_segments(
 
     let summary = SegmentSummary {
         segments_total: manifest.segments.len(),
+        checksum_algorithm,
         metadata_incomplete,
         verified,
         missing_files,
@@ -488,9 +594,10 @@ fn verify_segments(
     (reports, summary)
 }
 
-fn compute_sha256(
+fn compute_checksum(
     path: &Path,
     expected_size: Option<u64>,
+    algorithm: ChecksumAlgorithm,
     verbose_progress: bool,
 ) -> Result<String, String> {
     let progress: Option<ProgressReporter<io::StderrLock<'static>>> = if verbose_progress {
@@ -502,20 +609,23 @@ fn compute_sha256(
         None
     };
 
-    compute_sha256_from_reader(
+    compute_checksum_from_reader(
         fs::File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?,
         path,
+        algorithm,
         progress,
     )
 }
 
-fn compute_sha256_from_reader<R: Read, W: Write>(
+fn compute_checksum_from_reader<R: Read, W: Write>(
     mut reader: R,
     path: &Path,
+    algorithm: ChecksumAlgorithm,
     mut progress: Option<ProgressReporter<W>>,
 ) -> Result<String, String> {
-    let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
+    let mut hasher = EitherHasher::new(algorithm);
+
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -665,7 +775,11 @@ mod tests {
         SigningKey::try_from(&secret_bytes).expect("valid seed")
     }
 
-    fn write_manifest(dir: &TempDir, segments: &[(&str, &[u8])]) -> (PathBuf, PathBuf) {
+    fn write_manifest(
+        dir: &TempDir,
+        segments: &[(&str, &[u8])],
+        algorithm: ChecksumAlgorithm,
+    ) -> (PathBuf, PathBuf) {
         let manifest_dir = dir.path().join("manifest");
         let chunk_dir = dir.path().join("chunks");
         fs::create_dir_all(&manifest_dir).unwrap();
@@ -675,19 +789,28 @@ mod tests {
         for (index, (name, data)) in segments.iter().enumerate() {
             let path = chunk_dir.join(name);
             fs::write(&path, data).unwrap();
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            let checksum = hex::encode(hasher.finalize());
-            manifest_segments.push(json!({
+            let checksum = match algorithm {
+                ChecksumAlgorithm::Sha256 => hex::encode(Sha256::digest(data)),
+                ChecksumAlgorithm::Blake2b => hex::encode(Blake2b256::digest(data)),
+            };
+            let mut segment = json!({
                 "segment_name": name,
                 "size_bytes": data.len(),
-                "sha256": checksum,
+                "checksum": checksum,
                 "index": index,
-            }));
+            });
+            if algorithm == ChecksumAlgorithm::Sha256 {
+                segment
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("sha256".to_string(), json!(checksum));
+            }
+            manifest_segments.push(segment);
         }
 
         let manifest = json!({
             "version": 1,
+            "checksum_algorithm": algorithm,
             "generated_at": "2024-01-01T00:00:00Z",
             "segments": manifest_segments,
         });
@@ -707,6 +830,7 @@ mod tests {
         let (manifest_path, chunk_dir) = write_manifest(
             &temp,
             &[("chunk-0.bin", b"hello"), ("chunk-1.bin", b"world")],
+            ChecksumAlgorithm::Sha256,
         );
 
         let signing_key = deterministic_signing_key(1);
@@ -726,6 +850,7 @@ mod tests {
             },
             chunk_root: Some(chunk_dir.clone()),
             verbose_progress: false,
+            checksum_algorithm: None,
         };
         let mut report = VerificationReport::new(&args);
         let result = run_verification(&args, &mut report);
@@ -742,7 +867,11 @@ mod tests {
     #[test]
     fn detect_checksum_mismatch() {
         let temp = TempDir::new().unwrap();
-        let (manifest_path, chunk_dir) = write_manifest(&temp, &[("chunk-0.bin", b"hello")]);
+        let (manifest_path, chunk_dir) = write_manifest(
+            &temp,
+            &[("chunk-0.bin", b"hello")],
+            ChecksumAlgorithm::Sha256,
+        );
 
         fs::write(chunk_dir.join("chunk-0.bin"), b"xxxxx").unwrap();
 
@@ -763,6 +892,7 @@ mod tests {
             },
             chunk_root: Some(chunk_dir.clone()),
             verbose_progress: false,
+            checksum_algorithm: None,
         };
         let mut report = VerificationReport::new(&args);
         let result = run_verification(&args, &mut report);
@@ -775,6 +905,88 @@ mod tests {
         let summary = report.summary.unwrap();
         assert_eq!(summary.checksum_mismatches, 1);
         assert!(report.signature.unwrap().signature_valid);
+    }
+
+    #[test]
+    fn verify_blake2b_manifest() {
+        let temp = TempDir::new().unwrap();
+        let (manifest_path, chunk_dir) = write_manifest(
+            &temp,
+            &[("chunk-0.bin", b"hello blake2b")],
+            ChecksumAlgorithm::Blake2b,
+        );
+
+        let signing_key = deterministic_signing_key(4);
+        let verifying_key = signing_key.verifying_key();
+        let manifest_bytes = fs::read(&manifest_path).unwrap();
+        let signature = signing_key.sign(&manifest_bytes);
+
+        let signature_path = temp.path().join("chunks.json.sig");
+        fs::write(&signature_path, hex::encode(signature.to_bytes())).unwrap();
+
+        let args = VerifyArgs {
+            manifest: manifest_path.clone(),
+            signature: signature_path.clone(),
+            public_key: DataSource::Inline {
+                label: "inline".to_string(),
+                data: hex::encode(verifying_key.to_bytes()),
+            },
+            chunk_root: Some(chunk_dir.clone()),
+            verbose_progress: false,
+            checksum_algorithm: None,
+        };
+
+        let mut report = VerificationReport::new(&args);
+        let result = run_verification(&args, &mut report);
+        assert_matches!(
+            result,
+            Execution::Completed {
+                exit_code: ExitCode::Success
+            }
+        );
+        let summary = report.summary.unwrap();
+        assert_eq!(summary.verified, 1);
+        assert_eq!(summary.checksum_algorithm, ChecksumAlgorithm::Blake2b);
+    }
+
+    #[test]
+    fn checksum_algorithm_mismatch_is_fatal() {
+        let temp = TempDir::new().unwrap();
+        let (manifest_path, chunk_dir) = write_manifest(
+            &temp,
+            &[("chunk-0.bin", b"hello blake2b")],
+            ChecksumAlgorithm::Blake2b,
+        );
+
+        let signing_key = deterministic_signing_key(5);
+        let verifying_key = signing_key.verifying_key();
+        let manifest_bytes = fs::read(&manifest_path).unwrap();
+        let signature = signing_key.sign(&manifest_bytes);
+
+        let signature_path = temp.path().join("chunks.json.sig");
+        fs::write(&signature_path, hex::encode(signature.to_bytes())).unwrap();
+
+        let args = VerifyArgs {
+            manifest: manifest_path.clone(),
+            signature: signature_path.clone(),
+            public_key: DataSource::Inline {
+                label: "inline".to_string(),
+                data: hex::encode(verifying_key.to_bytes()),
+            },
+            chunk_root: Some(chunk_dir.clone()),
+            verbose_progress: false,
+            checksum_algorithm: Some(ChecksumAlgorithm::Sha256),
+        };
+
+        let mut report = VerificationReport::new(&args);
+        let result = run_verification(&args, &mut report);
+        match result {
+            Execution::Fatal { exit_code, error } => {
+                assert_eq!(exit_code, ExitCode::Fatal);
+                assert!(error.contains("checksum algorithm mismatch"));
+            }
+            other => panic!("expected fatal checksum mismatch, got {other:?}"),
+        }
     }
 
     fn counter_value(metrics: &str, name: &str, key: &str, value: &str) -> f64 {
@@ -810,7 +1022,11 @@ mod tests {
         let baseline = handle.render();
 
         let temp = TempDir::new().unwrap();
-        let (manifest_path, chunk_dir) = write_manifest(&temp, &[("chunk-0.bin", b"hello")]);
+        let (manifest_path, chunk_dir) = write_manifest(
+            &temp,
+            &[("chunk-0.bin", b"hello")],
+            ChecksumAlgorithm::Sha256,
+        );
 
         let signing_key = deterministic_signing_key(3);
         let verifying_key = signing_key.verifying_key();
@@ -831,6 +1047,7 @@ mod tests {
             },
             chunk_root: Some(chunk_dir.clone()),
             verbose_progress: false,
+            checksum_algorithm: None,
         };
 
         let mut success_report = VerificationReport::new(&args);
@@ -967,9 +1184,13 @@ mod tests {
             PROGRESS_LOG_INTERVAL,
         );
 
-        let digest =
-            compute_sha256_from_reader(Cursor::new(&data), Path::new("mock.bin"), Some(reporter))
-                .expect("checksum succeeds");
+        let digest = compute_checksum_from_reader(
+            Cursor::new(&data),
+            Path::new("mock.bin"),
+            ChecksumAlgorithm::Sha256,
+            Some(reporter),
+        )
+        .expect("checksum succeeds");
 
         assert_eq!(digest, hex::encode(expected));
 
@@ -996,9 +1217,13 @@ mod tests {
 
         let reporter = ProgressReporter::new(&mut log_buffer, None, PROGRESS_LOG_INTERVAL);
 
-        let digest =
-            compute_sha256_from_reader(Cursor::new(&data), Path::new("mock.bin"), Some(reporter))
-                .expect("checksum succeeds");
+        let digest = compute_checksum_from_reader(
+            Cursor::new(&data),
+            Path::new("mock.bin"),
+            ChecksumAlgorithm::Sha256,
+            Some(reporter),
+        )
+        .expect("checksum succeeds");
 
         assert_eq!(digest, hex::encode(Sha256::digest(&data)));
 
