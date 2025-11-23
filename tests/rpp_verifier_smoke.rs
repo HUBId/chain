@@ -1,7 +1,9 @@
 #![cfg(feature = "backend-rpp-stark")]
 
 use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
-use rpp_stark::backend::{ensure_proof_size_consistency, params_limit_to_node_bytes, ProofSizeMappingError};
+use rpp_stark::backend::{
+    ensure_proof_size_consistency, params_limit_to_node_bytes, ProofSizeMappingError,
+};
 use rpp_stark::params::{deserialize_params, StarkParamsBuilder};
 
 #[path = "rpp_vectors.rs"]

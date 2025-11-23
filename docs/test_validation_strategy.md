@@ -30,7 +30,10 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
   Für den RPP-STARK-Backendpfad sind separate Fuzz-Builds hinterlegt; kurze Repros (32 Iterationen, 5 s Timeout) lassen sich mit
   `cargo fuzz run handle_meta --features backend-rpp-stark -- -runs=32 -timeout=5` aus `rpp/p2p` sowie
   `cargo fuzz run wallet_rpc --features backend-rpp-stark -- -runs=32 -timeout=5` aus `rpp/wallet` starten, um die STARK-
-  spezifischen Decoderwege auf Build- und API-Regressionsfreiheit zu prüfen.
+  spezifischen Decoderwege auf Build- und API-Regressionsfreiheit zu prüfen. Backend-RPP-STARK-Fuzz-Builds installieren zudem
+  einen deterministischen RNG, der sich über `RPP_FUZZ_SEED` steuern lässt (dezimal oder `0x`-Hex). CI verwendet den Default
+  `0x5A17F00D` und übergibt denselben Wert auch als libFuzzer-Seed (`-seed=$RPP_FUZZ_SEED`), sodass identische Seeds die
+  gleichen Zufallsströme und somit reproduzierbare Ergebnisse liefern.
 - **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) bündelt `ci_block_pipeline.ron`, `ci_state_sync_guard.ron` und den Phase‑2-Stresslauf `consensus_quorum_stress.ron`. Die ersten beiden orchestrieren Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz); der dritte injiziert VRF-/Quorum-Manipulationen und misst Prover/Verifier-Latenzen inklusive CSV-/JSON-Summaries.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:tools/simnet/src/main.rs†L1-L86】
 
 ### 1.4 Feature-Matrix & Laufzeiten

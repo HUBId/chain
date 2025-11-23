@@ -77,6 +77,7 @@ jobs:
     timeout-minutes: 20
     env:
       NIGHTLY_TOOLCHAIN: nightly-2025-07-14
+      RPP_FUZZ_SEED: 0x5A17F00D
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -89,8 +90,8 @@ jobs:
 
       - name: Run backend-rpp-stark P2P fuzz build
         working-directory: rpp/p2p
-        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta --features backend-rpp-stark -- -runs=32 -timeout=5
+        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta --features backend-rpp-stark -- -seed="$RPP_FUZZ_SEED" -runs=32 -timeout=5
 
       - name: Run backend-rpp-stark wallet fuzz build
         working-directory: rpp/wallet
-        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc --features backend-rpp-stark -- -runs=32 -timeout=5
+        run: cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc --features backend-rpp-stark -- -seed="$RPP_FUZZ_SEED" -runs=32 -timeout=5

@@ -7,6 +7,10 @@ use rpp_wallet::zsi::{
     ConsensusApproval, RevokeRequest, RotateRequest, ZsiLifecycle, ZsiRecord, ZsiRequest,
 };
 
+#[cfg(feature = "backend-rpp-stark")]
+#[path = "../src/seed.rs"]
+mod seed;
+
 type BackendResult<T> = prover_backend_interface::BackendResult<T>;
 
 #[derive(Debug, Arbitrary)]
@@ -147,6 +151,9 @@ fn exercise_operation(
 }
 
 fuzz_target!(|sequence: LifecycleSequence| {
+    #[cfg(feature = "backend-rpp-stark")]
+    seed::install_deterministic_rng();
+
     let backend = MockBackend::new();
     let lifecycle = ZsiLifecycle::new(backend);
 
