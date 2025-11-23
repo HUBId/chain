@@ -3,11 +3,28 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Error;
-use clap::{ArgAction, Args};
+use clap::{ArgAction, Args, ValueEnum};
 
 pub use rpp_wallet_interface::runtime_config::RuntimeMode;
 
 pub type BootstrapResult<T> = Result<T, BootstrapError>;
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+pub enum TlsVersionArg {
+    Tls12,
+    Tls13,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub enum TlsCipherSuiteArg {
+    Tls13ChaCha20Poly1305Sha256,
+    Tls13Aes256GcmSha384,
+    Tls13Aes128GcmSha256,
+    Tls12ChaCha20Poly1305Sha256,
+    Tls12Aes256GcmSha384,
+    Tls12Aes128GcmSha256,
+}
 
 #[derive(Debug, Clone, Default, Args)]
 pub struct PruningCliOverrides {
@@ -106,6 +123,20 @@ pub struct RuntimeOptions {
     #[arg(long, value_name = "SECONDS")]
     pub telemetry_sample_interval: Option<u64>,
 
+    /// Override the minimum TLS version enforced by the snapshot RPC server
+    #[arg(long, value_enum, value_name = "VERSION")]
+    pub rpc_min_tls_version: Option<TlsVersionArg>,
+
+    /// Override the allowed TLS cipher suites for the snapshot RPC server
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SUITE",
+        value_delimiter = ',',
+        num_args = 1..
+    )]
+    pub rpc_tls_cipher_suites: Vec<TlsCipherSuiteArg>,
+
     /// Override the log level (also respects RUST_LOG)
     #[arg(long, value_name = "LEVEL")]
     pub log_level: Option<String>,
@@ -159,6 +190,8 @@ impl RuntimeOptions {
             telemetry_endpoint,
             telemetry_auth_token,
             telemetry_sample_interval,
+            rpc_min_tls_version,
+            rpc_tls_cipher_suites,
             log_level,
             log_json,
             dry_run,
@@ -200,6 +233,8 @@ impl RuntimeOptions {
             telemetry_endpoint,
             telemetry_auth_token,
             telemetry_sample_interval,
+            rpc_min_tls_version,
+            rpc_tls_cipher_suites,
             log_level,
             log_json,
             dry_run,
@@ -222,6 +257,8 @@ pub struct BootstrapOptions {
     pub telemetry_endpoint: Option<String>,
     pub telemetry_auth_token: Option<String>,
     pub telemetry_sample_interval: Option<u64>,
+    pub rpc_min_tls_version: Option<TlsVersionArg>,
+    pub rpc_tls_cipher_suites: Vec<TlsCipherSuiteArg>,
     pub log_level: Option<String>,
     pub log_json: bool,
     pub dry_run: bool,

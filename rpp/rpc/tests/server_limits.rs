@@ -9,6 +9,8 @@ use rcgen::{
     DnType, IsCa, KeyUsagePurpose, SanType,
 };
 use reqwest::{Client, Identity};
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls::{pki_types::CertificateDer, ClientConfig, RootCertStore};
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -16,7 +18,7 @@ use tokio::sync::oneshot;
 use tokio::time::sleep;
 
 use rpp::api::{self, ApiContext};
-use rpp::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
+use rpp::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig, TlsCipherSuite, TlsVersion};
 use rpp::runtime::RuntimeMode;
 
 fn random_loopback() -> SocketAddr {
@@ -252,6 +254,129 @@ async fn tls_requires_client_certificate() {
     let _ = handle.await;
 }
 
+#[cfg(feature = "wallet_rpc_mtls")]
+#[tokio::test]
+async fn strict_tls_profile_rejects_tls12_clients() {
+    let addr = random_loopback();
+    let temp = tempdir().expect("tempdir");
+
+    let ca = build_ca_cert();
+    let server = build_tls_cert(&ca, vec![SanType::DnsName("localhost".into())]);
+
+    let ca_path = write_pem(temp.path().join("ca.pem"), ca.serialize_pem().unwrap());
+    let server_cert_path = write_pem(
+        temp.path().join("server.pem"),
+        server.certificate_pem.clone(),
+    );
+    let server_key_path = write_pem(
+        temp.path().join("server.key"),
+        server.private_key_pem.clone(),
+    );
+
+    let mut tls = NetworkTlsConfig::default();
+    tls.enabled = true;
+    tls.certificate = Some(server_cert_path);
+    tls.private_key = Some(server_key_path);
+    tls.client_ca = Some(ca_path);
+    tls.min_tls_version = Some(TlsVersion::Tls13);
+    tls.cipher_suites = vec![TlsCipherSuite::Tls13Aes256GcmSha384];
+
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.enabled = false;
+
+    let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
+
+    let tls13_client = tls_client(
+        &ca,
+        Some(TlsVersion::Tls13),
+        vec![TlsCipherSuite::Tls13Aes256GcmSha384],
+    );
+    let response = tls13_client
+        .get(format!("https://localhost:{}/health", addr.port()))
+        .send()
+        .await
+        .expect("tls13 request");
+    assert!(response.status().is_success());
+
+    let tls12_client = tls_client(
+        &ca,
+        Some(TlsVersion::Tls12),
+        vec![TlsCipherSuite::Tls12Aes256GcmSha384],
+    );
+    let error = tls12_client
+        .get(format!("https://localhost:{}/health", addr.port()))
+        .send()
+        .await
+        .expect_err("tls12 request should fail");
+    assert!(error.is_connect());
+
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+}
+
+#[cfg(feature = "wallet_rpc_mtls")]
+#[tokio::test]
+async fn permissive_tls_profile_allows_tls12_cipher_suite() {
+    let addr = random_loopback();
+    let temp = tempdir().expect("tempdir");
+
+    let ca = build_ca_cert();
+    let server = build_tls_cert(&ca, vec![SanType::DnsName("localhost".into())]);
+
+    let ca_path = write_pem(temp.path().join("ca.pem"), ca.serialize_pem().unwrap());
+    let server_cert_path = write_pem(
+        temp.path().join("server.pem"),
+        server.certificate_pem.clone(),
+    );
+    let server_key_path = write_pem(
+        temp.path().join("server.key"),
+        server.private_key_pem.clone(),
+    );
+
+    let mut tls = NetworkTlsConfig::default();
+    tls.enabled = true;
+    tls.certificate = Some(server_cert_path);
+    tls.private_key = Some(server_key_path);
+    tls.client_ca = Some(ca_path);
+    tls.min_tls_version = Some(TlsVersion::Tls12);
+    tls.cipher_suites = vec![
+        TlsCipherSuite::Tls13Aes128GcmSha256,
+        TlsCipherSuite::Tls12Aes256GcmSha384,
+    ];
+
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.enabled = false;
+
+    let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
+
+    let tls12_client = tls_client(
+        &ca,
+        Some(TlsVersion::Tls12),
+        vec![TlsCipherSuite::Tls12Aes256GcmSha384],
+    );
+    let response = tls12_client
+        .get(format!("https://localhost:{}/health", addr.port()))
+        .send()
+        .await
+        .expect("tls12 request");
+    assert!(response.status().is_success());
+
+    let tls13_client = tls_client(
+        &ca,
+        Some(TlsVersion::Tls13),
+        vec![TlsCipherSuite::Tls13Aes128GcmSha256],
+    );
+    let response = tls13_client
+        .get(format!("https://localhost:{}/health", addr.port()))
+        .send()
+        .await
+        .expect("tls13 request");
+    assert!(response.status().is_success());
+
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+}
+
 fn build_ca_cert() -> RcgenCertificate {
     let mut params = CertificateParams::new(vec![]);
     params.distinguished_name = DistinguishedName::new();
@@ -286,4 +411,40 @@ fn build_tls_cert(ca: &RcgenCertificate, san: Vec<SanType>) -> GeneratedCert {
 fn write_pem(path: PathBuf, contents: String) -> PathBuf {
     std::fs::write(&path, contents).expect("write pem");
     path
+}
+
+#[cfg(feature = "wallet_rpc_mtls")]
+fn tls_client(
+    ca: &RcgenCertificate,
+    min_version: Option<TlsVersion>,
+    cipher_suites: Vec<TlsCipherSuite>,
+) -> Client {
+    let mut roots = RootCertStore::empty();
+    roots.add_parsable_certificates([CertificateDer::from(
+        ca.serialize_der().expect("serialize ca"),
+    )]);
+
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    if !cipher_suites.is_empty() {
+        provider.cipher_suites = cipher_suites
+            .iter()
+            .map(|suite| suite.rustls_suite())
+            .collect();
+    }
+
+    let versions: Vec<_> = min_version
+        .map(|version| vec![version.rustls_version()])
+        .unwrap_or_else(|| vec![&rustls::versions::TLS13, &rustls::versions::TLS12]);
+
+    let client_config = ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&versions)
+        .expect("protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    Client::builder()
+        .use_preconfigured_tls(client_config)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .expect("tls client")
 }

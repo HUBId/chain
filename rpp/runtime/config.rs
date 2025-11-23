@@ -30,6 +30,8 @@ use rpp_wallet::config::wallet::{
     WalletHwConfig as WalletHwSettings, WalletPolicyConfig as WalletPolicySettings,
     WalletProverConfig as WalletProverSettings,
 };
+#[cfg(feature = "wallet_rpc_mtls")]
+use rustls;
 
 use crate::consensus_engine::governance::TimetokeRewardGovernance;
 use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
@@ -1195,6 +1197,11 @@ pub struct AdmissionSigningConfig {
 impl AdmissionSigningConfig {
     fn validate(&self) -> ChainResult<()> {
         if !self.enabled {
+            if self.min_tls_version.is_some() {
+                return Err(ChainError::Config(
+                    "network.tls.min_tls_version is set but network.tls.enabled is false".into(),
+                ));
+            }
             return Ok(());
         }
         let path = self.key_path.as_ref().ok_or_else(|| {
@@ -1539,7 +1546,105 @@ pub struct NetworkTlsConfig {
     pub private_key: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ca: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_tls_version: Option<TlsVersion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cipher_suites: Vec<TlsCipherSuite>,
     pub require_client_auth: bool,
+}
+
+#[cfg_attr(feature = "runtime-cli", derive(ValueEnum))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsVersion {
+    Tls12,
+    Tls13,
+}
+
+impl TlsVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TlsVersion::Tls12 => "tls1.2",
+            TlsVersion::Tls13 => "tls1.3",
+        }
+    }
+
+    fn precedence(self) -> u8 {
+        match self {
+            TlsVersion::Tls12 => 12,
+            TlsVersion::Tls13 => 13,
+        }
+    }
+
+    #[cfg(feature = "wallet_rpc_mtls")]
+    pub fn rustls_version(self) -> &'static rustls::versions::SupportedProtocolVersion {
+        match self {
+            TlsVersion::Tls12 => &rustls::versions::TLS12,
+            TlsVersion::Tls13 => &rustls::versions::TLS13,
+        }
+    }
+}
+
+#[cfg_attr(feature = "runtime-cli", derive(ValueEnum))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsCipherSuite {
+    Tls13ChaCha20Poly1305Sha256,
+    Tls13Aes256GcmSha384,
+    Tls13Aes128GcmSha256,
+    Tls12ChaCha20Poly1305Sha256,
+    Tls12Aes256GcmSha384,
+    Tls12Aes128GcmSha256,
+}
+
+impl TlsCipherSuite {
+    pub fn label(self) -> &'static str {
+        match self {
+            TlsCipherSuite::Tls13ChaCha20Poly1305Sha256 => "TLS13_CHACHA20_POLY1305_SHA256",
+            TlsCipherSuite::Tls13Aes256GcmSha384 => "TLS13_AES_256_GCM_SHA384",
+            TlsCipherSuite::Tls13Aes128GcmSha256 => "TLS13_AES_128_GCM_SHA256",
+            TlsCipherSuite::Tls12ChaCha20Poly1305Sha256 => {
+                "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+            }
+            TlsCipherSuite::Tls12Aes256GcmSha384 => "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            TlsCipherSuite::Tls12Aes128GcmSha256 => "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        }
+    }
+
+    pub fn version(self) -> TlsVersion {
+        match self {
+            TlsCipherSuite::Tls13ChaCha20Poly1305Sha256
+            | TlsCipherSuite::Tls13Aes256GcmSha384
+            | TlsCipherSuite::Tls13Aes128GcmSha256 => TlsVersion::Tls13,
+            TlsCipherSuite::Tls12ChaCha20Poly1305Sha256
+            | TlsCipherSuite::Tls12Aes256GcmSha384
+            | TlsCipherSuite::Tls12Aes128GcmSha256 => TlsVersion::Tls12,
+        }
+    }
+
+    #[cfg(feature = "wallet_rpc_mtls")]
+    pub fn rustls_suite(self) -> rustls::SupportedCipherSuite {
+        match self {
+            TlsCipherSuite::Tls13ChaCha20Poly1305Sha256 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256
+            }
+            TlsCipherSuite::Tls13Aes256GcmSha384 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
+            }
+            TlsCipherSuite::Tls13Aes128GcmSha256 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256
+            }
+            TlsCipherSuite::Tls12ChaCha20Poly1305Sha256 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+            }
+            TlsCipherSuite::Tls12Aes256GcmSha384 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+            }
+            TlsCipherSuite::Tls12Aes128GcmSha256 => {
+                rustls::crypto::aws_lc_rs::cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+            }
+        }
+    }
 }
 
 impl NetworkTlsConfig {
@@ -1586,7 +1691,60 @@ impl NetworkTlsConfig {
             validate_tls_path("network.tls.client_ca", path)?;
         }
 
+        if let Some(min_version) = self.min_tls_version {
+            if min_version == TlsVersion::Tls13
+                && self
+                    .cipher_suites
+                    .iter()
+                    .any(|suite| suite.version() == TlsVersion::Tls12)
+            {
+                return Err(ChainError::Config(
+                    "network.tls.cipher_suites cannot include TLS1.2 ciphers when min_tls_version=tls13"
+                        .into(),
+                ));
+            }
+        }
+
         Ok(())
+    }
+
+    pub fn enabled_versions(&self) -> Vec<TlsVersion> {
+        let mut versions = vec![TlsVersion::Tls13, TlsVersion::Tls12];
+        if let Some(min_version) = self.min_tls_version {
+            versions.retain(|version| version.precedence() >= min_version.precedence());
+        }
+        versions
+    }
+
+    #[cfg(feature = "wallet_rpc_mtls")]
+    pub fn resolved_rustls_versions(
+        &self,
+    ) -> Vec<&'static rustls::versions::SupportedProtocolVersion> {
+        self.enabled_versions()
+            .into_iter()
+            .map(|version| version.rustls_version())
+            .collect()
+    }
+
+    pub fn cipher_suite_labels(&self) -> Vec<String> {
+        self.cipher_suites
+            .iter()
+            .map(|suite| suite.label().to_string())
+            .collect()
+    }
+
+    #[cfg(feature = "wallet_rpc_mtls")]
+    pub fn resolved_cipher_suites(&self) -> Vec<rustls::SupportedCipherSuite> {
+        if self.cipher_suites.is_empty() {
+            return rustls::crypto::aws_lc_rs::default_provider()
+                .cipher_suites
+                .clone();
+        }
+
+        self.cipher_suites
+            .iter()
+            .map(|suite| suite.rustls_suite())
+            .collect()
     }
 }
 
@@ -1597,6 +1755,8 @@ impl Default for NetworkTlsConfig {
             certificate: None,
             private_key: None,
             client_ca: None,
+            min_tls_version: None,
+            cipher_suites: Vec::new(),
             require_client_auth: false,
         }
     }

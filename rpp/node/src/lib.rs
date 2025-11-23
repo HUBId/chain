@@ -6,7 +6,7 @@ mod telemetry;
 
 pub use rpp_node_runtime_api::{
     BootstrapError, BootstrapErrorKind, BootstrapOptions, BootstrapResult, PruningCliOverrides,
-    PruningOverrides, RuntimeMode, RuntimeOptions,
+    PruningOverrides, RuntimeMode, RuntimeOptions, TlsCipherSuiteArg, TlsVersionArg,
 };
 
 pub mod config {
@@ -66,6 +66,7 @@ use rpp_chain::crypto::{
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
+use rpp_chain::runtime::config::{TlsCipherSuite, TlsVersion};
 use rpp_chain::runtime::{
     init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, TelemetryExporterBuilder,
 };
@@ -1467,6 +1468,16 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
             config.rollout.telemetry.enabled = true;
         }
     }
+    if let Some(version) = options.rpc_min_tls_version {
+        config.network.tls.min_tls_version = Some(map_tls_version_arg(version));
+    }
+    if !options.rpc_tls_cipher_suites.is_empty() {
+        config.network.tls.cipher_suites = options
+            .rpc_tls_cipher_suites
+            .iter()
+            .map(|suite| map_tls_cipher_suite_arg(*suite))
+            .collect();
+    }
     if let Some(ring_size) = options.storage_ring_size {
         config.storage.ring_size = ring_size;
     }
@@ -1486,6 +1497,28 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
     }
     if let Some(paused) = options.pruning.emergency_pause {
         config.pruning.emergency_pause = paused;
+    }
+}
+
+fn map_tls_version_arg(value: TlsVersionArg) -> TlsVersion {
+    match value {
+        TlsVersionArg::Tls12 => TlsVersion::Tls12,
+        TlsVersionArg::Tls13 => TlsVersion::Tls13,
+    }
+}
+
+fn map_tls_cipher_suite_arg(value: TlsCipherSuiteArg) -> TlsCipherSuite {
+    match value {
+        TlsCipherSuiteArg::Tls13ChaCha20Poly1305Sha256 => {
+            TlsCipherSuite::Tls13ChaCha20Poly1305Sha256
+        }
+        TlsCipherSuiteArg::Tls13Aes256GcmSha384 => TlsCipherSuite::Tls13Aes256GcmSha384,
+        TlsCipherSuiteArg::Tls13Aes128GcmSha256 => TlsCipherSuite::Tls13Aes128GcmSha256,
+        TlsCipherSuiteArg::Tls12ChaCha20Poly1305Sha256 => {
+            TlsCipherSuite::Tls12ChaCha20Poly1305Sha256
+        }
+        TlsCipherSuiteArg::Tls12Aes256GcmSha384 => TlsCipherSuite::Tls12Aes256GcmSha384,
+        TlsCipherSuiteArg::Tls12Aes128GcmSha256 => TlsCipherSuite::Tls12Aes128GcmSha256,
     }
 }
 
