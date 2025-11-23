@@ -350,6 +350,17 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     }
     let summary = collector.finalize();
 
+    for traffic in &summary.peer_traffic {
+        info!(
+            target = "rpp::sim::harness",
+            peer = %traffic.peer_id,
+            peer_class = %traffic.peer_class,
+            bytes_in = traffic.bytes_in,
+            bytes_out = traffic.bytes_out,
+            "peer traffic totals"
+        );
+    }
+
     let metrics_outputs = scenario.metrics_outputs();
     if let Some(output_path) = metrics_outputs.json {
         exporters::export_json(output_path, &summary)?;
