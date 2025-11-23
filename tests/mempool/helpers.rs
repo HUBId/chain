@@ -104,3 +104,22 @@ pub(super) fn drain_witness_channel(receiver: &mut broadcast::Receiver<Vec<u8>>)
 pub(super) fn witness_topic() -> GossipTopic {
     GossipTopic::WitnessProofs
 }
+
+pub(super) fn sort_bundles_by_fee_desc(
+    bundles: impl IntoIterator<Item = TransactionProofBundle>,
+) -> Vec<TransactionProofBundle> {
+    let mut bundles: Vec<_> = bundles.into_iter().collect();
+    bundles.sort_by(|lhs, rhs| {
+        rhs.transaction
+            .payload
+            .fee
+            .cmp(&lhs.transaction.payload.fee)
+            .then(
+                lhs.transaction
+                    .payload
+                    .nonce
+                    .cmp(&rhs.transaction.payload.nonce),
+            )
+    });
+    bundles
+}

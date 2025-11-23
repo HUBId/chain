@@ -18,13 +18,13 @@ use super::helpers::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AlertSeverity {
+pub(super) enum AlertSeverity {
     Warning,
     Critical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProbeAlert {
+pub(super) struct ProbeAlert {
     name: String,
     queue: &'static str,
     severity: AlertSeverity,
@@ -64,7 +64,7 @@ impl ProbeAlert {
     }
 }
 
-struct MempoolStatusProbe {
+pub(super) struct MempoolStatusProbe {
     warning_threshold: f64,
     critical_threshold: f64,
 }

@@ -23,6 +23,12 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   drained while the probe operates.【F:tests/mempool/status_probe.rs†L77-L163】 Use the same thresholds
   (80% warning, 100% critical by default) when wiring dashboards so that operator alerts align with
   the regression harness.【F:tests/mempool/status_probe.rs†L38-L74】
+* A restart probe captures the saturated transaction queue, restores it after a node restart in
+  fee-descending order, and persists the observed vs. expected ordering (plus any generated alerts)
+  to `target/artifacts/mempool-ordering-probe/ordering.json` (or the directory set via
+  `MEMPOOL_ORDERING_ARTIFACT_DIR`). This guards against regressions where restart flows reorder
+  pending work away from fee priority and confirms alerts still fire when the restored queue is
+  full.【F:tests/mempool/spam_recovery.rs†L108-L207】
 
 ### Interpreting probe alerts
 
