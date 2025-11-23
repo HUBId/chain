@@ -34,6 +34,12 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   `MEMPOOL_ORDERING_ARTIFACT_DIR`). This guards against regressions where restart flows reorder
   pending work away from fee priority and confirms alerts still fire when the restored queue is
   full.【F:tests/mempool/spam_recovery.rs†L108-L207】
+* A mixed spam probe floods both transaction and vote queues to validate that rate limiting stays
+  scoped per queue (overflowing transactions does not evict votes, and vice versa) and to record
+  per-queue eviction counts. CI saves the snapshot to
+  `target/artifacts/mempool-eviction-probe/evictions.json` (or the directory set via
+  `MEMPOOL_EVICTION_ARTIFACT_DIR`) so operators can audit how many submissions were rejected per
+  class when tuning fairness rules.【F:tests/mempool/spam_recovery.rs†L210-L305】
 
 ### Interpreting probe alerts
 
@@ -97,6 +103,16 @@ incident response, configuration changes, and dashboard updates share the same s
 4. Once the backlog matches pre-incident baselines, apply the steady-state limit and queue weights
    again (via `/control/mempool` or by restoring the committed configuration) and note the change in
    the incident log alongside the operator handbook guidance.【F:docs/mempool_cleanup.md†L108-L125】【F:docs/operator-guide.md†L82-L99】
+
+### Fairness and eviction expectations
+
+* Each mempool queue enforces the same `mempool_limit`, so spam in one class cannot evict another;
+  the eviction probe keeps a running count of rejected transactions and votes to confirm the queue
+  isolation is working as configured.【F:tests/mempool/spam_recovery.rs†L210-L305】 Use the artifact
+  to corroborate alert payloads when adjusting dashboard thresholds.
+* Queue weight tuning (`priority` vs. `fee`) still flows through `/status/mempool`, even while
+  queues are saturated, so operators can confirm that new fairness rules are active before
+  re-opening traffic after a DoS event.【F:tests/mempool/spam_recovery.rs†L70-L88】【F:tests/mempool/spam_recovery.rs†L289-L304】
 
 ## Handling Spam and Rate Limiting
 

@@ -6,11 +6,12 @@ use tempfile::tempdir;
 
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
+use rpp_chain::runtime::node::MempoolStatusExt;
 use rpp_chain::runtime::RuntimeMetrics;
 
 use super::helpers::{
     drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
-    sort_bundles_by_fee_desc, witness_topic,
+    sample_vote, sort_bundles_by_fee_desc, witness_topic,
 };
 use super::status_probe::{AlertSeverity, MempoolStatusProbe};
 
@@ -157,6 +158,177 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
         recovery_fees.iter().any(|fee| *fee >= 200),
         "recovered mempool should capture new high-fee submissions",
     );
+
+    drop(witness_rx);
+    drop(handle);
+    drop(node);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
+    let tempdir = tempdir()?;
+    let mempool_limit = 4usize;
+    let overflow = 2usize;
+
+    let config = sample_node_config(tempdir.path(), mempool_limit);
+    let node = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || Node::new(config, RuntimeMetrics::noop())
+    })
+    .await??;
+    let handle = node.handle();
+    let mut witness_rx = handle.subscribe_witness_gossip(witness_topic());
+
+    let recipient = handle.address().to_string();
+    let mut accepted_transactions = Vec::new();
+    for index in 0..mempool_limit {
+        let fee = 5 + index as u64;
+        let bundle = sample_transaction_bundle(&recipient, index as u64, fee);
+        let hash = handle
+            .submit_transaction(bundle)
+            .expect("transaction should be accepted before saturation");
+        accepted_transactions.push(hash.clone());
+
+        let event = recv_witness_transaction(&mut witness_rx)
+            .await
+            .expect("witness gossip event for accepted transaction");
+        assert_eq!(
+            event.hash, hash,
+            "witness payload should report submitted hash"
+        );
+    }
+
+    let mut transaction_evictions = 0usize;
+    for offset in 0..overflow {
+        let bundle = sample_transaction_bundle(
+            &recipient,
+            (mempool_limit + offset) as u64,
+            1 + offset as u64,
+        );
+        match handle.submit_transaction(bundle) {
+            Err(ChainError::Transaction(message)) => {
+                transaction_evictions += 1;
+                assert_eq!(
+                    message, "mempool full",
+                    "overflow should reject transactions"
+                );
+            }
+            Err(other) => panic!("unexpected submission error: {other:?}"),
+            Ok(hash) => panic!("overflow transaction unexpectedly accepted: {hash}"),
+        }
+    }
+
+    let mut accepted_votes = Vec::new();
+    for round in 0..mempool_limit {
+        let vote = sample_vote(1, round as u64);
+        let hash = handle
+            .submit_vote(vote)
+            .expect("vote should be accepted before reaching the limit");
+        accepted_votes.push(hash);
+    }
+
+    let mut vote_evictions = 0usize;
+    for round in mempool_limit..(mempool_limit + overflow) {
+        let vote = sample_vote(1, round as u64);
+        match handle.submit_vote(vote) {
+            Err(ChainError::Transaction(message)) => {
+                vote_evictions += 1;
+                assert_eq!(
+                    message, "vote mempool full",
+                    "vote overflow should be rejected"
+                );
+            }
+            Err(other) => panic!("unexpected vote submission error: {other:?}"),
+            Ok(hash) => panic!("overflow vote unexpectedly accepted: {hash}"),
+        }
+    }
+
+    drain_witness_channel(&mut witness_rx);
+
+    let snapshot = handle
+        .mempool_status()
+        .expect("fetch mempool status after mixed spam");
+    assert_eq!(
+        snapshot.transactions.len(),
+        mempool_limit,
+        "transaction spam should not evict prior accepted transactions",
+    );
+    assert_eq!(
+        snapshot.votes.len(),
+        mempool_limit,
+        "vote spam should be confined to the vote queue",
+    );
+    assert!(
+        snapshot.identities.is_empty(),
+        "identity queue should remain empty"
+    );
+    assert!(
+        snapshot.uptime_proofs.is_empty(),
+        "uptime queue should remain empty during spam probe",
+    );
+
+    let decoded_transactions = snapshot
+        .decode_transactions()
+        .expect("decode transaction mempool entries");
+    let decoded_transaction_hashes: Vec<_> = decoded_transactions
+        .iter()
+        .map(|tx| tx.hash.clone())
+        .collect();
+    assert_eq!(
+        decoded_transaction_hashes, accepted_transactions,
+        "overflow must not evict accepted transactions"
+    );
+
+    let decoded_votes = snapshot
+        .decode_votes()
+        .expect("decode vote mempool entries");
+    let decoded_vote_hashes: Vec<_> = decoded_votes.iter().map(|vote| vote.hash.clone()).collect();
+    assert_eq!(
+        decoded_vote_hashes, accepted_votes,
+        "vote ordering should remain stable across overflow attempts"
+    );
+
+    let node_status = handle
+        .node_status()
+        .expect("fetch node status after mixed spam");
+    assert_eq!(
+        node_status.pending_transactions, mempool_limit,
+        "node metrics should report saturated transaction queue"
+    );
+    assert_eq!(
+        node_status.pending_votes, mempool_limit,
+        "node metrics should report saturated vote queue"
+    );
+
+    let eviction_artifact_dir = env::var("MEMPOOL_EVICTION_ARTIFACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target/artifacts/mempool-eviction-probe")
+        });
+    fs::create_dir_all(&eviction_artifact_dir).expect("create mempool eviction artifact directory");
+    fs::write(
+        eviction_artifact_dir.join("evictions.json"),
+        serde_json::to_vec_pretty(&json!({
+            "accepted": {
+                "transactions": accepted_transactions,
+                "votes": accepted_votes,
+            },
+            "pending": {
+                "transactions": snapshot.transactions.len(),
+                "votes": snapshot.votes.len(),
+            },
+            "evictions": {
+                "transactions": transaction_evictions,
+                "votes": vote_evictions,
+            },
+            "queue_weights": snapshot.queue_weights,
+        }))
+        .expect("persist mempool eviction artifact"),
+    )
+    .expect("write mempool eviction payload");
 
     drop(witness_rx);
     drop(handle);
