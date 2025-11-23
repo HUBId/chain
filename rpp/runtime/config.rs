@@ -1611,6 +1611,7 @@ pub struct NetworkLimitsConfig {
     pub max_header_bytes: usize,
     pub max_body_bytes: usize,
     pub per_ip_token_bucket: NetworkTokenBucketConfig,
+    pub snapshot_token_bucket: SnapshotTokenBucketConfig,
 }
 
 impl NetworkLimitsConfig {
@@ -1642,6 +1643,10 @@ impl NetworkLimitsConfig {
         }
         self.per_ip_token_bucket
             .validate("network.limits.per_ip_token_bucket")
+            .and_then(|_| {
+                self.snapshot_token_bucket
+                    .validate("network.limits.snapshot_token_bucket")
+            })
     }
 }
 
@@ -1654,6 +1659,7 @@ impl Default for NetworkLimitsConfig {
             max_header_bytes: 16 * 1024,
             max_body_bytes: 2 * 1024 * 1024,
             per_ip_token_bucket: NetworkTokenBucketConfig::default(),
+            snapshot_token_bucket: SnapshotTokenBucketConfig::default(),
         }
     }
 }
@@ -1691,6 +1697,50 @@ impl Default for NetworkTokenBucketConfig {
             enabled: true,
             burst: 120,
             replenish_per_minute: 60,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotTokenBucketConfig {
+    pub enabled: bool,
+    pub burst: u64,
+    pub replenish_per_minute: u64,
+    /// When true, the limiter keys buckets by the Authorization/X-API-Key value and
+    /// falls back to the remote IP when no identity is provided.
+    pub prefer_auth_identity: bool,
+}
+
+impl SnapshotTokenBucketConfig {
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.burst == 0 {
+            return Err(ChainError::Config(format!(
+                "{label}.burst must be greater than 0"
+            )));
+        }
+
+        if self.replenish_per_minute == 0 {
+            return Err(ChainError::Config(format!(
+                "{label}.replenish_per_minute must be greater than 0"
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for SnapshotTokenBucketConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            burst: 120,
+            replenish_per_minute: 60,
+            prefer_auth_identity: true,
         }
     }
 }

@@ -14,6 +14,7 @@ use blake3::Hash as Blake3Hash;
 use hex::encode;
 use hyper::body::HttpBody;
 use parking_lot::RwLock;
+use reqwest::Client;
 use rpp_chain::api::{
     state_sync_chunk_by_id, state_sync_head_stream, state_sync_session_status, ApiContext,
     RpcErrorCode, StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
@@ -247,6 +248,103 @@ fn test_context(api: Arc<dyn StateSyncApi>) -> ApiContext {
         false,
     )
     .with_state_sync_api(api)
+}
+
+fn snapshot_loopback() -> SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind snapshot loopback");
+    let addr = listener.local_addr().expect("snapshot loopback addr");
+    drop(listener);
+    addr
+}
+
+fn hydrated_state_sync_api() -> Arc<dyn StateSyncApi> {
+    let payload = vec![9u8, 8, 7, 6];
+    let root = blake3::hash(&payload);
+    let chunk = SnapshotChunk {
+        root,
+        index: 0,
+        total: 1,
+        data: payload,
+    };
+    let mut chunks = HashMap::new();
+    chunks.insert(0, chunk);
+    let session = StateSyncSessionInfo {
+        root: Some(root),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: None,
+        served_chunks: Vec::new(),
+        progress_log: Vec::new(),
+    };
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        None,
+        chunks,
+        None,
+        None,
+    ))
+}
+
+async fn spawn_snapshot_server(
+    api: Arc<dyn StateSyncApi>,
+    limits: NetworkLimitsConfig,
+) -> (SocketAddr, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let addr = snapshot_loopback();
+    let context = test_context(api);
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    let handle = tokio::spawn(async move {
+        let shutdown = async move {
+            let _ = shutdown_rx.await;
+        };
+
+        let _ = rpp_chain::api::serve_with_shutdown(
+            context,
+            addr,
+            None,
+            None,
+            limits,
+            NetworkTlsConfig::default(),
+            shutdown,
+            Some(ready_tx),
+        )
+        .await;
+    });
+
+    ready_rx
+        .await
+        .expect("snapshot server ready channel")
+        .expect("snapshot server start");
+
+    (addr, shutdown_tx, handle)
+}
+
+fn assert_rate_limit_headers(response: &reqwest::Response, expected_limit: &str) {
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get("X-RateLimit-Limit")
+            .and_then(|value| value.to_str().ok())
+            .expect("rate-limit limit header"),
+        expected_limit
+    );
+
+    let remaining = headers
+        .get("X-RateLimit-Remaining")
+        .and_then(|value| value.to_str().ok())
+        .expect("rate-limit remaining header");
+    let reset = headers
+        .get("X-RateLimit-Reset")
+        .and_then(|value| value.to_str().ok())
+        .expect("rate-limit reset header");
+
+    assert!(!remaining.is_empty());
+    assert!(!reset.is_empty());
 }
 
 #[tokio::test]
@@ -652,6 +750,83 @@ async fn state_sync_chunk_failure_surfaces_structured_code() {
         .as_str()
         .unwrap()
         .contains("decode proof chunk"));
+}
+
+#[tokio::test]
+async fn snapshot_rate_limit_throttles_by_identity() {
+    let api = hydrated_state_sync_api();
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.enabled = false;
+    limits.snapshot_token_bucket.burst = 1;
+    limits.snapshot_token_bucket.replenish_per_minute = 1;
+    limits.snapshot_token_bucket.prefer_auth_identity = true;
+
+    let (addr, shutdown_tx, handle) = spawn_snapshot_server(api, limits).await;
+    let client = Client::builder().build().expect("snapshot client");
+    let url = format!("http://{addr}/state-sync/chunk/0");
+
+    let first = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-a")
+        .send()
+        .await
+        .expect("first snapshot request");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_rate_limit_headers(&first, "1");
+
+    let second = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-a")
+        .send()
+        .await
+        .expect("second snapshot request");
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_rate_limit_headers(&second, "1");
+
+    let third = client
+        .get(&url)
+        .header("Authorization", "Bearer tenant-b")
+        .send()
+        .await
+        .expect("third snapshot request");
+    assert_eq!(third.status(), StatusCode::OK);
+    assert_rate_limit_headers(&third, "1");
+
+    shutdown_tx.send(()).expect("shutdown snapshot server");
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn snapshot_rate_limit_falls_back_to_ip_when_anonymous() {
+    let api = hydrated_state_sync_api();
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.enabled = false;
+    limits.snapshot_token_bucket.burst = 1;
+    limits.snapshot_token_bucket.replenish_per_minute = 1;
+    limits.snapshot_token_bucket.prefer_auth_identity = false;
+
+    let (addr, shutdown_tx, handle) = spawn_snapshot_server(api, limits).await;
+    let client = Client::builder().build().expect("snapshot client");
+    let url = format!("http://{addr}/state-sync/chunk/0");
+
+    let first = client
+        .get(&url)
+        .send()
+        .await
+        .expect("first anonymous snapshot request");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_rate_limit_headers(&first, "1");
+
+    let second = client
+        .get(&url)
+        .send()
+        .await
+        .expect("second anonymous snapshot request");
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_rate_limit_headers(&second, "1");
+
+    shutdown_tx.send(()).expect("shutdown snapshot server");
+    let _ = handle.await;
 }
 
 #[tokio::test]
