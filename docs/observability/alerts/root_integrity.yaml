@@ -21,3 +21,16 @@ spec:
               Investigate the backing snapshot store and Firewood recovery tooling before
               re-enabling state sync peers.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#root-io-error-rate
+        - alert: StateSyncTamperDetected
+          expr: increase(rpp_node_pipeline_state_sync_tamper_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: pipeline
+          annotations:
+            summary: State-sync tamper detected during manifest or chunk verification
+            description: |
+              The state-sync verifier rejected a manifest or chunk mid-stream. Inspect the
+              snapshot publisher, verify chunk checksums, and rotate the manifest/signature
+              pair before resuming clients.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/state_sync.md#tamper-detection

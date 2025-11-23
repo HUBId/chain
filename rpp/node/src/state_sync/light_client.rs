@@ -389,6 +389,10 @@ fn classify_pipeline_error(err: PipelineError) -> VerificationErrorKind {
             PipelineMetrics::global().record_root_io_error();
             VerificationErrorKind::Io(message)
         }
+        PipelineError::SnapshotVerification(message) => {
+            PipelineMetrics::global().record_state_sync_tamper("snapshot_verification");
+            VerificationErrorKind::Pipeline(message)
+        }
         PipelineError::Validation(message) if message.contains(PROOF_IO_MARKER) => {
             PipelineMetrics::global().record_root_io_error();
             VerificationErrorKind::Io(message)
@@ -595,4 +599,109 @@ pub struct StateSyncVerificationSummary {
 pub struct StateSyncVerificationReport {
     pub events: Vec<LightClientVerificationEvent>,
     pub summary: StateSyncVerificationSummary,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry::{global, Context};
+    use opentelemetry_sdk::metrics::data::ResourceMetrics;
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MeterProvider, PeriodicReader};
+    use rpp_chain::runtime::sync::{ReconstructionEngine, RuntimeRecursiveProofVerifier};
+    use rpp_chain::storage::Storage;
+    use rpp_p2p::LightClientSync;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    mod support {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/support/mod.rs"
+        ));
+    }
+
+    #[test]
+    fn mid_stream_tamper_aborts_and_records_metric() {
+        let (exporter, provider) = setup_metrics();
+        global::set_meter_provider(provider.clone());
+
+        let tempdir = TempDir::new().expect("temp dir");
+        let storage = Storage::open(tempdir.path()).expect("open storage");
+
+        let mut blocks = Vec::new();
+        let mut previous = None;
+        for height in 1..=4 {
+            let block = support::make_dummy_block(height, previous.as_ref());
+            previous = Some(block.clone());
+            blocks.push(block);
+        }
+
+        support::install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+        let engine = ReconstructionEngine::new(storage.clone());
+        let artifacts = support::collect_state_sync_artifacts(&engine, 2)
+            .expect("collect state sync artifacts");
+        assert!(
+            artifacts.chunk_messages.len() >= 2,
+            "fixture should produce at least two chunks",
+        );
+
+        let mut light_client =
+            LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()));
+        let plan_bytes = serde_json::to_vec(&artifacts.network_plan).expect("encode plan");
+        light_client
+            .ingest_plan(&plan_bytes)
+            .expect("plan ingestion succeeds");
+
+        let first_chunk = artifacts
+            .chunk_messages
+            .first()
+            .expect("first chunk present");
+        let first_bytes = serde_json::to_vec(first_chunk).expect("encode first chunk");
+        light_client
+            .ingest_chunk(&first_bytes)
+            .expect("first chunk ingests");
+
+        let tampered = support::corrupt_chunk_commitment(
+            artifacts
+                .chunk_messages
+                .get(1)
+                .expect("second chunk present"),
+        );
+        let tampered_bytes = serde_json::to_vec(&tampered).expect("encode tampered chunk");
+        let err = light_client
+            .ingest_chunk(&tampered_bytes)
+            .expect_err("tampered chunk should fail");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("commitment mismatch") || message.contains("root mismatch"),
+            "unexpected tamper error: {message}",
+        );
+
+        let _ = super::classify_pipeline_error(err);
+
+        provider
+            .force_flush(&Context::current())
+            .expect("flush metrics");
+        let exported: Vec<ResourceMetrics> = exporter.get_finished_metrics().unwrap();
+        assert!(metric_observed(
+            &exported,
+            "rpp_node_pipeline_state_sync_tamper_total"
+        ));
+    }
+
+    fn setup_metrics() -> (InMemoryMetricExporter, MeterProvider) {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = MeterProvider::builder().with_reader(reader).build();
+        (exporter, provider)
+    }
+
+    fn metric_observed(exported: &[ResourceMetrics], name: &str) -> bool {
+        exported
+            .iter()
+            .flat_map(|resource| resource.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .any(|metric| metric.name() == name)
+    }
 }

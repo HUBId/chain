@@ -29,6 +29,19 @@ missing or malformed. Operators must publish both files together, keep their
 paths stable across restarts, and rotate them atomically so consumers never see
 an unsigned or stale manifest.
 
+### Tamper detection and alerting
+
+State-sync streams abort immediately when a previously valid session encounters
+a tampered manifest or chunk mid-stream. The light client surfaces a
+`PipelineError::SnapshotVerification` containing the specific mismatch (for
+example, a `commitment mismatch` string) so operators can distinguish tampering
+from transient I/O failures. Every rejection increments
+`rpp_node_pipeline_state_sync_tamper_total{reason="snapshot_verification"}`,
+and the `StateSyncTamperDetected` alert in
+`docs/observability/alerts/root_integrity.yaml` fires when the counter increases
+within five minutes. Scraping this metric provides a single place to confirm
+tamper events even when clients abort before all chunks are downloaded.
+
 ## Publishing new snapshots
 
 * Write the manifest payload to disk (canonical JSON) and compute its Blake3

@@ -49,6 +49,19 @@ fn state_sync_stream_alert_probe_detects_lag_and_stall() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn state_sync_tamper_alert_tracks_metric() -> Result<()> {
+    let alerts: AlertRuleFile = serde_yaml::from_str(include_str!(
+        "../../docs/observability/alerts/root_integrity.yaml"
+    ))
+    .context("parse root-integrity alert definitions")?;
+
+    let tamper = find_rule(&alerts, "StateSyncTamperDetected")?;
+    assert!(tamper.expr.contains("rpp_node_pipeline_state_sync_tamper_total"));
+
+    Ok(())
+}
+
 fn find_rule<'a>(alerts: &'a AlertRuleFile, name: &str) -> Result<&'a AlertRule> {
     alerts
         .groups
