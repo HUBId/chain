@@ -8775,6 +8775,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "hyper 0.14.31",
  "reqwest 0.12.24",
  "rpp-chain",
  "rpp-node-runtime-api",
