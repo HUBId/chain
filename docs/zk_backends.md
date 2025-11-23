@@ -20,7 +20,7 @@
 - Testaufruf: `cargo test --features backend-rpp-stark --test interop_rpp_stark`.
 - CI-Absicherung: Der GitHub-Actions-Workflow `nightly-simnet` (Job `simnet`) führt den Test als Teil seiner Matrix-Läufe bei jedem nächtlichen Durchlauf aus.
 - Prüft Digest, Stage-Flags (`params`, `public`, `merkle`, `fri`, `composition`), Proof-Länge und Trace-Indizes.
-- Die Backend-Unit-Suite schreibt die Checksummen der Golden-Vector-Artefakte nach `logs/rpp_golden_vector_checksums.log` und vergleicht sie in CI gegen die Basislinie `tests/baselines/rpp_golden_vector_checksums.log`. Drift blockiert den Lauf; legitime Updates werden über `tools/update_rpp_golden_vector_baseline.sh` übernommen.
+- Die Backend-Unit-Suite schreibt die Checksummen der Golden-Vector-Artefakte sowie die verifizierte Proof-Länge, Stage-Flags und Telemetrie (falls vorhanden) nach `logs/rpp_golden_vector_checksums.log` und vergleicht sie in CI gegen die Basislinie `tests/baselines/rpp_golden_vector_checksums.log`. Drift blockiert den Lauf; legitime Updates werden über `tools/update_rpp_golden_vector_baseline.sh` übernommen.
 
 ### Public-Inputs-Encoding
 

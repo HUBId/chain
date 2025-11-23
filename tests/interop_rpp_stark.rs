@@ -9,7 +9,9 @@ use rpp_chain::zk::rpp_verifier::{self, RppStarkVerifier};
 
 #[path = "rpp_vectors.rs"]
 mod rpp_vectors;
-use rpp_vectors::{load_bytes, load_hex_digest, log_vector_checksums, vector_path};
+use rpp_vectors::{
+    load_bytes, load_hex_digest, log_vector_checksums, log_vector_report, vector_path,
+};
 
 #[test]
 fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
@@ -51,6 +53,8 @@ fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
         proof.len(),
         "reported proof length must match provided bytes"
     );
+    log_vector_report(&report)?;
+
 
     Ok(())
 }
