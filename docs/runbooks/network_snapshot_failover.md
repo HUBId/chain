@@ -41,9 +41,12 @@ playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/obser
   emit `telemetry_otlp_failures_total{phase="init"}` when the primary backend
   rejects connections and `telemetry_otlp_failures_total{phase="init_failover"}`
   after switching to the secondary endpoints. The
-  `OtlpExporterFailure` alert fires while either counter increments and clears
-  once the secondary exporter stabilises, matching the chaos drill assertions in
-  `telemetry_otlp_failover_uses_secondary_endpoints`.【F:tests/observability_otlp_failures.rs†L205-L280】【F:docs/observability/alerts/telemetry.yaml†L1-L20】
+  `OtlpExporterFailure` alert fires while either counter increments and resolves
+  once the exporters stop incrementing for 10 minutes; Alertmanager then emits
+  `OtlpExporterFailureCleared` to mark recovery. Capture both the firing and
+  resolved alert payloads from `artifacts/telemetry-chaos/<ts>/*_alert_payload.json`
+  so the incident log shows the full lifecycle validated by
+  `telemetry_otlp_failover_uses_secondary_endpoints`.【F:tests/observability_otlp_failures.rs†L205-L445】【F:docs/observability/alerts/telemetry.yaml†L1-L38】
 - **Dashboards:** Keep the pipeline overview Grafana dashboard open to watch
   `snapshot_stream_lag_seconds` and throughput; the alert annotations link back
   to this runbook for quick navigation.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
