@@ -1,0 +1,6 @@
+# RPP STWO mini vector checksums (sha256) — stored at logs/rpp_golden_vector_checksums.log
+params.bin: 62ff3d9ad2f859c6192f6737cdeb06528aab609ce0f41f46d81f9cef645171b7
+public_inputs.bin: ee9aa1edac4fd1993445ae16dd105a876a70cc34abba47a7942608db43d85592
+proof.bin: 787114cd66046553d8a40fb2ba40e13703f529d960e6896e96084958581257fe
+public_digest.hex: a269b86df685ab4eb62561009e79231ba0cb454cfb2124c12f7022487b21c301
+indices.json: d64c5657a00967554647869bbdc2fb6898f6d7782a78ffd0d1d08ff3817beb97

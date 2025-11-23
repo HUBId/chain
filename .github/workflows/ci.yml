@@ -826,6 +826,9 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-unit
+      - name: Compare rpp golden vector checksums
+        if: matrix.name == 'backend-rpp-stark'
+        run: scripts/ci/compare_rpp_vector_checksums.sh
       - name: Collect unit suite artifacts (${{ matrix.name }})
         if: always()
         run: |
