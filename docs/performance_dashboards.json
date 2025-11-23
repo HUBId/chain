@@ -41,9 +41,9 @@
       "title": "Pipeline Storage Commit",
       "output": "docs/dashboards/pipeline_storage_commit.json",
       "min_schema": 39,
-      "version": 1,
-      "version_tag": "v2024-09-25",
-      "sha256": "c2576de10a5a4d1e84bd3310a2837c4cf45e00f093ba67d3b10cc0ecbee4c58f"
+      "version": 2,
+      "version_tag": "v2024-10-09",
+      "sha256": "fb516b2db107e2b1578e60af16797f8a33d948fe40b5406700fdb351c092f2bd"
     },
     {
       "uid": "snapshot-resilience",
