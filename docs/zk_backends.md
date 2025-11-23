@@ -45,9 +45,10 @@
 
 ### Size-Gate-Mapping
 
-- Proof-Header speichern die Obergrenze in KiB; der Node überträgt `max_proof_size_bytes` an den Verifier, der das Mapping mittels `ensure_proof_size_consistency` verifiziert.
-- `ProofVerifierRegistry` konvertiert das Node-Limit in Bytes → KiB und lehnt Werte ab, die nicht in `u32` passen.
-- Überlange Artefakte werden als `ChainError::Crypto` verworfen; Logs und Telemetrie melden `proof_backend="rpp-stark"`, `valid=false` und das beobachtete Bytevolumen.
+- Proof-Header speichern die Obergrenze in KiB; der Node überträgt `max_proof_size_bytes` an den Verifier, der das Mapping mittels `ensure_proof_size_consistency` verifiziert.【F:tests/rpp_verifier_smoke.rs†L35-L66】【F:tests/rpp_verifier_smoke.rs†L107-L152】
+- `ProofVerifierRegistry` konvertiert das Node-Limit in Bytes → KiB und lehnt Werte ab, die nicht in `u32` passen.【F:tests/rpp_verifier_smoke.rs†L35-L66】【F:tests/rpp_verifier_smoke.rs†L154-L183】
+- Die Byte-Histogramme werden in fünf Buckets eingeteilt: `≤512 KiB`, `≤1 MiB`, `≤2 MiB`, `≤4 MiB`, `>4 MiB`. Sowohl erfolgreiche Prüfungen als auch Fehlversuche (inkl. Size-Gate-Fehler) aktualisieren `rpp_stark_proof_total_bytes{,_by_result}`, `rpp_stark_params_bytes`, `rpp_stark_public_inputs_bytes` und `rpp_stark_payload_bytes`, sodass Oversize-Versuche messbar bleiben.【F:rpp/runtime/node.rs†L120-L213】【F:rpp/runtime/node.rs†L4526-L4720】
+- Überlange Artefakte liefern `RppStarkVerifyFailure::ProofTooLarge{max_kib,got_kib}`; Logs/Telemetrie enthalten `proof_bytes`, `size_bucket`, Parameter- und Payload-Größen. Beobachte `rpp_stark_proof_total_bytes_by_result{result="fail",proof_kind="consensus",le=…}` für Ausreißer oberhalb von 4 MiB.【F:rpp/runtime/node.rs†L4526-L4720】【F:rpp/runtime/node.rs†L4674-L4720】
 
 ### Fehlerbehandlung & Telemetrie
 
@@ -58,7 +59,7 @@
 
 - `NodeInner::verify_rpp_stark_with_metrics` (implementiert in `rpp/runtime/node.rs`) ruft den Registry-Helper auf und emittiert strukturierte Logs (`valid`, `proof_bytes`, `verify_duration_ms`, Stage-Flags) mit Label `proof_backend="rpp-stark"` und `proof_kind` (z. B. `"transaction"`).
 - Zusätzlich landen die Kennzahlen auf dem `telemetry`-Target. Erfolgreiche Prüfungen loggen `params_ok`, `public_ok`, `merkle_ok`, `fri_ok`, `composition_ok` sowie `params_bytes`, `public_inputs_bytes` und `payload_bytes`.
-- Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt.
+- Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt. Oversize- und Limit-Mismatch-Fälle tragen dieselben Byte-Felder und Buckets, wodurch Alerting-Regeln auf `result="fail"` aufsetzen können.【F:rpp/runtime/node.rs†L4526-L4720】【F:rpp/runtime/node.rs†L4649-L4720】
 - Beispielausgaben:
 
   ```text

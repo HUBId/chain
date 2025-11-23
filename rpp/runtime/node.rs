@@ -183,6 +183,55 @@ fn proof_size_bucket(bytes: u64) -> &'static str {
     }
 }
 
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Copy)]
+struct RppStarkProofSizeSnapshot {
+    proof_bytes: u64,
+    params_bytes: u64,
+    public_inputs_bytes: u64,
+    payload_bytes: u64,
+    size_bucket: &'static str,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn record_rpp_stark_size_metrics(
+    proof_metrics: &ProofMetrics,
+    backend: ProofVerificationBackend,
+    proof_kind: ProofVerificationKind,
+    proof: &ChainProof,
+    outcome: ProofVerificationOutcome,
+) -> Option<RppStarkProofSizeSnapshot> {
+    let artifact = proof.expect_rpp_stark().ok()?;
+    let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
+    let public_inputs_bytes = u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
+    let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+    let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+    let size_bucket = proof_size_bucket(proof_bytes);
+
+    proof_metrics.observe_verification_total_bytes(backend, proof_kind, proof_bytes);
+    proof_metrics.observe_verification_total_bytes_by_result(
+        backend,
+        proof_kind,
+        outcome,
+        proof_bytes,
+    );
+    proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
+    proof_metrics.observe_verification_public_inputs_bytes(
+        backend,
+        proof_kind,
+        public_inputs_bytes,
+    );
+    proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
+
+    Some(RppStarkProofSizeSnapshot {
+        proof_bytes,
+        params_bytes,
+        public_inputs_bytes,
+        payload_bytes,
+        size_bucket,
+    })
+}
+
 const PROOF_IO_MARKER: &str = "ProofError::IO";
 #[derive(Clone)]
 struct ChainTip {
@@ -2937,6 +2986,197 @@ mod zk_backend_validation_tests {
     }
 
     #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_size_gate_errors_record_lengths() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("rpp-stark-size-gate-metrics");
+        let metrics = RuntimeMetrics::from_meter(&meter);
+        let proof_metrics = metrics.proofs();
+
+        let proof = ChainProof::RppStark(RppStarkProof::new(
+            vec![0u8; 2 * 1024],
+            vec![0u8; 1024],
+            vec![0u8; 4 * 1024],
+        ));
+        let snapshot = record_rpp_stark_size_metrics(
+            proof_metrics,
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            &proof,
+            ProofVerificationOutcome::Fail,
+        )
+        .expect("size snapshot should be captured");
+
+        assert_eq!(snapshot.params_bytes, 2 * 1024);
+        assert_eq!(snapshot.public_inputs_bytes, 1024);
+        assert_eq!(snapshot.payload_bytes, 4 * 1024);
+        assert_eq!(snapshot.proof_bytes, 7 * 1024);
+        assert_eq!(
+            snapshot.size_bucket,
+            proof_size_bucket(snapshot.proof_bytes)
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut saw_total_histogram = false;
+        let mut saw_params_histogram = false;
+        let mut saw_public_inputs_histogram = false;
+        let mut saw_payload_histogram = false;
+
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    match metric.name.as_str() {
+                        "rpp_stark_proof_total_bytes_by_result" => {
+                            if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                                for point in data_points {
+                                    let mut attrs = HashMap::new();
+                                    for attribute in point.attributes {
+                                        attrs.insert(
+                                            attribute.key.to_string(),
+                                            attribute.value.to_string(),
+                                        );
+                                    }
+                                    if attrs.get(ProofVerificationOutcome::KEY)
+                                        == Some(
+                                            &ProofVerificationOutcome::Fail.as_str().to_string(),
+                                        )
+                                        && attrs.get(ProofVerificationBackend::KEY)
+                                            == Some(
+                                                &ProofVerificationBackend::RppStark
+                                                    .as_str()
+                                                    .to_string(),
+                                            )
+                                        && attrs.get(ProofVerificationKind::KEY)
+                                            == Some(
+                                                &ProofVerificationKind::Consensus
+                                                    .as_str()
+                                                    .to_string(),
+                                            )
+                                        && point.count > 0
+                                    {
+                                        saw_total_histogram = true;
+                                    }
+                                }
+                            }
+                        }
+                        "rpp_stark_params_bytes" => {
+                            if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                                for point in data_points {
+                                    let mut attrs = HashMap::new();
+                                    for attribute in point.attributes {
+                                        attrs.insert(
+                                            attribute.key.to_string(),
+                                            attribute.value.to_string(),
+                                        );
+                                    }
+                                    if attrs.get(ProofVerificationBackend::KEY)
+                                        == Some(
+                                            &ProofVerificationBackend::RppStark
+                                                .as_str()
+                                                .to_string(),
+                                        )
+                                        && attrs.get(ProofVerificationKind::KEY)
+                                            == Some(
+                                                &ProofVerificationKind::Consensus
+                                                    .as_str()
+                                                    .to_string(),
+                                            )
+                                        && point.count > 0
+                                    {
+                                        saw_params_histogram = true;
+                                    }
+                                }
+                            }
+                        }
+                        "rpp_stark_public_inputs_bytes" => {
+                            if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                                for point in data_points {
+                                    let mut attrs = HashMap::new();
+                                    for attribute in point.attributes {
+                                        attrs.insert(
+                                            attribute.key.to_string(),
+                                            attribute.value.to_string(),
+                                        );
+                                    }
+                                    if attrs.get(ProofVerificationBackend::KEY)
+                                        == Some(
+                                            &ProofVerificationBackend::RppStark
+                                                .as_str()
+                                                .to_string(),
+                                        )
+                                        && attrs.get(ProofVerificationKind::KEY)
+                                            == Some(
+                                                &ProofVerificationKind::Consensus
+                                                    .as_str()
+                                                    .to_string(),
+                                            )
+                                        && point.count > 0
+                                    {
+                                        saw_public_inputs_histogram = true;
+                                    }
+                                }
+                            }
+                        }
+                        "rpp_stark_payload_bytes" => {
+                            if let Data::Histogram(Histogram { data_points, .. }) = metric.data {
+                                for point in data_points {
+                                    let mut attrs = HashMap::new();
+                                    for attribute in point.attributes {
+                                        attrs.insert(
+                                            attribute.key.to_string(),
+                                            attribute.value.to_string(),
+                                        );
+                                    }
+                                    if attrs.get(ProofVerificationBackend::KEY)
+                                        == Some(
+                                            &ProofVerificationBackend::RppStark
+                                                .as_str()
+                                                .to_string(),
+                                        )
+                                        && attrs.get(ProofVerificationKind::KEY)
+                                            == Some(
+                                                &ProofVerificationKind::Consensus
+                                                    .as_str()
+                                                    .to_string(),
+                                            )
+                                        && point.count > 0
+                                    {
+                                        saw_payload_histogram = true;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_total_histogram,
+            "expected proof-by-result histogram to be populated"
+        );
+        assert!(
+            saw_params_histogram,
+            "expected params histogram to be populated"
+        );
+        assert!(
+            saw_public_inputs_histogram,
+            "expected public inputs histogram to be populated"
+        );
+        assert!(
+            saw_payload_histogram,
+            "expected payload histogram to be populated"
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
     #[traced_test]
     fn oversized_failure_logs_include_bucket() {
         let failure = RppStarkVerifyFailure::ProofTooLarge {
@@ -4501,6 +4741,7 @@ impl NodeInner {
     ) {
         let flags = report.flags();
         let proof_metrics = self.runtime_metrics.proofs();
+        let outcome = ProofVerificationOutcome::from_bool(report.is_verified());
         proof_metrics.observe_verification(backend, proof_kind, duration);
         if let Some(stage_timings) = report.stage_timings() {
             proof_metrics.observe_verification_stage_duration(
@@ -4530,32 +4771,65 @@ impl NodeInner {
                 adapter_duration,
             );
         }
-        proof_metrics.observe_verification_total_bytes(backend, proof_kind, report.total_bytes());
-        proof_metrics.observe_verification_total_bytes_by_result(
-            backend,
-            proof_kind,
-            ProofVerificationOutcome::from_bool(report.is_verified()),
-            report.total_bytes(),
-        );
-        record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
-
-        if let Ok(artifact) = proof.expect_rpp_stark() {
-            let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
-            let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
-            let public_inputs_bytes =
-                u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
-            let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
-            let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
-            let size_bucket = proof_size_bucket(proof_bytes);
-
-            proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
-            proof_metrics.observe_verification_public_inputs_bytes(
+        let snapshot =
+            record_rpp_stark_size_metrics(proof_metrics, backend, proof_kind, proof, outcome);
+        if snapshot.is_none() {
+            proof_metrics.observe_verification_total_bytes(
                 backend,
                 proof_kind,
-                public_inputs_bytes,
+                report.total_bytes(),
             );
-            proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
+            proof_metrics.observe_verification_total_bytes_by_result(
+                backend,
+                proof_kind,
+                outcome,
+                report.total_bytes(),
+            );
+        }
+        record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
 
+        let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+        if let Some(snapshot) = snapshot {
+            info!(
+                target = "proofs",
+                proof_backend = "rpp-stark",
+                proof_kind = proof_kind.as_str(),
+                valid = report.is_verified(),
+                params_ok = flags.params(),
+                public_ok = flags.public(),
+                merkle_ok = flags.merkle(),
+                fri_ok = flags.fri(),
+                composition_ok = flags.composition(),
+                proof_bytes = snapshot.proof_bytes,
+                size_bucket = snapshot.size_bucket,
+                params_bytes = snapshot.params_bytes,
+                public_inputs_bytes = snapshot.public_inputs_bytes,
+                payload_bytes = snapshot.payload_bytes,
+                verify_duration_ms,
+                trace_queries = ?report.trace_query_indices(),
+                report = %report,
+                "rpp-stark proof verification"
+            );
+            info!(
+                target = "telemetry",
+                proof_backend = "rpp-stark",
+                proof_kind = proof_kind.as_str(),
+                valid = report.is_verified(),
+                params_ok = flags.params(),
+                public_ok = flags.public(),
+                merkle_ok = flags.merkle(),
+                fri_ok = flags.fri(),
+                composition_ok = flags.composition(),
+                proof_bytes = snapshot.proof_bytes,
+                size_bucket = snapshot.size_bucket,
+                params_bytes = snapshot.params_bytes,
+                public_inputs_bytes = snapshot.public_inputs_bytes,
+                payload_bytes = snapshot.payload_bytes,
+                verify_duration_ms,
+                "rpp-stark proof verification"
+            );
+        } else {
+            let proof_bytes = report.total_bytes();
             info!(
                 target = "proofs",
                 proof_backend = "rpp-stark",
@@ -4567,10 +4841,7 @@ impl NodeInner {
                 fri_ok = flags.fri(),
                 composition_ok = flags.composition(),
                 proof_bytes,
-                size_bucket,
-                params_bytes,
-                public_inputs_bytes,
-                payload_bytes,
+                size_bucket = proof_size_bucket(proof_bytes),
                 verify_duration_ms,
                 trace_queries = ?report.trace_query_indices(),
                 report = %report,
@@ -4587,10 +4858,7 @@ impl NodeInner {
                 fri_ok = flags.fri(),
                 composition_ok = flags.composition(),
                 proof_bytes,
-                size_bucket,
-                params_bytes,
-                public_inputs_bytes,
-                payload_bytes,
+                size_bucket = proof_size_bucket(proof_bytes),
                 verify_duration_ms,
                 "rpp-stark proof verification"
             );
@@ -4606,9 +4874,11 @@ impl NodeInner {
         duration: Duration,
         error: &RppStarkVerifierError,
     ) {
-        let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
         let proof_metrics = self.runtime_metrics.proofs();
+        let outcome = ProofVerificationOutcome::Fail;
         proof_metrics.observe_verification(backend, proof_kind, duration);
+        let snapshot =
+            record_rpp_stark_size_metrics(proof_metrics, backend, proof_kind, proof, outcome);
         match error {
             RppStarkVerifierError::VerificationFailed { failure, report } => {
                 let flags = report.flags();
@@ -4640,51 +4910,18 @@ impl NodeInner {
                     );
                 }
                 record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
-                if let Ok(artifact) = proof.expect_rpp_stark() {
-                    let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
-                    let public_inputs_bytes =
-                        u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
-                    let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
-                    let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
-                    let size_bucket = proof_size_bucket(proof_bytes);
-
-                    proof_metrics.observe_verification_total_bytes(
-                        backend,
-                        proof_kind,
-                        proof_bytes,
-                    );
-                    proof_metrics.observe_verification_total_bytes_by_result(
-                        backend,
-                        proof_kind,
-                        ProofVerificationOutcome::Fail,
-                        proof_bytes,
-                    );
-                    proof_metrics.observe_verification_params_bytes(
-                        backend,
-                        proof_kind,
-                        params_bytes,
-                    );
-                    proof_metrics.observe_verification_public_inputs_bytes(
-                        backend,
-                        proof_kind,
-                        public_inputs_bytes,
-                    );
-                    proof_metrics.observe_verification_payload_bytes(
-                        backend,
-                        proof_kind,
-                        payload_bytes,
-                    );
-
+                let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+                if let Some(snapshot) = snapshot {
                     warn!(
                         target = "proofs",
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
-                        proof_bytes,
-                        size_bucket,
-                        params_bytes,
-                        public_inputs_bytes,
-                        payload_bytes,
+                        proof_bytes = snapshot.proof_bytes,
+                        size_bucket = snapshot.size_bucket,
+                        params_bytes = snapshot.params_bytes,
+                        public_inputs_bytes = snapshot.public_inputs_bytes,
+                        payload_bytes = snapshot.payload_bytes,
                         verify_duration_ms,
                         error = %failure,
                         "rpp-stark proof verification failed"
@@ -4694,11 +4931,34 @@ impl NodeInner {
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
-                        proof_bytes,
-                        size_bucket,
-                        params_bytes,
-                        public_inputs_bytes,
-                        payload_bytes,
+                        proof_bytes = snapshot.proof_bytes,
+                        size_bucket = snapshot.size_bucket,
+                        params_bytes = snapshot.params_bytes,
+                        public_inputs_bytes = snapshot.public_inputs_bytes,
+                        payload_bytes = snapshot.payload_bytes,
+                        verify_duration_ms,
+                        error = %failure,
+                        "rpp-stark proof verification failed"
+                    );
+                } else {
+                    warn!(
+                        target = "proofs",
+                        proof_backend = "rpp-stark",
+                        proof_kind = proof_kind.as_str(),
+                        valid = false,
+                        proof_bytes = report.total_bytes(),
+                        size_bucket = proof_size_bucket(report.total_bytes()),
+                        verify_duration_ms,
+                        error = %failure,
+                        "rpp-stark proof verification failed"
+                    );
+                    warn!(
+                        target = "telemetry",
+                        proof_backend = "rpp-stark",
+                        proof_kind = proof_kind.as_str(),
+                        valid = false,
+                        proof_bytes = report.total_bytes(),
+                        size_bucket = proof_size_bucket(report.total_bytes()),
                         verify_duration_ms,
                         error = %failure,
                         "rpp-stark proof verification failed"
@@ -4712,12 +4972,27 @@ impl NodeInner {
                     classify_rpp_stark_error_stage(other),
                     ProofVerificationOutcome::Fail,
                 );
+                if snapshot.is_none() {
+                    if let Ok(artifact) = proof.expect_rpp_stark() {
+                        proof_metrics.observe_verification_total_bytes(
+                            backend,
+                            proof_kind,
+                            u64::try_from(artifact.total_len()).unwrap_or(u64::MAX),
+                        );
+                        proof_metrics.observe_verification_total_bytes_by_result(
+                            backend,
+                            proof_kind,
+                            outcome,
+                            u64::try_from(artifact.total_len()).unwrap_or(u64::MAX),
+                        );
+                    }
+                }
                 warn!(
                     target = "proofs",
                     proof_backend = "rpp-stark",
                     proof_kind = proof_kind.as_str(),
                     valid = false,
-                    verify_duration_ms,
+                    verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64,
                     error = %other,
                     "rpp-stark proof verification failed"
                 );
@@ -4726,7 +5001,7 @@ impl NodeInner {
                     proof_backend = "rpp-stark",
                     proof_kind = proof_kind.as_str(),
                     valid = false,
-                    verify_duration_ms,
+                    verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64,
                     error = %other,
                     "rpp-stark proof verification failed"
                 );
@@ -8827,10 +9102,13 @@ fn tier_to_level(tier: &Tier) -> TierLevel {
 #[cfg(test)]
 mod telemetry_metrics_tests {
     use super::{
-        classify_rpp_stark_error_stage, record_rpp_stark_stage_checks, ConsensusTelemetry,
-        ProofVerificationBackend, ProofVerificationKind, ProofVerificationOutcome, RuntimeMetrics,
+        classify_rpp_stark_error_stage, proof_size_bucket, record_rpp_stark_size_metrics,
+        record_rpp_stark_stage_checks, ConsensusTelemetry, ProofVerificationBackend,
+        ProofVerificationKind, ProofVerificationOutcome, RuntimeMetrics,
     };
     use crate::types::Address;
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::types::{ChainProof, RppStarkProof};
     use crate::zk::rpp_verifier::RppStarkVerificationFlags;
     use crate::zk::rpp_verifier::{RppStarkVerifierError, RppStarkVerifyFailure};
     use opentelemetry_sdk::metrics::data::{Data, Histogram};

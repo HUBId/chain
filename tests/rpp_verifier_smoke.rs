@@ -1,8 +1,8 @@
 #![cfg(feature = "backend-rpp-stark")]
 
 use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
-use rpp_stark::backend::params_limit_to_node_bytes;
-use rpp_stark::params::deserialize_params;
+use rpp_stark::backend::{ensure_proof_size_consistency, params_limit_to_node_bytes, ProofSizeMappingError};
+use rpp_stark::params::{deserialize_params, StarkParamsBuilder};
 
 #[path = "rpp_vectors.rs"]
 mod rpp_vectors;
@@ -63,6 +63,88 @@ fn size_gate_mismatch_surfaces_from_library() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[test]
+fn size_gate_rounds_node_limit_up_to_next_kib() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
+    let params = load_bytes("params.bin")?;
+    let stark_params = deserialize_params(&params)?;
+    let node_limit = params_limit_to_node_bytes(&stark_params)?;
+
+    ensure_proof_size_consistency(&stark_params, node_limit.saturating_sub(1))
+        .expect("rounding should tolerate sub-kiB deltas");
+
+    let err = ensure_proof_size_consistency(&stark_params, node_limit - 1024)
+        .expect_err("dropping a full KiB should shift the expected bucket");
+    match err {
+        ProofSizeMappingError::Mismatch {
+            params_kb,
+            expected_kb,
+        } => {
+            assert_eq!(params_kb, stark_params.proof().max_size_kb);
+            assert_eq!(expected_kb + 1, params_kb);
+        }
+        other => panic!("unexpected mapping error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn proof_size_gate_rejects_oversized_payloads() -> anyhow::Result<()> {
+    log_vector_checksums()?;
+
+    let params = load_bytes("params.bin")?;
+    let public_inputs = load_bytes("public_inputs.bin")?;
+    let mut proof = load_bytes("proof.bin")?;
+
+    let stark_params = deserialize_params(&params)?;
+    let node_limit = params_limit_to_node_bytes(&stark_params)?;
+
+    proof.extend_from_slice(&vec![0u8; 2 * 1024]);
+
+    let verifier = RppStarkVerifier::new();
+    let error = verifier
+        .verify(&params, &public_inputs, &proof, node_limit)
+        .expect_err("oversized proof should yield a proof-too-large error");
+
+    match error {
+        RppStarkVerifierError::VerificationFailed { failure, report } => {
+            if let RppStarkVerifyFailure::ProofTooLarge { max_kib, got_kib } = failure {
+                assert_eq!(max_kib, node_limit.div_ceil(1024));
+                assert_eq!(got_kib, u64::try_from(proof.len()).unwrap().div_ceil(1024));
+            } else {
+                panic!("unexpected failure variant: {failure:?}");
+            }
+            assert!(!report.is_verified());
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn size_gate_overflow_maps_to_facade_error() {
+    let mut builder = StarkParamsBuilder::default();
+    builder.proof.max_size_kb = u32::MAX;
+    let params = builder.build().expect("params build succeeds");
+
+    let error = params_limit_to_node_bytes(&params).unwrap_err();
+    match error {
+        ProofSizeMappingError::Overflow { max_size_kb } => {
+            assert_eq!(max_size_kb, u32::MAX);
+        }
+        other => panic!("unexpected mapping error: {other:?}"),
+    }
+
+    let facade_error = RppStarkVerifierError::from_size_mapping_error(error);
+    assert!(matches!(
+        facade_error,
+        RppStarkVerifierError::ProofSizeLimitOverflow { max_kib } if max_kib == u32::MAX
+    ));
 }
 
 #[test]

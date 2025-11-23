@@ -789,6 +789,10 @@ PY
             features: ""
             no_default_features: ""
             experimental: false
+          - name: backend-rpp-stark
+            features: "backend-rpp-stark"
+            no_default_features: ""
+            experimental: false
           - name: prover-stwo-backend
             features: "prod,prover-stwo"
             no_default_features: "1"

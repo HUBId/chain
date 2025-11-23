@@ -294,6 +294,11 @@ path = "../../tests/reorg_stark.rs"
 required-features = ["backend-rpp-stark"]
 
 [[test]]
+name = "rpp_verifier_smoke"
+path = "../../tests/rpp_verifier_smoke.rs"
+required-features = ["backend-rpp-stark"]
+
+[[test]]
 name = "admission"
 path = "../rpc/tests/admission.rs"
 
