@@ -73,6 +73,8 @@ pub struct SnapshotStreamStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<SnapshotDownloadErrorCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -187,6 +189,7 @@ impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
             last_update_index: status.last_update_index,
             last_update_height: status.last_update_height,
             verified: status.verified,
+            error_code: status.error_code,
             error: status.error,
         }
     }

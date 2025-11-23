@@ -14,7 +14,7 @@ use rpp_chain::api::{self, ApiContext, SnapshotStreamRuntime, SnapshotStreamRunt
 use rpp_chain::runtime::config::DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS;
 use rpp_chain::runtime::node_runtime::node::{NodeError as P2pNodeError, SnapshotStreamStatus};
 use rpp_chain::runtime::RuntimeMode;
-use rpp_p2p::{vendor::PeerId as NetworkPeerId, SnapshotSessionId};
+use rpp_p2p::{vendor::PeerId as NetworkPeerId, PipelineError, SnapshotSessionId};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -145,6 +145,7 @@ fn sample_status(session: u64, peer: &NetworkPeerId) -> SnapshotStreamStatus {
         last_update_index: Some(7),
         last_update_height: Some(128),
         verified: Some(true),
+        error_code: None,
         error: None,
     }
 }
@@ -289,6 +290,74 @@ async fn start_snapshot_stream_propagates_error() {
     let body = to_bytes(response.into_body()).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error"], "gossip propagation disabled");
+}
+
+#[tokio::test]
+async fn start_snapshot_stream_sets_download_error_codes() {
+    let peer = NetworkPeerId::random();
+    let checksum_runtime = Arc::new(FakeSnapshotRuntime::new(
+        Err(SnapshotStreamRuntimeError::Runtime(P2pNodeError::Pipeline(
+            PipelineError::SnapshotVerification("checksum mismatch".into()),
+        ))),
+        HashMap::new(),
+    ));
+    let resume_runtime = Arc::new(FakeSnapshotRuntime::new(
+        Err(SnapshotStreamRuntimeError::Runtime(P2pNodeError::Pipeline(
+            PipelineError::SnapshotVerification(
+                "resume plan id abc does not match persisted plan def".into(),
+            ),
+        ))),
+        HashMap::new(),
+    ));
+
+    let checksum_app = Router::new()
+        .route("/p2p/snapshots", post(api::start_snapshot_stream))
+        .with_state(test_context(checksum_runtime));
+    let resume_app = Router::new()
+        .route("/p2p/snapshots", post(api::start_snapshot_stream))
+        .with_state(test_context(resume_runtime));
+
+    let checksum_request = Request::builder()
+        .method("POST")
+        .uri("/p2p/snapshots")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "peer": peer.to_string(),
+                "chunk_size": 32,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resume_request = Request::builder()
+        .method("POST")
+        .uri("/p2p/snapshots")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "peer": peer.to_string(),
+                "chunk_size": 32,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let checksum_response = checksum_app.oneshot(checksum_request).await.unwrap();
+    assert_eq!(checksum_response.status(), StatusCode::BAD_GATEWAY);
+    let checksum_body = to_bytes(checksum_response.into_body()).await.unwrap();
+    let checksum_payload: serde_json::Value = serde_json::from_slice(&checksum_body).unwrap();
+    assert_eq!(checksum_payload["download_error"], "checksum");
+    assert_eq!(
+        checksum_payload["code"],
+        serde_json::Value::String("state_sync_pipeline_error".to_string())
+    );
+
+    let resume_response = resume_app.oneshot(resume_request).await.unwrap();
+    assert_eq!(resume_response.status(), StatusCode::BAD_GATEWAY);
+    let resume_body = to_bytes(resume_response.into_body()).await.unwrap();
+    let resume_payload: serde_json::Value = serde_json::from_slice(&resume_body).unwrap();
+    assert_eq!(resume_payload["download_error"], "resume_mismatch");
 }
 
 #[tokio::test]

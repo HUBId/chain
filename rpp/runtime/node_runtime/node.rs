@@ -387,6 +387,15 @@ impl From<NetworkIdentityProfile> for IdentityProfile {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotDownloadErrorCode {
+    Network,
+    Checksum,
+    Authentication,
+    ResumeMismatch,
+}
+
 #[derive(Clone, Debug)]
 pub struct SnapshotStreamStatus {
     pub session: SnapshotSessionId,
@@ -401,6 +410,7 @@ pub struct SnapshotStreamStatus {
     pub last_update_index: Option<u64>,
     pub last_update_height: Option<u64>,
     pub verified: Option<bool>,
+    pub error_code: Option<SnapshotDownloadErrorCode>,
     pub error: Option<String>,
 }
 
@@ -423,6 +433,7 @@ impl SnapshotStreamStatus {
             last_update_index: None,
             last_update_height: None,
             verified: None,
+            error_code: None,
             error: None,
         }
     }
@@ -1181,15 +1192,52 @@ impl NodeInner {
         entry.clone()
     }
 
+    fn pipeline_error_to_download_code(err: &PipelineError) -> SnapshotDownloadErrorCode {
+        match err {
+            PipelineError::SnapshotVerification(message) => {
+                if message.to_ascii_lowercase().contains("resume plan id") {
+                    SnapshotDownloadErrorCode::ResumeMismatch
+                } else if message.to_ascii_lowercase().contains("checksum")
+                    || message.to_ascii_lowercase().contains("digest")
+                    || message.to_ascii_lowercase().contains("size mismatch")
+                {
+                    SnapshotDownloadErrorCode::Checksum
+                } else {
+                    SnapshotDownloadErrorCode::Network
+                }
+            }
+            PipelineError::ResumeBoundsExceeded { .. } => SnapshotDownloadErrorCode::ResumeMismatch,
+            _ => SnapshotDownloadErrorCode::Network,
+        }
+    }
+
+    fn reason_to_download_code(reason: &str) -> SnapshotDownloadErrorCode {
+        let reason = reason.to_ascii_lowercase();
+        if reason.contains("resume plan")
+            || reason.contains("plan id")
+            || reason.contains("root mismatch")
+        {
+            SnapshotDownloadErrorCode::ResumeMismatch
+        } else if reason.contains("checksum") || reason.contains("digest") {
+            SnapshotDownloadErrorCode::Checksum
+        } else if reason.contains("auth") || reason.contains("unauthorized") {
+            SnapshotDownloadErrorCode::Authentication
+        } else {
+            SnapshotDownloadErrorCode::Network
+        }
+    }
+
     fn snapshot_stream_failure(
         &self,
         session: SnapshotSessionId,
         peer: PeerId,
         reason: impl Into<String>,
+        code: SnapshotDownloadErrorCode,
     ) {
         let reason = reason.into();
         let status = self.update_snapshot_status(session, &peer, None, |status| {
             status.error = Some(reason.clone());
+            status.error_code = Some(code);
             if status.verified != Some(true) {
                 status.verified = Some(false);
             }
@@ -1785,6 +1833,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to encode snapshot plan: {err}"),
+                            SnapshotDownloadErrorCode::Network,
                         );
                         return;
                     }
@@ -1808,6 +1857,7 @@ impl NodeInner {
                                 status.last_update_index = None;
                                 status.last_update_height = None;
                                 status.verified = None;
+                                status.error_code = None;
                                 status.error = None;
                             },
                         );
@@ -1831,6 +1881,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to ingest snapshot plan: {err}"),
+                            Self::pipeline_error_to_download_code(&err),
                         );
                     }
                 }
@@ -1856,6 +1907,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to encode snapshot chunk: {err}"),
+                            SnapshotDownloadErrorCode::Network,
                         );
                         return;
                     }
@@ -1879,6 +1931,7 @@ impl NodeInner {
                                         .map(|previous| previous.max(index))
                                         .unwrap_or(index),
                                 );
+                                status.error_code = None;
                                 status.error = None;
                             });
                         let stage = SnapshotStreamProgressStage::Chunk {
@@ -1905,6 +1958,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to ingest snapshot chunk: {err}"),
+                            Self::pipeline_error_to_download_code(&err),
                         );
                     }
                 }
@@ -1930,6 +1984,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to encode snapshot update: {err}"),
+                            SnapshotDownloadErrorCode::Network,
                         );
                         return;
                     }
@@ -1957,6 +2012,7 @@ impl NodeInner {
                             if previous.map_or(true, |existing| index >= existing) {
                                 status.last_update_height = Some(update.height);
                             }
+                            status.error_code = None;
                             status.error = None;
                         });
                         let stage = SnapshotStreamProgressStage::Update {
@@ -1983,6 +2039,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("failed to ingest snapshot update: {err}"),
+                            Self::pipeline_error_to_download_code(&err),
                         );
                     }
                 }
@@ -1998,6 +2055,7 @@ impl NodeInner {
                     Ok(verified) => {
                         let status = self.update_snapshot_status(session, &peer, None, |status| {
                             status.verified = Some(verified);
+                            status.error_code = None;
                             status.error = None;
                         });
                         let _ = self.events.send(NodeEvent::SnapshotStreamCompleted {
@@ -2019,6 +2077,7 @@ impl NodeInner {
                             session,
                             peer,
                             format!("snapshot verification failed: {err}"),
+                            Self::pipeline_error_to_download_code(&err),
                         );
                     }
                 }
@@ -2035,7 +2094,8 @@ impl NodeInner {
                     %reason,
                     "snapshot stream error"
                 );
-                self.snapshot_stream_failure(session, peer, reason);
+                let code = Self::reason_to_download_code(&reason);
+                self.snapshot_stream_failure(session, peer, reason, code);
             }
             NetworkEvent::ReputationUpdated {
                 peer,
@@ -2506,6 +2566,52 @@ mod tests {
     use tokio::time::timeout;
 
     use serde_json::json;
+
+    #[test]
+    fn download_error_classifies_pipeline_failures() {
+        let checksum = PipelineError::SnapshotVerification("chunk checksum mismatch".into());
+        let resume = PipelineError::SnapshotVerification(
+            "resume plan id abc does not match persisted plan def".into(),
+        );
+        let bounds = PipelineError::ResumeBoundsExceeded {
+            kind: ResumeBoundKind::Chunk,
+            requested: 5,
+            total: 1,
+        };
+
+        assert_eq!(
+            Node::pipeline_error_to_download_code(&checksum),
+            SnapshotDownloadErrorCode::Checksum
+        );
+        assert_eq!(
+            Node::pipeline_error_to_download_code(&resume),
+            SnapshotDownloadErrorCode::ResumeMismatch
+        );
+        assert_eq!(
+            Node::pipeline_error_to_download_code(&bounds),
+            SnapshotDownloadErrorCode::ResumeMismatch
+        );
+    }
+
+    #[test]
+    fn download_error_classifies_reason_strings() {
+        assert_eq!(
+            Node::reason_to_download_code("authentication failed"),
+            SnapshotDownloadErrorCode::Authentication
+        );
+        assert_eq!(
+            Node::reason_to_download_code("checksum mismatch on chunk 7"),
+            SnapshotDownloadErrorCode::Checksum
+        );
+        assert_eq!(
+            Node::reason_to_download_code("resume plan id mismatch"),
+            SnapshotDownloadErrorCode::ResumeMismatch
+        );
+        assert_eq!(
+            Node::reason_to_download_code("timeout while reading"),
+            SnapshotDownloadErrorCode::Network
+        );
+    }
 
     fn test_config(
         identity_path: PathBuf,

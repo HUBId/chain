@@ -119,6 +119,20 @@ controlled per invocation:
 Tune these flags when scripting against unstable links so transient failures do
 not abort snapshot downloads, while still surfacing permanent errors promptly.
 
+Snapshot RPC responses and pollable stream statuses surface a `download_error`
+code when the runtime aborts a stream:
+
+* `network` – the peer disconnected, requests timed out, or the transport could
+  not encode a message. Retry with backoff; consider shrinking
+  `max_concurrent_downloads` on lossy links.
+* `checksum` – a chunk or manifest failed validation. Restart the download from
+  scratch and verify the provider’s manifest and signatures before retrying.
+* `authentication` – RPC authentication failed. Refresh the bearer token or
+  client certificate and resend the request.
+* `resume_mismatch` – the provided resume marker does not match the persisted
+  plan or snapshot root. Query the latest session status and retry using the
+  returned `plan_id` to avoid rewinding or skipping chunks.
+
 ### Resume semantics
 
 Snapshot downloads can be resumed without re-transferring verified chunks. The

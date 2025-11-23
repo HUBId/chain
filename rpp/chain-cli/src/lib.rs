@@ -22,6 +22,7 @@ use rpp_chain::runtime::config::{
     NodeConfig, SecretsBackendConfig, SecretsConfig, SnapshotChecksumAlgorithm, TelemetryConfig,
     WalletConfig, WalletConfigExt, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
 };
+use rpp_chain::runtime::node_runtime::node::SnapshotDownloadErrorCode;
 use rpp_chain::runtime::{RuntimeMetrics, TelemetryExporterBuilder};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
@@ -913,6 +914,8 @@ struct SnapshotStreamStatusResponse {
     #[serde(default)]
     verified: Option<bool>,
     #[serde(default)]
+    error_code: Option<SnapshotDownloadErrorCode>,
+    #[serde(default)]
     error: Option<String>,
 }
 
@@ -1720,6 +1723,12 @@ fn print_snapshot_status(label: &str, status: &SnapshotStreamStatusResponse) {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_string());
     println!("  verified: {verified}");
+    let error_code = status
+        .error_code
+        .as_ref()
+        .map(|value| format!("{value:?}"))
+        .unwrap_or_else(|| "none".to_string());
+    println!("  error_code: {error_code}");
     println!(
         "  error: {}",
         status

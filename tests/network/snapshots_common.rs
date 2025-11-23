@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use rpp_chain::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_chain::runtime::node_runtime::node::SnapshotDownloadErrorCode;
 use rpp_p2p::pipeline::chunk_sizing::ChunkSizingStrategy;
 use rpp_p2p::SnapshotSessionId;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,8 @@ pub struct SnapshotStreamStatusResponse {
     pub last_update_height: Option<u64>,
     #[serde(default)]
     pub verified: Option<bool>,
+    #[serde(default)]
+    pub error_code: Option<SnapshotDownloadErrorCode>,
     #[serde(default)]
     pub error: Option<String>,
 }
