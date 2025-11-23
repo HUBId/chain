@@ -31,11 +31,12 @@ The RPC server exposes two complementary limiters:
   equivalent CLI override) is set, each API key is assigned an isolated token
   bucket keyed by `Authorization` or `X-Api-Key` headers. Exceeding the quota
   returns `429` responses with `X-RateLimit-*` headers scoped to the offending
-  tenant; other tenants can continue issuing requests with their own budgets.【F:config/wallet.toml†L23-L33】【F:rpp/node/src/lib.rs†L360-L418】【F:rpp/rpc/api.rs†L1511-L1615】【F:rpp/rpc/api.rs†L1938-L1954】
-- **Per-IP token bucket**. `network.limits.per_ip_token_bucket` remains the
-  first line of defence against noisy neighbours and unauthenticated floods.
-  Tune burst and replenish values alongside upstream reverse proxies to achieve
-  the desired concurrency envelope.【F:config/validator.toml†L17-L48】【F:rpp/runtime/config.rs†L1578-L1725】【F:rpp/rpc/api.rs†L1487-L1579】
+  tenant; other tenants can continue issuing requests with their own budgets.【F:config/wallet.toml†L23-L33】【F:rpp/node/src/lib.rs†L360-L418】【F:rpp/rpc/api.rs†L1820-L1895】
+- **Per-IP token buckets**. `network.limits.per_ip_token_bucket.*` remains the
+  first line of defence against noisy neighbours and unauthenticated floods,
+  with independent read/write budgets. Tune burst and replenish values
+  alongside upstream reverse proxies to achieve the desired concurrency
+  envelope.【F:config/validator.toml†L35-L70】【F:rpp/runtime/config.rs†L1767-L1909】【F:rpp/rpc/api.rs†L1899-L1958】
 
 Operational guidance:
 

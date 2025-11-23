@@ -80,7 +80,10 @@ mempool_limit = 16384
 [network.rpc]
 listen = "0.0.0.0:7070"
 
-[network.limits.per_ip_token_bucket]
+[network.limits.per_ip_token_bucket.read]
+replenish_per_minute = 900
+
+[network.limits.per_ip_token_bucket.write]
 replenish_per_minute = 900
 
 [rollout]
@@ -164,7 +167,8 @@ Key tips while editing the configuration:
 - **Snapshots and proofs:** Place `snapshot_dir` and `proof_cache_dir` on fast,
   persistent storage. Missing snapshots force peers to re-sync from genesis and
   slow down validator recovery after restarts.
-- **RPC throttling:** Raise `network.limits.per_ip_token_bucket.replenish_per_minute` cautiously and monitor the
+- **RPC throttling:** Raise the read/write buckets under
+  `network.limits.per_ip_token_bucket.*.replenish_per_minute` cautiously and monitor the
   `/status/mempool` telemetry to ensure external users cannot exhaust CPU with
   bursts of submission attempts.
 

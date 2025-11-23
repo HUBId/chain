@@ -1770,7 +1770,7 @@ pub struct NetworkLimitsConfig {
     pub write_timeout_ms: u64,
     pub max_header_bytes: usize,
     pub max_body_bytes: usize,
-    pub per_ip_token_bucket: NetworkTokenBucketConfig,
+    pub per_ip_token_bucket: RpcTokenBucketConfig,
     pub snapshot_token_bucket: SnapshotTokenBucketConfig,
 }
 
@@ -1818,7 +1818,7 @@ impl Default for NetworkLimitsConfig {
             write_timeout_ms: 15_000,
             max_header_bytes: 16 * 1024,
             max_body_bytes: 2 * 1024 * 1024,
-            per_ip_token_bucket: NetworkTokenBucketConfig::default(),
+            per_ip_token_bucket: RpcTokenBucketConfig::default(),
             snapshot_token_bucket: SnapshotTokenBucketConfig::default(),
         }
     }
@@ -1857,6 +1857,65 @@ impl Default for NetworkTokenBucketConfig {
             enabled: true,
             burst: 120,
             replenish_per_minute: 60,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(
+    default,
+    from = "RpcTokenBucketConfigSerde",
+    into = "RpcTokenBucketConfigSerde"
+)]
+pub struct RpcTokenBucketConfig {
+    pub read: NetworkTokenBucketConfig,
+    pub write: NetworkTokenBucketConfig,
+}
+
+impl RpcTokenBucketConfig {
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        self.read
+            .validate(&format!("{label}.read"))
+            .and_then(|_| self.write.validate(&format!("{label}.write")))
+    }
+}
+
+impl Default for RpcTokenBucketConfig {
+    fn default() -> Self {
+        Self {
+            read: NetworkTokenBucketConfig::default(),
+            write: NetworkTokenBucketConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RpcTokenBucketConfigSerde {
+    Unified(NetworkTokenBucketConfig),
+    Split {
+        read: NetworkTokenBucketConfig,
+        write: NetworkTokenBucketConfig,
+    },
+}
+
+impl From<RpcTokenBucketConfigSerde> for RpcTokenBucketConfig {
+    fn from(value: RpcTokenBucketConfigSerde) -> Self {
+        match value {
+            RpcTokenBucketConfigSerde::Unified(config) => Self {
+                read: config.clone(),
+                write: config,
+            },
+            RpcTokenBucketConfigSerde::Split { read, write } => Self { read, write },
+        }
+    }
+}
+
+impl From<RpcTokenBucketConfig> for RpcTokenBucketConfigSerde {
+    fn from(value: RpcTokenBucketConfig) -> Self {
+        RpcTokenBucketConfigSerde::Split {
+            read: value.read,
+            write: value.write,
         }
     }
 }
@@ -3352,12 +3411,12 @@ mod tests {
     #[test]
     fn node_config_validation_rejects_invalid_token_bucket() {
         let mut config = NodeConfig::default();
-        config.network.limits.per_ip_token_bucket.burst = 0;
+        config.network.limits.per_ip_token_bucket.read.burst = 0;
         let error = config.validate().expect_err("validation should fail");
         match error {
             ChainError::Config(message) => {
                 assert!(
-                    message.contains("per_ip_token_bucket.burst"),
+                    message.contains("per_ip_token_bucket.read.burst"),
                     "unexpected message: {}",
                     message
                 );
@@ -3370,12 +3429,13 @@ mod tests {
             .network
             .limits
             .per_ip_token_bucket
+            .read
             .replenish_per_minute = 0;
         let error = config.validate().expect_err("validation should fail");
         match error {
             ChainError::Config(message) => {
                 assert!(
-                    message.contains("per_ip_token_bucket.replenish_per_minute"),
+                    message.contains("per_ip_token_bucket.read.replenish_per_minute"),
                     "unexpected message: {}",
                     message
                 );

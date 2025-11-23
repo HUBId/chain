@@ -58,7 +58,8 @@ async fn spawn_server(
     addr: SocketAddr,
     mut limits: NetworkLimitsConfig,
 ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
-    limits.per_ip_token_bucket.enabled = true;
+    limits.per_ip_token_bucket.read.enabled = true;
+    limits.per_ip_token_bucket.write.enabled = true;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (ready_tx, ready_rx) = oneshot::channel();
     let context = ApiContext::new(
@@ -297,8 +298,8 @@ fn node_contract_exposes_consensus_height() {
 async fn wallet_ui_rate_limit_returns_plain_text() {
     let addr = random_loopback();
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.burst = 1;
-    limits.per_ip_token_bucket.replenish_per_minute = 1;
+    limits.per_ip_token_bucket.read.burst = 1;
+    limits.per_ip_token_bucket.read.replenish_per_minute = 1;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits).await;
 

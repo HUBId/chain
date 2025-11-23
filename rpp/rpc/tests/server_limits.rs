@@ -75,7 +75,8 @@ async fn oversized_body_is_rejected() {
     let addr = random_loopback();
     let mut limits = NetworkLimitsConfig::default();
     limits.max_body_bytes = 16;
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default(), None).await;
 
@@ -98,7 +99,8 @@ async fn read_timeout_closes_stalled_body() {
     let addr = random_loopback();
     let mut limits = NetworkLimitsConfig::default();
     limits.read_timeout_ms = 50;
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default(), None).await;
 
@@ -126,7 +128,8 @@ async fn read_timeout_closes_stalled_body() {
 async fn api_keys_are_rate_limited_independently() {
     let addr = random_loopback();
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let rate_limit = NonZeroU64::new(1).expect("non-zero rate limit");
     let (shutdown_tx, handle) =
@@ -186,6 +189,64 @@ async fn api_keys_are_rate_limited_independently() {
 }
 
 #[tokio::test]
+async fn read_and_write_rate_limits_are_isolated() {
+    let addr = random_loopback();
+    let mut limits = NetworkLimitsConfig::default();
+    limits.per_ip_token_bucket.read.burst = 2;
+    limits.per_ip_token_bucket.read.replenish_per_minute = 2;
+    limits.per_ip_token_bucket.write.burst = 1;
+    limits.per_ip_token_bucket.write.replenish_per_minute = 1;
+
+    let (shutdown_tx, handle) = spawn_server(addr, limits, NetworkTlsConfig::default(), None).await;
+
+    let client = Client::builder().build().expect("client");
+    let health = format!("http://{addr}/health");
+    let tx = format!("http://{addr}/transactions");
+
+    let first_read = client.get(&health).send().await.expect("first read");
+    assert!(first_read.status().is_success());
+    let second_read = client.get(&health).send().await.expect("second read");
+    assert!(second_read.status().is_success());
+
+    let first_write = client
+        .post(&tx)
+        .body("{}")
+        .send()
+        .await
+        .expect("first write");
+    assert_ne!(
+        first_write.status(),
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        "write bucket should allow the first request"
+    );
+
+    let throttled_write = client
+        .post(&tx)
+        .body("{}")
+        .send()
+        .await
+        .expect("second write");
+    assert_eq!(
+        throttled_write.status(),
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        "write bucket should throttle the second request"
+    );
+    assert_eq!(
+        throttled_write
+            .headers()
+            .get("x-ratelimit-class")
+            .and_then(|value| value.to_str().ok()),
+        Some("write")
+    );
+
+    let body = throttled_write.text().await.expect("throttled body");
+    assert!(body.contains("write rate limit exceeded"));
+
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+}
+
+#[tokio::test]
 async fn tls_requires_client_certificate() {
     let addr = random_loopback();
     let temp = tempdir().expect("tempdir");
@@ -212,7 +273,8 @@ async fn tls_requires_client_certificate() {
     tls.require_client_auth = true;
 
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
 
@@ -282,7 +344,8 @@ async fn strict_tls_profile_rejects_tls12_clients() {
     tls.cipher_suites = vec![TlsCipherSuite::Tls13Aes256GcmSha384];
 
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
 
@@ -345,7 +408,8 @@ async fn permissive_tls_profile_allows_tls12_cipher_suite() {
     ];
 
     let mut limits = NetworkLimitsConfig::default();
-    limits.per_ip_token_bucket.enabled = false;
+    limits.per_ip_token_bucket.read.enabled = false;
+    limits.per_ip_token_bucket.write.enabled = false;
 
     let (shutdown_tx, handle) = spawn_server(addr, limits, tls, None).await;
 

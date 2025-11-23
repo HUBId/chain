@@ -85,8 +85,9 @@ use crate::proof_system::{
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
 use crate::runtime::config::{
-    NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
-    SecretsBackendConfig, SecretsConfig, SnapshotTokenBucketConfig,
+    NetworkLimitsConfig, NetworkTlsConfig, NetworkTokenBucketConfig, P2pAllowlistEntry,
+    QueueWeightsConfig, RpcTokenBucketConfig, SecretsBackendConfig, SecretsConfig,
+    SnapshotTokenBucketConfig,
 };
 use crate::runtime::node::{StateSyncChunkError, StateSyncVerificationStatus};
 use crate::runtime::node_runtime::node::{
@@ -95,8 +96,8 @@ use crate::runtime::node_runtime::node::{
 };
 use crate::runtime::sync::StateSyncServer;
 use crate::runtime::{
-    ProofRpcMethod, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics, RuntimeMode,
-    WalletRpcMethod,
+    ProofRpcMethod, RpcClass, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics,
+    RuntimeMode, WalletRpcMethod,
 };
 use crate::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 use crate::sync::ReconstructionPlan;
@@ -1337,6 +1338,14 @@ fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
     RpcMethod::Other
 }
 
+fn classify_rpc_class(method: &Method) -> RpcClass {
+    if method == Method::GET || method == Method::HEAD {
+        RpcClass::Read
+    } else {
+        RpcClass::Write
+    }
+}
+
 #[cfg(feature = "wallet-integration")]
 fn wallet_rpc_method(_method: &Method, path: &str) -> Option<WalletRpcMethod> {
     if !path.starts_with("/wallet/") {
@@ -1554,14 +1563,14 @@ fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
 
 #[derive(Clone)]
 struct PerIpTokenBucketLayer {
-    state: Arc<PerIpTokenBucketState>,
+    state: Arc<RpcClassTokenBuckets<IpAddr>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl PerIpTokenBucketLayer {
-    fn new(burst: u64, replenish_per_minute: u64, metrics: Arc<RuntimeMetrics>) -> Self {
+    fn new(config: &RpcTokenBucketConfig, metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
-            state: Arc::new(PerIpTokenBucketState::new(burst, replenish_per_minute)),
+            state: Arc::new(RpcClassTokenBuckets::new(config)),
             metrics,
         }
     }
@@ -1654,9 +1663,6 @@ where
     }
 }
 
-type PerIpTokenBucketState = TokenBucketState<IpAddr>;
-type ApiKeyTokenBucketState = TokenBucketState<ApiKey>;
-
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
@@ -1668,7 +1674,64 @@ struct RateLimitSnapshot {
     reset_seconds: u64,
 }
 
-fn attach_rate_limit_headers(headers: &mut HeaderMap, snapshot: &RateLimitSnapshot) {
+#[derive(Clone)]
+struct RpcClassTokenBuckets<K> {
+    read: Option<Arc<TokenBucketState<K>>>,
+    write: Option<Arc<TokenBucketState<K>>>,
+}
+
+impl<K> RpcClassTokenBuckets<K>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    fn new(config: &RpcTokenBucketConfig) -> Self {
+        let read = config.read.enabled.then(|| {
+            Arc::new(TokenBucketState::new(
+                config.read.burst,
+                config.read.replenish_per_minute,
+            ))
+        });
+        let write = config.write.enabled.then(|| {
+            Arc::new(TokenBucketState::new(
+                config.write.burst,
+                config.write.replenish_per_minute,
+            ))
+        });
+
+        Self { read, write }
+    }
+
+    fn try_acquire(&self, class: RpcClass, key: K) -> Result<(), RateLimitSnapshot> {
+        match self.state(class) {
+            Some(state) => state.try_acquire(key),
+            None => Ok(()),
+        }
+    }
+
+    fn try_acquire_with_snapshot(
+        &self,
+        class: RpcClass,
+        key: K,
+    ) -> Result<Option<RateLimitSnapshot>, RateLimitSnapshot> {
+        match self.state(class) {
+            Some(state) => state.try_acquire_with_snapshot(key).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn state(&self, class: RpcClass) -> Option<&Arc<TokenBucketState<K>>> {
+        match class {
+            RpcClass::Read => self.read.as_ref(),
+            RpcClass::Write => self.write.as_ref(),
+        }
+    }
+}
+
+fn attach_rate_limit_headers(
+    headers: &mut HeaderMap,
+    snapshot: &RateLimitSnapshot,
+    class: RpcClass,
+) {
     let _ = headers.insert(
         "X-RateLimit-Limit",
         HeaderValue::from_str(&snapshot.limit.to_string())
@@ -1684,14 +1747,22 @@ fn attach_rate_limit_headers(headers: &mut HeaderMap, snapshot: &RateLimitSnapsh
         HeaderValue::from_str(&snapshot.reset_seconds.to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
+    let _ = headers.insert(
+        "X-RateLimit-Class",
+        HeaderValue::from_str(class.as_str())
+            .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+    );
 }
 
-fn rate_limit_response(snapshot: RateLimitSnapshot) -> Response {
+fn rate_limit_response(snapshot: RateLimitSnapshot, class: RpcClass) -> Response {
     let mut response = Response::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
-        .body(Body::from("rate limit exceeded"))
+        .body(Body::from(format!(
+            "{} rate limit exceeded",
+            class.as_str()
+        )))
         .unwrap();
-    attach_rate_limit_headers(response.headers_mut(), &snapshot);
+    attach_rate_limit_headers(response.headers_mut(), &snapshot, class);
     response
 }
 
@@ -1750,14 +1821,24 @@ fn extract_api_key(request: &Request<Body>) -> ApiKey {
 
 #[derive(Clone)]
 struct PerApiKeyTokenBucketLayer {
-    state: Arc<ApiKeyTokenBucketState>,
+    state: Arc<RpcClassTokenBuckets<ApiKey>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl PerApiKeyTokenBucketLayer {
     fn new(burst: u64, metrics: Arc<RuntimeMetrics>) -> Self {
+        let bucket = NetworkTokenBucketConfig {
+            enabled: true,
+            burst,
+            replenish_per_minute: burst,
+        };
+        let state = RpcTokenBucketConfig {
+            read: bucket.clone(),
+            write: bucket,
+        };
+
         Self {
-            state: Arc::new(ApiKeyTokenBucketState::new(burst, burst)),
+            state: Arc::new(RpcClassTokenBuckets::new(&state)),
             metrics,
         }
     }
@@ -1778,7 +1859,7 @@ impl<S> Layer<S> for PerApiKeyTokenBucketLayer {
 #[derive(Clone)]
 struct PerApiKeyTokenBucketService<S> {
     inner: S,
-    state: Arc<ApiKeyTokenBucketState>,
+    state: Arc<RpcClassTokenBuckets<ApiKey>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
@@ -1798,19 +1879,28 @@ where
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let api_key = extract_api_key(&request);
         let rpc_method = classify_rpc_method(request.method(), request.uri().path());
+        let rpc_class = classify_rpc_class(request.method());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
 
         Box::pin(async move {
-            match state.try_acquire(api_key) {
+            match state.try_acquire(rpc_class, api_key) {
                 Ok(()) => {
-                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                    metrics.record_rpc_rate_limit(
+                        rpc_class,
+                        rpc_method,
+                        RpcRateLimitStatus::Allowed,
+                    );
                     inner.call(request).await
                 }
                 Err(snapshot) => {
-                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
-                    Ok(rate_limit_response(snapshot))
+                    metrics.record_rpc_rate_limit(
+                        rpc_class,
+                        rpc_method,
+                        RpcRateLimitStatus::Throttled,
+                    );
+                    Ok(rate_limit_response(snapshot, rpc_class))
                 }
             }
         })
@@ -1820,7 +1910,7 @@ where
 #[derive(Clone)]
 struct PerIpTokenBucketService<S> {
     inner: S,
-    state: Arc<PerIpTokenBucketState>,
+    state: Arc<RpcClassTokenBuckets<IpAddr>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
@@ -1843,23 +1933,32 @@ where
             .get::<ConnectInfo<SocketAddr>>()
             .map(|info| info.0.ip());
         let rpc_method = classify_rpc_method(request.method(), request.uri().path());
+        let rpc_class = classify_rpc_class(request.method());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
 
         Box::pin(async move {
             if let Some(ip) = remote_ip {
-                match state.try_acquire(ip) {
+                match state.try_acquire(rpc_class, ip) {
                     Ok(()) => {
-                        metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                        metrics.record_rpc_rate_limit(
+                            rpc_class,
+                            rpc_method,
+                            RpcRateLimitStatus::Allowed,
+                        );
                     }
                     Err(snapshot) => {
-                        metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
-                        return Ok(rate_limit_response(snapshot));
+                        metrics.record_rpc_rate_limit(
+                            rpc_class,
+                            rpc_method,
+                            RpcRateLimitStatus::Throttled,
+                        );
+                        return Ok(rate_limit_response(snapshot, rpc_class));
                     }
                 }
             } else {
-                metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                metrics.record_rpc_rate_limit(rpc_class, rpc_method, RpcRateLimitStatus::Allowed);
             }
 
             inner.call(request).await
@@ -1924,26 +2023,35 @@ where
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let bucket_key = SnapshotRateLimitKey::from_request(&request, self.prefer_auth_identity);
         let rpc_method = RpcMethod::Snapshot;
+        let rpc_class = classify_rpc_class(request.method());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
 
         Box::pin(async move {
             let Some(key) = bucket_key else {
-                metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                metrics.record_rpc_rate_limit(rpc_class, rpc_method, RpcRateLimitStatus::Allowed);
                 return inner.call(request).await;
             };
 
             match state.try_acquire_with_snapshot(key) {
                 Ok(snapshot) => {
-                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Allowed);
+                    metrics.record_rpc_rate_limit(
+                        rpc_class,
+                        rpc_method,
+                        RpcRateLimitStatus::Allowed,
+                    );
                     let mut response = inner.call(request).await?;
-                    attach_rate_limit_headers(response.headers_mut(), &snapshot);
+                    attach_rate_limit_headers(response.headers_mut(), &snapshot, rpc_class);
                     Ok(response)
                 }
                 Err(snapshot) => {
-                    metrics.record_rpc_rate_limit(rpc_method, RpcRateLimitStatus::Throttled);
-                    Ok(rate_limit_response(snapshot))
+                    metrics.record_rpc_rate_limit(
+                        rpc_class,
+                        rpc_method,
+                        RpcRateLimitStatus::Throttled,
+                    );
+                    Ok(rate_limit_response(snapshot, rpc_class))
                 }
             }
         })
@@ -2183,10 +2291,9 @@ where
         service_builder =
             service_builder.layer(PerApiKeyTokenBucketLayer::new(limit.get(), metrics.clone()));
     }
-    if limits.per_ip_token_bucket.enabled {
+    if limits.per_ip_token_bucket.read.enabled || limits.per_ip_token_bucket.write.enabled {
         service_builder = service_builder.layer(PerIpTokenBucketLayer::new(
-            limits.per_ip_token_bucket.burst,
-            limits.per_ip_token_bucket.replenish_per_minute,
+            &limits.per_ip_token_bucket,
             metrics.clone(),
         ));
     }

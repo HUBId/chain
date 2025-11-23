@@ -98,7 +98,7 @@ pub struct RuntimeMetrics {
     wallet_sync_driver_active: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
-    rpc_rate_limit_total: RpcCounter<RpcMethod, RpcRateLimitStatus>,
+    rpc_rate_limit_total: RpcClassCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
     wal_flush_bytes: EnumU64Histogram<WalFlushOutcome>,
     wal_flush_total: EnumCounter<WalFlushOutcome>,
@@ -220,12 +220,10 @@ impl RuntimeMetrics {
                     .with_unit("1")
                     .build(),
             ),
-            rpc_rate_limit_total: RpcCounter::new(
+            rpc_rate_limit_total: RpcClassCounter::new(
                 meter
                     .u64_counter("rpp.runtime.rpc.rate_limit.total")
-                    .with_description(
-                        "RPC rate limit decisions grouped by method and allow/throttle status",
-                    )
+                    .with_description("RPC rate limit decisions grouped by class, method and allow/throttle status")
                     .with_unit("1")
                     .build(),
             ),
@@ -551,8 +549,13 @@ impl RuntimeMetrics {
     }
 
     /// Record the outcome of a rate limit decision for an RPC handler.
-    pub fn record_rpc_rate_limit(&self, method: RpcMethod, status: RpcRateLimitStatus) {
-        self.rpc_rate_limit_total.add(method, status, 1);
+    pub fn record_rpc_rate_limit(
+        &self,
+        class: RpcClass,
+        method: RpcMethod,
+        status: RpcRateLimitStatus,
+    ) {
+        self.rpc_rate_limit_total.add(class, method, status, 1);
     }
 
     /// Record the duration of a WAL flush attempt.
@@ -1381,6 +1384,13 @@ pub enum RpcMethod {
     Other,
 }
 
+/// RPC handlers grouped by read/write semantics.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum RpcClass {
+    Read,
+    Write,
+}
+
 impl MetricLabel for RpcMethod {
     const KEY: &'static str = "method";
 
@@ -1390,6 +1400,17 @@ impl MetricLabel for RpcMethod {
             Self::Proof(method) => method.as_str(),
             Self::Snapshot => "snapshot",
             Self::Other => "other",
+        }
+    }
+}
+
+impl MetricLabel for RpcClass {
+    const KEY: &'static str = "class";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
         }
     }
 }
@@ -1757,6 +1778,30 @@ impl<M: MetricLabel, R: MetricLabel> RpcCounter<M, R> {
 
     fn add(&self, method: M, result: R, value: u64) {
         let attributes = [
+            KeyValue::new(M::KEY, method.as_str()),
+            KeyValue::new(R::KEY, result.as_str()),
+        ];
+        self.counter.add(value, &attributes);
+    }
+}
+
+#[derive(Clone)]
+struct RpcClassCounter<C: MetricLabel, M: MetricLabel, R: MetricLabel> {
+    counter: Counter<u64>,
+    _marker: PhantomData<(C, M, R)>,
+}
+
+impl<C: MetricLabel, M: MetricLabel, R: MetricLabel> RpcClassCounter<C, M, R> {
+    fn new(counter: Counter<u64>) -> Self {
+        Self {
+            counter,
+            _marker: PhantomData,
+        }
+    }
+
+    fn add(&self, class: C, method: M, result: R, value: u64) {
+        let attributes = [
+            KeyValue::new(C::KEY, class.as_str()),
             KeyValue::new(M::KEY, method.as_str()),
             KeyValue::new(R::KEY, result.as_str()),
         ];

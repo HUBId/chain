@@ -141,9 +141,9 @@ configuration files and verify the impact through Prometheus metrics.
 ### 2. Bound connection fan-out
 
 1. Apply per-host HTTP connection shaping to protect the RPC ingress path by
-   adjusting `network.limits.per_ip_token_bucket` (burst and replenish values) in
-   the node configuration. This governs how many simultaneous requests a single
-   IP may issue before throttling kicks in.【F:config/node.toml†L35-L52】
+   adjusting `network.limits.per_ip_token_bucket.*` (burst and replenish values)
+   in the node configuration. This governs how many simultaneous read/write
+   requests a single IP may issue before throttling kicks in.【F:config/node.toml†L37-L55】
 2. For the gossip layer, restrict which peers may connect by seeding
    `network.p2p.allowlist` with known peer IDs (and tiers) and enforcing
    blocklist entries for untrusted senders. Admission control rejects peers that
