@@ -24,6 +24,18 @@ Pair these thresholds with the sample Alertmanager rules under `ops/alerts/stora
 observability runbook sections referenced below. Alert annotations should link to the relevant
 runbook anchors (`docs/runbooks/observability.md`).
 
+## Dashboards
+
+Operators can import `docs/dashboards/pipeline_storage_commit.json` into Grafana to track leak
+handling alongside the pipeline storage SLOs. The **Leaked Ranges** panel charts
+`firewood_checker_leaked_ranges` so maintenance runs clearly show whether leaked ranges drop back
+to zero after repairs.【F:docs/dashboards/pipeline_storage_commit.json†L115-L143】 The accompanying
+**Leak Fix Outcomes** panel overlays the 5-minute rates of
+`firewood_checker_leaked_areas_fixed` and `firewood_checker_leaked_areas_failed_to_fix`, making it
+easy to spot stalled repairs or persistent IO errors while the checker drains the free
+list.【F:docs/dashboards/pipeline_storage_commit.json†L145-L177】 Plot the panels on the same row to
+confirm that fixes progress whenever leaked ranges stay non-zero.
+
 ## Updating the telemetry schema
 
 The storage metrics surfaced here are validated in CI against `telemetry/schema.yaml`. When adding a

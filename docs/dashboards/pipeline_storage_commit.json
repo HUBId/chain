@@ -2,7 +2,7 @@
   "title": "Pipeline Storage Commit",
   "uid": "pipeline-storage-commit",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "timezone": "browser",
   "time": {
@@ -109,6 +109,71 @@
           "values": false
         },
         "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Leaked Ranges",
+      "description": "Gauge of leaked storage ranges reported by the Firewood checker.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "firewood_checker_leaked_ranges",
+          "legendFormat": "Leaked ranges"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Leak Fix Outcomes",
+      "description": "Rates of leaked areas fixed or failed while the checker drains free lists.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(firewood_checker_leaked_areas_fixed[5m]))",
+          "legendFormat": "Fixed"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(firewood_checker_leaked_areas_failed_to_fix[5m]))",
+          "legendFormat": "Failed to fix"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
       }
     }
   ]
