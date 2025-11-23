@@ -45,6 +45,25 @@ pub fn export_csv<P: AsRef<Path>>(path: P, summary: &SimulationSummary) -> Resul
         summary.chunk_retries.to_string(),
     ])?;
 
+    if let Some(replay_guard) = &summary.replay_guard {
+        writer.write_record(&[
+            "replay_guard_drops_trusted".to_string(),
+            replay_guard.drops_by_class.trusted.to_string(),
+        ])?;
+        writer.write_record(&[
+            "replay_guard_drops_untrusted".to_string(),
+            replay_guard.drops_by_class.untrusted.to_string(),
+        ])?;
+        writer.write_record(&[
+            "replay_guard_window_fill_trusted".to_string(),
+            format!("{:.3}", replay_guard.window_fill_ratio_by_class.trusted),
+        ])?;
+        writer.write_record(&[
+            "replay_guard_window_fill_untrusted".to_string(),
+            format!("{:.3}", replay_guard.window_fill_ratio_by_class.untrusted),
+        ])?;
+    }
+
     if let Some(propagation) = &summary.propagation {
         writer.write_record(&[
             "propagation_p50_ms".to_string(),
@@ -137,6 +156,16 @@ mod tests {
             total_receives: 20,
             duplicates: 3,
             chunk_retries: 1,
+            replay_guard: Some(super::super::reduce::ReplayGuardMetrics {
+                drops_by_class: super::super::reduce::ReplayGuardDrops {
+                    trusted: 1,
+                    untrusted: 2,
+                },
+                window_fill_ratio_by_class: super::super::reduce::ReplayWindowFill {
+                    trusted: 0.25,
+                    untrusted: 0.5,
+                },
+            }),
             propagation: Some(super::super::reduce::PropagationPercentiles {
                 p50_ms: 120.0,
                 p95_ms: 340.5,

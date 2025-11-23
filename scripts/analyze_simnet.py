@@ -168,6 +168,24 @@ def main(argv: List[str]) -> int:
         help="Fail if the recovery max resume latency exceeds this threshold (ms)",
     )
     parser.add_argument(
+        "--max-replay-drops-trusted",
+        type=int,
+        default=120,
+        help="Fail if trusted peers drop more than this many duplicate payloads",
+    )
+    parser.add_argument(
+        "--max-replay-drops-untrusted",
+        type=int,
+        default=160,
+        help="Fail if untrusted peers drop more than this many duplicate payloads",
+    )
+    parser.add_argument(
+        "--max-replay-window-fill",
+        type=float,
+        default=0.85,
+        help="Fail if the replay window stays above this fill ratio after recovery",
+    )
+    parser.add_argument(
         "--max-cpu-percent",
         type=float,
         default=320.0,
@@ -225,6 +243,34 @@ def main(argv: List[str]) -> int:
             failures.append(
                 f"{path} recovery max resume {max_resume:.2f}ms exceeds threshold {args.max_resume_latency:.2f}ms"
             )
+
+        replay_guard = summary.get("replay_guard")
+        if not replay_guard:
+            failures.append(f"{path} missing replay_guard metrics")
+        else:
+            drops = replay_guard.get("drops_by_class") or {}
+            trusted_drops = drops.get("trusted")
+            untrusted_drops = drops.get("untrusted")
+            if trusted_drops is not None and trusted_drops > args.max_replay_drops_trusted:
+                failures.append(
+                    f"{path} trusted replay guard drops {trusted_drops} exceeds threshold {args.max_replay_drops_trusted}"
+                )
+            if untrusted_drops is not None and untrusted_drops > args.max_replay_drops_untrusted:
+                failures.append(
+                    f"{path} untrusted replay guard drops {untrusted_drops} exceeds threshold {args.max_replay_drops_untrusted}"
+                )
+
+            fill = replay_guard.get("window_fill_ratio_by_class") or {}
+            trusted_fill = fill.get("trusted")
+            untrusted_fill = fill.get("untrusted")
+            if trusted_fill is not None and trusted_fill > args.max_replay_window_fill:
+                failures.append(
+                    f"{path} trusted replay window fill {trusted_fill:.3f} exceeds threshold {args.max_replay_window_fill:.3f}"
+                )
+            if untrusted_fill is not None and untrusted_fill > args.max_replay_window_fill:
+                failures.append(
+                    f"{path} untrusted replay window fill {untrusted_fill:.3f} exceeds threshold {args.max_replay_window_fill:.3f}"
+                )
 
         fault_kinds = {fault.get("kind") for fault in summary.get("faults") or []}
         if "partition_start" in fault_kinds and "partition_end" not in fault_kinds:

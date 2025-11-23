@@ -4,6 +4,7 @@ pub mod reduce;
 
 pub use collector::{Collector, FaultEvent, FaultRecord, MeshAction, MeshChangeRecord, SimEvent};
 pub use reduce::{
-    ComparisonReport, PropagationPercentiles, RecoveryMetrics, ResourceUsageMetrics, RunDeltas,
-    RunMetrics, SimulationSummary,
+    ComparisonReport, PropagationPercentiles, RecoveryMetrics, ReplayGuardDrops,
+    ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics, RunDeltas, RunMetrics,
+    SimulationSummary,
 };

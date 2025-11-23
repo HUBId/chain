@@ -10,6 +10,24 @@ pub struct PropagationPercentiles {
     pub p95_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ReplayGuardMetrics {
+    pub drops_by_class: ReplayGuardDrops,
+    pub window_fill_ratio_by_class: ReplayWindowFill,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ReplayGuardDrops {
+    pub trusted: usize,
+    pub untrusted: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ReplayWindowFill {
+    pub trusted: f64,
+    pub untrusted: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SimulationSummary {
     pub total_publishes: usize,
@@ -17,6 +35,8 @@ pub struct SimulationSummary {
     pub duplicates: usize,
     #[serde(default)]
     pub chunk_retries: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_guard: Option<ReplayGuardMetrics>,
     pub propagation: Option<PropagationPercentiles>,
     pub mesh_changes: Vec<MeshChangeRecord>,
     pub faults: Vec<FaultRecord>,
@@ -202,6 +222,7 @@ mod tests {
             total_receives: 20,
             duplicates: 2,
             chunk_retries: 0,
+            replay_guard: None,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 100.0,
                 p95_ms: 200.0,
@@ -220,6 +241,7 @@ mod tests {
             total_receives: 25,
             duplicates: 3,
             chunk_retries: 1,
+            replay_guard: None,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 110.0,
                 p95_ms: 205.0,

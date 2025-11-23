@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{
     calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, RecoveryMetrics,
-    ResourceUsageMetrics, SimulationSummary,
+    ReplayGuardDrops, ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics,
+    SimulationSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ pub enum SimEvent {
         message_id: String,
         timestamp: Instant,
         duplicate: bool,
+        peer_class: rpp_p2p::peerstore::peer_class::PeerClass,
     },
     MeshChange {
         peer_id: PeerId,
@@ -88,6 +90,10 @@ pub struct Collector {
     total_receives: usize,
     duplicates: usize,
     chunk_retries: usize,
+    replay_trusted_drops: usize,
+    replay_untrusted_drops: usize,
+    replay_trusted_receives: usize,
+    replay_untrusted_receives: usize,
     mesh_changes: Vec<MeshChangeRecord>,
     faults: Vec<FaultRecord>,
     pending_partition_end: Option<Instant>,
@@ -111,6 +117,10 @@ impl Collector {
             total_receives: 0,
             duplicates: 0,
             chunk_retries: 0,
+            replay_trusted_drops: 0,
+            replay_untrusted_drops: 0,
+            replay_trusted_receives: 0,
+            replay_untrusted_receives: 0,
             mesh_changes: Vec::new(),
             faults: Vec::new(),
             pending_partition_end: None,
@@ -141,12 +151,32 @@ impl Collector {
                 message_id,
                 timestamp,
                 duplicate,
+                peer_class,
                 ..
             } => {
                 self.total_receives += 1;
+                match peer_class {
+                    rpp_p2p::peerstore::peer_class::PeerClass::Trusted => {
+                        self.replay_trusted_receives = self.replay_trusted_receives.saturating_add(1);
+                    }
+                    rpp_p2p::peerstore::peer_class::PeerClass::Untrusted => {
+                        self.replay_untrusted_receives =
+                            self.replay_untrusted_receives.saturating_add(1);
+                    }
+                }
                 if duplicate {
                     self.duplicates += 1;
                     self.chunk_retries += 1;
+                    match peer_class {
+                        rpp_p2p::peerstore::peer_class::PeerClass::Trusted => {
+                            self.replay_trusted_drops =
+                                self.replay_trusted_drops.saturating_add(1);
+                        }
+                        rpp_p2p::peerstore::peer_class::PeerClass::Untrusted => {
+                            self.replay_untrusted_drops =
+                                self.replay_untrusted_drops.saturating_add(1);
+                        }
+                    }
                 }
                 if let Some(published_at) = self.publications.get(&message_id) {
                     let delta = timestamp.duration_since(*published_at).as_secs_f64() * 1_000.0;
@@ -280,11 +310,47 @@ impl Collector {
             })
         };
 
+        let replay_guard = {
+            let trusted_receives = self.replay_trusted_receives as f64;
+            let untrusted_receives = self.replay_untrusted_receives as f64;
+            let has_signal = self.replay_trusted_drops > 0
+                || self.replay_untrusted_drops > 0
+                || trusted_receives > 0.0
+                || untrusted_receives > 0.0;
+
+            if has_signal {
+                let trusted_ratio = if trusted_receives > 0.0 {
+                    self.replay_trusted_drops as f64 / trusted_receives
+                } else {
+                    0.0
+                };
+                let untrusted_ratio = if untrusted_receives > 0.0 {
+                    self.replay_untrusted_drops as f64 / untrusted_receives
+                } else {
+                    0.0
+                };
+
+                Some(ReplayGuardMetrics {
+                    drops_by_class: ReplayGuardDrops {
+                        trusted: self.replay_trusted_drops,
+                        untrusted: self.replay_untrusted_drops,
+                    },
+                    window_fill_ratio_by_class: ReplayWindowFill {
+                        trusted: trusted_ratio,
+                        untrusted: untrusted_ratio,
+                    },
+                })
+            } else {
+                None
+            }
+        };
+
         SimulationSummary {
             total_publishes: self.total_publishes,
             total_receives: self.total_receives,
             duplicates: self.duplicates,
             chunk_retries: self.chunk_retries,
+            replay_guard,
             propagation,
             mesh_changes: self.mesh_changes,
             faults: self.faults,

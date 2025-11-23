@@ -41,6 +41,11 @@ summaries. It also enforces thresholds that align with the nightly workflow.
 * **Recovery is observed:** partition start/end markers are paired with
   resume-latency samples so the report captures backpressure mitigation and
   recovery once the partition heals.【F:scripts/analyze_simnet.py†L186-L202】
+* **Replay guard stabilises:** replay protection counters stay below the
+  per-class limits (trusted ≤120 drops, untrusted ≤160) and the inferred replay
+  window fill ratio remains under 0.85 after the mesh heals. The analyzer fails
+  runs that lack replay metrics or exceed these thresholds so regressions in
+  trusted versus untrusted peers are caught automatically.【F:scripts/analyze_simnet.py†L170-L185】
 
 ### Payload sizing
 
