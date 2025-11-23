@@ -99,7 +99,7 @@ jobs:
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run OTLP exporter chaos test
+      - name: Run OTLP exporter chaos tests
         run: |
           set -euo pipefail
           cargo test --test observability_otlp_failures --features integration
