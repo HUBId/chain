@@ -56,23 +56,40 @@ const MALACHITE_CONFIG_VERSION_DEFAULT: &str = "1.0.0";
 const MALACHITE_CONFIG_FILE: &str = "malachite.toml";
 const DEFAULT_MALACHITE_CONFIG_PATH: &str = "config/malachite.toml";
 
-fn parse_strict_toml<T: DeserializeOwned>(content: &str, label: &str) -> ChainResult<T> {
-    let mut unknown_keys = Vec::new();
-    let mut deserializer = toml::de::Deserializer::new(content);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigValidation {
+    Relaxed,
+    Strict,
+}
 
-    let value = serde_ignored::deserialize(&mut deserializer, |path| {
-        unknown_keys.push(path.to_string());
-    })
-    .map_err(|err| ChainError::Config(format!("{label}: {err}")))?;
+fn parse_toml<T: DeserializeOwned>(
+    content: &str,
+    label: &str,
+    validation: ConfigValidation,
+) -> ChainResult<T> {
+    match validation {
+        ConfigValidation::Relaxed => {
+            toml::from_str(content).map_err(|err| ChainError::Config(format!("{label}: {err}")))
+        }
+        ConfigValidation::Strict => {
+            let mut unknown_keys = Vec::new();
+            let mut deserializer = toml::de::Deserializer::new(content);
 
-    if !unknown_keys.is_empty() {
-        return Err(ChainError::Config(format!(
-            "{label}: unknown configuration key(s): {}",
-            unknown_keys.join(", ")
-        )));
+            let value = serde_ignored::deserialize(&mut deserializer, |path| {
+                unknown_keys.push(path.to_string());
+            })
+            .map_err(|err| ChainError::Config(format!("{label}: {err}")))?;
+
+            if !unknown_keys.is_empty() {
+                return Err(ChainError::Config(format!(
+                    "{label}: unknown configuration key(s): {}",
+                    unknown_keys.join(", ")
+                )));
+            }
+
+            Ok(value)
+        }
     }
-
-    Ok(value)
 }
 
 #[cfg(not(feature = "wallet-integration"))]
@@ -362,11 +379,14 @@ pub struct MalachiteConfig {
 }
 
 impl MalachiteConfig {
-    pub fn load_from_path(path: &Path) -> ChainResult<Self> {
+    pub fn load_from_path_with_validation(
+        path: &Path,
+        validation: ConfigValidation,
+    ) -> ChainResult<Self> {
         match fs::read_to_string(path) {
             Ok(content) => {
                 let mut config: Self =
-                    parse_strict_toml(&content, "malachite configuration parse error")?;
+                    parse_toml(&content, "malachite configuration parse error", validation)?;
                 config.validate()?;
                 Ok(config)
             }
@@ -379,8 +399,15 @@ impl MalachiteConfig {
         }
     }
 
+    pub fn load_from_path(path: &Path) -> ChainResult<Self> {
+        Self::load_from_path_with_validation(path, ConfigValidation::Strict)
+    }
+
     pub fn load_default() -> ChainResult<Self> {
-        Self::load_from_path(Path::new(DEFAULT_MALACHITE_CONFIG_PATH))
+        Self::load_from_path_with_validation(
+            Path::new(DEFAULT_MALACHITE_CONFIG_PATH),
+            ConfigValidation::Strict,
+        )
     }
 
     pub fn validate(&self) -> ChainResult<()> {
@@ -1956,14 +1983,19 @@ impl NodeConfig {
         self.malachite.proof.max_recursive_depth = 6;
     }
 
-    pub fn load(path: &Path) -> ChainResult<Self> {
+    pub fn load_with_validation(path: &Path, validation: ConfigValidation) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
-        let mut config: Self = parse_strict_toml(&content, "node configuration parse error")?;
+        let mut config: Self = parse_toml(&content, "node configuration parse error", validation)?;
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         let malachite_path = base.join(MALACHITE_CONFIG_FILE);
-        config.malachite = MalachiteConfig::load_from_path(&malachite_path)?;
+        config.malachite =
+            MalachiteConfig::load_from_path_with_validation(&malachite_path, validation)?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn load(path: &Path) -> ChainResult<Self> {
+        Self::load_with_validation(path, ConfigValidation::Strict)
     }
 
     pub fn save(&self, path: &Path) -> ChainResult<()> {
@@ -3579,7 +3611,18 @@ pub trait WalletConfigExt {
     where
         Self: Sized;
 
+    fn load_with_validation(path: &Path, validation: ConfigValidation) -> ChainResult<Self>
+    where
+        Self: Sized;
+
     fn load_with_capabilities(path: &Path) -> ChainResult<(Self, WalletCapabilityHints)>
+    where
+        Self: Sized;
+
+    fn load_with_capabilities_with_validation(
+        path: &Path,
+        validation: ConfigValidation,
+    ) -> ChainResult<(Self, WalletCapabilityHints)>
     where
         Self: Sized;
 
@@ -3601,14 +3644,27 @@ pub trait WalletConfigExt {
 
 impl WalletConfigExt for WalletConfig {
     fn load(path: &Path) -> ChainResult<Self> {
-        let (config, _) = Self::load_with_capabilities(path)?;
+        let (config, _) =
+            Self::load_with_capabilities_with_validation(path, ConfigValidation::Strict)?;
+        Ok(config)
+    }
+
+    fn load_with_validation(path: &Path, validation: ConfigValidation) -> ChainResult<Self> {
+        let (config, _) = Self::load_with_capabilities_with_validation(path, validation)?;
         Ok(config)
     }
 
     fn load_with_capabilities(path: &Path) -> ChainResult<(Self, WalletCapabilityHints)> {
+        Self::load_with_capabilities_with_validation(path, ConfigValidation::Strict)
+    }
+
+    fn load_with_capabilities_with_validation(
+        path: &Path,
+        validation: ConfigValidation,
+    ) -> ChainResult<(Self, WalletCapabilityHints)> {
         let content = fs::read_to_string(path)?;
         let hints = WalletCapabilityHints::detect(&content);
-        let config: Self = parse_strict_toml(&content, "wallet configuration parse error")?;
+        let config: Self = parse_toml(&content, "wallet configuration parse error", validation)?;
         config.validate().map_err(runtime_config_error)?;
         Ok((config, hints))
     }

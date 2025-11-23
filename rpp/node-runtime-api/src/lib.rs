@@ -136,6 +136,14 @@ pub struct RuntimeOptions {
     /// Launch the wallet alongside an embedded node using the hybrid runtime profile.
     #[arg(long = "with-node", action = ArgAction::SetTrue)]
     pub with_node: bool,
+
+    /// Reject unknown configuration keys during startup
+    #[arg(
+        long = "strict-config-validation",
+        env = "RPP_STRICT_CONFIG_VALIDATION",
+        action = ArgAction::SetTrue
+    )]
+    pub strict_config_validation: bool,
 }
 
 impl RuntimeOptions {
@@ -158,6 +166,7 @@ impl RuntimeOptions {
             storage_ring_size,
             pruning,
             with_node: _,
+            strict_config_validation,
         } = self;
 
         let hybrid_config = hybrid_config.or(config.clone());
@@ -197,6 +206,7 @@ impl RuntimeOptions {
             write_config,
             storage_ring_size,
             pruning: pruning.into_overrides(),
+            strict_config_validation,
         }
     }
 }
@@ -218,6 +228,7 @@ pub struct BootstrapOptions {
     pub write_config: bool,
     pub storage_ring_size: Option<u32>,
     pub pruning: PruningOverrides,
+    pub strict_config_validation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

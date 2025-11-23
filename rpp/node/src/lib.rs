@@ -56,8 +56,9 @@ use tracing_subscriber::Layer;
 
 use rpp_chain::api::{ApiContext, PruningServiceApi};
 use rpp_chain::config::{
-    NodeConfig, ReleaseChannel, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds,
-    WalletCapabilityHints, WalletConfig, WalletConfigExt, WormExportTargetConfig,
+    ConfigValidation, NodeConfig, ReleaseChannel, SecretsBackendConfig, TelemetryConfig,
+    VrfTelemetryThresholds, WalletCapabilityHints, WalletConfig, WalletConfigExt,
+    WormExportTargetConfig,
 };
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, VrfKeyIdentifier,
@@ -1289,10 +1290,19 @@ async fn wait_for_signal_shutdown() -> ShutdownOutcome {
     ShutdownOutcome::Clean
 }
 
+fn config_validation_mode(options: &BootstrapOptions) -> ConfigValidation {
+    if options.strict_config_validation {
+        ConfigValidation::Strict
+    } else {
+        ConfigValidation::Relaxed
+    }
+}
+
 fn load_node_configuration(
     mode: RuntimeMode,
     options: &BootstrapOptions,
 ) -> Result<Option<ConfigBundle<NodeConfig>>> {
+    let validation = config_validation_mode(options);
     if !mode.includes_node() {
         return Ok(None);
     }
@@ -1312,7 +1322,7 @@ fn load_node_configuration(
     }
 
     let display_path = resolved.path.display().to_string();
-    let config = NodeConfig::load(&resolved.path)
+    let config = NodeConfig::load_with_validation(&resolved.path, validation)
         .with_context(|| format!("failed to load configuration from {display_path}"))?;
 
     Ok(Some(ConfigBundle {
@@ -1326,6 +1336,7 @@ fn load_wallet_configuration(
     mode: RuntimeMode,
     options: &BootstrapOptions,
 ) -> Result<Option<ConfigBundle<WalletConfig>>> {
+    let validation = config_validation_mode(options);
     if !mode.includes_wallet() {
         return Ok(None);
     }
@@ -1345,9 +1356,10 @@ fn load_wallet_configuration(
     }
 
     let display_path = resolved.path.display().to_string();
-    let (config, capabilities) = WalletConfig::load_with_capabilities(&resolved.path)
-        .map_err(|err| anyhow!(err))
-        .with_context(|| format!("failed to load configuration from {display_path}"))?;
+    let (config, capabilities) =
+        WalletConfig::load_with_capabilities_with_validation(&resolved.path, validation)
+            .map_err(|err| anyhow!(err))
+            .with_context(|| format!("failed to load configuration from {display_path}"))?;
 
     Ok(Some(ConfigBundle {
         value: config,
@@ -2494,6 +2506,7 @@ mod tests {
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{self, SimpleSpanProcessor};
     use std::collections::HashMap;
+    use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2612,6 +2625,7 @@ mod tests {
             write_config: false,
             storage_ring_size: None,
             pruning: PruningOverrides::default(),
+            strict_config_validation: false,
         }
     }
 
@@ -2818,6 +2832,98 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn relaxed_config_validation_loads_node_configs_with_unknown_keys() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let temp = tempdir().expect("tempdir");
+        let node_path = temp.path().join("node.toml");
+
+        let mut config = NodeConfig::default();
+        let mut value = toml::Value::try_from(&config).expect("serialize default node config");
+        value
+            .as_table_mut()
+            .expect("root table")
+            .insert("unknown_root".to_string(), toml::Value::Integer(1));
+
+        let encoded = toml::to_string(&value).expect("encode with unknown key");
+        fs::write(&node_path, encoded).expect("write node config");
+
+        let mut options = base_bootstrap_options();
+        options.node_config = Some(node_path);
+
+        let bundle = load_node_configuration(RuntimeMode::Node, &options)
+            .expect("relaxed mode should not error")
+            .expect("config bundle");
+
+        assert_eq!(bundle.value.data_dir, config.data_dir);
+    }
+
+    #[test]
+    fn strict_config_validation_rejects_unknown_node_keys() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let temp = tempdir().expect("tempdir");
+        let node_path = temp.path().join("node.toml");
+
+        let mut config = NodeConfig::default();
+        let mut value = toml::Value::try_from(&config).expect("serialize default node config");
+        value
+            .as_table_mut()
+            .expect("root table")
+            .insert("unknown_root".to_string(), toml::Value::Integer(1));
+
+        let encoded = toml::to_string(&value).expect("encode with unknown key");
+        fs::write(&node_path, encoded).expect("write node config");
+
+        let mut options = base_bootstrap_options();
+        options.node_config = Some(node_path);
+        options.strict_config_validation = true;
+
+        let error = load_node_configuration(RuntimeMode::Node, &options)
+            .expect_err("strict mode should reject unknown keys");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("unknown configuration key(s):"),
+            "missing strict validation error: {message}"
+        );
+    }
+
+    #[test]
+    fn strict_config_validation_applies_to_wallet_configs() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let temp = tempdir().expect("tempdir");
+        let wallet_path = temp.path().join("wallet.toml");
+
+        let mut config = WalletConfig::for_mode(RuntimeMode::Wallet);
+        let mut value = toml::Value::try_from(&config).expect("serialize default wallet config");
+        value
+            .as_table_mut()
+            .expect("root table")
+            .insert("extra_field".to_string(), toml::Value::Boolean(true));
+
+        let encoded = toml::to_string(&value).expect("encode with extra field");
+        fs::write(&wallet_path, encoded).expect("write wallet config");
+
+        let mut options = base_bootstrap_options();
+        options.wallet_config = Some(wallet_path);
+        options.strict_config_validation = true;
+
+        let error = load_wallet_configuration(RuntimeMode::Wallet, &options)
+            .expect_err("strict mode should reject wallet typos");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("unknown configuration key(s):"),
+            "missing strict validation error: {message}"
+        );
     }
 
     #[test]
