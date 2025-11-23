@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::faults::{ByzantineFault, ChurnFault, PartitionFault};
 use crate::traffic::{
-    OnOffBursty, PoissonTraffic, PublisherSelectorBuilder, TrafficModelState, TrafficPhaseConfig,
-    TrafficProgram,
+    OnOffBursty, PayloadGenerator, PoissonTraffic, PublisherSelectorBuilder, TrafficModelState,
+    TrafficPhaseConfig, TrafficProgram,
 };
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,6 +72,8 @@ pub struct TxTraffic {
     pub phases: Vec<TrafficPhase>,
     #[serde(default)]
     pub publisher_bias: Option<PublisherBiasConfig>,
+    #[serde(default)]
+    pub payload: PayloadConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -101,6 +103,23 @@ pub enum TrafficModelConfig {
 pub enum PublisherBiasConfig {
     Uniform,
     Zipf { s: f64 },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PayloadConfig {
+    #[serde(default = "default_min_payload_bytes")]
+    pub min_bytes: usize,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+}
+
+impl Default for PayloadConfig {
+    fn default() -> Self {
+        Self {
+            min_bytes: default_min_payload_bytes(),
+            max_bytes: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -229,6 +248,7 @@ impl Scenario {
         if self.traffic.tx.phases.is_empty() {
             return Err(anyhow!("at least one traffic phase must be specified"));
         }
+        self.traffic.tx.payload.validate()?;
         for (idx, phase) in self.traffic.tx.phases.iter().enumerate() {
             if phase.duration_ms == 0 {
                 return Err(anyhow!("traffic phase {idx} duration must be positive"));
@@ -439,6 +459,10 @@ impl Scenario {
     pub fn traffic_program(&self) -> Result<TrafficProgram> {
         self.traffic.tx.build_program(self.sim.seed)
     }
+
+    pub fn payload_generator(&self) -> PayloadGenerator {
+        self.traffic.tx.payload.generator(self.sim.seed)
+    }
 }
 
 impl TxTraffic {
@@ -462,6 +486,29 @@ impl TxTraffic {
         };
         Ok(TrafficProgram::new(phases, publisher))
     }
+}
+
+impl PayloadConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.min_bytes == 0 {
+            bail!("payload min_bytes must be positive");
+        }
+        if let Some(max_bytes) = self.max_bytes {
+            if max_bytes < self.min_bytes {
+                bail!("payload max_bytes must be greater than or equal to min_bytes");
+            }
+        }
+        Ok(())
+    }
+
+    fn generator(&self, seed: u64) -> PayloadGenerator {
+        let max_bytes = self.max_bytes.unwrap_or(self.min_bytes);
+        PayloadGenerator::new(self.min_bytes, max_bytes, seed ^ 0x5041_594C_4F41_44)
+    }
+}
+
+fn default_min_payload_bytes() -> usize {
+    24
 }
 
 impl TrafficModelConfig {

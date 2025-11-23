@@ -42,6 +42,14 @@ summaries. It also enforces thresholds that align with the nightly workflow.
   resume-latency samples so the report captures backpressure mitigation and
   recovery once the partition heals.【F:scripts/analyze_simnet.py†L186-L202】
 
+### Payload sizing
+
+Flood drills now derive their gossip payload sizes from the `[traffic.tx.payload]`
+section of the TOML profiles. The CI-focused
+`partitioned_flood` plan sticks to 256–1024 byte payloads, while the nightly
+`compound_partitioned_backpressure` plan uses 16–64 KiB payloads to stress large
+messages through the gossip stack.【F:scenarios/partitioned_flood.toml†L23-L42】【F:scenarios/compound_partitioned_backpressure.toml†L23-L46】
+
 ### Resource budgets and tuning knobs
 
 * **CPU/RSS guardrails:** the simnet summaries now contain a `resource_usage`

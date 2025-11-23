@@ -24,6 +24,10 @@ A-B = { delay_ms = 160, jitter_ms = 40, loss = 0.05 }
 [traffic.tx]
 publisher_bias = { type = "zipf", s = 1.08 }
 
+[traffic.tx.payload]
+min_bytes = 16384
+max_bytes = 65536
+
 [[traffic.tx.phases]]
 name = "warmup"
 duration_ms = 8000
