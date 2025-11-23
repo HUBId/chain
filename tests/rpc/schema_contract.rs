@@ -2,15 +2,21 @@ use super::{
     ErrorResponse, PipelineWaitRequest, PipelineWaitResponse, RuntimeModeResponse, SignTxRequest,
     SignTxResponse, ValidatorPeerResponse, ValidatorProofQueueResponse,
 };
+use chrono::{NaiveDate, Utc};
 use jsonschema::{Draft, JSONSchema};
+use semver::Version;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn interfaces_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/interfaces")
+}
+
+fn deprecation_allowlist_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/rpc/deprecated_fields.toml")
 }
 
 fn load_json(path: &Path) -> Value {
@@ -60,6 +66,53 @@ fn load_schema(segment: &str) -> Value {
 
 fn load_example(segment: &str) -> Value {
     load_json(&interfaces_dir().join(segment))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DeprecationAllowlist {
+    #[serde(default)]
+    deprecated_fields: Vec<DeprecatedField>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeprecatedField {
+    schema: String,
+    field: String,
+    removal_version: String,
+    expires_on: String,
+    rationale: Option<String>,
+}
+
+fn load_deprecation_allowlist() -> DeprecationAllowlist {
+    let path = deprecation_allowlist_path();
+    let contents = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("unable to read {}: {error}", path.display()));
+
+    toml::from_str(&contents)
+        .unwrap_or_else(|error| panic!("invalid TOML in {}: {error}", path.display()))
+}
+
+fn schema_has_field(schema: &Value, dotted_path: &str) -> bool {
+    let mut cursor = schema;
+
+    for segment in dotted_path.split('.') {
+        let Value::Object(map) = cursor else {
+            return false;
+        };
+
+        let Some(Value::Object(properties)) = map.get("properties").and_then(Value::as_object) else {
+            return false;
+        };
+
+        match properties.get(segment) {
+            Some(next) => {
+                cursor = next;
+            }
+            None => return false,
+        }
+    }
+
+    true
 }
 
 fn assert_roundtrip<T>(schema_file: &str, example_file: &str)
@@ -140,4 +193,40 @@ fn validator_proof_queue_response_schema_roundtrip() {
         "rpc/validator_proof_queue_response.jsonschema",
         "rpc/examples/validator_proof_queue_response.json",
     );
+}
+
+#[test]
+fn deprecated_fields_require_version_bump_or_expiry() {
+    let allowlist = load_deprecation_allowlist();
+    let current_version = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version");
+    let today = Utc::now().date_naive();
+
+    for entry in allowlist.deprecated_fields {
+        let schema = load_schema(&entry.schema);
+        let expires_on = NaiveDate::parse_from_str(&entry.expires_on, "%Y-%m-%d")
+            .unwrap_or_else(|error| panic!("invalid expiry date for {}: {error}", entry.field));
+
+        if today > expires_on {
+            panic!(
+                "Deprecation for `{field}` in `{schema}` expired on {expiry}. Remove the allowlist entry or extend the window with a new expiry date.",
+                field = entry.field,
+                schema = entry.schema,
+                expiry = expires_on,
+            );
+        }
+
+        let removal_version = Version::parse(&entry.removal_version)
+            .unwrap_or_else(|error| panic!("invalid removal version for {}: {error}", entry.field));
+        let field_present = schema_has_field(&schema, &entry.field);
+
+        if !field_present && current_version < removal_version {
+            panic!(
+                "Deprecated RPC field `{field}` was removed from `{schema}` before the removal gate. Bump the workspace version to {removal} or wait until the deprecation expires on {expiry}.",
+                field = entry.field,
+                schema = entry.schema,
+                removal = removal_version,
+                expiry = entry.expires_on,
+            );
+        }
+    }
 }

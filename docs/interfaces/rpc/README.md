@@ -28,6 +28,26 @@ of two minor releases) the endpoint is either removed or the field becomes a no-
 op entry, depending on the migration plan. Breaking removals only ship alongside
 minor version bumps within the same major series.
 
+### Enforced deprecation windows
+
+The RPC contract tests enforce the deprecation window so that removals never land
+accidentally. When deprecating a field, add an entry to
+`tests/rpc/deprecated_fields.toml` with the schema name, dotted property path,
+the first workspace version that permits removal, and the expiry date of the
+grace period. CI runs `deprecated_fields_require_version_bump_or_expiry` to
+verify three rules:
+
+1. Deprecated fields must stay in the JSON Schema until either the configured
+   removal version ships or the expiry date is reached.
+2. Allowlist entries with past-due expiry dates fail the build, prompting
+   contributors to remove the field (and the allowlist entry) or extend the
+   window with a new date.
+3. Schema removals before the allowed version cause a failure unless the
+   deprecation window has expired.
+
+Document the new allowlist entry in release notes so client teams can plan the
+migration and keep the `rationale` string up to date for reviewers.
+
 ## Semantic Version Mapping
 
 * **Patch release (`MAJOR.MINOR.PATCH`)** – bug fixes only. Payload shapes and
