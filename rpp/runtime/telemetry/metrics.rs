@@ -772,6 +772,9 @@ pub struct ProofMetrics {
     verification_public_inputs_bytes: Histogram<u64>,
     verification_payload_bytes: Histogram<u64>,
     verification_stage_checks: Counter<u64>,
+    cache_hits: Counter<u64>,
+    cache_misses: Counter<u64>,
+    cache_evictions: Counter<u64>,
 }
 
 impl ProofMetrics {
@@ -833,6 +836,21 @@ impl ProofMetrics {
             verification_stage_checks: meter
                 .u64_counter("rpp_stark_stage_checks_total")
                 .with_description("Verification stage outcomes observed for the RPP-STARK backend")
+                .with_unit("1")
+                .build(),
+            cache_hits: meter
+                .u64_counter("rpp.runtime.proof.cache.hits")
+                .with_description("Gossip proof cache hits observed by the runtime")
+                .with_unit("1")
+                .build(),
+            cache_misses: meter
+                .u64_counter("rpp.runtime.proof.cache.misses")
+                .with_description("Gossip proof cache misses observed by the runtime")
+                .with_unit("1")
+                .build(),
+            cache_evictions: meter
+                .u64_counter("rpp.runtime.proof.cache.evictions")
+                .with_description("Gossip proof cache evictions observed by the runtime")
                 .with_unit("1")
                 .build(),
         }
@@ -925,6 +943,25 @@ impl ProofMetrics {
     ) {
         let attributes = verification_attributes(backend, kind);
         self.verification_payload_bytes.record(bytes, &attributes);
+    }
+
+    pub fn record_cache_events(
+        &self,
+        cache: &str,
+        delta_hits: u64,
+        delta_misses: u64,
+        delta_evictions: u64,
+    ) {
+        let attributes = [KeyValue::new("cache", cache.to_string())];
+        if delta_hits > 0 {
+            self.cache_hits.add(delta_hits, &attributes);
+        }
+        if delta_misses > 0 {
+            self.cache_misses.add(delta_misses, &attributes);
+        }
+        if delta_evictions > 0 {
+            self.cache_evictions.add(delta_evictions, &attributes);
+        }
     }
 
     pub fn observe_verification_stage(

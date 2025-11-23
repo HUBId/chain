@@ -182,6 +182,12 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p rpp-chain --test zk_alert_probe
+      - name: Stress proof cache eviction policy
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-p2p --test proof_cache_metrics -- \
+            eviction_policy_is_fifo_and_hits_survive_eviction \
+            eviction_hit_rate_stays_stable_under_pressure
 
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts

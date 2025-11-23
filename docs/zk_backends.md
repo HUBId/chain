@@ -90,6 +90,11 @@
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
 
+### Proof-Cache-Sizing & Telemetrie
+
+- Die Gossip-Proof-Persistenz ist auf 1 024 Einträge pro Backend limitiert (`PersistentProofStorage::with_capacity`), das älteste Element wird bei Überlauf im FIFO-Modus entfernt.【F:rpp/p2p/src/pipeline.rs†L831-L846】 Der Pfad bleibt über `config.proof_cache_dir` konfigurierbar, sodass Betreiber den Cache auf ein separates Volume legen können, falls größere Retentionswerte gebaut werden.
+- Die Runtime exportiert `rpp.runtime.proof.cache.{hits,misses,evictions}` mit Label `cache=gossip-proof-cache`, womit Dashboards (Cache-Efficiency) und Alerts (`ProofCacheThrash` in `ops/alerts/zk/rpp_stark.yaml`) einen Thrash-Alarm auslösen, sobald die Hit-Rate unter 50 % sinkt und Evictions anziehen.【F:telemetry/schema.yaml†L21-L32】【F:telemetry/prometheus/cache-rules.yaml†L16-L37】【F:ops/alerts/zk/rpp_stark.yaml†L46-L71】
+
 ### Verifier-Stage-Flags & Gegenmaßnahmen
 
 | Stage-Flag | Bedeutung | Typische Fehlersignale | Priorisierte Gegenmaßnahmen |

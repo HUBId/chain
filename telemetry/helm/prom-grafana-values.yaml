@@ -31,6 +31,19 @@ prometheus:
               labels:
                 component: storage
 
+            - record: proof_cache:hit_ratio:5m
+              expr: |
+                sum by (cache) (rate(rpp_runtime_proof_cache_hits[5m]))
+                  /
+                sum by (cache) (rate(rpp_runtime_proof_cache_hits[5m]) + rate(rpp_runtime_proof_cache_misses[5m]))
+              labels:
+                component: proofs
+
+            - record: proof_cache:evictions_per_minute:5m
+              expr: sum by (cache) (rate(rpp_runtime_proof_cache_evictions[5m])) * 60
+              labels:
+                component: proofs
+
             - alert: CacheMissSpike
               expr: cache:hit_ratio:5m < 0.7
               for: 10m
@@ -54,6 +67,19 @@ prometheus:
                 description: |
                   Cache evictions have exceeded 50 per minute for 10 minutes.
                   This may indicate memory pressure or poorly tuned retention.
+
+            - alert: ProofCacheThrash
+              expr: proof_cache:hit_ratio:5m < 0.5 and proof_cache:evictions_per_minute:5m > 30
+              for: 15m
+              labels:
+                severity: warning
+                component: proofs
+              annotations:
+                summary: "Gossip proof cache hit ratio degraded with elevated evictions"
+                description: |
+                  Proof cache hit ratio stayed below 50% for 15 minutes while evictions
+                  exceeded 30 per minute. Investigate gossip spam, cache sizing, or
+                  backend mismatches before hit rates collapse further.
 
   serviceAccount:
     create: true
@@ -169,6 +195,60 @@ grafana:
               "targets": [
                 {
                   "expr": "cache:evictions_per_minute:5m",
+                  "legendFormat": "{{cache}}",
+                  "refId": "A"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "evictions/min"
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "single" }
+              }
+            },
+            {
+              "type": "timeseries",
+              "title": "Proof Cache Hit Ratio (5m)",
+              "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+              "targets": [
+                {
+                  "expr": "proof_cache:hit_ratio:5m",
+                  "legendFormat": "{{cache}}",
+                  "refId": "A"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percentunit",
+                  "min": 0,
+                  "max": 1,
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      { "color": "red", "value": null },
+                      { "color": "semi-dark-orange", "value": 0.5 },
+                      { "color": "green", "value": 0.85 }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": { "displayMode": "list", "placement": "bottom" },
+                "tooltip": { "mode": "single" }
+              }
+            },
+            {
+              "type": "timeseries",
+              "title": "Proof Cache Evictions per Minute (5m)",
+              "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+              "targets": [
+                {
+                  "expr": "proof_cache:evictions_per_minute:5m",
                   "legendFormat": "{{cache}}",
                   "refId": "A"
                 }

@@ -74,3 +74,17 @@ groups:
             for ten minutes. Inspect per-stage latency panels and recent deployments
             for regressions before resuming proof validation.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkProofCacheThrash
+        expr: proof_cache:hit_ratio:5m{cache="gossip-proof-cache"} < 0.5 and proof_cache:evictions_per_minute:5m{cache="gossip-proof-cache"} > 30
+        for: 15m
+        labels:
+          severity: warning
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: Proof cache hit ratio degraded for gossip proofs
+          description: >-
+            Gossip proof cache hits stayed below 50% for 15 minutes while evictions
+            exceeded 30 per minute. Review backend fingerprints, cache retention, or
+            gossip spam before verifier load spikes further.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response

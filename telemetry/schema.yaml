@@ -49,6 +49,15 @@ metrics:
   - name: rpp.runtime.proof.generation.size
     labels:
       - backend
+  - name: rpp.runtime.proof.cache.hits
+    labels:
+      - cache
+  - name: rpp.runtime.proof.cache.misses
+    labels:
+      - cache
+  - name: rpp.runtime.proof.cache.evictions
+    labels:
+      - cache
   - name: rpp.runtime.reputation.penalties
     labels:
       - label
