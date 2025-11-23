@@ -44,12 +44,13 @@ pub struct NodeGossipProcessor {
 impl NodeGossipProcessor {
     pub fn new(node: NodeHandle, proof_storage_path: impl Into<PathBuf>) -> Self {
         let registry = ProofVerifierRegistry::default();
+        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
         let cache_metrics = registry.cache_metrics();
         let backend = Arc::new(RuntimeTransactionProofVerifier::new(registry));
         let validator = Arc::new(RuntimeProofValidator::new(backend));
         let storage_path = proof_storage_path.into();
         let storage = Arc::new(
-            PersistentProofStorage::open(storage_path)
+            PersistentProofStorage::open_with_namespace(storage_path, cache_namespace)
                 .expect("persistent proof pipeline must initialise"),
         );
         let recovered = storage.load().unwrap_or_else(|err| {

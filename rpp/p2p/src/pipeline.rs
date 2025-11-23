@@ -18,7 +18,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::watch;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
@@ -342,6 +342,16 @@ struct StoredProofRecord {
     received_at: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredProofCache {
+    Records(Vec<StoredProofRecord>),
+    Namespaced {
+        backend: String,
+        records: Vec<StoredProofRecord>,
+    },
+}
+
 impl From<&ProofRecord> for StoredProofRecord {
     fn from(record: &ProofRecord) -> Self {
         let received_at = record
@@ -393,24 +403,82 @@ pub struct PersistentProofStorage {
     path: PathBuf,
     retain: usize,
     cache: parking_lot::Mutex<Vec<ProofRecord>>,
+    namespace: Option<String>,
 }
 
 impl PersistentProofStorage {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, PipelineError> {
-        Self::with_capacity(path, 1024)
+        Self::with_capacity_and_namespace(path, 1024, None)
+    }
+
+    pub fn open_with_namespace(
+        path: impl Into<PathBuf>,
+        namespace: impl Into<String>,
+    ) -> Result<Self, PipelineError> {
+        Self::with_capacity_and_namespace(path, 1024, Some(namespace.into()))
     }
 
     pub fn with_capacity(path: impl Into<PathBuf>, retain: usize) -> Result<Self, PipelineError> {
+        Self::with_capacity_and_namespace(path, retain, None)
+    }
+
+    pub fn with_capacity_and_namespace(
+        path: impl Into<PathBuf>,
+        retain: usize,
+        namespace: Option<String>,
+    ) -> Result<Self, PipelineError> {
         let path = path.into();
         let cache = if path.exists() {
+            let mut invalidated = false;
             let raw = fs::read_to_string(&path)
                 .map_err(|err| PipelineError::Persistence(err.to_string()))?;
-            let stored: Vec<StoredProofRecord> = serde_json::from_str(&raw)
-                .map_err(|err: serde_json::Error| PipelineError::Persistence(err.to_string()))?;
-            stored
+            let stored: StoredProofCache = serde_json::from_str(&raw)
+                .map_err(|err| PipelineError::Persistence(format!("decode proof cache: {err}")))?;
+            let (backend, records) = match stored {
+                StoredProofCache::Records(records) => (None, records),
+                StoredProofCache::Namespaced { backend, records } => (Some(backend), records),
+            };
+            let namespace = namespace.as_ref().map(String::as_str);
+            let records = match (namespace, backend) {
+                (Some(expected), Some(previous)) if expected != previous => {
+                    info!(
+                        target = "p2p.proof.cache",
+                        path = %path.display(),
+                        expected,
+                        previous,
+                        "invalidating proof cache after backend switch",
+                    );
+                    invalidated = true;
+                    Vec::new()
+                }
+                _ => records,
+            };
+            let parsed = records
                 .into_iter()
                 .map(ProofRecord::try_from)
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            if parsed.is_empty() {
+                let payload = namespace
+                    .as_ref()
+                    .map(|backend| StoredProofCache::Namespaced {
+                        backend: backend.clone(),
+                        records: Vec::new(),
+                    });
+                let encoded = payload
+                    .as_ref()
+                    .and_then(|cache| serde_json::to_string_pretty(cache).ok())
+                    .unwrap_or_else(|| "[]".to_string());
+                if invalidated {
+                    if let Err(err) = fs::write(&path, encoded) {
+                        debug!(
+                            ?err,
+                            path = %path.display(),
+                            "failed to reset proof cache file"
+                        );
+                    }
+                }
+            }
+            parsed
         } else {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)
@@ -422,12 +490,21 @@ impl PersistentProofStorage {
             path,
             retain: retain.max(1),
             cache: parking_lot::Mutex::new(cache),
+            namespace,
         })
     }
 
     fn persist_inner(&self, records: &[ProofRecord]) -> Result<(), PipelineError> {
-        let stored: Vec<StoredProofRecord> = records.iter().map(StoredProofRecord::from).collect();
-        let encoded = serde_json::to_string_pretty(&stored)
+        let stored_records: Vec<StoredProofRecord> =
+            records.iter().map(StoredProofRecord::from).collect();
+        let payload = match &self.namespace {
+            Some(backend) => StoredProofCache::Namespaced {
+                backend: backend.clone(),
+                records: stored_records,
+            },
+            None => StoredProofCache::Records(stored_records),
+        };
+        let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|err: serde_json::Error| PipelineError::Persistence(err.to_string()))?;
         fs::write(&self.path, encoded).map_err(|err| PipelineError::Persistence(err.to_string()))
     }

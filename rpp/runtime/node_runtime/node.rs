@@ -608,7 +608,11 @@ impl GossipPipelines {
         config: &NodeRuntimeConfig,
         commands: mpsc::Sender<NodeCommand>,
     ) -> Result<Self, PipelineError> {
-        let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
+        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+        let storage = Arc::new(PersistentProofStorage::open_with_namespace(
+            &config.proof_storage_path,
+            cache_namespace,
+        )?);
         let registry = ProofVerifierRegistry::default();
         let proof_backend = Arc::new(RuntimeTransactionProofVerifier::new(registry.clone()));
         let validator = Arc::new(RuntimeProofValidator::new(proof_backend));

@@ -623,6 +623,17 @@ impl ProofVerifierRegistry {
         Self::default()
     }
 
+    /// Stable fingerprint of the compiled verifier backends for cache namespacing.
+    pub fn backend_fingerprint() -> String {
+        let mut systems = registry_backends();
+        systems.sort();
+        systems
+            .into_iter()
+            .map(proof_system_label)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     fn system_verifier(&self, system: ProofSystemKind) -> ChainResult<&dyn ProofVerifier> {
         match system {
             ProofSystemKind::Stwo => self.stwo.verifier(),
