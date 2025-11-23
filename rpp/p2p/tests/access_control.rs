@@ -13,7 +13,7 @@ use rpp_p2p::{
     AdmissionControl, AdmissionError, AllowlistedPeer, GossipTopic, HandshakePayload,
     IdentityMetadata, IdentityVerifier, Network, NetworkError, NetworkEvent, NodeIdentity,
     Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
-    TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
+    SnapshotsBehaviourConfig, TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 use tempfile::tempdir;
@@ -94,6 +94,7 @@ fn init_network(
         replay,
         ReputationHeuristics::default(),
         None,
+        SnapshotsBehaviourConfig::default(),
     )
     .expect("network")
 }

@@ -1037,6 +1037,8 @@ pub struct P2pConfig {
     pub blocklist: Vec<String>,
     #[serde(default)]
     pub reputation_heuristics: ReputationHeuristicsConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_max_inbound_sessions: Option<usize>,
 }
 
 impl Default for P2pConfig {
@@ -1053,6 +1055,7 @@ impl Default for P2pConfig {
             allowlist: Vec::new(),
             blocklist: Vec::new(),
             reputation_heuristics: ReputationHeuristicsConfig::default(),
+            snapshot_max_inbound_sessions: None,
         }
     }
 }
@@ -1075,11 +1078,22 @@ impl P2pConfig {
                 "p2p.replay_window_size must be greater than 0".into(),
             ));
         }
+        if let Some(limit) = self.snapshot_max_inbound_sessions {
+            if limit == 0 {
+                return Err(ChainError::Config(
+                    "p2p.snapshot_max_inbound_sessions must be greater than 0".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
     pub fn reputation_heuristics(&self) -> ReputationHeuristics {
         ReputationHeuristics::from(&self.reputation_heuristics)
+    }
+
+    pub fn snapshot_max_inbound_sessions(&self) -> Option<usize> {
+        self.snapshot_max_inbound_sessions
     }
 }
 

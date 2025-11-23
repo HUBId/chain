@@ -9,7 +9,8 @@ use rpp_p2p::{
     AllowlistedPeer, CommandWormExporter, GossipStateError, GossipStateStore, HandshakePayload,
     IdentityError, Network, NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError,
     PolicySigner, PolicyTrustStore, ReputationHeuristics, S3WormExporter, SnapshotProviderHandle,
-    TierLevel, WormExportSettings, WormExporter, WormRetention, WormRetentionMode,
+    SnapshotsBehaviourConfig, TierLevel, WormExportSettings, WormExporter, WormRetention,
+    WormRetentionMode,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -227,6 +228,10 @@ impl NetworkResources {
             )
         };
         let handshake_snapshot = handshake.clone();
+        let snapshots_behaviour_config = SnapshotsBehaviourConfig {
+            max_concurrent_requests: None,
+            max_inbound_sessions: p2p_config.snapshot_max_inbound_sessions(),
+        };
         let mut network = Network::new(
             identity.clone(),
             peerstore.clone(),
@@ -236,6 +241,7 @@ impl NetworkResources {
             config.replay_window_size(),
             config.reputation_heuristics(),
             snapshot_provider,
+            snapshots_behaviour_config,
         )?;
         if let Some(profile) = profile {
             network.update_identity(

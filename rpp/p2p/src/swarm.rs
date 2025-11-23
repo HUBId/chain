@@ -101,7 +101,8 @@ use crate::admission::{
     ReputationOutcome,
 };
 use crate::behaviour::snapshots::{
-    NullSnapshotProvider, SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour, SnapshotsEvent,
+    NullSnapshotProvider, SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour,
+    SnapshotsBehaviourConfig, SnapshotsEvent,
 };
 use crate::gossip;
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
@@ -250,6 +251,7 @@ impl RppBehaviour {
     fn new(
         identity: &Keypair,
         snapshots_provider: SnapshotProviderHandle,
+        snapshots_config: SnapshotsBehaviourConfig,
         #[cfg(feature = "metrics")] mut metrics_registry: Option<&mut Registry>,
     ) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
@@ -263,10 +265,13 @@ impl RppBehaviour {
         let ping = ping::Behaviour::new(ping::Config::new());
         let mut gossipsub = Self::build_gossipsub(identity)?;
         #[cfg(feature = "metrics")]
-        let snapshots =
-            SnapshotsBehaviour::new(snapshots_provider, metrics_registry.as_deref_mut());
+        let snapshots = SnapshotsBehaviour::with_config(
+            snapshots_provider,
+            snapshots_config,
+            metrics_registry.as_deref_mut(),
+        );
         #[cfg(not(feature = "metrics"))]
-        let snapshots = SnapshotsBehaviour::new(snapshots_provider);
+        let snapshots = SnapshotsBehaviour::with_config(snapshots_provider, snapshots_config);
 
         #[cfg(feature = "metrics")]
         if let Some(registry) = metrics_registry {
@@ -859,6 +864,7 @@ impl Network {
         replay_window_size: usize,
         heuristics: ReputationHeuristics,
         snapshots_provider: Option<SnapshotProviderHandle>,
+        snapshots_config: SnapshotsBehaviourConfig,
     ) -> Result<Self, NetworkError> {
         let handshake = {
             let mut payload = handshake;
@@ -890,6 +896,7 @@ impl Network {
         });
 
         let snapshots_provider_for_behaviour = snapshots_provider.clone();
+        let snapshots_config_for_behaviour = snapshots_config;
 
         let builder = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
@@ -1012,14 +1019,20 @@ impl Network {
             .map_err(|err| NetworkError::Noise(err.to_string()))?
             .with_behaviour(|keypair| {
                 let snapshots_provider = snapshots_provider_for_behaviour.clone();
+                let snapshots_config = snapshots_config_for_behaviour;
                 #[cfg(feature = "metrics")]
                 {
-                    RppBehaviour::new(keypair, snapshots_provider, Some(&mut metrics_registry))
-                        .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
+                    RppBehaviour::new(
+                        keypair,
+                        snapshots_provider,
+                        snapshots_config,
+                        Some(&mut metrics_registry),
+                    )
+                    .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
                 }
                 #[cfg(not(feature = "metrics"))]
                 {
-                    RppBehaviour::new(keypair, snapshots_provider)
+                    RppBehaviour::new(keypair, snapshots_provider, snapshots_config)
                         .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
                 }
             })
@@ -2305,6 +2318,7 @@ mod tests {
             1_024,
             ReputationHeuristics::default(),
             None,
+            SnapshotsBehaviourConfig::default(),
         )
         .expect("network")
     }
@@ -2334,6 +2348,7 @@ mod tests {
             1_024,
             ReputationHeuristics::default(),
             None,
+            SnapshotsBehaviourConfig::default(),
         )
         .expect("network");
 

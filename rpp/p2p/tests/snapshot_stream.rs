@@ -9,9 +9,9 @@ use rpp_p2p::{
     NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningSegment,
     NetworkPruningSnapshot, NetworkReconstructionRequest, NetworkSnapshotSummary,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex, NodeIdentity, Peerstore,
-    PeerstoreConfig, PipelineError, ReputationHeuristics, ResumeBoundKind, SnapshotChunk,
-    SnapshotItemKind, SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel,
-    VRF_HANDSHAKE_CONTEXT,
+    PeerstoreConfig, PipelineError, ReputationHeuristics, ResumeBoundKind, SnapshotBehaviourConfig,
+    SnapshotChunk, SnapshotItemKind, SnapshotResumeState, SnapshotSessionId, SnapshotStore,
+    TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 use tempfile::{tempdir, TempDir};
@@ -49,6 +49,7 @@ fn init_network(
         1_024,
         ReputationHeuristics::default(),
         provider.map(|p| p as Arc<_>),
+        SnapshotsBehaviourConfig::default(),
     )
     .expect("network")
 }

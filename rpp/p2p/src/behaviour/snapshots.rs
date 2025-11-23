@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -224,6 +224,22 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         Ok(())
     }
 
+    fn start_session(
+        &self,
+        _session_id: SnapshotSessionId,
+        _peer: &PeerId,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn finish_session(&self, _session_id: SnapshotSessionId) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn active_sessions(&self) -> Option<usize> {
+        None
+    }
+
     fn fetch_plan(
         &self,
         session_id: SnapshotSessionId,
@@ -281,6 +297,14 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
         peer: &PeerId,
     ) -> Result<(), Self::Error> {
         (**self).open_session(session_id, peer)
+    }
+
+    fn start_session(
+        &self,
+        session_id: SnapshotSessionId,
+        peer: &PeerId,
+    ) -> Result<(), Self::Error> {
+        (**self).start_session(session_id, peer)
     }
 
     fn fetch_plan(
@@ -346,6 +370,14 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
 
     fn reset_breaker(&self) -> Result<(), Self::Error> {
         (**self).reset_breaker()
+    }
+
+    fn finish_session(&self, session_id: SnapshotSessionId) -> Result<(), Self::Error> {
+        (**self).finish_session(session_id)
+    }
+
+    fn active_sessions(&self) -> Option<usize> {
+        (**self).active_sessions()
     }
 }
 
@@ -1406,6 +1438,7 @@ pub struct SnapshotsBehaviour<P: SnapshotProvider> {
     pending_events: VecDeque<SnapshotsEvent>,
     requests: HashMap<RequestResponseId, (SnapshotSessionId, SnapshotItemKind)>,
     sessions: HashMap<SnapshotSessionId, SessionState>,
+    provider_sessions: HashSet<SnapshotSessionId>,
     config: SnapshotsBehaviourConfig,
     request_metrics: SnapshotRequestMetrics,
     #[cfg(feature = "metrics")]
@@ -1428,6 +1461,8 @@ pub struct SnapshotsBehaviourConfig {
     /// When unset, the behaviour matches the legacy single-request-in-flight
     /// semantics.
     pub max_concurrent_requests: Option<usize>,
+    /// Maximum number of inbound snapshot sessions that may be served concurrently.
+    pub max_inbound_sessions: Option<usize>,
 }
 
 #[cfg(feature = "request-response")]
@@ -1456,6 +1491,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            provider_sessions: HashSet::new(),
             config,
             request_metrics,
             metrics,
@@ -1478,6 +1514,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             pending_events: VecDeque::new(),
             requests: HashMap::new(),
             sessions: HashMap::new(),
+            provider_sessions: HashSet::new(),
             config,
             request_metrics: SnapshotRequestMetrics::default(),
         }
@@ -1688,6 +1725,41 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     fn finish_outbound_request(&mut self, session_id: SnapshotSessionId, kind: SnapshotItemKind) {
         if let Some(state) = self.sessions.get_mut(&session_id) {
             state.finish_outbound(kind);
+        }
+    }
+
+    fn active_provider_sessions(&self) -> usize {
+        self.provider
+            .active_sessions()
+            .unwrap_or(self.provider_sessions.len())
+    }
+
+    fn start_provider_session(
+        &mut self,
+        session_id: SnapshotSessionId,
+        peer: &PeerId,
+    ) -> Result<(), String> {
+        if self.provider_sessions.contains(&session_id) {
+            return Ok(());
+        }
+
+        self.provider
+            .start_session(session_id, peer)
+            .map_err(|err| err.to_string())?;
+        self.provider_sessions.insert(session_id);
+        Ok(())
+    }
+
+    fn finish_provider_session(&mut self, session_id: SnapshotSessionId) {
+        if self.provider_sessions.remove(&session_id) {
+            if let Err(err) = self.provider.finish_session(session_id) {
+                debug!(
+                    target: "telemetry.snapshots",
+                    session = %session_id,
+                    error = %err,
+                    "snapshot_provider_finish_failed"
+                );
+            }
         }
     }
 
@@ -2151,6 +2223,31 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             self.record_breaker_metrics();
             return;
         }
+        let is_new_session = !self.provider_sessions.contains(&session_id);
+        if is_new_session {
+            if let Some(limit) = self.config.max_inbound_sessions {
+                let active_sessions = self.active_provider_sessions();
+                if active_sessions >= limit {
+                    let message = format!(
+                        "snapshot provider saturated: {active_sessions} active sessions (limit {limit}); please retry later with backoff",
+                    );
+                    let _ = self.send_response_with_metrics(
+                        request_id,
+                        channel,
+                        SnapshotsResponse::Error {
+                            session_id,
+                            message: message.clone(),
+                        },
+                    );
+                    self.pending_events.push_back(SnapshotsEvent::Error {
+                        peer,
+                        session_id,
+                        error: SnapshotProtocolError::Provider(message),
+                    });
+                    return;
+                }
+            }
+        }
         let state = self
             .sessions
             .entry(session_id)
@@ -2166,22 +2263,41 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             state.peer = peer.clone();
         }
 
-        if let Err(err) = self.provider.open_session(session_id, &peer) {
-            let message = err.to_string();
-            let _ = self.send_response_with_metrics(
-                request_id,
-                channel,
-                SnapshotsResponse::Error {
+        if is_new_session {
+            if let Err(err) = self.provider.open_session(session_id, &peer) {
+                let message = err.to_string();
+                let _ = self.send_response_with_metrics(
+                    request_id,
+                    channel,
+                    SnapshotsResponse::Error {
+                        session_id,
+                        message: message.clone(),
+                    },
+                );
+                self.pending_events.push_back(SnapshotsEvent::Error {
+                    peer,
                     session_id,
-                    message: message.clone(),
-                },
-            );
-            self.pending_events.push_back(SnapshotsEvent::Error {
-                peer,
-                session_id,
-                error: SnapshotProtocolError::Provider(message),
-            });
-            return;
+                    error: SnapshotProtocolError::Provider(message),
+                });
+                return;
+            }
+
+            if let Err(message) = self.start_provider_session(session_id, &peer) {
+                let _ = self.send_response_with_metrics(
+                    request_id,
+                    channel,
+                    SnapshotsResponse::Error {
+                        session_id,
+                        message: message.clone(),
+                    },
+                );
+                self.pending_events.push_back(SnapshotsEvent::Error {
+                    peer,
+                    session_id,
+                    error: SnapshotProtocolError::Provider(message),
+                });
+                return;
+            }
         }
 
         match request {
@@ -2212,6 +2328,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.finish_provider_session(session_id);
                         self.record_failure("outbound", SnapshotItemKind::Plan);
                         return;
                     }
@@ -2256,6 +2373,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                                 session_id,
                                 error: SnapshotProtocolError::Provider(message),
                             });
+                            self.finish_provider_session(session_id);
                             self.record_failure("outbound", SnapshotItemKind::Plan);
                         }
                     },
@@ -2274,6 +2392,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.finish_provider_session(session_id);
                         self.record_failure("outbound", SnapshotItemKind::Plan);
                     }
                 }
@@ -2313,6 +2432,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.finish_provider_session(session_id);
                         self.record_failure("outbound", SnapshotItemKind::Chunk);
                     }
                 },
@@ -2331,6 +2451,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.finish_provider_session(session_id);
                     self.record_failure("outbound", SnapshotItemKind::Chunk);
                 }
             },
@@ -2373,6 +2494,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.finish_provider_session(session_id);
                         self.record_failure("outbound", SnapshotItemKind::LightClientUpdate);
                     }
                 },
@@ -2391,6 +2513,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.finish_provider_session(session_id);
                     self.record_failure("outbound", SnapshotItemKind::LightClientUpdate);
                 }
             },
@@ -2426,6 +2549,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         });
                         self.record_failure("outbound", SnapshotItemKind::Resume);
                         self.record_breaker_metrics();
+                        self.finish_provider_session(session_id);
                         return;
                     }
                 };
@@ -2477,6 +2601,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             error: SnapshotProtocolError::Provider(message),
                         });
                         self.record_failure("outbound", SnapshotItemKind::Resume);
+                        self.finish_provider_session(session_id);
                     }
                 }
             }
@@ -2514,6 +2639,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.finish_provider_session(session_id);
                 }
             },
             SnapshotsRequest::Error {
@@ -2525,6 +2651,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     session_id,
                     error: SnapshotProtocolError::Remote(message),
                 });
+                self.finish_provider_session(session_id);
                 if self.send_response_with_metrics(
                     request_id,
                     channel,
@@ -2716,6 +2843,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             }
         }
         if matches!(kind, SnapshotItemKind::Ack | SnapshotItemKind::Error) {
+            self.finish_provider_session(session_id);
             self.sessions.remove(&session_id);
             self.update_stream_metrics();
         }
