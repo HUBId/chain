@@ -92,6 +92,18 @@
      /path/to/previous/run/logs/rpp_golden_vector_checksums.log
    ```
 
+   The backend unit-suite job now compares the emitted ledger against the
+   checked-in baseline at `tests/baselines/rpp_golden_vector_checksums.log` and
+   fails the run on mismatches. After intentionally regenerating vendor vectors
+   (or updating the log format), refresh the baseline via:
+
+   ```bash
+   tools/update_rpp_golden_vector_baseline.sh
+   ```
+
+   Include the resulting diff in your vendor-refresh PR so reviewers can audit
+   the new digests.
+
 ## 4. Run interoperability tests
 
 Execute the workspace-level interop harness to ensure the updated vendor tree
