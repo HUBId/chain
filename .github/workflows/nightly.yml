@@ -110,6 +110,7 @@ jobs:
         with:
           name: telemetry-chaos
           path: rpp/chain/artifacts/telemetry-chaos
+          retention-days: 10
 
   storage-chaos:
     name: Firewood WAL crash chaos drill
@@ -132,6 +133,7 @@ jobs:
         with:
           name: firewood-wal-chaos
           path: target/compliance/chaos/firewood-wal
+          retention-days: 10
 
   mempool-status-probe:
     name: Mempool status probe

@@ -69,6 +69,14 @@ Each directory contains:
   firing `OtlpExporterFailure` alert for the captured metrics and records the
   resolved state once the secondary backend is healthy.【F:tests/observability_otlp_failures.rs†L136-L176】【F:tests/observability_otlp_failures.rs†L248-L276】
 
+Retention: the harness keeps the latest 10 runs and prunes older ones after
+each invocation. Override this limit with `TELEMETRY_CHAOS_MAX_RUNS=<count>` if
+you need a larger local window.【F:tests/observability_otlp_failures.rs†L805-L897】 GitHub Actions
+artifacts are stored for 10 days to mirror the on-disk retention window.【F:.github/workflows/nightly.yml†L95-L119】
+
+Manual cleanup: remove all cached runs with `rm -rf rpp/chain/artifacts/telemetry-chaos`
+or delete specific timestamped directories to reclaim space.
+
 You can inspect the latest chaos output locally with:
 
 ```bash

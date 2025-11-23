@@ -39,6 +39,8 @@ use support::{
 const OTLP_FAILURE_METRIC: &str = "telemetry_otlp_failures_total";
 const ARTIFACT_BASE: &str = "artifacts/telemetry-chaos";
 const ARTIFACT_ENV: &str = "TELEMETRY_CHAOS_ARTIFACT_DIR";
+const RETENTION_ENV: &str = "TELEMETRY_CHAOS_MAX_RUNS";
+const DEFAULT_RETENTION: usize = 10;
 
 #[test]
 fn telemetry_otlp_exporter_failures_surface_alerts() -> Result<()> {
@@ -863,6 +865,11 @@ impl TelemetryChaosArtifacts {
                 .context("write telemetry chaos alert payload")?;
         }
 
+        if let Some(base_dir) = self.directory.parent() {
+            prune_telemetry_chaos_artifacts(base_dir, telemetry_chaos_retention_limit())
+                .context("prune telemetry chaos artifacts")?;
+        }
+
         Ok(())
     }
 }
@@ -887,4 +894,43 @@ fn telemetry_chaos_artifact_dir() -> Result<std::path::PathBuf> {
         .as_secs();
 
     Ok(base.join(format!("{}", timestamp)))
+}
+
+fn telemetry_chaos_retention_limit() -> usize {
+    env::var(RETENTION_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|runs| *runs > 0)
+        .unwrap_or(DEFAULT_RETENTION)
+}
+
+fn prune_telemetry_chaos_artifacts(base_dir: &std::path::Path, keep_latest: usize) -> Result<()> {
+    if keep_latest == 0 {
+        return Ok(());
+    }
+
+    let mut runs: Vec<_> = fs::read_dir(base_dir)
+        .with_context(|| {
+            format!(
+                "scan telemetry chaos artifact directory at {}",
+                base_dir.display()
+            )
+        })?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => Some(entry.path()),
+            _ => None,
+        })
+        .collect();
+
+    runs.sort();
+
+    let surplus = runs.len().saturating_sub(keep_latest);
+    for run in runs.into_iter().take(surplus) {
+        fs::remove_dir_all(&run).with_context(|| {
+            format!("remove stale telemetry chaos artifact at {}", run.display())
+        })?;
+    }
+
+    Ok(())
 }
