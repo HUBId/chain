@@ -15,6 +15,19 @@ groups:
         labels:
           component: storage
 
+      - record: proof_cache:hit_ratio:5m
+        expr: |
+          sum by (cache) (rate(rpp_runtime_proof_cache_hits[5m]))
+            /
+          sum by (cache) (rate(rpp_runtime_proof_cache_hits[5m]) + rate(rpp_runtime_proof_cache_misses[5m]))
+        labels:
+          component: proofs
+
+      - record: proof_cache:evictions_per_minute:5m
+        expr: sum by (cache) (rate(rpp_runtime_proof_cache_evictions[5m])) * 60
+        labels:
+          component: proofs
+
       - alert: CacheMissSpike
         expr: cache:hit_ratio:5m < 0.7
         for: 10m
@@ -38,6 +51,19 @@ groups:
           description: |
             Cache evictions have exceeded 50 per minute for 10 minutes.
             This may indicate memory pressure or poorly tuned retention.
+
+      - alert: ProofCacheThrash
+        expr: proof_cache:hit_ratio:5m < 0.5 and proof_cache:evictions_per_minute:5m > 30
+        for: 15m
+        labels:
+          severity: warning
+          component: proofs
+        annotations:
+          summary: "Gossip proof cache hit ratio degraded with elevated evictions"
+          description: |
+            Proof cache hit ratio stayed below 50% for 15 minutes while evictions
+            exceeded 30 per minute. Investigate gossip spam, cache sizing, or
+            backend mismatches before hit rates collapse further.
 
   - name: zk-proof-footprint
     interval: 30s

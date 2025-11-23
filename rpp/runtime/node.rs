@@ -156,7 +156,7 @@ use rpp_p2p::{
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, ResumeBoundKind,
     SnapshotChunk, SnapshotChunkCapabilities, SnapshotChunkStream, SnapshotItemKind,
     SnapshotProvider, SnapshotProviderHandle, SnapshotResumeState, SnapshotSessionId,
-    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT, ProofCacheMetricsSnapshot,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
@@ -1501,6 +1501,7 @@ pub(crate) struct NodeInner {
     consensus_telemetry: Arc<ConsensusTelemetry>,
     audit_exporter: AuditExporter,
     runtime_metrics: Arc<RuntimeMetrics>,
+    cache_metrics_checkpoint: ParkingMutex<ProofCacheMetricsSnapshot>,
     state_sync_session: ParkingMutex<StateSyncSessionCache>,
     state_sync_server: OnceCell<Arc<StateSyncServer>>,
 }
@@ -2705,6 +2706,7 @@ impl Node {
             consensus_telemetry,
             audit_exporter,
             runtime_metrics: runtime_metrics.clone(),
+            cache_metrics_checkpoint: ParkingMutex::new(ProofCacheMetricsSnapshot::default()),
             state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
             state_sync_server: OnceCell::new(),
         });
@@ -4182,6 +4184,29 @@ impl NodeInner {
         Ok(config)
     }
 
+    fn record_proof_cache_metrics(&self, snapshot: &ProofCacheMetricsSnapshot) {
+        let mut checkpoint = self.cache_metrics_checkpoint.lock();
+        let delta_hits = snapshot.hits.saturating_sub(checkpoint.hits);
+        let delta_misses = snapshot.misses.saturating_sub(checkpoint.misses);
+        let delta_evictions = snapshot
+            .evictions
+            .saturating_sub(checkpoint.evictions);
+
+        *checkpoint = snapshot.clone();
+
+        if delta_hits == 0 && delta_misses == 0 && delta_evictions == 0 {
+            return;
+        }
+
+        let proof_metrics = self.runtime_metrics.proofs();
+        proof_metrics.record_cache_events(
+            "gossip-proof-cache",
+            delta_hits,
+            delta_misses,
+            delta_evictions,
+        );
+    }
+
     fn runtime_metrics(&self) -> ChainResult<P2pMetrics> {
         let status = self.node_status()?;
         let reputation_score = self
@@ -4190,13 +4215,15 @@ impl NodeInner {
             .map(|account| account.reputation.score)
             .unwrap_or_default();
         let consensus_snapshot = self.consensus_telemetry.snapshot();
+        let verifier_metrics = self.verifiers.metrics_snapshot();
+        self.record_proof_cache_metrics(&verifier_metrics.cache);
         self.runtime_metrics.record_block_height(status.height);
         Ok(P2pMetrics {
             block_height: status.height,
             block_hash: status.last_hash,
             transaction_count: status.pending_transactions,
             reputation_score,
-            verifier_metrics: self.verifiers.metrics_snapshot(),
+            verifier_metrics,
             round_latencies_ms: consensus_snapshot.round_latencies_ms,
             leader_changes: consensus_snapshot.leader_changes,
             quorum_latency_ms: consensus_snapshot.quorum_latency_ms,
