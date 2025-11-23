@@ -194,7 +194,7 @@ fn telemetry_otlp_exporter_failures_surface_alerts() -> Result<()> {
 
     TelemetryChaosArtifacts::new(artifact_dir, log_buffer)
         .with_metrics(metrics_body)
-        .with_alert_payload(alert_payload)
+        .with_alert_payload("firing", alert_payload)
         .persist()
         .context("write telemetry chaos artifacts")?;
 
@@ -373,7 +373,7 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
         "expected trace failover counter to stay flat after recovery"
     );
 
-    let alert_payload = json!({
+    let firing_payload = json!({
         "receiver": "telemetry-chaos-harness",
         "status": "firing",
         "alerts": [
@@ -391,16 +391,29 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
                     "validation.traces": traces_init,
                 },
             },
+        ],
+    });
+
+    assert!(
+        metrics_failover_after - metrics_failover == 0.0
+            && traces_failover_after - traces_failover == 0.0,
+        "failover counters should stop increasing so the alert can resolve"
+    );
+
+    let resolved_payload = json!({
+        "receiver": "telemetry-chaos-harness",
+        "status": "resolved",
+        "alerts": [
             {
                 "status": "resolved",
                 "labels": {
-                    "alertname": "OtlpExporterFailure",
-                    "severity": "warning",
+                    "alertname": "OtlpExporterFailureCleared",
+                    "severity": "info",
                     "service": "observability",
                 },
                 "annotations": {
-                    "summary": "OTLP telemetry exporters failed over successfully",
-                    "description": "Secondary OTLP endpoints are active and failure counters stopped incrementing.",
+                    "summary": "OTLP telemetry exporters recovered after failover",
+                    "description": "Secondary OTLP endpoints are stable and failure counters stopped incrementing for the alert clear window.",
                     "validation.metrics": metrics_failover_after,
                     "validation.traces": traces_failover_after,
                 },
@@ -411,7 +424,8 @@ fn telemetry_otlp_failover_uses_secondary_endpoints() -> Result<()> {
     TelemetryChaosArtifacts::new(artifact_dir, log_buffer)
         .with_metrics(metrics_body)
         .with_named_metrics("metrics_after_failover.prom", steady_metrics_body)
-        .with_alert_payload(alert_payload)
+        .with_alert_payload("firing", firing_payload)
+        .with_alert_payload("resolved", resolved_payload)
         .persist()
         .context("write telemetry failover chaos artifacts")?;
 
@@ -750,7 +764,7 @@ fn telemetry_otlp_timeouts_backoff_and_buffer() -> Result<()> {
 
     TelemetryChaosArtifacts::new(artifact_dir, log_buffer)
         .with_metrics(metrics_body)
-        .with_alert_payload(alert_payload)
+        .with_alert_payload("firing", alert_payload)
         .persist()
         .context("write telemetry timeout chaos artifacts")?;
 
@@ -807,7 +821,7 @@ struct TelemetryChaosArtifacts {
     directory: std::path::PathBuf,
     logs: LogBuffer,
     metrics: Vec<(String, String)>,
-    alert_payload: Option<serde_json::Value>,
+    alert_payloads: Vec<(String, serde_json::Value)>,
 }
 
 impl TelemetryChaosArtifacts {
@@ -816,7 +830,7 @@ impl TelemetryChaosArtifacts {
             directory,
             logs,
             metrics: Vec::new(),
-            alert_payload: None,
+            alert_payloads: Vec::new(),
         }
     }
 
@@ -830,8 +844,8 @@ impl TelemetryChaosArtifacts {
         self
     }
 
-    fn with_alert_payload(mut self, payload: serde_json::Value) -> Self {
-        self.alert_payload = Some(payload);
+    fn with_alert_payload(mut self, name: impl Into<String>, payload: serde_json::Value) -> Self {
+        self.alert_payloads.push((name.into(), payload));
         self
     }
 
@@ -859,10 +873,14 @@ impl TelemetryChaosArtifacts {
                 .with_context(|| format!("write telemetry chaos metrics snapshot to {filename}"))?;
         }
 
-        if let Some(payload) = &self.alert_payload {
-            let payload = serde_json::to_vec_pretty(payload).context("encode alert payload")?;
-            fs::write(self.directory.join("alert_payload.json"), payload)
-                .context("write telemetry chaos alert payload")?;
+        for (name, payload) in &self.alert_payloads {
+            let payload = serde_json::to_vec_pretty(payload)
+                .with_context(|| format!("encode alert payload for {name}"))?;
+            fs::write(
+                self.directory.join(format!("{name}_alert_payload.json")),
+                payload,
+            )
+            .with_context(|| format!("write telemetry chaos alert payload for {name}"))?;
         }
 
         if let Some(base_dir) = self.directory.parent() {

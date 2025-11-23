@@ -20,7 +20,24 @@ spec:
               At least one OTLP exporter failed to initialise within the last 15 minutes.
               Inspect the node logs for `failed to initialise OTLP` warnings, verify
               TLS material and collector reachability, and restart the node once the
-              exporter configuration is healthy.
+              exporter configuration is healthy. Alert clears once failure counters
+              stay flat for 10 minutes; the companion recovery alert confirms the
+              exporters stabilised after failover.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/observability.md#otlp-exporter-failure-drill
+        - alert: OtlpExporterFailureCleared
+          expr: increase(telemetry_otlp_failures_total[15m]) == 0
+            and max_over_time(telemetry_otlp_failures_total[1h]) > 0
+          for: 10m
+          labels:
+            severity: info
+            service: observability
+          annotations:
+            summary: OTLP telemetry exporters recovered after failover
+            description: |
+              No new OTLP exporter failures have been observed for 10 minutes after a
+              recent outage. Secondary endpoints are stable; downgrade the incident and
+              prepare to roll back to the primary backend once TLS and connectivity tests
+              pass.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/observability.md#otlp-exporter-failure-drill
         - alert: RpcRateLimitThrottling
           expr: sum by (method)(rate(rpp_runtime_rpc_rate_limit_total{status="throttled"}[5m])) > 0
