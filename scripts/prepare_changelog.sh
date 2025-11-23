@@ -12,6 +12,8 @@ USAGE
 
 TAG=""
 OUTPUT=""
+PREVIOUS_TAG=""
+VECTOR_DIFFS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -68,6 +70,8 @@ if ! git rev-parse "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
+PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match "v[0-9]*" "${TAG}^" 2>/dev/null || true)
+
 TMP_OUTPUT="$(mktemp)"
 trap 'rm -f "$TMP_OUTPUT"' EXIT
 
@@ -91,6 +95,12 @@ FEATURES=$(extract_section "<!-- 0 -->" "$TMP_OUTPUT")
 FIXES=$(extract_section "<!-- 1 -->" "$TMP_OUTPUT")
 SECURITY=$(extract_section "<!-- 8 -->" "$TMP_OUTPUT")
 BREAKING=$(grep '\[\*\*breaking\*\*\]' "$TMP_OUTPUT" | sed 's/^\s\+- /- /' || true)
+
+if [[ -n "$PREVIOUS_TAG" ]]; then
+  VECTOR_DIFFS=$(git diff --name-only "$PREVIOUS_TAG" "$TAG" -- vendor/rpp-stark/vectors 2>/dev/null | sed '/^$/d' || true)
+else
+  echo "warning: unable to determine previous SemVer tag; zk vector diff prompt skipped" >&2
+fi
 
 mkdir -p "$(dirname "$OUTPUT")"
 cat >"$OUTPUT" <<EOF
@@ -128,3 +138,20 @@ cat >>"$OUTPUT" <<'EOF'
 - SHA256: `SNAPSHOT_VERIFIER_SHA256_PLACEHOLDER`
 - Signatur: `SNAPSHOT_VERIFIER_SIGNATURE_PLACEHOLDER`
 EOF
+
+if [[ -n "$VECTOR_DIFFS" ]]; then
+  cat >>"$OUTPUT" <<'EOF'
+
+## 🧬 ZK Vectors
+- [REQUIRED] Describe refreshed deterministic vectors and link to the regeneration evidence. Changes detected in:
+EOF
+  printf '%s\n' "$VECTOR_DIFFS" | sed 's/^/  - /' >>"$OUTPUT"
+  echo "error: zk vector updates detected; populate the 'ZK Vectors' section in ${OUTPUT}" >&2
+  exit 1
+else
+  cat >>"$OUTPUT" <<'EOF'
+
+## 🧬 ZK Vectors
+_No zk vector updates recorded between the previous release and this tag._
+EOF
+fi
