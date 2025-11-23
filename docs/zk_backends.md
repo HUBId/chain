@@ -69,6 +69,7 @@
   - Histogramme `rpp_stark_verify_duration_seconds`, `rpp_stark_proof_total_bytes`, `rpp_stark_params_bytes`, `rpp_stark_public_inputs_bytes` und `rpp_stark_payload_bytes` (Labels: `proof_backend`, `proof_kind`).
   - Counter `rpp_stark_stage_checks_total` mit Labels `proof_backend`, `proof_kind`, `stage` (`params`, `public`, `merkle`, `fri`, `composition`) und `result` (`ok`/`fail`).
   - Fehlerpfade aktualisieren dieselben Byte-Histogramme, sodass Ausreißer sichtbar bleiben.
+- Gossip-Proof-Caches werden per Backend-Fingerprint namespacet; sobald ein Node mit einem anderen aktiven Backend startet, loggt er `p2p.proof.cache` mit `expected`/`previous` und leert die persistierten Digests, damit eingehende Proofs erneut gegen das frische Backend verifiziert werden.【F:rpp/p2p/src/pipeline.rs†L356-L425】【F:rpp/runtime/node_runtime/tests/gossip_bridge.rs†L100-L161】
 - `TelemetrySnapshot` (`rpp/runtime/node_runtime/node.rs`) trägt die `verifier_metrics.per_backend`-Aggregationen weiter, womit Exporter den aktuellen Stand der Backend-Verifikationen ohne zusätzlichen RPC abrufen können.
 - Beispiel-`scrape_config` für Prometheus (wenn `rollout.telemetry.metrics.listen = "127.0.0.1:9797"` konfiguriert ist):
 

@@ -3,9 +3,11 @@ use std::convert::TryFrom;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use base64::{engine::general_purpose, Engine as _};
+use blake3;
 use libp2p::PeerId;
 use tempfile::tempdir;
 use tokio::time;
@@ -144,6 +146,91 @@ fn system_time_to_millis(time: SystemTime) -> u64 {
     time.duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backend_switch_rehydrates_proofs_against_active_backend() -> Result<()> {
+    let dir_a = tempdir()?;
+    let dir_b = tempdir()?;
+
+    let mut config_a = sample_node_config(dir_a.path());
+    let mut config_b = sample_node_config(dir_b.path());
+
+    let (listen_a, _) = random_listen_addr();
+    let (listen_b, _) = random_listen_addr();
+    config_a.p2p.listen_addr = listen_a.clone();
+    config_b.p2p.listen_addr = listen_b.clone();
+    config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
+
+    let node_a = Node::new(config_a.clone(), RuntimeMetrics::noop())?;
+    let node_b = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
+    let handle_a = node_a.handle();
+    let handle_b = node_b.handle();
+
+    let identity_a = node_a.network_identity_profile()?;
+    let identity_b = node_b.network_identity_profile()?;
+
+    let mut runtime_a = NodeRuntimeConfig::from(&config_a);
+    runtime_a.metrics = RuntimeMetrics::noop();
+    runtime_a.identity = Some(identity_a.into());
+    let mut runtime_b = NodeRuntimeConfig::from(&config_b);
+    runtime_b.metrics = RuntimeMetrics::noop();
+    runtime_b.identity = Some(identity_b.into());
+
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
+
+    let bundle = sample_transaction_bundle(handle_b.address(), 0);
+    let payload = serde_json::to_vec(&bundle)?;
+    let digest = blake3::hash(&payload);
+    let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs.json");
+    fs::create_dir_all(proof_storage_path.parent().unwrap())?;
+    let legacy_cache = serde_json::json!({
+        "backend": "legacy-backend",
+        "records": [{
+            "peer": handle_a_runtime.local_peer_id().to_base58(),
+            "topic": GossipTopic::WitnessProofs.as_str(),
+            "payload": general_purpose::STANDARD.encode(&payload),
+            "digest": digest.to_hex().to_string(),
+            "received_at": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }]
+    });
+    fs::write(&proof_storage_path, serde_json::to_string_pretty(&legacy_cache)?)?;
+
+    let task_a = tokio::spawn(async move {
+        p2p_a.run().await.expect("run p2p a");
+    });
+    let task_b = tokio::spawn(async move {
+        p2p_b.run().await.expect("run p2p b");
+    });
+
+    handle_a.attach_p2p(handle_a_runtime.clone()).await;
+    handle_b.attach_p2p(handle_b_runtime.clone()).await;
+
+    wait_for_peer(&handle_b_runtime, handle_a_runtime.local_peer_id()).await;
+
+    let mut witness_rx = handle_b.subscribe_witness_gossip(GossipTopic::WitnessProofs);
+    handle_a_runtime
+        .publish_gossip(GossipTopic::WitnessProofs, payload.clone())
+        .await?;
+
+    let witness_payload = time::timeout(Duration::from_secs(10), async {
+        witness_rx.recv().await
+    })
+    .await??;
+
+    let received: TransactionProofBundle = serde_json::from_slice(&witness_payload)?;
+    assert_eq!(received.hash(), bundle.hash());
+
+    handle_a_runtime.shutdown().await?;
+    handle_b_runtime.shutdown().await?;
+    task_a.await.expect("p2p a completed");
+    task_b.await.expect("p2p b completed");
+
+    Ok(())
 }
 
 async fn wait_for_peer(handle: &P2pHandle, expected: libp2p::PeerId) {
