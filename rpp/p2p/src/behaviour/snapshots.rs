@@ -3033,6 +3033,7 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
+    use futures::{channel::oneshot, executor};
     use prometheus_client::encoding::text::encode;
     use prometheus_client::registry::Registry;
 
@@ -3538,5 +3539,65 @@ mod tests {
         )
         .expect("backpressure recorded");
         assert!(chunk_backpressure > 0.0);
+    }
+
+    #[test]
+    fn provider_limit_denies_new_sessions_at_capacity() {
+        let mut behaviour = SnapshotsBehaviour::with_config(
+            NullSnapshotProvider::default(),
+            SnapshotsBehaviourConfig {
+                max_concurrent_requests: None,
+                max_inbound_sessions: Some(1),
+            },
+            None,
+        );
+
+        let active_session = SnapshotSessionId::new(1);
+        behaviour.provider_sessions.insert(active_session);
+
+        let new_session = SnapshotSessionId::new(2);
+        let request = SnapshotsRequest::Plan {
+            session_id: new_session,
+            chunk_size: None,
+            min_chunk_size: None,
+            max_chunk_size: None,
+        };
+
+        let peer = PeerId::random();
+        let (tx, rx) = oneshot::channel();
+        let channel: RequestResponseChannel<SnapshotsResponse> = unsafe { std::mem::transmute(tx) };
+
+        behaviour.handle_inbound_request(peer.clone(), inbound_request_id(7), request, channel);
+
+        let response = executor::block_on(async { rx.await.expect("response channel open") });
+        match response {
+            SnapshotsResponse::Error {
+                session_id,
+                message,
+            } => {
+                assert_eq!(session_id, new_session);
+                assert!(message.contains("saturated"));
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+
+        let event = behaviour
+            .pending_events
+            .pop_front()
+            .expect("pending error event");
+        match event {
+            SnapshotsEvent::Error {
+                session_id,
+                error: SnapshotProtocolError::Provider(message),
+                ..
+            } => {
+                assert_eq!(session_id, new_session);
+                assert!(message.contains("saturated"));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+
+        assert_eq!(behaviour.provider_sessions.len(), 1);
+        assert!(behaviour.provider_sessions.contains(&active_session));
     }
 }

@@ -199,6 +199,24 @@ Audit- und Dashboard-Belege synchron bleiben.【F:docs/runbooks/oncall.md†L21-
 visualisieren dieselben Fortschritts- und Fehlerindikatoren, die die CLI als
 Text ausgibt, und sind verpflichtende Artefakte für die Phase‑3-Abnahme.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】【F:docs/dashboards/vrf_overview.json†L1-L60】
 
+#### Limiting inbound snapshot sessions
+
+Snapshot providers can cap concurrent inbound streams via
+`p2p.snapshot_max_inbound_sessions`. The cap prevents a single consumer swarm
+from saturating the provider: once the active session count reaches the limit,
+the provider immediately returns a `snapshot provider saturated …` error and the
+consumer marks the session as failed with the `network` error code.【F:rpp/runtime/config.rs†L1028-L1097】【F:rpp/p2p/src/behaviour/snapshots.rs†L2218-L2262】【F:rpp/runtime/node_runtime/node.rs†L2065-L2123】 Start with a
+conservative value of `1`–`2` unless you have surplus bandwidth/IO; raise the
+limit gradually while watching CPU and disk utilisation during snapshot export.
+
+Metrics surface both the configured cap and any denied sessions. The Prometheus
+gauge `snapshot_concurrency_limit{source="configured"}` exposes the configured
+cap, while `snapshot_message_bytes_total{direction="inbound",flow="sent",kind="error"}`
+increments whenever the provider sends an error response (including saturation
+rejections).【F:rpp/p2p/src/behaviour/snapshots.rs†L1019-L1061】【F:rpp/p2p/src/behaviour/snapshots.rs†L2218-L2262】 Alert on a rising rate of error responses and
+pair it with logs from the `snapshot stream error` marker to spot sustained
+pressure; consumers will need to back off or stagger downloads.
+
 ### Snapshot verification CLI
 
 `cargo run -p rpp-chain -- validator snapshot verify` kapselt den Offline-Verifier aus

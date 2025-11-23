@@ -49,6 +49,21 @@ can see when a provider has rotated its snapshot.【F:rpp/runtime/node.rs†L151
 Integration tests cover both the HTTP and runtime handle surfaces to guard the
 behaviour.【F:tests/network/snapshots_resume.rs†L1-L310】
 
+### Provider concurrency limits
+
+Snapshot providers can cap inbound session concurrency via
+`p2p.snapshot_max_inbound_sessions`. The behaviour checks the configured limit
+before opening a new session; when saturated it returns an error response and the
+runtime marks the consumer session as failed with the `network` error code.
+Capacity caps help prevent slow or malicious consumers from starving the
+provider; start with `1`–`2` concurrent sessions unless the host has headroom for
+multiple exports.【F:rpp/runtime/config.rs†L1028-L1097】【F:rpp/p2p/src/behaviour/snapshots.rs†L2218-L2262】【F:rpp/runtime/node_runtime/node.rs†L2065-L2123】 Prometheus metrics expose the configured cap via
+`snapshot_concurrency_limit{source="configured"}` and count saturated responses
+via `snapshot_message_bytes_total{direction="inbound",flow="sent",kind="error"}`;
+alert on a rising error rate to trigger backoff/retry policies before consumers
+pile up.
+
+
 Acknowledge messages let consumers confirm ingestion of specific artefacts. The
 provider receives `Ack` requests, persists the acknowledgement, and echoes a
 matching response; outbound errors trigger `SnapshotProtocolError::Outbound`
