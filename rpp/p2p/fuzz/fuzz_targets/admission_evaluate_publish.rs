@@ -8,6 +8,10 @@ use once_cell::sync::Lazy;
 use rpp_p2p::vendor::identity::{Keypair, PeerId};
 use rpp_p2p::{AdmissionControl, GossipTopic, IdentityMetadata, Peerstore, PeerstoreConfig};
 
+#[cfg(feature = "backend-rpp-stark")]
+#[path = "../src/seed.rs"]
+mod seed;
+
 #[derive(Debug, Arbitrary)]
 struct PublishInput {
     seed: Vec<u8>,
@@ -42,5 +46,8 @@ fn evaluate(seed: &[u8], topic_byte: u8) {
 }
 
 fuzz_target!(|input: PublishInput| {
+    #[cfg(feature = "backend-rpp-stark")]
+    seed::install_deterministic_rng();
+
     evaluate(&input.seed, input.topic);
 });

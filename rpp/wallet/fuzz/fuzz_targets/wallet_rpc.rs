@@ -7,7 +7,14 @@ use libfuzzer_sys::fuzz_target;
 use prover_mock_backend::MockBackend;
 use rpp_wallet::rpc::zsi::{self, AuditParams, IssueParams, RevokeParams, RotateParams};
 
+#[cfg(feature = "backend-rpp-stark")]
+#[path = "../src/seed.rs"]
+mod seed;
+
 fuzz_target!(|data: &[u8]| {
+    #[cfg(feature = "backend-rpp-stark")]
+    seed::install_deterministic_rng();
+
     if let Ok(params) = serde_json::from_slice::<IssueParams>(data) {
         let _ = zsi::issue(MockBackend::new(), params);
     }

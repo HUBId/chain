@@ -15,6 +15,9 @@ backend-rpp-stark = ["rpp-chain/backend-rpp-stark"]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 once_cell = "1.19"
+getrandom = "0.2"
+rand_chacha = "0.3"
+rand_core = "0.6"
 serde_json = "1.0"
 
 [dependencies.rpp-p2p]
