@@ -101,6 +101,26 @@ The nightly chaos workflow executes the entire OTLP failure suite (initial
 startup failures, failover, and timeout recovery) so regressions in telemetry
 backpressure or alerting surface without blocking day-to-day development.
 
+### CI failure response for chaos drills
+
+When the `telemetry_otlp_exporter_failures_surface_alerts` chaos test fails in
+CI, page the **Observability on-call** in PagerDuty and notify the
+**secondary SRE** in the incident Slack bridge so both responders can split the
+triage. Follow these steps as soon as the workflow reports the failure:
+
+1. **Pull the uploaded artifacts.** Download the `telemetry-chaos` bundle from
+   the failed workflow run and open `node.log`, `metrics.prom`, and
+   `alert_payload.json` to confirm whether exporter initialisation failed or a
+   downstream collector timed out.
+2. **Inspect the dashboards.** Load the `telemetry` panels in the pipeline
+   dashboard (`docs/observability/pipeline_grafana.json`) via Grafana to verify
+   whether `telemetry_otlp_failures_total` advanced during the run and whether
+   any downstream ingestion errors appear alongside the synthetic alert.
+3. **Re-run locally if needed.** Use the artifact directory noted above or
+   execute `cargo test -p rpp-chain --test observability_otlp_failures` to
+   reproduce the failure with the same TLS/endpoint settings before filing a
+   regression ticket.
+
 ## Telemetry schema allowlist
 
 Runtime metrics exported by the node are validated against an allowlist stored
