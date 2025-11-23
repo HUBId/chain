@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use hex;
-use reqwest::{Certificate, Client, Identity, StatusCode};
+use reqwest::{Certificate, Client, ClientBuilder, Identity, Proxy, StatusCode};
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex,
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeyStore, VrfKeypair,
@@ -297,6 +297,14 @@ struct SnapshotConnectionArgs {
         env = "RPP_SNAPSHOT_MAX_CONCURRENT_DOWNLOADS"
     )]
     max_concurrent_downloads: u32,
+
+    /// HTTP proxy used for snapshot RPC requests
+    #[arg(long, value_name = "URL", env = "RPP_SNAPSHOT_HTTP_PROXY")]
+    http_proxy: Option<String>,
+
+    /// HTTPS proxy used for snapshot RPC requests
+    #[arg(long, value_name = "URL", env = "RPP_SNAPSHOT_HTTPS_PROXY")]
+    https_proxy: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1015,9 +1023,7 @@ impl SnapshotRpcClient {
             builder = builder.identity(identity);
         }
 
-        let client = builder
-            .build()
-            .context("failed to build snapshot RPC client")?;
+        let client = build_snapshot_client(builder, args)?;
 
         Ok(Self {
             client,
@@ -1070,6 +1076,160 @@ impl SnapshotRpcClient {
         }
 
         anyhow::bail!("failed to {label}: retries exhausted")
+    }
+}
+
+fn build_snapshot_client(builder: ClientBuilder, args: &SnapshotConnectionArgs) -> Result<Client> {
+    let builder = apply_snapshot_proxies(builder, args)?;
+    builder
+        .build()
+        .context("failed to build snapshot RPC client")
+}
+
+fn apply_snapshot_proxies(
+    mut builder: ClientBuilder,
+    args: &SnapshotConnectionArgs,
+) -> Result<ClientBuilder> {
+    if let Some(proxy) = snapshot_proxy_url(args.http_proxy.as_deref()) {
+        builder = builder.proxy(Proxy::http(proxy)?);
+    }
+
+    if let Some(proxy) = snapshot_proxy_url(args.https_proxy.as_deref()) {
+        builder = builder.proxy(Proxy::https(proxy)?);
+    }
+
+    Ok(builder)
+}
+
+fn snapshot_proxy_url(value: Option<&str>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_snapshot_client, SnapshotConnectionArgs, ValidatorConfigArgs};
+    use hyper::header::PROXY_AUTHORIZATION;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server};
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+
+    struct CapturedProxyRequest {
+        uri: String,
+        proxy_authorization: Option<String>,
+    }
+
+    #[tokio::test]
+    async fn routes_requests_through_configured_proxy() {
+        let (proxy_addr, request_rx, shutdown_tx) = spawn_mock_proxy();
+        let proxy_url = format!("http://{}", proxy_addr);
+        let args = test_connection_args(Some(proxy_url), None);
+
+        let client = build_snapshot_client(reqwest::Client::builder(), &args).unwrap();
+        let target = "http://example.invalid/proxied";
+        let response = client.get(target).send().await.unwrap();
+
+        assert_eq!(response.text().await.unwrap(), "proxied");
+
+        let observed = request_rx.await.expect("proxy captured request");
+        assert_eq!(observed.uri, target);
+        shutdown_tx.send(()).ok();
+    }
+
+    #[tokio::test]
+    async fn forwards_proxy_authorization_headers() {
+        let (proxy_addr, request_rx, shutdown_tx) = spawn_mock_proxy();
+        let proxy_url = format!("http://user:password@{}", proxy_addr);
+        let args = test_connection_args(Some(proxy_url), None);
+
+        let client = build_snapshot_client(reqwest::Client::builder(), &args).unwrap();
+        let response = client
+            .get("http://example.invalid/authorized")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.text().await.unwrap(), "proxied");
+
+        let observed = request_rx.await.expect("proxy captured request");
+        assert_eq!(
+            observed.proxy_authorization.as_deref(),
+            Some("Basic dXNlcjpwYXNzd29yZA==")
+        );
+        shutdown_tx.send(()).ok();
+    }
+
+    fn test_connection_args(
+        http_proxy: Option<String>,
+        https_proxy: Option<String>,
+    ) -> SnapshotConnectionArgs {
+        SnapshotConnectionArgs {
+            config: ValidatorConfigArgs {
+                config: PathBuf::from("/tmp/unused.toml"),
+            },
+            rpc_url: None,
+            auth_token: None,
+            tls_ca_certificate: None,
+            tls_client_certificate: None,
+            tls_client_private_key: None,
+            tls_insecure_skip_verify: false,
+            retry_attempts: 1,
+            retry_backoff_ms: 1,
+            max_concurrent_downloads: 4,
+            http_proxy,
+            https_proxy,
+        }
+    }
+
+    fn spawn_mock_proxy() -> (
+        SocketAddr,
+        oneshot::Receiver<CapturedProxyRequest>,
+        oneshot::Sender<()>,
+    ) {
+        let (request_tx, request_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let captured = Arc::new(Mutex::new(Some(request_tx)));
+
+        let make_service = make_service_fn(move |_conn| {
+            let captured = captured.clone();
+            async move {
+                Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                    let captured = captured.clone();
+                    async move {
+                        if let Some(sender) = captured.lock().unwrap().take() {
+                            let _ = sender.send(CapturedProxyRequest {
+                                uri: req.uri().to_string(),
+                                proxy_authorization: req
+                                    .headers()
+                                    .get(PROXY_AUTHORIZATION)
+                                    .and_then(|value| value.to_str().ok())
+                                    .map(|value| value.to_string()),
+                            });
+                        }
+
+                        Ok::<_, Infallible>(Response::new(Body::from("proxied")))
+                    }
+                }))
+            }
+        });
+
+        let server = Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
+        let proxy_addr = server.local_addr();
+        tokio::spawn(server.with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        (proxy_addr, request_rx, shutdown_tx)
     }
 }
 

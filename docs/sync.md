@@ -160,6 +160,21 @@ controlled per invocation:
 Tune these flags when scripting against unstable links so transient failures do
 not abort snapshot downloads, while still surfacing permanent errors promptly.
 
+## Proxying snapshot downloads
+
+Snapshot RPC requests follow the proxy settings supplied on the CLI or via
+environment variables:
+
+* `--snapshot-http-proxy` / `RPP_SNAPSHOT_HTTP_PROXY` – proxy for HTTP snapshot
+  RPC traffic.
+* `--snapshot-https-proxy` / `RPP_SNAPSHOT_HTTPS_PROXY` – proxy for HTTPS
+  snapshot RPC traffic.
+
+Credentials embedded in the proxy URL are forwarded as `Proxy-Authorization`
+headers so authenticated forward proxies can gate access to snapshot endpoints.
+Proxying only applies to the HTTP(S) RPC control plane; libp2p snapshot streams
+still connect directly to peers. SOCKS proxies are not supported.
+
 Snapshot RPC responses and pollable stream statuses surface a `download_error`
 code when the runtime aborts a stream:
 

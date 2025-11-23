@@ -23,5 +23,9 @@ serde_json = { version = "=1.0.145", default-features = false, features = ["std"
 snapshot-verify = { path = "../../tools/snapshot-verify" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
+[dev-dependencies]
+hyper = { version = "=0.14.31", features = ["server"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
 [lints]
 workspace = true
