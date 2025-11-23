@@ -88,6 +88,12 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
         ProofVerificationKind::Transaction,
         16384,
     );
+    proofs.observe_verification_total_bytes_by_result(
+        ProofVerificationBackend::RppStark,
+        ProofVerificationKind::Transaction,
+        ProofVerificationOutcome::Fail,
+        32768,
+    );
     proofs.observe_verification_total_bytes(
         ProofVerificationBackend::Stwo,
         ProofVerificationKind::State,

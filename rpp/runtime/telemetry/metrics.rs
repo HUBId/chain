@@ -767,6 +767,7 @@ pub struct ProofMetrics {
     generation_total: EnumCounter<ProofKind>,
     verification_duration: Histogram<f64>,
     verification_total_bytes: Histogram<u64>,
+    verification_total_bytes_by_result: Histogram<u64>,
     verification_params_bytes: Histogram<u64>,
     verification_public_inputs_bytes: Histogram<u64>,
     verification_payload_bytes: Histogram<u64>,
@@ -807,6 +808,11 @@ impl ProofMetrics {
             verification_total_bytes: meter
                 .u64_histogram("rpp_stark_proof_total_bytes")
                 .with_description("Total serialized byte length observed during proof verification")
+                .with_unit("By")
+                .build(),
+            verification_total_bytes_by_result: meter
+                .u64_histogram("rpp_stark_proof_total_bytes_by_result")
+                .with_description("Total serialized byte length observed during proof verification, annotated with result outcome")
                 .with_unit("By")
                 .build(),
             verification_params_bytes: meter
@@ -878,6 +884,18 @@ impl ProofMetrics {
         self.verification_total_bytes.record(bytes, &attributes);
     }
 
+    pub fn observe_verification_total_bytes_by_result(
+        &self,
+        backend: ProofVerificationBackend,
+        kind: ProofVerificationKind,
+        outcome: ProofVerificationOutcome,
+        bytes: u64,
+    ) {
+        let attributes = verification_attributes_with_outcome(backend, kind, outcome);
+        self.verification_total_bytes_by_result
+            .record(bytes, &attributes);
+    }
+
     pub fn observe_verification_params_bytes(
         &self,
         backend: ProofVerificationBackend,
@@ -933,6 +951,18 @@ fn verification_attributes(
     [
         KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+    ]
+}
+
+fn verification_attributes_with_outcome(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    outcome: ProofVerificationOutcome,
+) -> [KeyValue; 3] {
+    [
+        KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(ProofVerificationOutcome::KEY, outcome.as_str()),
     ]
 }
 

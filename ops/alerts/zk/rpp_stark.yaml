@@ -32,6 +32,20 @@ groups:
             or bypass consensus proofs; escalate to release engineering if
             mitigation fails.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkLargeFailingProofs
+        expr: histogram_quantile(0.90, sum(rate(rpp_stark_proof_total_bytes_by_result_bucket{proof_backend="rpp-stark",result="fail"}[10m])) by (le, proof_kind)) > 5e6
+        for: 10m
+        labels:
+          severity: warning
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: Failing RPP-STARK proofs are unusually large
+          description: >-
+            The 90th percentile failing proof size exceeded 5 MiB for ten minutes
+            (kind={{ $labels.proof_kind }}). Inspect recent proof payloads and
+            verifier logs for size_bucket context before slashing resumes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
       - alert: ZkRppStarkVerifierLatencyCritical
         expr: histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend="rpp-stark",proof_kind="consensus"}[5m])) by (le)) > 3.2
         for: 15m
