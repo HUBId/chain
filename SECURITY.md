@@ -74,9 +74,11 @@ new code that needs to assume unreachable states must either return structured
 errors or document why a panic is unavoidable. When an invariant must be
 asserted, scope the exception narrowly with `#[allow(clippy::expect_used)]` or
 `#[allow(clippy::unwrap_used)]`, include a justification comment, and prefer to
-recover gracefully whenever possible. Test modules may continue to use the
-operations for brevity, but the allow must remain confined to the test scope so
-runtime paths stay panic-free.
+recover gracefully whenever possible. The dedicated **Panic/unwrap guard** job
+runs Clippy against the consensus engine and snapshot verifier crates to ensure
+the policy stays active even when those packages are built in isolation. Test
+modules may continue to use the operations for brevity, but the allow must
+remain confined to the test scope so runtime paths stay panic-free.
 
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).

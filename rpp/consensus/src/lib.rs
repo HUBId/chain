@@ -11,6 +11,8 @@
 //!
 //! Toggling these options only requires adjusting Cargo feature flags; no code
 //! snippets or manual wiring is needed.
+#![deny(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 use std::fmt;
 
 #[cfg(all(

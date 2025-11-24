@@ -747,7 +747,7 @@ mod tests {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(prevote_sig.to_bytes()),
         };
-        round.register_prevote(&signed_prevote).unwrap();
+        assert!(round.register_prevote(&signed_prevote).is_ok());
 
         let precommit_vote = BftVote {
             kind: BftVoteKind::PreCommit,
@@ -759,7 +759,7 @@ mod tests {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(precommit_sig.to_bytes()),
         };
-        round.register_precommit(&signed_precommit).unwrap();
+        assert!(round.register_precommit(&signed_precommit).is_ok());
         assert!(round.commit_reached());
         assert_eq!(round.commit_participants(), vec![address.clone()]);
         let certificate = round.certificate();
@@ -790,7 +790,7 @@ mod tests {
             signature: hex::encode(signature.to_bytes()),
         };
 
-        round.register_prevote(&signed_vote).unwrap();
+        assert!(round.register_prevote(&signed_vote).is_ok());
     }
 
     #[test]
