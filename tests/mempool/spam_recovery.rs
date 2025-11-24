@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, thread};
 
 use anyhow::Result;
 use serde_json::json;
@@ -14,6 +14,64 @@ use super::helpers::{
     sample_vote, sort_bundles_by_fee_desc, witness_topic,
 };
 use super::status_probe::{AlertSeverity, MempoolStatusProbe};
+
+struct ProbeArtifact {
+    path: PathBuf,
+    payload: Option<serde_json::Value>,
+}
+
+impl ProbeArtifact {
+    fn new(path: PathBuf) -> Self {
+        println!(
+            "[mempool] probe artifacts will be written to: {} (on failure)",
+            path.display()
+        );
+        Self {
+            path,
+            payload: None,
+        }
+    }
+
+    fn set_payload(&mut self, payload: serde_json::Value) {
+        self.payload = Some(payload);
+    }
+}
+
+impl Drop for ProbeArtifact {
+    fn drop(&mut self) {
+        if !thread::panicking() {
+            return;
+        }
+
+        let Some(payload) = self.payload.as_ref() else {
+            return;
+        };
+
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        match serde_json::to_vec_pretty(payload) {
+            Ok(serialized) => {
+                if let Err(error) = fs::write(&self.path, serialized) {
+                    eprintln!(
+                        "[mempool] failed to persist probe artifact to {}: {error:?}",
+                        self.path.display()
+                    );
+                } else {
+                    eprintln!(
+                        "[mempool] persisted probe artifact to {} after failure",
+                        self.path.display()
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "[mempool] failed to serialize probe artifact for {}: {error:?}",
+                self.path.display()
+            ),
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
@@ -158,6 +216,33 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
         recovery_fees.iter().any(|fee| *fee >= 200),
         "recovered mempool should capture new high-fee submissions",
     );
+
+    let spam_artifact_dir = env::var("MEMPOOL_SPAM_ARTIFACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/artifacts/mempool-spam-probe")
+        });
+    let mut spam_artifact = ProbeArtifact::new(spam_artifact_dir.join("spam.json"));
+    spam_artifact.set_payload(json!({
+        "accepted_hashes": accepted_hashes,
+        "initial_pending": snapshot.transactions.len(),
+        "initial_queue_weights": snapshot.queue_weights,
+        "recovered_pending": recovered_snapshot.transactions.len(),
+        "recovered_queue_weights": recovered_snapshot.queue_weights,
+        "recovered_status": {
+            "pending_transactions": recovered_status.pending_transactions,
+            "pending_votes": recovered_status.pending_votes,
+        },
+        "eviction_attempts": {
+            "rejected_submissions": rejected,
+            "overflow": overflow,
+        },
+        "transaction_queue_order": recovered_snapshot
+            .transactions
+            .iter()
+            .map(|entry| json!({"hash": entry.hash, "fee": entry.fee}))
+            .collect::<Vec<_>>(),
+    }));
 
     drop(witness_rx);
     drop(handle);
@@ -308,27 +393,39 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("target/artifacts/mempool-eviction-probe")
         });
-    fs::create_dir_all(&eviction_artifact_dir).expect("create mempool eviction artifact directory");
-    fs::write(
-        eviction_artifact_dir.join("evictions.json"),
-        serde_json::to_vec_pretty(&json!({
-            "accepted": {
-                "transactions": accepted_transactions,
-                "votes": accepted_votes,
-            },
-            "pending": {
-                "transactions": snapshot.transactions.len(),
-                "votes": snapshot.votes.len(),
-            },
-            "evictions": {
-                "transactions": transaction_evictions,
-                "votes": vote_evictions,
-            },
-            "queue_weights": snapshot.queue_weights,
-        }))
-        .expect("persist mempool eviction artifact"),
-    )
-    .expect("write mempool eviction payload");
+    let mut eviction_artifact = ProbeArtifact::new(eviction_artifact_dir.join("evictions.json"));
+
+    eviction_artifact.set_payload(json!({
+        "accepted": {
+            "transactions": accepted_transactions,
+            "votes": accepted_votes,
+        },
+        "pending": {
+            "transactions": snapshot.transactions.len(),
+            "votes": snapshot.votes.len(),
+        },
+        "evictions": {
+            "transactions": transaction_evictions,
+            "votes": vote_evictions,
+        },
+        "queue_weights": snapshot.queue_weights,
+        "node_status": {
+            "pending_transactions": node_status.pending_transactions,
+            "pending_votes": node_status.pending_votes,
+        },
+        "decoded_transactions": decoded_transactions,
+        "decoded_votes": decoded_votes,
+        "transaction_queue_order": snapshot
+            .transactions
+            .iter()
+            .map(|entry| json!({"hash": entry.hash, "fee": entry.fee}))
+            .collect::<Vec<_>>(),
+        "vote_queue_order": snapshot
+            .votes
+            .iter()
+            .map(|entry| json!({"hash": entry.hash, "round": entry.vote.round}))
+            .collect::<Vec<_>>(),
+    }));
 
     drop(witness_rx);
     drop(handle);
@@ -455,7 +552,7 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("target/artifacts/mempool-ordering-probe")
         });
-    fs::create_dir_all(&ordering_artifact_dir).expect("create mempool ordering artifact directory");
+    let mut ordering_artifact = ProbeArtifact::new(ordering_artifact_dir.join("ordering.json"));
 
     let probe = MempoolStatusProbe::new(0.8, 1.0);
     let probe_alerts = probe.evaluate(&restored_snapshot, expanded_limit);
@@ -477,11 +574,7 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
             }))
             .collect::<Vec<_>>()
     });
-    fs::write(
-        ordering_artifact_dir.join("ordering.json"),
-        serde_json::to_vec_pretty(&ordering_log).expect("serialize ordering log"),
-    )
-    .expect("persist mempool ordering artifact");
+    ordering_artifact.set_payload(ordering_log);
 
     assert_eq!(
         observed_order, expected_order,

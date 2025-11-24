@@ -30,16 +30,23 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   closing an incident.【F:tests/mempool/status_probe.rs†L165-L263】
 * A restart probe captures the saturated transaction queue, restores it after a node restart in
   fee-descending order, and persists the observed vs. expected ordering (plus any generated alerts)
-  to `target/artifacts/mempool-ordering-probe/ordering.json` (or the directory set via
-  `MEMPOOL_ORDERING_ARTIFACT_DIR`). This guards against regressions where restart flows reorder
+  when the test fails to `target/artifacts/mempool-ordering-probe/ordering.json` (or the directory
+  set via `MEMPOOL_ORDERING_ARTIFACT_DIR`, collected from CI under
+  `artifacts/mempool/<matrix>/ordering`). This guards against regressions where restart flows reorder
   pending work away from fee priority and confirms alerts still fire when the restored queue is
-  full.【F:tests/mempool/spam_recovery.rs†L108-L207】
+  full.【F:tests/mempool/spam_recovery.rs†L108-L207】【F:.github/workflows/ci.yml†L946-L1004】
 * A mixed spam probe floods both transaction and vote queues to validate that rate limiting stays
   scoped per queue (overflowing transactions does not evict votes, and vice versa) and to record
-  per-queue eviction counts. CI saves the snapshot to
-  `target/artifacts/mempool-eviction-probe/evictions.json` (or the directory set via
-  `MEMPOOL_EVICTION_ARTIFACT_DIR`) so operators can audit how many submissions were rejected per
-  class when tuning fairness rules.【F:tests/mempool/spam_recovery.rs†L210-L305】
+  per-queue eviction counts. Failing runs persist the decoded queue contents, eviction attempts,
+  queue weights, and node metrics to `target/artifacts/mempool-eviction-probe/evictions.json` (or
+  `artifacts/mempool/<matrix>/eviction` in CI via `MEMPOOL_EVICTION_ARTIFACT_DIR`) so operators can
+  audit how many submissions were rejected per class when tuning fairness rules and inspect the
+  exact eviction order captured in the transaction and vote queues.【F:tests/mempool/spam_recovery.rs†L210-L305】【F:.github/workflows/ci.yml†L940-L1004】
+* The spam saturation probe now writes `spam.json` (guarded by `MEMPOOL_SPAM_ARTIFACT_DIR`, defaulting
+  to `target/artifacts/mempool-spam-probe/`) on failures, capturing accepted hash/fee pairs, pending
+  queue depths before and after recovery, recovered queue order, and the number of overflow
+  submissions rejected. CI collects the same payloads under `artifacts/mempool/<matrix>/spam` to aid
+  root-cause analysis when rate-limit regressions trip the test.【F:tests/mempool/spam_recovery.rs†L18-L164】【F:.github/workflows/ci.yml†L940-L1004】
 
 ### Interpreting probe alerts
 
