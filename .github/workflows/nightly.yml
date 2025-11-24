@@ -191,6 +191,21 @@ jobs:
             eviction_policy_is_fifo_and_hits_survive_eviction \
             eviction_hit_rate_stays_stable_under_pressure
 
+  zk-load-harness:
+    name: ZK backend load harness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Exercise zk load test suite
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest

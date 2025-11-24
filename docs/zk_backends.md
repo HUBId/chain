@@ -44,6 +44,16 @@
 - Dokumentiere jeden Bump in den Release Notes (`docs/release_notes.md`) und aktualisiere bei Bedarf zusätzliche Artefakte wie
   Telemetrie-Mappings oder Operator-Guides, damit Auditor:innen den ABI-Wechsel nachvollziehen können.
 
+### Lasttests & Durchsatzgrenzen
+
+- `cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture` erzeugt parallelisierte
+  Proof-Batches über STWO- und RPP-STARK-Artefakte, misst Latenzen/Throughput und erzwingt die erwarteten Size-Gate-Fehler bei
+  übergroßen Beweisen (`RppStarkVerifyFailure::ProofTooLarge`). Die Suite nutzt einen STWO-Prover-Semaphor mit zwei gleichzeitigen
+  Jobs sowie drei parallele RPP-Verifier-Läufe; der minimale Durchsatz-Floor liegt bei 0,1 Proofs/Sekunde und wird als Test-Assert
+  geprüft.【F:tests/zk_load.rs†L1-L204】
+- Nightly-CI führt die Suite automatisch im Job `zk-load-harness` aus, damit Größe- und Parallelitäts-Grenzen regressionssicher
+  bleiben.【F:.github/workflows/nightly.yml†L168-L201】
+
 ### Size-Gate-Mapping
 
 - Proof-Header speichern die Obergrenze in KiB; der Node überträgt `max_proof_size_bytes` an den Verifier, der das Mapping mittels `ensure_proof_size_consistency` verifiziert.【F:tests/rpp_verifier_smoke.rs†L35-L66】【F:tests/rpp_verifier_smoke.rs†L107-L152】

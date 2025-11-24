@@ -227,6 +227,11 @@ name = "zk_alert_probe"
 path = "../../tests/zk_alert_probe.rs"
 
 [[test]]
+name = "zk_load"
+path = "../../tests/zk_load.rs"
+required-features = ["prover-stwo", "backend-rpp-stark"]
+
+[[test]]
 name = "feature_guard"
 path = "../../tests/feature_guard.rs"
 
