@@ -243,6 +243,25 @@ and check provider telemetry (`snapshot_bytes_sent_total` and
 negotiated chunk size and bounds through the snapshot status RPC, which helps
 debug mismatches between requested and served sizes.
 
+### Structured checksum progress logs
+
+When `snapshot-verify` runs with `--verbose-progress`, checksum progress is
+streamed as one JSON object per line so operators and log pipelines can ingest
+the data directly. Each entry contains:
+
+* `event` – always `"checksum_progress"` to make routing filters trivial.
+* `bytes_downloaded` – cumulative bytes read from the stream at the time of the
+  log emission.
+* `total_bytes` – total expected size if known, otherwise `null`.
+* `bytes_per_second` – current average throughput calculated from the start of
+  the checksum run.
+* `checksum_progress` – ratio between `bytes_downloaded` and `total_bytes`
+  (null when the total is unknown), capped at `1.0`.
+
+Entries are emitted every few megabytes and again on completion, and the
+`bytes_downloaded` field increases monotonically so collectors can rely on log
+ordering even when multiple streams run in parallel.
+
 ## Parallel snapshot downloads
 
 Snapshot streams can download multiple chunks in parallel. The CLI flag
