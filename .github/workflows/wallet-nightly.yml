@@ -28,6 +28,7 @@ jobs:
               wallet_backup_recovery_e2e
               wallet_policies_fee_e2e
               wallet_rbac_mtls_e2e
+              wallet_rpc_limits
             display: Linux backup/policies/RBAC
           - os: ubuntu-latest
             id: linux-watch
