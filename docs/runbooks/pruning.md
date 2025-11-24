@@ -86,6 +86,12 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
 4. **Cross-check telemetry.** When a job runs, the worker updates internal watchers and emits the
    status to the snapshots gossip topic. Confirm that downstream consumers (dashboards, recovery
    tooling) ingest the plan before closing the incident.【F:rpp/node/src/services/pruning.rs†L305-L320】【F:rpp/runtime/node.rs†L3200-L3219】
+5. **Track long-running jobs.** Use the pruning observability dashboard to check
+   `rpp.node.pruning.keys_processed` against `missing_heights` and watch
+   `rpp.node.pruning.time_remaining_ms` for a rising completion estimate. If the
+   estimated time exceeds the cadence window or `failures_total` increments with
+   `error="storage"`, escalate using the stalled/slow alerts documented in the
+   observability guide.【F:rpp/node/src/telemetry/pruning.rs†L31-L97】
 
 ## 5. Post-change verification
 

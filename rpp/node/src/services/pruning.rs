@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 use rpp_chain::api::{PruningServiceApi, PruningServiceError};
 use rpp_chain::config::NodeConfig;
+use rpp_chain::errors::ChainError;
 use rpp_chain::node::{NodeHandle, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK};
 
 use crate::telemetry::pruning::{CycleOutcome, CycleReason, PruningMetrics};
@@ -106,6 +107,19 @@ impl From<RunReason> for CycleReason {
             RunReason::Manual => CycleReason::Manual,
             RunReason::Scheduled => CycleReason::Scheduled,
         }
+    }
+}
+
+fn classify_pruning_error(err: &ChainError) -> &'static str {
+    match err {
+        ChainError::Storage(_) | ChainError::Io(_) => "storage",
+        ChainError::Serialization(_) => "serialization",
+        ChainError::Config(_) | ChainError::MigrationRequired { .. } => "config",
+        ChainError::Crypto(_) => "crypto",
+        ChainError::Transaction(_) => "transaction",
+        ChainError::InvalidProof(_) => "proof",
+        ChainError::CommitmentMismatch(_) | ChainError::MonotonicityViolation(_) => "commitment",
+        ChainError::SnapshotReplayFailed(_) => "replay",
     }
 }
 
@@ -400,13 +414,15 @@ async fn run_worker(
                 );
             }
             Err(err) => {
+                let error_label = classify_pruning_error(&err);
                 metrics.record_cycle(
                     cycle_reason,
                     CycleOutcome::Failure,
                     started_at.elapsed(),
                     None,
                 );
-                warn!(?err, "pruning cycle failed");
+                metrics.record_failure(cycle_reason, error_label);
+                warn!(?err, error = error_label, "pruning cycle failed");
             }
         }
     }
