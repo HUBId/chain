@@ -39,6 +39,10 @@ run to confirm alerts fire and then clear:
 - **Timetoke epoch delay** – simulates a delayed timetoke rollover so
   `TimetokeEpochDelayWarning` and `TimetokeEpochDelayCritical` page when epoch
   age exceeds one or one-and-a-half hours, then drop once epochs resume.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
+- **Restart/finality correlation** – drives a synthetic restart (via
+  `process_start_time_seconds`) that coincides with widening finality lag and
+  finalized height gaps to assert the new `ConsensusRestartFinalityCorrelation`
+  rule fires alongside the standard warning alerts.【F:tools/alerts/validation.py†L882-L955】【F:ops/alerts/consensus/finality.yaml†L35-L52】
 
 Run the probes with the existing validation harness (`python -m pytest
 tools/alerts/tests`) whenever alert expressions change to preserve coverage.

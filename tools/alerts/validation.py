@@ -587,6 +587,59 @@ def _evaluate_finality_metric(
     return AlertComputation(starts_at=start_ts, value=peak)
 
 
+def _evaluate_restart_finality_correlation(
+    store: MetricStore,
+    lag_threshold: float,
+    gap_threshold: float,
+    restart_window: float,
+    duration: float,
+) -> Optional[AlertComputation]:
+    restarts = store.series("process_start_time_seconds")
+    lag_series = store.series("finality_lag_slots")
+    gap_series = store.series("finalized_height_gap")
+
+    if restarts is None or (lag_series is None and gap_series is None):
+        return None
+
+    restart_points: List[float] = []
+    previous = None
+    for sample in restarts.samples:
+        if previous is not None and sample.value != previous.value:
+            if restart_window <= 0 or sample.timestamp - previous.timestamp <= restart_window:
+                restart_points.append(sample.timestamp)
+        previous = sample
+
+    if not restart_points:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in sorted(store.all_timestamps()):
+        if timestamp < restart_points[0]:
+            continue
+        lag = lag_series.value_at(timestamp) if lag_series is not None else None
+        gap = gap_series.value_at(timestamp) if gap_series is not None else None
+        correlated = (lag is not None and lag > lag_threshold) or (
+            gap is not None and gap > gap_threshold
+        )
+        evaluations.append((timestamp, correlated))
+        if correlated:
+            values = [value for value in (lag, gap) if value is not None]
+            if values:
+                observed.append((timestamp, max(values)))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    if not any(restart <= start_ts for restart in restart_points):
+        return None
+
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    detail = f"restart detected at {restart_points[0]:.0f}s"
+    return AlertComputation(starts_at=start_ts, value=peak, details=detail)
+
+
 def _evaluate_block_height_stall(
     store: MetricStore, metric: str, window: float, duration: float
 ) -> Optional[AlertComputation]:
@@ -723,6 +776,20 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_finality_metric(store, "finalized_height_gap", 8.0, 120.0),
+        ),
+        AlertRule(
+            name="ConsensusRestartFinalityCorrelation",
+            severity="warning",
+            service="consensus",
+            summary="Node restart correlated with finality regression",
+            description=(
+                "A node restart coincided with widening finality lag or finalized height gap. Inspect restart logs, peer "
+                "counts, and pipeline health until the gap closes."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_restart_finality_correlation(
+                store, lag_threshold=12.0, gap_threshold=4.0, restart_window=900.0, duration=300.0
+            ),
         ),
         AlertRule(
             name="ConsensusLivenessStall",
@@ -1270,6 +1337,75 @@ def build_uptime_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_restart_finality_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="process_start_time_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1_700_000_000.0),
+                    (300.0, 1_700_000_000.0),
+                    (600.0, 1_700_000_000.0),
+                    (900.0, 1_700_000_900.0),
+                    (1200.0, 1_700_000_900.0),
+                    (1500.0, 1_700_000_900.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 6.0),
+                    (300.0, 8.0),
+                    (600.0, 10.0),
+                    (900.0, 14.0),
+                    (1200.0, 18.0),
+                    (1500.0, 11.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2.0),
+                    (300.0, 3.0),
+                    (600.0, 3.5),
+                    (900.0, 5.0),
+                    (1200.0, 6.0),
+                    (1500.0, 3.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1_000.0),
+                    (300.0, 1_020.0),
+                    (600.0, 1_040.0),
+                    (900.0, 1_050.0),
+                    (1200.0, 1_065.0),
+                    (1500.0, 1_090.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_timetoke_epoch_delay_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -1354,6 +1490,15 @@ def default_validation_cases() -> List[ValidationCase]:
             name="uptime-recovery",
             store=build_uptime_recovery_store(),
             expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="restart-finality-correlation",
+            store=build_restart_finality_store(),
+            expected_alerts={
+                "ConsensusFinalityLagWarning",
+                "ConsensusFinalizedHeightGapWarning",
+                "ConsensusRestartFinalityCorrelation",
+            },
         ),
         ValidationCase(
             name="timetoke-epoch-delay",

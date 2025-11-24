@@ -54,3 +54,21 @@ groups:
             for two minutes. Page the on-call and execute the documented
             failover procedures to recover block production.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#finality-lag
+      - alert: ConsensusRestartFinalityCorrelation
+        expr: |
+          changes(process_start_time_seconds[15m]) > 0
+            and (
+              max_over_time(finality_lag_slots[15m]) > 12
+              or max_over_time(finalized_height_gap[15m]) > 4
+            )
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+        annotations:
+          summary: Node restart correlated with finality regression
+          description: >-
+            A recent node restart coincided with widening finality lag or height
+            gaps. Inspect the node logs for crash signatures, confirm peer
+            counts recovered, and monitor finality panels until the gap closes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts

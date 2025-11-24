@@ -52,6 +52,7 @@ Dashboard blueprints for the orchestrator live alongside this guide:
 - [`pipeline_storage_commit.json`](./pipeline_storage_commit.json)
 - [`compliance_overview.json`](./compliance_overview.json)
 - [`snapshot_resilience.json`](./snapshot_resilience.json)
+- [`uptime_finality_correlation.json`](./uptime_finality_correlation.json)
 
 Import them into Grafana via **Dashboards → New → Import**, then upload the JSON
 file or paste the contents into the dialog. Assign each dashboard to your
