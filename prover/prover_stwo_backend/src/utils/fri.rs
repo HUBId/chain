@@ -1,3 +1,4 @@
+use prover_backend_interface::determinism::deterministic_seed;
 use rand::{rngs::OsRng, rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -112,6 +113,9 @@ fn desired_query_count(len: usize) -> usize {
 }
 
 fn random_seed() -> [u8; 32] {
+    if let Some(seed) = deterministic_seed() {
+        return seed;
+    }
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
     seed
@@ -229,6 +233,30 @@ fn sample_positions(seed: [u8; 32], domain: usize, count: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prover_backend_interface::determinism::DETERMINISTIC_ENV;
+    use std::env;
+
+    struct DeterminismGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl DeterminismGuard {
+        fn enabled() -> Self {
+            let previous = env::var_os(DETERMINISTIC_ENV);
+            env::set_var(DETERMINISTIC_ENV, "1");
+            Self { previous }
+        }
+    }
+
+    impl Drop for DeterminismGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.take() {
+                env::set_var(DETERMINISTIC_ENV, value);
+            } else {
+                env::remove_var(DETERMINISTIC_ENV);
+            }
+        }
+    }
 
     #[test]
     fn proof_roundtrip_succeeds() {
@@ -258,5 +286,14 @@ mod tests {
         let proof_a = FriProver::prove(&values);
         let proof_b = FriProver::prove(&values);
         assert_ne!(proof_a.seed, proof_b.seed);
+    }
+
+    #[test]
+    fn deterministic_mode_reuses_seeds() {
+        let _guard = DeterminismGuard::enabled();
+        let values = vec![FieldElement::from(7u128), FieldElement::from(13u128)];
+        let proof_a = FriProver::prove(&values);
+        let proof_b = FriProver::prove(&values);
+        assert_eq!(proof_a, proof_b);
     }
 }

@@ -22,6 +22,8 @@ use plonky3_backend::{
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::{Map, Value};
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -195,6 +197,30 @@ struct FixtureDoc {
     circuit: String,
     verifying_key: FixtureKey,
     proving_key: FixtureKey,
+}
+
+const DETERMINISTIC_ENV: &str = prover_backend_interface::determinism::DETERMINISTIC_ENV;
+
+struct DeterminismGuard {
+    previous: Option<OsString>,
+}
+
+impl DeterminismGuard {
+    fn enable() -> Self {
+        let previous = env::var_os(DETERMINISTIC_ENV);
+        env::set_var(DETERMINISTIC_ENV, "1");
+        Self { previous }
+    }
+}
+
+impl Drop for DeterminismGuard {
+    fn drop(&mut self) {
+        if let Some(value) = self.previous.take() {
+            env::set_var(DETERMINISTIC_ENV, value);
+        } else {
+            env::remove_var(DETERMINISTIC_ENV);
+        }
+    }
 }
 
 fn sample_witness() -> ConsensusWitness {
@@ -530,6 +556,26 @@ fn consensus_prover_context_rejects_retargeted_air() {
 fn consensus_proof_commitments_match_metadata() {
     let (proof, _) = prove_sample_witness();
     assert_stark_proof_matches_metadata(&proof.proof);
+}
+
+#[test]
+fn consensus_proofs_stabilize_when_deterministic() {
+    let _guard = DeterminismGuard::enable();
+    let (prover, verifier) = sample_contexts();
+    let witness = sample_witness();
+    let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
+
+    let proof_a = prove_consensus(&prover, &circuit).expect("first proof should succeed");
+    let proof_b = prove_consensus(&prover, &circuit).expect("second proof should succeed");
+
+    assert_eq!(proof_a.commitment, proof_b.commitment);
+    assert_eq!(
+        proof_a.proof.serialized_proof(),
+        proof_b.proof.serialized_proof()
+    );
+
+    verify_consensus(&verifier, &proof_a).expect("first proof must verify");
+    verify_consensus(&verifier, &proof_b).expect("second proof must verify");
 }
 
 #[test]

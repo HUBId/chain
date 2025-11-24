@@ -29,6 +29,7 @@ use p3_uni_stark::{
     config::{PcsError, Val},
     prove, StarkProvingKey, StarkVerifyingKey,
 };
+use prover_backend_interface::determinism;
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -554,8 +555,17 @@ fn load_signed_fixtures() -> BackendResult<HashMap<String, SignedFixture>> {
         BackendError::SetupManifest(format!("{}: {err}", manifest_path.display()))
     })?;
 
+    let mut artifacts = manifest.artifacts;
+    if determinism::deterministic_mode() {
+        artifacts.sort_by(|left, right| {
+            left.circuit
+                .cmp(&right.circuit)
+                .then_with(|| left.file.cmp(&right.file))
+        });
+    }
+
     let mut fixtures = HashMap::new();
-    for entry in manifest.artifacts {
+    for entry in artifacts {
         let file_path = dir.join(&entry.file);
         let payload = fs::read_to_string(&file_path).map_err(|err| {
             BackendError::SetupManifest(format!("{}: {err}", file_path.display()))
