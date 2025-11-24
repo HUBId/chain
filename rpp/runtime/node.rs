@@ -167,6 +167,13 @@ const LEADER_BONUS_PERCENT: u8 = 20;
 pub const DEFAULT_STATE_SYNC_CHUNK: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 const SNAPSHOT_BREAKER_THRESHOLD: u64 = 3;
 
+fn proof_backend(proof: &ChainProof) -> ProofVerificationBackend {
+    match proof {
+        ChainProof::RppStark(_) => ProofVerificationBackend::RppStark,
+        _ => ProofVerificationBackend::Stwo,
+    }
+}
+
 #[cfg(feature = "backend-rpp-stark")]
 const RPP_STARK_PROOF_BUCKETS: [u64; 4] =
     [512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024];
@@ -4899,6 +4906,25 @@ impl NodeInner {
         }
     }
 
+    fn log_external_block_verification_failure(
+        height: u64,
+        round: u32,
+        proposer: &Address,
+        backend: ProofVerificationBackend,
+        proof_kind: &'static str,
+        err: &ChainError,
+    ) {
+        warn!(
+            height,
+            round,
+            proposer = %proposer,
+            ?err,
+            proof_kind,
+            proof_backend = backend.as_str(),
+            "external block proof verification failed"
+        );
+    }
+
     #[cfg(feature = "backend-rpp-stark")]
     fn verify_rpp_stark_with_metrics(
         &self,
@@ -8710,6 +8736,7 @@ impl NodeInner {
 
         let round_number = round.round();
         #[cfg(feature = "backend-rpp-stark")]
+        let state_backend = proof_backend(&block.stark.state_proof);
         let state_result = match &block.stark.state_proof {
             ChainProof::RppStark(_) => self
                 .verify_rpp_stark_with_metrics(
@@ -8722,13 +8749,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let state_result = self.verifiers.verify_state(&block.stark.state_proof);
         if let Err(err) = state_result {
-            warn!(
+            Self::log_external_block_verification_failure(
                 height,
-                round = round_number,
-                proposer = %block.header.proposer,
-                ?err,
-                proof_kind = "state",
-                "external block proof verification failed"
+                round_number,
+                &block.header.proposer,
+                state_backend,
+                "state",
+                &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
@@ -8736,6 +8763,7 @@ impl NodeInner {
         self.record_stwo_proof_size(ProofVerificationKind::State, &block.stark.state_proof, None);
 
         #[cfg(feature = "backend-rpp-stark")]
+        let pruning_backend = proof_backend(&block.stark.pruning_proof);
         let pruning_result = match &block.stark.pruning_proof {
             ChainProof::RppStark(_) => self
                 .verify_rpp_stark_with_metrics(
@@ -8748,13 +8776,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let pruning_result = self.verifiers.verify_pruning(&block.stark.pruning_proof);
         if let Err(err) = pruning_result {
-            warn!(
+            Self::log_external_block_verification_failure(
                 height,
-                round = round_number,
-                proposer = %block.header.proposer,
-                ?err,
-                proof_kind = "pruning",
-                "external block proof verification failed"
+                round_number,
+                &block.header.proposer,
+                pruning_backend,
+                "pruning",
+                &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
@@ -8766,6 +8794,7 @@ impl NodeInner {
         );
 
         #[cfg(feature = "backend-rpp-stark")]
+        let recursive_backend = proof_backend(&block.stark.recursive_proof);
         let recursive_result = match &block.stark.recursive_proof {
             ChainProof::RppStark(_) => self
                 .verify_rpp_stark_with_metrics(
@@ -8782,13 +8811,13 @@ impl NodeInner {
             .verifiers
             .verify_recursive(&block.stark.recursive_proof);
         if let Err(err) = recursive_result {
-            warn!(
+            Self::log_external_block_verification_failure(
                 height,
-                round = round_number,
-                proposer = %block.header.proposer,
-                ?err,
-                proof_kind = "recursive",
-                "external block proof verification failed"
+                round_number,
+                &block.header.proposer,
+                recursive_backend,
+                "recursive",
+                &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
@@ -8801,6 +8830,7 @@ impl NodeInner {
 
         if let Some(proof) = &block.consensus_proof {
             #[cfg(feature = "backend-rpp-stark")]
+            let consensus_backend = proof_backend(proof);
             let consensus_result = match proof {
                 ChainProof::RppStark(_) => self
                     .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, proof)
@@ -8810,13 +8840,13 @@ impl NodeInner {
             #[cfg(not(feature = "backend-rpp-stark"))]
             let consensus_result = self.verifiers.verify_consensus(proof);
             if let Err(err) = consensus_result {
-                warn!(
+                Self::log_external_block_verification_failure(
                     height,
-                    round = round_number,
-                    proposer = %block.header.proposer,
-                    ?err,
-                    proof_kind = "consensus",
-                    "external block proof verification failed"
+                    round_number,
+                    &block.header.proposer,
+                    consensus_backend,
+                    "consensus",
+                    &err,
                 );
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
                 return Err(err);
@@ -9335,8 +9365,9 @@ mod telemetry_metrics_tests {
     use super::{
         classify_rpp_stark_error_stage, proof_size_bucket, record_rpp_stark_size_metrics,
         record_rpp_stark_stage_checks, ConsensusTelemetry, ProofVerificationBackend,
-        ProofVerificationKind, ProofVerificationOutcome, RuntimeMetrics,
+        ProofVerificationKind, ProofVerificationOutcome, RuntimeInner, RuntimeMetrics,
     };
+    use crate::errors::ChainError;
     use crate::types::Address;
     #[cfg(feature = "backend-rpp-stark")]
     use crate::types::{ChainProof, RppStarkProof};
@@ -9550,6 +9581,32 @@ mod telemetry_metrics_tests {
         );
 
         assert!(logs_contain("size_bucket=gt_4_mib"));
+    }
+
+    #[traced_test]
+    fn external_block_failure_logs_include_backend_identity() {
+        let err = ChainError::Crypto("expected failure".into());
+
+        RuntimeInner::log_external_block_verification_failure(
+            42,
+            7,
+            &Address::from("validator-rpp"),
+            ProofVerificationBackend::RppStark,
+            "state",
+            &err,
+        );
+
+        RuntimeInner::log_external_block_verification_failure(
+            42,
+            7,
+            &Address::from("validator-failover"),
+            ProofVerificationBackend::Stwo,
+            "pruning",
+            &err,
+        );
+
+        assert!(logs_contain("proof_backend=rpp-stark"));
+        assert!(logs_contain("proof_backend=stwo"));
     }
 }
 
