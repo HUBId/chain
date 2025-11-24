@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 
+use rpp_p2p::peerstore::peer_class::PeerClass;
 use serde::Deserialize;
 
 use crate::faults::{ByzantineFault, ChurnFault, PartitionFault};
@@ -24,6 +25,8 @@ pub struct Scenario {
     pub regions: RegionsSection,
     #[serde(default)]
     pub links: LinksSection,
+    #[serde(default)]
+    pub latency_profile: Option<PeerClassLatencyProfile>,
     #[serde(default)]
     pub metrics: Option<MetricsSection>,
     #[serde(default)]
@@ -178,6 +181,37 @@ impl Default for LinksSection {
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
+pub struct PeerClassLatencyProfile {
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub trusted: Option<PeerClassLatency>,
+    #[serde(default)]
+    pub untrusted: Option<PeerClassLatency>,
+}
+
+impl PeerClassLatencyProfile {
+    pub fn seed_or_default(&self, fallback: u64) -> u64 {
+        self.seed.unwrap_or(fallback)
+    }
+
+    pub fn params_for(&self, class: PeerClass) -> Option<&PeerClassLatency> {
+        match class {
+            PeerClass::Trusted => self.trusted.as_ref(),
+            PeerClass::Untrusted => self.untrusted.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct PeerClassLatency {
+    #[serde(default)]
+    pub extra_delay_ms: u64,
+    #[serde(default)]
+    pub jitter_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct MetricsSection {
     /// Deprecated shorthand for `json`.
     pub output: Option<PathBuf>,
@@ -326,6 +360,13 @@ impl Scenario {
                 ));
             }
         }
+        if let Some(latency) = &self.latency_profile {
+            if latency.trusted.is_none() && latency.untrusted.is_none() {
+                return Err(anyhow!(
+                    "latency_profile must configure at least one peer class"
+                ));
+            }
+        }
         match self.topology.topology_type {
             TopologyType::Ring | TopologyType::KRegular | TopologyType::SmallWorld => {
                 if self.topology.k.is_none() {
@@ -454,6 +495,21 @@ impl Scenario {
                 cfg.publishers.clone(),
             )
         })
+    }
+
+    pub fn latency_profile_seed(&self) -> u64 {
+        const LATENCY_SEED_SALT: u64 = 0x4C41_5445_4E43; // "LATENC"
+        let fallback = self.sim.seed ^ LATENCY_SEED_SALT;
+        self.latency_profile
+            .as_ref()
+            .map(|profile| profile.seed_or_default(fallback))
+            .unwrap_or(fallback)
+    }
+
+    pub fn class_latency_params(&self, class: PeerClass) -> Option<&PeerClassLatency> {
+        self.latency_profile
+            .as_ref()
+            .and_then(|profile| profile.params_for(class))
     }
 
     pub fn traffic_program(&self) -> Result<TrafficProgram> {

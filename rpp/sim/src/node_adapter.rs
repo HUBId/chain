@@ -313,7 +313,7 @@ fn handle_gossipsub_event(
                 message_id: id,
                 timestamp: Instant::now(),
                 duplicate: !is_new,
-                peer_class: classify_peer(&propagation_source),
+                peer_class: classify_peer_id(&propagation_source),
                 payload_bytes: message.data.len(),
             });
         }
@@ -352,7 +352,7 @@ fn handle_gossipsub_event(
     }
 }
 
-fn classify_peer(peer_id: &PeerId) -> PeerClass {
+pub(crate) fn classify_peer_id(peer_id: &PeerId) -> PeerClass {
     let bytes = peer_id.to_bytes();
     let last = bytes.last().copied().unwrap_or_default();
     if last % 2 == 0 {
