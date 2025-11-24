@@ -663,6 +663,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             description: "Exercise RPP-STARK fork-choice and recovery",
         },
         SimnetPreset {
+            slug: "epoch-drift",
+            scenario_path: "tools/simnet/scenarios/consensus_epoch_drift.ron",
+            description: "Fuzz epoch transitions under clock skew and slow peers",
+        },
+        SimnetPreset {
             slug: "uptime-soak",
             scenario_path: "tools/simnet/scenarios/uptime_soak.ron",
             description: "Run the multi-hour uptime/finality soak drill",
@@ -862,6 +867,7 @@ fn run_simnet_smoke() -> Result<()> {
         "block-pipeline",
         "state-sync-guard",
         "quorum-stress",
+        "epoch-drift",
         "partition",
     ];
     if has_feature_flag("backend-rpp-stark") {
