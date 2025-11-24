@@ -2022,6 +2022,8 @@ pub const DEFAULT_SNAPSHOT_CHUNK_SIZE: usize = 16;
 pub const DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 pub const DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 pub const DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS: usize = 4;
+pub const DEFAULT_SNAPSHOT_TIMETOKE_BUDGET_SECS: u64 = 900;
+pub const DEFAULT_SNAPSHOT_UPTIME_BUDGET_SECS: u64 = 1800;
 pub const DEFAULT_PROOF_CACHE_RETAIN: usize = 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2766,10 +2768,22 @@ impl Default for SnapshotSizingConfig {
 pub struct SnapshotDownloadConfig {
     #[serde(default = "default_max_concurrent_chunk_downloads")]
     pub max_concurrent_chunk_downloads: usize,
+    #[serde(default = "default_snapshot_timetoke_budget_secs")]
+    pub timetoke_budget_secs: u64,
+    #[serde(default = "default_snapshot_uptime_budget_secs")]
+    pub uptime_budget_secs: u64,
 }
 
 fn default_max_concurrent_chunk_downloads() -> usize {
     DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS
+}
+
+fn default_snapshot_timetoke_budget_secs() -> u64 {
+    DEFAULT_SNAPSHOT_TIMETOKE_BUDGET_SECS
+}
+
+fn default_snapshot_uptime_budget_secs() -> u64 {
+    DEFAULT_SNAPSHOT_UPTIME_BUDGET_SECS
 }
 
 impl SnapshotDownloadConfig {
@@ -2777,6 +2791,25 @@ impl SnapshotDownloadConfig {
         if self.max_concurrent_chunk_downloads == 0 {
             return Err(ChainError::Config(
                 "snapshot_download.max_concurrent_chunk_downloads must be greater than 0".into(),
+            ));
+        }
+
+        if self.timetoke_budget_secs == 0 {
+            return Err(ChainError::Config(
+                "snapshot_download.timetoke_budget_secs must be greater than 0".into(),
+            ));
+        }
+
+        if self.uptime_budget_secs == 0 {
+            return Err(ChainError::Config(
+                "snapshot_download.uptime_budget_secs must be greater than 0".into(),
+            ));
+        }
+
+        if self.timetoke_budget_secs > self.uptime_budget_secs {
+            return Err(ChainError::Config(
+                "snapshot_download.timetoke_budget_secs must be less than or equal to snapshot_download.uptime_budget_secs"
+                    .into(),
             ));
         }
 
@@ -2788,6 +2821,8 @@ impl Default for SnapshotDownloadConfig {
     fn default() -> Self {
         Self {
             max_concurrent_chunk_downloads: DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
+            timetoke_budget_secs: DEFAULT_SNAPSHOT_TIMETOKE_BUDGET_SECS,
+            uptime_budget_secs: DEFAULT_SNAPSHOT_UPTIME_BUDGET_SECS,
         }
     }
 }

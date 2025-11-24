@@ -1214,12 +1214,31 @@ impl StateSyncSessionCache {
 #[derive(Debug)]
 pub(crate) enum StateSyncChunkError {
     NoActiveSession,
-    ChunkIndexOutOfRange { index: u32, total: u32 },
-    ChunkNotFound { index: u32, reason: String },
-    SnapshotRootMismatch { expected: Hash, actual: Hash },
-    ManifestViolation { reason: String },
+    ChunkIndexOutOfRange {
+        index: u32,
+        total: u32,
+    },
+    ChunkNotFound {
+        index: u32,
+        reason: String,
+    },
+    SnapshotRootMismatch {
+        expected: Hash,
+        actual: Hash,
+    },
+    ManifestViolation {
+        reason: String,
+    },
     Io(std::io::Error),
-    IoProof { index: u32, message: String },
+    IoProof {
+        index: u32,
+        message: String,
+    },
+    BudgetExceeded {
+        budget: &'static str,
+        limit: Duration,
+        elapsed: Duration,
+    },
     Internal(String),
 }
 
@@ -5900,6 +5919,13 @@ impl NodeInner {
 
     fn state_sync_server(&self) -> Option<Arc<StateSyncServer>> {
         self.state_sync_server.get().cloned()
+    }
+
+    pub(crate) fn snapshot_download_budgets(&self) -> (Duration, Duration) {
+        (
+            Duration::from_secs(self.config.snapshot_download.timetoke_budget_secs),
+            Duration::from_secs(self.config.snapshot_download.uptime_budget_secs),
+        )
     }
 
     fn parse_chunk_total(message: &str) -> Option<u32> {

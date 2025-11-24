@@ -966,6 +966,7 @@ pub enum RpcErrorCode {
     StateSyncVerifierIo,
     StateSyncPipelineError,
     StateSyncPrunerStateError,
+    StateSyncBudgetExceeded,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -4158,6 +4159,19 @@ fn chunk_error_to_state_sync(err: StateSyncChunkError) -> StateSyncError {
             RpcErrorCode::StateSyncVerifierIo,
             Some(message),
         ),
+        StateSyncChunkError::BudgetExceeded {
+            budget,
+            limit,
+            elapsed,
+        } => StateSyncError::with_code(
+            StateSyncErrorKind::Internal,
+            RpcErrorCode::StateSyncBudgetExceeded,
+            Some(format!(
+                "state sync exceeded {budget} budget after {:.3}s (limit {:.3}s)",
+                elapsed.as_secs_f64(),
+                limit.as_secs_f64(),
+            )),
+        ),
         StateSyncChunkError::Internal(message) => StateSyncError::with_code(
             StateSyncErrorKind::Internal,
             RpcErrorCode::StateSyncPipelineError,
@@ -4206,6 +4220,20 @@ mod tests {
             "disk unavailable",
         )));
         assert_eq!(io.code, Some(RpcErrorCode::StateSyncVerifierIo));
+
+        let budget = super::chunk_error_to_state_sync(StateSyncChunkError::BudgetExceeded {
+            budget: "timetoke",
+            limit: Duration::from_secs(5),
+            elapsed: Duration::from_secs(7),
+        });
+        assert_eq!(budget.code, Some(RpcErrorCode::StateSyncBudgetExceeded));
+        assert!(
+            budget
+                .error
+                .as_ref()
+                .is_some_and(|message| message.contains("timetoke budget")),
+            "budget overrun must surface descriptive error"
+        );
     }
 }
 
