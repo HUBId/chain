@@ -206,6 +206,23 @@ jobs:
           set -euo pipefail
           cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture
 
+  uptime-ha-drills:
+    name: Uptime HA restart drills
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run uptime HA restart scenarios
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          set -euo pipefail
+          cargo test --test uptime_ha --features "integration wallet-integration wallet-ui"
+
   verify-smoke-artifacts:
     name: Verify CI smoke artifacts
     runs-on: ubuntu-latest
