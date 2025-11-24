@@ -125,6 +125,19 @@ visualisieren diese Kennzahlen (Latenzen, Fehlerraten, Circuit-Cache-Größe) f�
 Plonky3 und werden vom CI-Dashboard-Lint überprüft. Binde die Panels in das
 Produktions-Dashboard ein, um Phase‑2-Abnahmekriterien sichtbar zu machen.【F:docs/dashboards/consensus_proof_validation.json†L1-L120】
 
+### Proof backend attribution and audits
+
+Every proof verification log now tags the backend via `proof_backend` alongside
+the proof kind so operators can distinguish RPP-STARK successes from STWO
+failover decisions during incident reviews.【F:rpp/runtime/node.rs†L198-L206】【F:rpp/runtime/node.rs†L869-L936】
+The same identifier flows into the runtime metrics attributes for verification
+duration and byte histograms, allowing Grafana dashboards to filter and compare
+backend performance.【F:rpp/runtime/telemetry/metrics.rs†L877-L999】 When
+triaging incidents or audits, query the `proofs`/`telemetry` log targets for the
+`proof_backend` field and confirm the corresponding metrics stream reports the
+same backend label. This evidence is required for primary-versus-failover
+attribution when proofs are retried on alternative verifiers.
+
 Kombiniere `backend-plonky3` nicht mit dem `prover-mock`-Feature; der Guard
 erzwingt weiterhin die Trennung zwischen deterministischen Test-Fixtures und
 produktiven Vendor-Artefakten.【F:rpp/node/src/feature_guard.rs†L1-L5】
