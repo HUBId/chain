@@ -293,6 +293,21 @@ fn run_wallet_feature_matrix() -> Result<()> {
         run_wallet_feature_guard_suite(&root, &scenario, &chain_base_features)?;
     }
 
+    let mut wallet_e2e = Command::new("cargo");
+    wallet_e2e
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("wallet_e2e");
+    apply_feature_flags(&mut wallet_e2e);
+    if let Some(joined) = scenario_feature_list(false, &chain_base_features, &[]) {
+        wallet_e2e.arg("--features").arg(joined);
+    }
+    run_command(wallet_e2e, "wallet end-to-end coverage")?;
+
     run_command(
         Command::new("cargo")
             .current_dir(&root)

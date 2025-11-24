@@ -139,6 +139,11 @@ pub struct WalletTestFixture {
     wallet: Arc<Wallet>,
     node: Arc<MockNodeClient>,
     indexer: Arc<MockIndexer>,
+    policy: WalletPolicyConfig,
+    fees: WalletFeeConfig,
+    prover: WalletProverConfig,
+    zsi: WalletZsiConfig,
+    zsi_backend: Option<Arc<dyn ProofBackend>>,
     birthday_height: u64,
     latest_height: u64,
     deposits: Vec<DepositRecord>,
@@ -220,6 +225,11 @@ impl WalletTestFixture {
             wallet,
             node,
             indexer,
+            policy,
+            fees,
+            prover,
+            zsi,
+            zsi_backend,
             birthday_height,
             latest_height,
             deposits,
@@ -252,6 +262,27 @@ impl WalletTestFixture {
 
     pub fn total_deposit(&self) -> u64 {
         self.deposits.iter().map(|deposit| deposit.amount).sum()
+    }
+
+    pub fn restart_wallet(&self) -> Result<Arc<Wallet>> {
+        Ok(Arc::new(
+            Wallet::new(
+                self.wallet.store(),
+                WalletMode::Full {
+                    root_seed: seeded_seed(),
+                },
+                self.policy.clone(),
+                self.fees.clone(),
+                self.prover.clone(),
+                WalletHwConfig::default(),
+                self.zsi.clone(),
+                self.zsi_backend.clone(),
+                Arc::clone(&self.node),
+                WalletPaths::for_data_dir(self._tempdir.path()),
+                Arc::new(WalletActionTelemetry::new(false)),
+            )
+            .context("restart wallet instance")?,
+        ))
     }
 
     pub fn indexer_client(&self) -> Arc<dyn IndexerClient> {

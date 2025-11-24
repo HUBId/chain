@@ -245,6 +245,11 @@ path = "../../tests/runtime_wallet_cfg.rs"
 required-features = ["wallet-integration"]
 
 [[test]]
+name = "wallet_e2e"
+path = "../../tests/wallet_e2e/main.rs"
+required-features = ["wallet-integration"]
+
+[[test]]
 name = "zsi_renewal"
 path = "../../tests/zsi_renewal.rs"
 
