@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rpp_p2p::peerstore::peer_class::PeerClass;
 use rpp_p2p::vendor::gossipsub::IdentTopic;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
@@ -19,8 +20,8 @@ use crate::metrics::{
     exporters, Collector, FaultEvent, ResourceUsageMetrics, SimEvent, SimulationSummary,
 };
 use crate::multiprocess;
-use crate::node_adapter::{spawn_node, Node, NodeHandle};
-use crate::scenario::{LinkParams, Scenario, TopologyType};
+use crate::node_adapter::{classify_peer_id, spawn_node, Node, NodeHandle};
+use crate::scenario::{LinkParams, PeerClassLatencyProfile, Scenario, TopologyType};
 use crate::topology::{
     annotate_links, AnnotatedLink, ErdosRenyiTopology, KRegularTopology, RingTopology,
     ScaleFreeTopology, SmallWorldTopology, Topology,
@@ -109,11 +110,26 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     };
 
     let mut rng = StdRng::seed_from_u64(scenario.sim.seed);
+    let latency_seed = scenario.latency_profile_seed();
+    let mut latency_rng = StdRng::seed_from_u64(latency_seed);
+    let latency_profile = scenario.latency_profile.clone();
     let edges = build_topology_edges(&scenario, node_count, &mut rng)?;
     let regions = scenario.node_regions();
     let annotated = annotate_links(&edges, &regions, &scenario.links)?;
     let adjacency = build_adjacency(node_count, &annotated);
-    dial_links(&handles, &annotated, &mut rng).await?;
+    let peer_classes: Vec<PeerClass> = handles
+        .iter()
+        .map(|handle| classify_peer_id(&handle.peer_id))
+        .collect();
+    dial_links(
+        &handles,
+        &annotated,
+        &mut rng,
+        &mut latency_rng,
+        latency_profile.as_ref(),
+        &peer_classes,
+    )
+    .await?;
 
     let partition_fault = scenario.partition_fault();
     let churn_fault = scenario.churn_fault();
@@ -126,6 +142,8 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
         let handles_clone = handles.clone();
         let events = harness_event_tx.clone();
         let partition_active_flag = Arc::clone(&partition_active);
+        let peer_classes_clone = peer_classes.clone();
+        let latency_profile_clone = latency_profile.clone();
         let links: Vec<AnnotatedLink> = annotated
             .iter()
             .filter(|link| link_crosses_partition(&partition, &regions, link))
@@ -151,7 +169,18 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
                 partition_active_flag.store(false, Ordering::SeqCst);
                 let mut rng =
                     StdRng::seed_from_u64(0x7061_7274 ^ partition.start.as_millis() as u64);
-                if let Err(err) = dial_links(&handles_clone, &links, &mut rng).await {
+                let mut latency_rng =
+                    StdRng::seed_from_u64(latency_seed ^ partition.start.as_millis() as u64);
+                if let Err(err) = dial_links(
+                    &handles_clone,
+                    &links,
+                    &mut rng,
+                    &mut latency_rng,
+                    latency_profile_clone.as_ref(),
+                    &peer_classes_clone,
+                )
+                .await
+                {
                     tracing::warn!(
                         target = "rpp::sim::harness",
                         "partition reconnect failed: {err:?}"
@@ -176,6 +205,8 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
             let events = harness_event_tx.clone();
             let partition_flag = Arc::clone(&partition_active);
             let partition_for_churn = partition_fault.clone();
+            let peer_classes_clone = peer_classes.clone();
+            let latency_profile_clone = latency_profile.clone();
             let seed = scenario.sim.seed ^ 0x4355_524e;
             fault_tasks.push(tokio::spawn(async move {
                 if churn.start > Duration::ZERO {
@@ -227,6 +258,8 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
                         timestamp: Instant::now(),
                     });
                     let mut rng_local = StdRng::seed_from_u64(seed ^ (node_idx as u64 + 1));
+                    let mut latency_rng =
+                        StdRng::seed_from_u64(latency_seed ^ (node_idx as u64 + 1));
                     let mut to_restore = Vec::new();
                     for link in node_links.iter() {
                         if partition_flag.load(Ordering::SeqCst) {
@@ -238,7 +271,15 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
                         }
                         to_restore.push(link.clone());
                     }
-                    if let Err(err) = dial_links(&handles_clone, &to_restore, &mut rng_local).await
+                    if let Err(err) = dial_links(
+                        &handles_clone,
+                        &to_restore,
+                        &mut rng_local,
+                        &mut latency_rng,
+                        latency_profile_clone.as_ref(),
+                        &peer_classes_clone,
+                    )
+                    .await
                     {
                         tracing::warn!(
                             target = "rpp::sim::harness",
@@ -426,6 +467,9 @@ async fn dial_links(
     handles: &[NodeHandle],
     annotated: &[AnnotatedLink],
     rng: &mut StdRng,
+    latency_rng: &mut StdRng,
+    latency_profile: Option<&PeerClassLatencyProfile>,
+    peer_classes: &[PeerClass],
 ) -> Result<()> {
     let mut tasks = Vec::new();
     for link in annotated {
@@ -436,7 +480,10 @@ async fn dial_links(
         if drop_chance < link.params.loss {
             continue;
         }
-        let delay = jittered_delay(&link.params, rng);
+        let target_class = peer_classes.get(link.b).copied();
+        let class_params =
+            target_class.and_then(|class| latency_profile.and_then(|p| p.params_for(class)));
+        let delay = jittered_delay(&link.params, class_params, latency_rng);
         let handle = handles[link.a].clone();
         let target_peer = handles[link.b].peer_id.clone();
         let target_addr = handles[link.b].listen_addr().clone();
@@ -482,12 +529,29 @@ async fn disconnect_links(handles: &[NodeHandle], annotated: &[AnnotatedLink]) -
     Ok(())
 }
 
-fn jittered_delay(params: &LinkParams, rng: &mut StdRng) -> Duration {
-    let base = Duration::from_millis(params.delay_ms);
-    if params.jitter_ms == 0 {
+fn jittered_delay(
+    link_params: &LinkParams,
+    class_params: Option<&PeerClassLatency>,
+    rng: &mut StdRng,
+) -> Duration {
+    let mut base = Duration::from_millis(link_params.delay_ms);
+    if let Some(class) = class_params {
+        base += Duration::from_millis(class.extra_delay_ms);
+    }
+
+    base = apply_jitter(base, link_params.jitter_ms, rng);
+    if let Some(class) = class_params {
+        base = apply_jitter(base, class.jitter_ms, rng);
+    }
+
+    base
+}
+
+fn apply_jitter(base: Duration, jitter_ms: u64, rng: &mut StdRng) -> Duration {
+    if jitter_ms == 0 {
         return base;
     }
-    let jitter = params.jitter_ms as i64;
+    let jitter = jitter_ms as i64;
     let offset = rng.gen_range(-jitter, jitter + 1);
     if offset >= 0 {
         base + Duration::from_millis(offset as u64)
@@ -683,5 +747,37 @@ publishers = [0]
             .expect("byzantine scenario executes");
         let kinds: Vec<_> = summary.faults.iter().map(|f| f.kind.as_str()).collect();
         assert!(kinds.contains(&"byzantine_spam"));
+    }
+
+    #[test]
+    fn jittered_delay_applies_peer_class_overrides() {
+        let base = LinkParams {
+            delay_ms: 20,
+            jitter_ms: 0,
+            loss: 0.0,
+        };
+        let class = PeerClassLatency {
+            extra_delay_ms: 10,
+            jitter_ms: 0,
+        };
+        let mut rng = StdRng::seed_from_u64(1);
+        let without_class = jittered_delay(&base, None, &mut rng);
+        let mut rng = StdRng::seed_from_u64(1);
+        let with_class = jittered_delay(&base, Some(&class), &mut rng);
+        assert_eq!(without_class, Duration::from_millis(20));
+        assert_eq!(with_class, Duration::from_millis(30));
+
+        let jittery = LinkParams {
+            delay_ms: 0,
+            jitter_ms: 2,
+            loss: 0.0,
+        };
+        let class_jitter = PeerClassLatency {
+            extra_delay_ms: 0,
+            jitter_ms: 2,
+        };
+        let mut rng = StdRng::seed_from_u64(99);
+        let combined = jittered_delay(&jittery, Some(&class_jitter), &mut rng);
+        assert!(combined <= Duration::from_millis(4));
     }
 }

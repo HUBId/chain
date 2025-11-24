@@ -20,6 +20,10 @@ assignments = [
 intra = { delay_ms = 24, jitter_ms = 5, loss = 0.0 }
 A-B = { delay_ms = 140, jitter_ms = 35, loss = 0.04 }
 
+[latency_profile]
+trusted = { extra_delay_ms = 6, jitter_ms = 3 }
+untrusted = { extra_delay_ms = 32, jitter_ms = 12 }
+
 [traffic.tx]
 publisher_bias = { type = "zipf", s = 1.05 }
 

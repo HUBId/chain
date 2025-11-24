@@ -66,9 +66,23 @@ validations before starting any processes:
   bounds for gossip messages. The partitioned flood drills now pin the range in
   the TOML profiles so CI can alternate between small (KiB-scale) and large
   (tens-of-KiB) payload pressure without editing the RON wrapper.
+- Latency profiles: add an optional `[latency_profile]` table to p2p TOML
+  profiles to inject extra per-peer-class delay/jitter. Configure one or both
+  of the `trusted`/`untrusted` entries (each supports `extra_delay_ms` and
+  `jitter_ms`), and optionally a dedicated `seed`. When no seed is provided the
+  profile inherits the simulation seed, so CI runs use the deterministic
+  `SIMNET_SEED` default without extra wiring.
 - Consensus section: defaults are `runs = 64`, `validators = 64`,
   `witness_commitments = 192`, and tamper `every_n = 8`. All consensus counts
   must be greater than zero.
+
+Example latency profile snippet:
+
+```
+[latency_profile]
+trusted = { extra_delay_ms = 6, jitter_ms = 3 }
+untrusted = { extra_delay_ms = 32, jitter_ms = 12 }
+```
 
 ## CI and nightly parity
 

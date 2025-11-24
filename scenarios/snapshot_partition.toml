@@ -20,6 +20,10 @@ assignments = [
 default = { delay_ms = 40, jitter_ms = 6, loss = 0.01 }
 A-B = { delay_ms = 160, jitter_ms = 40, loss = 0.05 }
 
+[latency_profile]
+trusted = { extra_delay_ms = 4, jitter_ms = 2 }
+untrusted = { extra_delay_ms = 28, jitter_ms = 10 }
+
 [traffic.tx]
 publisher_bias = { type = "uniform" }
 
