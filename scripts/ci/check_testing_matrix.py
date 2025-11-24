@@ -55,6 +55,12 @@ EXPECTED_MATRIX: Dict[str, Set[str]] = {
         "integration-workflows",
         "simnet-smoke",
     },
+    "Branch factor 256 + io-uring with pruning (default backend)": {
+        "combined-feature-lanes",
+    },
+    "Branch factor 256 + io-uring with pruning (backend-rpp-stark)": {
+        "combined-feature-lanes",
+    },
 }
 
 

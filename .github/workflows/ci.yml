@@ -998,6 +998,48 @@ PY
           name: integration-workflows-${{ matrix.name }}
           path: artifacts/integration/${{ matrix.name }}
 
+  combined-feature-lanes:
+    name: Combined storage + pruning (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default-branch256-io-uring
+            features: "branch_factor_256,io-uring"
+            no_default_features: ""
+          - name: backend-rpp-stark-branch256-io-uring
+            features: "branch_factor_256,io-uring,backend-rpp-stark"
+            no_default_features: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: combined-feature-lane-${{ matrix.name }}
+      - name: Run combined coverage lane
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            export XTASK_NO_DEFAULT_FEATURES='${{ matrix.no_default_features }}'
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            export XTASK_FEATURES='${{ matrix.features }}'
+          fi
+          cargo xtask test-combined-lane
+      - name: Collect combined lane artifacts (${{ matrix.name }})
+        if: always()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/combined/${{ matrix.name }}" logs
+      - name: Upload combined lane artifacts (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-feature-lane-${{ matrix.name }}
+          path: artifacts/combined/${{ matrix.name }}
+
   observability-metrics:
     name: Observability metrics (${{ matrix.name }})
     runs-on: ubuntu-latest
