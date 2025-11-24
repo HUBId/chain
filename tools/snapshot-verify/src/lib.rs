@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use base64::Engine;
@@ -14,6 +15,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH};
 use hex::FromHexError;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::Sha256;
 use thiserror::Error;
 
@@ -667,6 +669,7 @@ struct ProgressReporter<W: Write> {
     interval: u64,
     bytes_read: u64,
     next_log: u64,
+    started_at: Instant,
 }
 
 impl ProgressReporter<io::StderrLock<'static>> {
@@ -686,6 +689,7 @@ impl<W: Write> ProgressReporter<W> {
             interval: interval.max(1),
             bytes_read: 0,
             next_log: interval.max(1),
+            started_at: Instant::now(),
         }
     }
 
@@ -706,21 +710,37 @@ impl<W: Write> ProgressReporter<W> {
     }
 
     fn log_progress(&mut self) -> io::Result<()> {
-        match self.expected_size {
-            Some(total) if total > 0 => {
-                let percent = (self.bytes_read as f64 / total as f64 * 100.0).min(100.0);
-                writeln!(
-                    self.writer,
-                    "checksum progress: {} / {} bytes ({percent:.1}%)",
-                    self.bytes_read, total
-                )
-            }
-            _ => writeln!(
-                self.writer,
-                "checksum progress: {} bytes read",
-                self.bytes_read
-            ),
-        }
+        let total_bytes = self.expected_size;
+        let bytes_per_second = rate_bytes_per_second(self.bytes_read, self.started_at.elapsed());
+        let checksum_progress = total_bytes.map(|total| progress_ratio(self.bytes_read, total));
+
+        let entry = json!({
+            "event": "checksum_progress",
+            "bytes_downloaded": self.bytes_read,
+            "total_bytes": total_bytes,
+            "bytes_per_second": bytes_per_second,
+            "checksum_progress": checksum_progress,
+        });
+
+        serde_json::to_writer(&mut self.writer, &entry)?;
+        self.writer.write_all(b"\n")
+    }
+}
+
+fn rate_bytes_per_second(bytes_read: u64, elapsed: Duration) -> f64 {
+    let seconds = elapsed.as_secs_f64();
+    if seconds <= f64::EPSILON {
+        0.0
+    } else {
+        bytes_read as f64 / seconds
+    }
+}
+
+fn progress_ratio(bytes_read: u64, total_bytes: u64) -> f64 {
+    if total_bytes == 0 {
+        0.0
+    } else {
+        (bytes_read as f64 / total_bytes as f64).min(1.0)
     }
 }
 
@@ -754,7 +774,7 @@ mod tests {
     use assert_matches::assert_matches;
     use ed25519_dalek::{Signer, SigningKey};
     use metrics_exporter_prometheus::PrometheusBuilder;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::convert::TryFrom;
     use std::io::Cursor;
     use std::sync::OnceLock;
@@ -1195,19 +1215,28 @@ mod tests {
         assert_eq!(digest, hex::encode(expected));
 
         let output = String::from_utf8(log_buffer).expect("utf8 log");
-        let lines: Vec<_> = output.lines().collect();
+        let lines: Vec<Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("json line"))
+            .collect();
+
         assert!(lines.len() >= 3);
-        assert!(lines
-            .iter()
-            .all(|line| line.starts_with("checksum progress:")));
-        assert_eq!(
-            lines.last().unwrap(),
-            &format!(
-                "checksum progress: {} / {} bytes (100.0%)",
-                data.len(),
-                data.len()
-            )
-        );
+
+        let mut last_bytes = 0;
+        for entry in &lines {
+            assert_eq!(entry["event"], "checksum_progress");
+            assert_eq!(entry["total_bytes"], Value::from(data.len() as u64));
+            let bytes_downloaded = entry["bytes_downloaded"].as_u64().expect("bytes_downloaded");
+            assert!(bytes_downloaded >= last_bytes);
+            last_bytes = bytes_downloaded;
+            assert!(entry["bytes_per_second"].as_f64().expect("rate") >= 0.0);
+            let progress = entry["checksum_progress"].as_f64().expect("progress");
+            assert!(progress >= 0.0 && progress <= 1.0);
+        }
+
+        let final_entry = lines.last().expect("final progress entry");
+        assert_eq!(final_entry["bytes_downloaded"], Value::from(data.len() as u64));
+        assert_eq!(final_entry["checksum_progress"], Value::from(1.0));
     }
 
     #[test]
@@ -1228,9 +1257,31 @@ mod tests {
         assert_eq!(digest, hex::encode(Sha256::digest(&data)));
 
         let output = String::from_utf8(log_buffer).expect("utf8 log");
-        assert!(output
+        let lines: Vec<Value> = output
             .lines()
-            .all(|line| line.starts_with("checksum progress: ") && line.contains("bytes read")));
-        assert!(output.contains(&(data.len().to_string())));
+            .map(|line| serde_json::from_str(line).expect("json line"))
+            .collect();
+
+        assert!(!lines.is_empty());
+
+        let mut last_bytes = 0;
+        for entry in &lines {
+            assert_eq!(entry["event"], "checksum_progress");
+            assert!(entry["total_bytes"].is_null());
+            let bytes_downloaded = entry["bytes_downloaded"].as_u64().expect("bytes_downloaded");
+            assert!(bytes_downloaded >= last_bytes);
+            last_bytes = bytes_downloaded;
+            assert!(entry["bytes_per_second"].as_f64().expect("rate") >= 0.0);
+            assert!(entry["checksum_progress"].is_null());
+        }
+
+        assert_eq!(
+            lines
+                .last()
+                .expect("final entry")
+                .get("bytes_downloaded")
+                .and_then(|v| v.as_u64()),
+            Some(data.len() as u64)
+        );
     }
 }
