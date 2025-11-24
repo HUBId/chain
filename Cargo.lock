@@ -7577,6 +7577,7 @@ dependencies = [
  "p3-symmetric",
  "p3-uni-stark",
  "p3-util 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "prover-backend-interface",
  "serde",
  "serde_json",
  "sha2",

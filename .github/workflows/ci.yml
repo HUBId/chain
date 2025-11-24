@@ -719,6 +719,7 @@ PY
           XTASK_FEATURES: ${{ matrix.xtask_features }}
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo xtask test-firewood
 
   wallet-feature-matrix:
@@ -734,6 +735,7 @@ PY
       - name: Run wallet feature matrix
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo xtask test-wallet-feature-matrix
 
   firewood-ffi-go:
@@ -849,6 +851,7 @@ PY
       - name: Run unit validation suites
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
           fi
@@ -884,6 +887,7 @@ PY
       - name: Run chain-cli smoke checks (dual default/runtime-cli passes)
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo xtask test-cli
           cargo run -p rpp-chain -- --help >/dev/null
           cargo run -p rpp-node --bin rpp-node -- --help >/dev/null
@@ -901,6 +905,7 @@ PY
       - name: Run dual-approval audit guard
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo test -p rpp-chain --locked --test admission
 
   worm-export-smoke:
@@ -916,10 +921,12 @@ PY
       - name: Exercise WORM export stub pipeline
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo xtask test-worm-export
       - name: Validate WORM export failure guard
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo test --test compliance --features integration -- worm_export_failure_emits_metric_and_log
       - name: Upload WORM smoke artifacts
         uses: actions/upload-artifact@v4
@@ -940,6 +947,7 @@ PY
       - name: Generate snapshot verifier bundle
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           cargo xtask snapshot-verifier
       - name: Upload snapshot verifier artifacts
         uses: actions/upload-artifact@v4
@@ -993,6 +1001,7 @@ PY
       - name: Run integration workflows
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           echo "::notice title=Mempool probe artifacts::Artifacts will be written to ${MEMPOOL_SPAM_ARTIFACT_DIR}, ${MEMPOOL_EVICTION_ARTIFACT_DIR}, and ${MEMPOOL_ORDERING_ARTIFACT_DIR} when failures occur"
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
@@ -1005,6 +1014,7 @@ PY
         shell: bash
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           args=(test --locked --test root_corruption)
           if [ -n "${{ matrix.no_default_features }}" ]; then
             args+=(--no-default-features)
@@ -1051,6 +1061,7 @@ PY
       - name: Run combined coverage lane
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES='${{ matrix.no_default_features }}'
           fi
@@ -1110,6 +1121,7 @@ PY
           FINALITY_ALERT_ARTIFACT_DIR: artifacts/finality-alert-probe/${{ matrix.name }}
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
           fi
@@ -1171,6 +1183,7 @@ PY
       - name: Run simnet scenario
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
           fi
@@ -1232,6 +1245,7 @@ PY
       - name: Run regression harness
         run: |
           set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
           rm -rf target/simnet/regression-ci
           cargo run -p simnet --bin regression -- \
             --artifacts-root target/simnet/regression-ci

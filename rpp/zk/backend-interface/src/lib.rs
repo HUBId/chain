@@ -18,6 +18,8 @@
 //! supported by the STWO wallet prover so downstream components can request keys
 //! and proofs for identity, state transition, pruning, recursive aggregation,
 //! uptime, consensus, and transaction checks.
+pub mod determinism;
+
 use std::fmt;
 
 pub mod blake2s {

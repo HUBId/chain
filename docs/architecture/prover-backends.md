@@ -82,3 +82,12 @@ backend identifiers before constructing `WitnessHeader` instances, ensuring a
 single source of truth for backend selection while keeping the blueprint enums
 unchanged.【F:rpp/proofs/rpp.rs†L1-L77】
 
+## Deterministic proving mode
+
+Setting `RPP_PROVER_DETERMINISTIC=1` enables deterministic proving across both
+the Plonky3 and STWO backends. The flag pins RNG seeds derived from the
+environment value and sorts Plonky3 setup artifacts, ensuring the same witness
+produces byte-identical proofs in repeated runs. CI exports this flag to reduce
+test flakiness; unset it when running throughput or latency benchmarks so the
+backends can use fresh randomness during performance experiments.【F:rpp/zk/backend-interface/src/determinism.rs†L1-L35】【F:prover/plonky3_backend/src/lib.rs†L552-L584】【F:prover/prover_stwo_backend/src/utils/fri.rs†L108-L135】
+
