@@ -630,6 +630,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             scenario_path: "tools/simnet/scenarios/consensus_reorg_stark.ron",
             description: "Exercise the STARK backend reorg scenario",
         },
+        SimnetPreset {
+            slug: "reorg-rpp-stark",
+            scenario_path: "tools/simnet/scenarios/consensus_reorg_rpp_stark.ron",
+            description: "Exercise RPP-STARK fork-choice and recovery",
+        },
     ]
 }
 
@@ -829,6 +834,7 @@ fn run_simnet_smoke() -> Result<()> {
     ];
     if has_feature_flag("backend-rpp-stark") {
         scenarios.push("reorg-stark");
+        scenarios.push("reorg-rpp-stark");
     }
 
     for slug in scenarios {

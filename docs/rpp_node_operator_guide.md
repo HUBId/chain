@@ -113,6 +113,24 @@ an. `scripts/analyze_simnet.py` wertet die JSON-Summary aus, bricht bei
 Gegenüberstellung von Erfolgs- und Fehlerpfaden ist ebenfalls im Runbook
 festgehalten.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/performance/consensus_proofs.md†L1-L160】
 
+**RPP-STARK-Reorg-Checks:** Für das `backend-rpp-stark`-Feature ergänzt das
+Nightly einen Reorg-Drill (`consensus-reorg-rpp-stark`), der widersprüchliche
+Votes einspeist, Proof-Bundles mit dem RPP-STARK-Backend validiert und danach
+eine neue Finalitätsrunde erzwingt.【F:tools/simnet/scenarios/consensus_reorg_rpp_stark.ron†L1-L31】【F:tests/reorg_rpp_stark.rs†L1-L263】
+* Erwartete Logs: `ConsensusFault`-Einträge im Slashing-Ledger für die
+  doppelt signierten Prevote/Precommit-Versuche sowie erfolgreiche
+  Proof-Verifikationen (`rpp.runtime.verifier.accepted_total{backend="rpp-stark"}`)
+  für den kanonischen Zweig.
+* Erwartete Metriken: ein abgelehntes Verifikationsereignis, sobald das
+  manipulierte Bundle geprüft wird, gefolgt von ansteigenden
+  Accepted-Zählern, sobald der Reorg abgearbeitet ist und neue Blöcke
+  finalisiert werden.
+* Operator-Aktion: Falls der Tip auf der Fork einfriert oder die
+  Accepted-Zähler nicht steigen, die Simnet-Prozesse mit `--keep-alive`
+  erneut starten, Proof-Bundles aus `target/simnet/consensus-reorg-rpp-stark/`
+  extrahieren und die Beobachtungen im Incident-Runbook dokumentieren, bevor
+  Validatoren rotiert werden.
+
 Die Konsensus-Beweise werden zusätzlich softwareseitig gehärtet: `ConsensusCircuit`
 im Backend bindet VRF-Ausgaben, -Beweise und Quorum-Digests an den Block-Hash,
 die Wallet-Adapter lassen nur valide Zeugen in die Prover-Pipeline, und der
