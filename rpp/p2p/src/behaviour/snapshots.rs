@@ -589,6 +589,8 @@ struct SessionState {
     last_dispatched_kind: Option<SnapshotItemKind>,
     last_progress: Instant,
     chunk_size: Option<u64>,
+    total_chunks: Option<u64>,
+    total_updates: Option<u64>,
     capabilities: SnapshotChunkCapabilities,
     plan_max_concurrent_requests: Option<usize>,
     chunk_sizing: ChunkSizingStrategy,
@@ -621,10 +623,17 @@ impl SessionState {
             last_dispatched_kind: None,
             last_progress: Instant::now(),
             chunk_size: capabilities.chunk_size,
+            total_chunks: None,
+            total_updates: None,
             capabilities,
             plan_max_concurrent_requests: None,
             chunk_sizing,
         }
+    }
+
+    fn track_plan_shape(&mut self, plan: &NetworkStateSyncPlan) {
+        self.total_chunks = Some(plan.chunks.len() as u64);
+        self.total_updates = Some(plan.light_client_updates.len() as u64);
     }
 
     fn mark_progress(&mut self) {
@@ -792,6 +801,9 @@ struct SnapshotStreamMetrics {
     request_telemetry: SnapshotRequestTelemetry,
     lag_seconds: Gauge<f64, AtomicU64>,
     resume_events: Family<Vec<(String, String)>, Counter>,
+    resume_validated_bytes: Gauge<u64, AtomicU64>,
+    resume_progress_ratio: Gauge<f64, AtomicU64>,
+    resume_checksum_state: Family<Vec<(String, String)>, Gauge<u64, AtomicU64>>,
     failures: Family<Vec<(String, String)>, Counter>,
     chunk_send_latency_seconds: Histogram,
     chunk_send_queue_depth: Gauge<u64, AtomicU64>,
@@ -1000,10 +1012,28 @@ impl SnapshotStreamMetrics {
         let request_telemetry = SnapshotRequestTelemetry::register(registry);
 
         let resume_events = Family::<Vec<(String, String)>, Counter>::default();
+        let resume_validated_bytes = Gauge::default();
+        let resume_progress_ratio = Gauge::default();
+        let resume_checksum_state = Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
         registry.register(
             "snapshot_resume_events_total",
             "Snapshot resume attempts grouped by result",
             resume_events.clone(),
+        );
+        registry.register(
+            "snapshot_resume_validated_bytes",
+            "Approximate bytes validated when a resume request completes",
+            resume_validated_bytes.clone(),
+        );
+        registry.register(
+            "snapshot_resume_progress_ratio",
+            "Estimated resume progress as a fraction of the advertised plan",
+            resume_progress_ratio.clone(),
+        );
+        registry.register(
+            "snapshot_resume_checksum_state",
+            "Latest checksum validation state observed during resume",
+            resume_checksum_state.clone(),
         );
 
         let lag_seconds = Gauge::<f64, AtomicU64>::default();
@@ -1120,6 +1150,9 @@ impl SnapshotStreamMetrics {
             request_telemetry,
             lag_seconds,
             resume_events,
+            resume_validated_bytes,
+            resume_progress_ratio,
+            resume_checksum_state,
             failures,
             chunk_send_latency_seconds,
             chunk_send_queue_depth,
@@ -1165,6 +1198,22 @@ impl SnapshotStreamMetrics {
     fn record_resume(&self, result: &str) {
         let labels = vec![("result".to_string(), result.to_string())];
         self.resume_events.get_or_create(&labels).inc();
+    }
+
+    fn record_resume_progress(
+        &self,
+        validated_bytes: u64,
+        progress_ratio: f64,
+        checksum_state: &str,
+    ) {
+        self.resume_validated_bytes.set(validated_bytes);
+        self.resume_progress_ratio.set(progress_ratio);
+
+        for state in ["consistent", "mismatch", "unknown"] {
+            self.resume_checksum_state
+                .get_or_create(&vec![("state".to_string(), state.to_string())])
+                .set(if state == checksum_state { 1 } else { 0 });
+        }
     }
 
     fn record_failure(&self, direction: &str, kind: SnapshotItemKind) {
@@ -2700,6 +2749,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         max_concurrent_requests,
                     });
                     state.set_plan_concurrency_limit(plan.max_concurrent_requests);
+                    state.track_plan_shape(&plan);
                     if let Some(size) = chunk_size {
                         self.record_negotiated_chunk_size("consumer", size);
                     }
@@ -2806,6 +2856,22 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     state.next_chunk_index = chunk_index;
                     state.next_update_index = update_index;
                     state.mark_progress();
+
+                    #[cfg(feature = "metrics")]
+                    if let Some(metrics) = &self.metrics {
+                        let chunk_size = chunk_size.or(state.chunk_size).unwrap_or(0);
+                        let validated_bytes = chunk_index.saturating_mul(chunk_size);
+                        let progress_ratio = state
+                            .total_chunks
+                            .filter(|total| *total > 0)
+                            .map(|total| chunk_index as f64 / total as f64)
+                            .unwrap_or(0.0);
+                        metrics.record_resume_progress(
+                            validated_bytes,
+                            progress_ratio,
+                            "consistent",
+                        );
+                    }
                 }
                 self.update_stream_metrics();
                 self.record_resume_success();
@@ -2834,6 +2900,31 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     Some(SnapshotItemKind::Resume)
                 ) {
                     self.record_resume_failure();
+                    #[cfg(feature = "metrics")]
+                    if let Some(metrics) = &self.metrics {
+                        let (validated_bytes, progress_ratio) = self
+                            .sessions
+                            .get(&session_id)
+                            .map(|state| {
+                                let size = state.chunk_size.unwrap_or(0);
+                                let validated_bytes = state.next_chunk_index.saturating_mul(size);
+                                let progress_ratio = state
+                                    .total_chunks
+                                    .filter(|total| *total > 0)
+                                    .map(|total| state.next_chunk_index as f64 / total as f64)
+                                    .unwrap_or(0.0);
+                                (validated_bytes, progress_ratio)
+                            })
+                            .unwrap_or((0, 0.0));
+                        let state = if message.to_ascii_lowercase().contains("checksum")
+                            || message.to_ascii_lowercase().contains("digest")
+                        {
+                            "mismatch"
+                        } else {
+                            "unknown"
+                        };
+                        metrics.record_resume_progress(validated_bytes, progress_ratio, state);
+                    }
                 }
                 self.pending_events.push_back(SnapshotsEvent::Error {
                     peer,
@@ -3319,9 +3410,10 @@ mod tests {
 
         let peer = PeerId::random();
         let session = SnapshotSessionId::new(41);
-        behaviour
-            .sessions
-            .insert(session, SessionState::new(peer.clone()));
+        let mut initial_state = SessionState::new(peer.clone());
+        initial_state.chunk_size = Some(8);
+        initial_state.total_chunks = Some(10);
+        behaviour.sessions.insert(session, initial_state);
 
         behaviour
             .request_resume(peer.clone(), session, "plan-a".to_string())
@@ -3356,7 +3448,7 @@ mod tests {
             failed_session,
             SnapshotsResponse::Error {
                 session_id: failed_session,
-                message: "resume failed".into(),
+                message: "checksum mismatch on resume".into(),
             },
             Some(timing),
         );
@@ -3385,6 +3477,30 @@ mod tests {
                 &buffer,
                 "snapshot_resume_events_total",
                 &[("result", "failure")],
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            metric_value(&buffer, "snapshot_resume_validated_bytes"),
+            Some(16.0)
+        );
+        assert_eq!(
+            metric_value(&buffer, "snapshot_resume_progress_ratio"),
+            Some(0.2)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_resume_checksum_state",
+                &[("state", "consistent")],
+            ),
+            Some(0.0)
+        );
+        assert_eq!(
+            metric_value_with_labels(
+                &buffer,
+                "snapshot_resume_checksum_state",
+                &[("state", "mismatch")],
             ),
             Some(1.0)
         );
