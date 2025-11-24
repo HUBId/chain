@@ -108,6 +108,21 @@ The `/p2p/snapshots*` and `/state-sync/*` handlers surface these codes so
 operators can map RPC responses directly to the remediation steps in the
 troubleshooting guide.
 
+### SDK error mapping helpers
+
+The Rust (`rpp/chain-cli`), Go (`ffi` module), and TypeScript (`validator-ui`)
+SDK layers expose typed error helpers that translate the snapshot `code` field
+into structured enums. Each helper also derives retry delays from
+`X-RateLimit-Reset`/`Retry-After` headers so client backoff matches the server’s
+token-bucket policy. See the language-specific docs below for examples:
+
+* Rust: `SnapshotError` and `classify_snapshot_error` in
+  `rpp/chain-cli/src/snapshot_errors.rs`.
+* Go: `SnapshotError` and `ClassifySnapshotResponse` in
+  `ffi/snapshotclient.go`.
+* TypeScript: `SnapshotError` and `snapshotRequest` in
+  `validator-ui/src/lib/snapshotClient.ts`.
+
 ## Live API key rotation
 
 RPC authentication secrets are only loaded during process startup; there is no

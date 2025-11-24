@@ -41,7 +41,9 @@ use snapshot_verify::{
 use tokio::task;
 
 mod rate_limit;
+mod snapshot_errors;
 pub use rate_limit::{compute_retry_delay, rate_limit_window, RateLimitWindow};
+pub use snapshot_errors::{classify_snapshot_error, SnapshotError, SnapshotErrorKind};
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
 const DEFAULT_WALLET_CONFIG: &str = "config/wallet.toml";
