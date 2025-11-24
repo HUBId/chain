@@ -921,6 +921,10 @@ PY
     name: Integration workflows (${{ matrix.name }})
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.experimental }}
+    env:
+      MEMPOOL_EVICTION_ARTIFACT_DIR: artifacts/mempool/${{ matrix.name }}/eviction
+      MEMPOOL_ORDERING_ARTIFACT_DIR: artifacts/mempool/${{ matrix.name }}/ordering
+      MEMPOOL_SPAM_ARTIFACT_DIR: artifacts/mempool/${{ matrix.name }}/spam
     strategy:
       fail-fast: false
       matrix:
@@ -955,6 +959,7 @@ PY
       - name: Run integration workflows
         run: |
           set -euo pipefail
+          echo "::notice title=Mempool probe artifacts::Artifacts will be written to ${MEMPOOL_SPAM_ARTIFACT_DIR}, ${MEMPOOL_EVICTION_ARTIFACT_DIR}, and ${MEMPOOL_ORDERING_ARTIFACT_DIR} when failures occur"
           if [ -n "${{ matrix.no_default_features }}" ]; then
             export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
           fi
@@ -978,7 +983,10 @@ PY
         if: always()
         run: |
           set -euo pipefail
-          scripts/ci/collect_test_artifacts.sh "artifacts/integration/${{ matrix.name }}" logs
+          scripts/ci/collect_test_artifacts.sh "artifacts/integration/${{ matrix.name }}" logs \
+            "${MEMPOOL_SPAM_ARTIFACT_DIR}" \
+            "${MEMPOOL_EVICTION_ARTIFACT_DIR}" \
+            "${MEMPOOL_ORDERING_ARTIFACT_DIR}"
       - name: Upload integration artifacts (${{ matrix.name }})
         if: always()
         uses: actions/upload-artifact@v4
