@@ -1,0 +1,32 @@
+{
+  "name": "consensus-reorg-rpp-stark",
+  "description": "Exercise reorg handling with RPP-STARK proof validation and recovery",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info",
+    "RUST_BACKTRACE": "1"
+  },
+  "resources": {
+    "cpus": 12,
+    "memory_gb": 24
+  },
+  "nodes": [
+    {
+      "label": "consensus-reorg-rpp-stark",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--quiet",
+        "--test",
+        "reorg_rpp_stark",
+        "--",
+        "--nocapture"
+      ],
+      "startup_timeout_ms": 240000,
+      "working_dir": "../.."
+    }
+  ],
+  "wallets": [],
+  "p2p": null,
+  "consensus": null
+}

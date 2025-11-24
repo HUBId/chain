@@ -96,3 +96,29 @@ To debug a failure:
    an escalation fired or was suppressed, then adjust the expressions or
    thresholds accordingly.
 
+## RPP-STARK reorg drills and observability
+
+Nightly simnet runs now include an RPP-STARK-specific reorg scenario that
+builds competing chains, rejects conflicting votes, validates the proof bundles
+on the winning branch, and proves the chain can recover with fresh finality
+after the fork.【F:tools/simnet/scenarios/consensus_reorg_rpp_stark.ron†L1-L31】【F:tests/reorg_rpp_stark.rs†L1-L263】 Operators should
+expect the following telemetry and logs when replaying or debugging the drill:
+
+* **Verifier counters:** `rpp.runtime.verifier.accepted_total{backend="rpp-stark"}`
+  should increment as soon as the canonical bundle is revalidated. The test
+  asserts a non-zero accepted count and records the rejection of a tampered
+  proof when a byte is flipped in the state proof.
+* **Slashing events:** conflicting prevotes/precommits emit
+  `ConsensusFault` entries in the validator slashing log. The scenario checks
+  for at least two new events, confirming double-sign protection stays wired.
+* **Fork-choice confirmation:** the latest block remains pinned to the
+  pre-fork hash while conflicting votes are rejected. After submitting a new
+  transaction, the recovered tip must advance and finality markers reappear in
+  `consensus_status` responses, demonstrating healthy progress past the fork.
+
+When these signals deviate (e.g., verifier accept counters remain zero or the
+tip height stalls), capture `rpp-node` logs with `rpp.consensus` and
+`rpp.proofs` targets enabled, export the slashing ledger via `node_handle
+slashing_events`, and rerun the simnet scenario with `--keep-alive` to inspect
+the intermediate proof bundles before engaging the incident runbook.
+
