@@ -36,6 +36,10 @@ run to confirm alerts fire and then clear:
 - **Recovery guard** – the recovery fixture keeps lag and height gaps below
   thresholds while heights advance, proving alerts return to green once the
   network catches up.【F:tools/alerts/validation.py†L1205-L1270】【F:tools/alerts/tests/test_alert_validation.py†L15-L61】
+- **Missed slots and blocks** – synthetic stores now model proposers skipping
+  slots (lag/gap growth followed by recovery) and a flat block height section to
+  prove `ConsensusFinalityLag*` and `ConsensusLivenessStall` alerts fire and
+  clear when production resumes.【F:tools/alerts/validation.py†L1342-L1485】【F:tools/alerts/tests/test_alert_validation.py†L15-L61】
 - **Timetoke epoch delay** – simulates a delayed timetoke rollover so
   `TimetokeEpochDelayWarning` and `TimetokeEpochDelayCritical` page when epoch
   age exceeds one or one-and-a-half hours, then drop once epochs resume.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
@@ -90,6 +94,7 @@ python tools/alerts/validate_alerts.py --artifacts target/alert-probes
 ```
 
 CI executes the same sequence in the `alert-probes` workflow job and uploads the
-JSON summary as `alert-probes/alert_probe_results.json`. The job fails if any
-expected alert is missing, ensuring regressions are caught before
-merge.【F:.github/workflows/ci.yml†L393-L425】【F:tools/alerts/validate_alerts.py†L64-L87】
+JSON summary as `alert-probes/alert_probe_results.json` plus an `exit_code.txt`
+capturing probe failures. The nightly drill mirrors the CI job and preserves
+artifacts even when probes fail, making it easier to debug missed-slot or block
+stall regressions.【F:.github/workflows/ci.yml†L393-L425】【F:.github/workflows/nightly.yml†L1-L87】【F:tools/alerts/validate_alerts.py†L64-L87】

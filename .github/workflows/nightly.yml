@@ -84,10 +84,27 @@ jobs:
           python -m pip install -r tools/alerts/requirements.txt
 
       - name: Run alert validation drills
+        env:
+          ALERT_PROBE_ARTIFACT_DIR: artifacts/alert-probes
         run: |
           set -euo pipefail
-          python tools/alerts/validate_alerts.py
+          mkdir -p "$ALERT_PROBE_ARTIFACT_DIR"
+          status=0
+          set +e
+          python tools/alerts/validate_alerts.py --artifacts "$ALERT_PROBE_ARTIFACT_DIR"
+          status=$((status | $?))
           python -m pytest tools/alerts/tests
+          status=$((status | $?))
+          set -e
+          echo "$status" > "$ALERT_PROBE_ARTIFACT_DIR/exit_code.txt"
+          exit "$status"
+
+      - name: Upload alert validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alert-probes
+          path: artifacts/alert-probes
 
   telemetry-chaos:
     name: Telemetry exporter chaos drill

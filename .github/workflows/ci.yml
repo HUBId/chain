@@ -427,8 +427,15 @@ PY
         run: |
           set -euo pipefail
           mkdir -p "$ALERT_PROBE_ARTIFACT_DIR"
+          status=0
+          set +e
           python -m pytest tools/alerts/tests
+          status=$((status | $?))
           python tools/alerts/validate_alerts.py --artifacts "$ALERT_PROBE_ARTIFACT_DIR"
+          status=$((status | $?))
+          set -e
+          echo "$status" > "$ALERT_PROBE_ARTIFACT_DIR/exit_code.txt"
+          exit "$status"
       - name: Upload probe artifacts
         if: always()
         uses: actions/upload-artifact@v4

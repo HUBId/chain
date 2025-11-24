@@ -23,7 +23,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 8
+    assert len(results) == 12
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -31,6 +31,10 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "snapshot-anomaly",
         "uptime-pause",
         "uptime-recovery",
+        "missed-slots",
+        "missed-slot-recovery",
+        "missed-blocks",
+        "missed-block-recovery",
         "restart-finality-correlation",
         "timetoke-epoch-delay",
         "timetoke-epoch-recovery",
@@ -55,6 +59,22 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     uptime_recovery = results_by_case["uptime-recovery"]
     assert uptime_recovery.fired_events == []
     assert uptime_recovery.webhook_payloads == []
+
+    missed_slots = results_by_case["missed-slots"]
+    assert {event.name for event in missed_slots.fired_events} == missed_slots.case.expected_alerts
+    assert len(missed_slots.webhook_payloads) == len(missed_slots.fired_events)
+
+    missed_slot_recovery = results_by_case["missed-slot-recovery"]
+    assert missed_slot_recovery.fired_events == []
+    assert missed_slot_recovery.webhook_payloads == []
+
+    missed_blocks = results_by_case["missed-blocks"]
+    assert {event.name for event in missed_blocks.fired_events} == missed_blocks.case.expected_alerts
+    assert len(missed_blocks.webhook_payloads) == len(missed_blocks.fired_events)
+
+    missed_block_recovery = results_by_case["missed-block-recovery"]
+    assert missed_block_recovery.fired_events == []
+    assert missed_block_recovery.webhook_payloads == []
 
     restart_correlation = results_by_case["restart-finality-correlation"]
     assert {event.name for event in restart_correlation.fired_events} == restart_correlation.case.expected_alerts

@@ -75,6 +75,31 @@ shared view:
 5. Document the timeline, Grafana snapshots, and mitigations in the incident log
    and attach them to the alert ticket.
 
+## Missed slots and stalled block production
+
+Consensus alerts also guard against missed proposer slots and prolonged blocks
+stalling the chain:
+
+* **Missed slots:** the same `finality_lag_slots` and `finalized_height_gap`
+  alerts act as an early warning when proposers fail to produce or finalize
+  blocks. Warning thresholds trip after five minutes above 12 slots or four
+  blocks, with critical pages at 24 slots and eight blocks for two minutes.【F:ops/alerts/consensus/finality.yaml†L1-L66】
+* **Missed blocks:** `ConsensusLivenessStall` fires when
+  `chain_block_height` stays flat over a ten-minute window, indicating stalled
+  block production even if finality appears healthy.【F:tools/alerts/validation.py†L780-L808】
+
+When either alert fires:
+
+1. **Confirm proposer rotation.** Check the `finality_lag_slots` and
+   `chain_block_height` panels to verify whether the gap is still widening or
+   whether blocks have resumed.
+2. **Recover stuck proposers.** Bounce validators that stopped producing,
+   rebalance peers, and check for throttled resources (CPU, disk) before the
+   critical window elapses.
+3. **Validate clearance.** Ensure the lag drops below the warning thresholds
+   and block height resumes increasing; the missed-slot recovery drill in the
+   alert probes records that alerts clear once metrics return to baseline.【F:tools/alerts/validation.py†L1424-L1485】【F:tools/alerts/tests/test_alert_validation.py†L15-L61】
+
 ## Validation drills
 
 `cargo test --test finality_alert_probe` replays the alert thresholds and
