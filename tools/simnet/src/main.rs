@@ -11,12 +11,13 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use sysinfo::System;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::SimnetConfig;
@@ -45,6 +46,10 @@ struct Cli {
     /// Override the RNG seed used by p2p and consensus harnesses
     #[arg(long, env = "SIMNET_SEED")]
     seed: Option<u64>,
+
+    /// Continue even when the host does not meet the scenario resource guidance
+    #[arg(long)]
+    allow_insufficient_resources: bool,
 }
 
 #[tokio::main]
@@ -69,6 +74,7 @@ async fn main() -> Result<()> {
     config
         .validate()
         .with_context(|| format!("invalid scenario {}", scenario_path.display()))?;
+    enforce_resources(&config, cli.allow_insufficient_resources)?;
     let artifacts_dir = config.resolve_artifacts_dir(cli.artifacts_dir.as_deref())?;
 
     let mut runner = SimnetRunner::new(config, artifacts_dir, cli.seed);
@@ -132,6 +138,47 @@ fn resolve_scenario_path(cli: &Cli) -> Result<PathBuf> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+fn enforce_resources(config: &SimnetConfig, allow_insufficient: bool) -> Result<()> {
+    let Some(resources) = &config.resources else {
+        return Ok(());
+    };
+
+    let system = System::new_all();
+    let host_cpus = system.cpus().len();
+    let host_memory = system.total_memory();
+
+    info!(
+        target = "simnet::resources",
+        required_cpus = resources.cpus,
+        host_cpus,
+        required_memory_gb = resources.memory_gb,
+        host_memory_gb = bytes_to_gb(host_memory),
+        "resource guidance",
+    );
+
+    if host_cpus < resources.cpus || host_memory < resources.memory_bytes() {
+        if allow_insufficient {
+            warn!(
+                target = "simnet::resources",
+                "host resources are below scenario guidance; continuing due to --allow-insufficient-resources"
+            );
+            return Ok(());
+        }
+
+        bail!(
+            "host resources below scenario guidance ({} cpus, {} GiB required); rerun with --allow-insufficient-resources to override",
+            resources.cpus,
+            resources.memory_gb,
+        );
+    }
+
+    Ok(())
+}
+
+fn bytes_to_gb(bytes: u64) -> f64 {
+    bytes as f64 / 1_073_741_824f64
 }
 
 struct HealthServer {

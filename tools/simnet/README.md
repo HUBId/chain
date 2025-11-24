@@ -7,8 +7,8 @@ run the common presets locally and to mirror the scenarios exercised by CI.
 ## CLI presets
 
 ```
-cargo xtask simnet --profile <name> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
-cargo xtask simnet --scenario <path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>]
+cargo xtask simnet --profile <name> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>] [--allow-insufficient-resources]
+cargo xtask simnet --scenario <path> [--artifacts-dir <path>] [--keep-alive] [--seed <u64>] [--allow-insufficient-resources]
 ```
 
 Use `--profile` to load the canned simnet parameter sets that CI exercises; fall
@@ -16,15 +16,15 @@ back to `--scenario` for ad-hoc RON files.
 
 ### Available profiles
 
-| Name | Scenario file | Description |
-| --- | --- | --- |
-| `block-pipeline` | `tools/simnet/scenarios/ci_block_pipeline.ron` | Exercises the CI block pipeline harness. |
-| `state-sync-guard` | `tools/simnet/scenarios/ci_state_sync_guard.ron` | Validates guard rails around state sync. |
-| `quorum-stress` | `tools/simnet/scenarios/consensus_quorum_stress.ron` | Drives the consensus quorum stress drill. |
-| `partition` | `tools/simnet/scenarios/snapshot_partition.ron` | Partitions validators while testing snapshot recovery. |
-| `flood` (also `partitioned-flood`) | `tools/simnet/scenarios/partitioned_flood.ron` | Runs the partitioned flood drill using gossip templates. |
-| `small-world` | `tools/simnet/scenarios/small_world_smoke.ron` | Executes the in-process small world smoke harness. |
-| `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. |
+| Name | Scenario file | Description | Resource guidance (CPU / RAM) |
+| --- | --- | --- | --- |
+| `block-pipeline` | `tools/simnet/scenarios/ci_block_pipeline.ron` | Exercises the CI block pipeline harness. | `4` cores / `8 GiB` |
+| `state-sync-guard` | `tools/simnet/scenarios/ci_state_sync_guard.ron` | Validates guard rails around state sync. | `8` cores / `16 GiB` |
+| `quorum-stress` | `tools/simnet/scenarios/consensus_quorum_stress.ron` | Drives the consensus quorum stress drill. | `16` cores / `32 GiB` |
+| `partition` | `tools/simnet/scenarios/snapshot_partition.ron` | Partitions validators while testing snapshot recovery. | `8` cores / `16 GiB` |
+| `flood` (also `partitioned-flood`) | `tools/simnet/scenarios/partitioned_flood.ron` | Runs the partitioned flood drill using gossip templates. | `6` cores / `12 GiB` |
+| `small-world` | `tools/simnet/scenarios/small_world_smoke.ron` | Executes the in-process small world smoke harness. | `4` cores / `8 GiB` |
+| `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. | `12` cores / `24 GiB` |
 
 Pass a custom path to execute ad-hoc scenarios:
 
@@ -38,6 +38,14 @@ Use `--artifacts-dir` to control where logs and outputs are written and
 used by both the p2p harness and the consensus load generator. CI defaults to
 `0x53494d4e4554` when no seed is provided so runs remain reproducible; set
 `SIMNET_SEED` to a different value locally when fuzzing is desired.
+
+### Resource checks
+
+Each scenario can advertise recommended CPU and memory needs through the
+`resources` block in the RON file. Simnet logs the detected host totals and
+refuses to start when the machine has fewer cores or less RAM than requested.
+Pass `--allow-insufficient-resources` to bypass the guard rail when a
+best-effort run is acceptable; a warning is emitted when the override is used.
 
 ## Scenario configuration
 

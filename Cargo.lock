@@ -5246,7 +5246,7 @@ dependencies = [
  "libp2p-swarm",
  "libp2p-swarm-derive",
  "memory-stats",
- "sysinfo",
+ "sysinfo 0.33.1",
  "tokio",
  "tracing",
 ]
@@ -9723,6 +9723,7 @@ dependencies = [
  "rpp-sim",
  "serde",
  "serde_json",
+ "sysinfo 0.30.13",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -10253,6 +10254,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.30.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a5b4ddaee55fb2bea2bf0e5000747e5f5c0de765e5a5ff87f4cd106439f4bb3"
+dependencies = [
+ "cfg-if",
+ "core-foundation-sys",
+ "libc",
+ "ntapi",
+ "once_cell",
+ "rayon",
+ "windows 0.52.0",
 ]
 
 [[package]]
