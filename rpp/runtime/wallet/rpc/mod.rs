@@ -61,6 +61,13 @@ impl AuthToken {
 }
 
 /// Authentication error surfaced by the RPC layer.
+#[derive(Clone, Debug)]
+pub struct RateLimitWindow {
+    limit: NonZeroU64,
+    remaining: u64,
+    reset_after: Duration,
+}
+
 #[derive(Debug)]
 pub struct RpcError {
     status: StatusCode,
@@ -68,6 +75,7 @@ pub struct RpcError {
     message: String,
     wallet_code: Option<WalletRpcErrorCode>,
     details: Option<Value>,
+    rate_limit: Option<RateLimitWindow>,
 }
 
 impl RpcError {
@@ -79,6 +87,7 @@ impl RpcError {
             message: "wallet RPC authentication failed".to_string(),
             wallet_code: None,
             details: None,
+            rate_limit: None,
         }
     }
 
@@ -91,7 +100,23 @@ impl RpcError {
             message: "wallet RPC rate limit exceeded".to_string(),
             wallet_code: None,
             details: None,
+            rate_limit: None,
         }
+    }
+
+    pub fn with_rate_limit(mut self, window: RateLimitWindow) -> Self {
+        self.rate_limit = Some(window);
+        self
+    }
+
+    pub fn with_wallet_details(
+        mut self,
+        wallet_code: WalletRpcErrorCode,
+        details: Option<Value>,
+    ) -> Self {
+        self.wallet_code = Some(wallet_code);
+        self.details = details;
+        self
     }
 
     pub fn rbac_forbidden(required: &'static [WalletRole], granted: &WalletRoleSet) -> Self {
@@ -120,6 +145,7 @@ impl RpcError {
             message,
             wallet_code: Some(WalletRpcErrorCode::RbacForbidden),
             details: Some(details),
+            rate_limit: None,
         }
     }
 
@@ -135,6 +161,10 @@ impl RpcError {
 
     pub fn wallet_code(&self) -> Option<&WalletRpcErrorCode> {
         self.wallet_code.as_ref()
+    }
+
+    pub fn rate_limit(&self) -> Option<&RateLimitWindow> {
+        self.rate_limit.as_ref()
     }
 
     pub fn details(&self) -> Option<&Value> {
@@ -216,19 +246,24 @@ impl RateLimiter {
         }
     }
 
-    fn try_acquire(&self) -> bool {
+    fn try_acquire(&self) -> Result<(), RateLimitWindow> {
         let mut state = self.state.lock();
         let now = Instant::now();
-        if now.saturating_duration_since(state.window_start) >= self.interval {
+        let elapsed = now.saturating_duration_since(state.window_start);
+        if elapsed >= self.interval {
             state.window_start = now;
             state.count = 0;
         }
 
         if state.count < self.capacity.get() {
             state.count += 1;
-            true
+            Ok(())
         } else {
-            false
+            Err(RateLimitWindow {
+                limit: self.capacity,
+                remaining: 0,
+                reset_after: self.interval.saturating_sub(elapsed),
+            })
         }
     }
 }
@@ -321,7 +356,7 @@ where
         }
 
         if let Some(limiter) = &self.rate_limiter {
-            if !limiter.try_acquire() {
+            if let Err(window) = limiter.try_acquire() {
                 let duration = start.elapsed();
                 self.record_outcome(
                     audit_context.as_ref(),
@@ -329,7 +364,7 @@ where
                     RpcResult::ClientError,
                     duration,
                 );
-                return Err(RpcError::too_many_requests());
+                return Err(RpcError::too_many_requests().with_rate_limit(window));
             }
         }
 
@@ -964,6 +999,7 @@ async fn wallet_rpc_handler(
                 format!("invalid JSON payload: {err}"),
                 None,
                 None,
+                None,
             );
         }
     };
@@ -995,6 +1031,7 @@ async fn wallet_rpc_handler(
             err.to_string(),
             err.wallet_code().cloned(),
             err.details().cloned(),
+            err.rate_limit().cloned(),
         ),
     }
 }
@@ -1017,6 +1054,7 @@ fn rpc_error_response(
     message: impl Into<String>,
     wallet_code: Option<WalletRpcErrorCode>,
     details: Option<Value>,
+    rate_limit: Option<RateLimitWindow>,
 ) -> Response {
     let message = message.into();
     let error = if let Some(wallet_code) = wallet_code {
@@ -1025,7 +1063,28 @@ fn rpc_error_response(
     } else {
         JsonRpcError::new(code, message, details)
     };
-    (status, Json(JsonRpcResponse::error(id, error))).into_response()
+    let mut response = (status, Json(JsonRpcResponse::error(id, error))).into_response();
+    if let Some(window) = rate_limit {
+        let reset = window.reset_after.as_secs().max(1);
+        let headers = response.headers_mut();
+        headers.insert(
+            "x-ratelimit-limit",
+            HeaderValue::from_str(&window.limit.get().to_string()).expect("limit header"),
+        );
+        headers.insert(
+            "x-ratelimit-remaining",
+            HeaderValue::from_str(&window.remaining.to_string()).expect("remaining header"),
+        );
+        headers.insert(
+            "x-ratelimit-reset",
+            HeaderValue::from_str(&reset.to_string()).expect("reset header"),
+        );
+        headers.insert(
+            "retry-after",
+            HeaderValue::from_str(&reset.to_string()).expect("retry header"),
+        );
+    }
+    response
 }
 
 fn request_identities(

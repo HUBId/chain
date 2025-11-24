@@ -92,7 +92,9 @@ controls so production deployments can pass early security reviews.
   payloads are rejected with a `-32700` *parse error* or a `-32600` *invalid
   request* response. Tokens configured under `wallet.auth` are only used for
   bearer verification and are never echoed back to callers. Rate-limit
-  exhaustions return `-32061`.
+  exhaustions return `-32061` and include `x-ratelimit-limit`,
+  `x-ratelimit-remaining`, `x-ratelimit-reset`, and `retry-after` headers so
+  callers can back off until the current minute window is replenished.
 - Configure listener, optional CORS allow-list, and per-minute request budgets
   through `[wallet.rpc]` in `config/wallet.toml`. Operators can disable the
   limiter by leaving `requests_per_minute` unset, or pick a positive value to
