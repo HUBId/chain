@@ -193,6 +193,8 @@
 - `Plonky3Prover` aktualisiert Telemetrie (`cached_circuits`, `proofs_generated`, `failed_proofs`, Zeitstempel) auf Basis realer Läufe.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】
 - `/status/node` liefert produktive Prover-/Verifier-Snapshots unter `backend_health.plonky3.*`; die Validator-UI rendert die Werte direkt aus diesen Feldern.【F:rpp/runtime/node.rs†L161-L220】【F:validator-ui/src/types.ts†L140-L220】
 - Grafana-Panels in `docs/dashboards/consensus_proof_validation.json` zeigen p50/p95-Latenzen, Proof-Größen und Tamper-Rejections, unterstützt durch Nightly-Stresstests.【F:docs/dashboards/consensus_proof_validation.json†L1-L200】【F:docs/performance/consensus_proofs.md†L1-L200】
+- Die Wallet-Prover-Queues emittieren das Gauge `wallet.prover.queue.depth{backend}` (inklusive `backend="mock"`/`"stwo"`) und blockieren neue Jobs bei ausgeschöpften Semaphoren (`wallet.prover.max_concurrency`). Alerts feuern bei einer Tiefe > 2 über 10 Minuten, p95-Latenz > 3 Minuten oder Fehlerraten > 20 % pro Backend; sobald das Backlog abgearbeitet ist, fällt das Gauge wieder auf 0.【F:rpp/wallet/src/engine/signing/prover.rs†L271-L338】【F:tests/zk_alert_probe.rs†L32-L73】【F:ops/alerts/zk/stwo.yaml†L31-L83】
+- Runbook-Hinweis: Bei Queue- oder Latenz-Alerts blockierte Drafts prüfen, Backend-Logs auf Dauercodes sichten, `wallet.prover.max_concurrency` temporär senken bzw. `wallet.prover.timeout_secs` erhöhen und die Wallet mit geleertem Entwurfs-Cache neu starten. Hält der Alarm länger als 15 Minuten an, Backend wechseln oder an das Release-Team eskalieren.【F:ops/alerts/zk/stwo.yaml†L31-L83】【F:rpp/wallet/src/engine/signing/prover.rs†L271-L338】
 
 ### Offene Aufgaben
 
