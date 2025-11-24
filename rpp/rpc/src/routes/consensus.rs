@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::super::{to_http_error, ApiContext, ErrorResponse};
+use super::super::{ApiContext, ErrorResponse};
 use crate::runtime::node::{ConsensusProofStatus, ConsensusProofVrfEntry};
 
 #[derive(Debug, Default, Deserialize)]
@@ -65,15 +65,12 @@ pub(super) async fn proof_status(
     let include_legacy = version <= 2;
 
     let node = state.require_node()?;
-    let status = node.consensus_proof_status().map_err(to_http_error)?;
+    let status = node
+        .consensus_proof_status()
+        .map_err(|err| consensus_proof_error(&state, err))?;
 
     let Some(status) = status else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "no consensus certificate recorded".to_string(),
-            }),
-        ));
+        return Err(consensus_finality_unavailable(&state));
     };
 
     let legacy_outputs = status.legacy_vrf_outputs();
@@ -139,4 +136,146 @@ pub(super) async fn proof_status(
         version,
         status: payload,
     }))
+}
+
+fn consensus_finality_unavailable(state: &ApiContext) -> (StatusCode, Json<ErrorResponse>) {
+    state.metrics().record_consensus_rpc_failure(
+        crate::runtime::telemetry::metrics::ConsensusRpcFailure::FinalityGap,
+    );
+
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse::with_code(
+            "no consensus certificate recorded",
+            crate::rpc::RpcErrorCode::ConsensusFinalityUnavailable,
+        )),
+    )
+}
+
+fn consensus_proof_error(
+    state: &ApiContext,
+    err: crate::runtime::errors::ChainError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    state.metrics().record_consensus_rpc_failure(
+        crate::runtime::telemetry::metrics::ConsensusRpcFailure::VerifierFailed,
+    );
+
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse::with_code(
+            err.to_string(),
+            crate::rpc::RpcErrorCode::ConsensusVerifierFailed,
+        )),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use opentelemetry::global;
+    use opentelemetry::metrics::noop::NoopMeterProvider;
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use rpp_runtime::RuntimeMetrics;
+
+    use crate::runtime::errors::ChainError;
+    use crate::RuntimeMode;
+
+    fn context_with_metrics(exporter: &InMemoryMetricExporter) -> (ApiContext, SdkMeterProvider) {
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        global::set_meter_provider(provider.clone());
+
+        let meter = provider.meter("rpp-runtime");
+        let metrics = Arc::new(RuntimeMetrics::from_meter_for_testing(&meter));
+
+        let context = ApiContext::new(
+            Arc::new(parking_lot::RwLock::new(RuntimeMode::Node)),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            false,
+        )
+        .with_metrics(metrics);
+
+        (context, provider)
+    }
+
+    fn collect_failure_counts(
+        exporter: &InMemoryMetricExporter,
+    ) -> std::collections::HashMap<String, u64> {
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("export consensus RPC metrics");
+
+        let mut sums = std::collections::HashMap::new();
+        for resource in &exported {
+            for scope in &resource.scope_metrics {
+                for metric in &scope.metrics {
+                    if metric.name == "rpp.runtime.consensus.rpc.failures" {
+                        if let opentelemetry_sdk::metrics::data::Data::Sum(sum) = &metric.data {
+                            for point in &sum.points {
+                                let key = point
+                                    .attributes
+                                    .iter()
+                                    .map(|(k, v)| format!("{}={}", k.as_str(), v.to_string()))
+                                    .collect::<Vec<_>>()
+                                    .join(",");
+                                sums.insert(key, point.value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        sums
+    }
+
+    #[test]
+    fn finality_gap_surfaces_structured_code_and_metric() {
+        let exporter = InMemoryMetricExporter::default();
+        let (context, provider) = context_with_metrics(&exporter);
+
+        let (status, Json(error)) = consensus_finality_unavailable(&context);
+        assert_eq!(StatusCode::SERVICE_UNAVAILABLE, status);
+        let encoded = serde_json::to_value(&error).expect("encode error");
+        assert_eq!(
+            Some("consensus_finality_unavailable"),
+            encoded.get("code").and_then(|value| value.as_str())
+        );
+
+        provider.force_flush().unwrap();
+        let counts = collect_failure_counts(&exporter);
+        assert_eq!(Some(&1), counts.get("reason=finality_gap"));
+    }
+
+    #[test]
+    fn verifier_failures_emit_code_and_metric() {
+        let exporter = InMemoryMetricExporter::default();
+        let (context, provider) = context_with_metrics(&exporter);
+
+        let (status, Json(error)) =
+            consensus_proof_error(&context, ChainError::Crypto("bad proof".into()));
+        assert_eq!(StatusCode::SERVICE_UNAVAILABLE, status);
+        let encoded = serde_json::to_value(&error).expect("encode error");
+        assert_eq!(
+            Some("consensus_verifier_failed"),
+            encoded.get("code").and_then(|value| value.as_str())
+        );
+
+        provider.force_flush().unwrap();
+        let counts = collect_failure_counts(&exporter);
+        assert_eq!(Some(&1), counts.get("reason=verifier_failed"));
+    }
+
+    #[test]
+    fn metrics_reset_on_drop() {
+        global::set_meter_provider(NoopMeterProvider::new());
+    }
 }

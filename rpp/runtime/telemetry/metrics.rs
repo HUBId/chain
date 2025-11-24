@@ -99,6 +99,7 @@ pub struct RuntimeMetrics {
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
     rpc_rate_limit_total: RpcClassCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
+    consensus_rpc_failures: EnumCounter<ConsensusRpcFailure>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
     wal_flush_bytes: EnumU64Histogram<WalFlushOutcome>,
     wal_flush_total: EnumCounter<WalFlushOutcome>,
@@ -224,6 +225,15 @@ impl RuntimeMetrics {
                 meter
                     .u64_counter("rpp.runtime.rpc.rate_limit.total")
                     .with_description("RPC rate limit decisions grouped by class, method and allow/throttle status")
+                    .with_unit("1")
+                    .build(),
+            ),
+            consensus_rpc_failures: EnumCounter::new(
+                meter
+                    .u64_counter("rpp.runtime.consensus.rpc.failures")
+                    .with_description(
+                        "Consensus RPC failures grouped by reason (verifier failure, missing finality)",
+                    )
                     .with_unit("1")
                     .build(),
             ),
@@ -556,6 +566,10 @@ impl RuntimeMetrics {
         status: RpcRateLimitStatus,
     ) {
         self.rpc_rate_limit_total.add(class, method, status, 1);
+    }
+
+    pub fn record_consensus_rpc_failure(&self, reason: ConsensusRpcFailure) {
+        self.consensus_rpc_failures.add(reason, 1);
     }
 
     /// Record the duration of a WAL flush attempt.
@@ -1434,6 +1448,12 @@ pub enum RpcRateLimitStatus {
     Throttled,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ConsensusRpcFailure {
+    VerifierFailed,
+    FinalityGap,
+}
+
 impl RpcRateLimitStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1448,6 +1468,17 @@ impl MetricLabel for RpcRateLimitStatus {
 
     fn as_str(&self) -> &'static str {
         self.as_str()
+    }
+}
+
+impl MetricLabel for ConsensusRpcFailure {
+    const KEY: &'static str = "reason";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::VerifierFailed => "verifier_failed",
+            Self::FinalityGap => "finality_gap",
+        }
     }
 }
 

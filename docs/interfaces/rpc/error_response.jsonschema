@@ -9,6 +9,8 @@
     "code": {
       "type": "string",
       "enum": [
+        "consensus_verifier_failed",
+        "consensus_finality_unavailable",
         "state_sync_plan_invalid",
         "state_sync_proof_encoding_invalid",
         "state_sync_metadata_mismatch",

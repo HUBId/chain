@@ -906,6 +906,8 @@ impl ApiSecurity {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RpcErrorCode {
+    ConsensusVerifierFailed,
+    ConsensusFinalityUnavailable,
     StateSyncPlanInvalid,
     StateSyncProofEncodingInvalid,
     StateSyncMetadataMismatch,

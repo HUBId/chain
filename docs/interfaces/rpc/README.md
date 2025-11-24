@@ -108,6 +108,21 @@ The `/p2p/snapshots*` and `/state-sync/*` handlers surface these codes so
 operators can map RPC responses directly to the remediation steps in the
 troubleshooting guide.
 
+### Consensus RPC errors
+
+Consensus endpoints expose structured error payloads when finality or proof
+verification fails. The `/consensus/proof/status` handler sets a `code` field in
+addition to the human-readable `error` string:
+
+| Code | HTTP status | Typical message | Description |
+| --- | --- | --- | --- |
+| `consensus_verifier_failed` | `503` | `invalid VRF proof`, `consensus certificate contains non-prevote in prevote set` | Consensus proof or binding verification failed. The runtime increments `rpp.runtime.consensus.rpc.failures{reason="verifier_failed"}` for observability. |
+| `consensus_finality_unavailable` | `503` | `no consensus certificate recorded` | No finalized consensus certificate is currently available. The metric label `reason="finality_gap"` is emitted alongside the failure counter. |
+
+Operators can alert on `rpp.runtime.consensus.rpc.failures` to detect repeated
+verification errors or stalled finality and then reference the troubleshooting
+guide for remediation steps.
+
 ### SDK error mapping helpers
 
 The Rust (`rpp/chain-cli`), Go (`ffi` module), and TypeScript (`validator-ui`)

@@ -99,5 +99,13 @@ only while older agents remain in the fleet.
    ensures the ledger bundle mirrors the certificate metadata, including the
    VRF transcripts, reputation roots, epoch/slot counters, and quorum bindings.
 
-When either criterion fails, the route returns `503 Service Unavailable` until the
-runtime records a valid certificate again.
+When either criterion fails, the route returns `503 Service Unavailable` and a
+structured error code until the runtime records a valid certificate again:
+
+- `consensus_verifier_failed` – consensus proof or binding verification failed
+  (for example, an invalid VRF transcript or quorum digest mismatch). The
+  counter `rpp.runtime.consensus.rpc.failures{reason="verifier_failed"}`
+  increments for each failure.
+- `consensus_finality_unavailable` – no finalized consensus certificate is
+  available yet. The counter emits `reason="finality_gap"` so operators can
+  alert on sustained gaps.
