@@ -1,0 +1,72 @@
+[sim]
+seed = 424242
+# Three-hour soak with room for startup/teardown
+duration_ms = 10800000
+
+[topology]
+type = "small_world"
+n = 36
+k = 8
+rewire_p = 0.18
+
+[regions]
+assignments = [
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+]
+
+[links]
+intra = { delay_ms = 18, jitter_ms = 3, loss = 0.0 }
+A-B = { delay_ms = 120, jitter_ms = 20, loss = 0.01 }
+B-C = { delay_ms = 140, jitter_ms = 25, loss = 0.015 }
+A-C = { delay_ms = 110, jitter_ms = 18, loss = 0.012 }
+
+after_spike = { delay_ms = 220, jitter_ms = 45, loss = 0.04 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 4, jitter_ms = 2 }
+untrusted = { extra_delay_ms = 22, jitter_ms = 9 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.08 }
+
+[traffic.tx.payload]
+min_bytes = 512
+max_bytes = 8192
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 1800000
+model = "poisson"
+lambda_per_sec = 14.0
+
+[[traffic.tx.phases]]
+name = "steady"
+duration_ms = 5400000
+model = "poisson"
+lambda_per_sec = 26.0
+
+[[traffic.tx.phases]]
+name = "recovery"
+duration_ms = 1800000
+model = "poisson"
+lambda_per_sec = 18.0
+
+[faults.partition]
+start_ms = 7200000
+duration_ms = 600000
+group_a = "A"
+group_b = "B"
+
+[faults.churn]
+start_ms = 3600000
+rate_per_min = 5.0
+restart_after_ms = 30000
+
+[metrics]
+json = "target/simnet/uptime-soak/summaries/uptime_soak.json"
+csv = "target/simnet/uptime-soak/summaries/uptime_soak.csv"

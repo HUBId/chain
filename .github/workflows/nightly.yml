@@ -980,6 +980,39 @@ EOF
           name: simnet-regression-nightly
           path: simnet-regression.tar.gz
 
+  simnet-uptime-soak:
+    name: Simnet uptime soak (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Execute uptime soak scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/uptime-soak-nightly
+          cargo run --locked --package simnet -- \
+            --scenario tools/simnet/scenarios/uptime_soak.ron \
+            --artifacts-dir target/simnet/uptime-soak-nightly
+
+      - name: Package uptime soak artifacts
+        run: |
+          tar -czf simnet-uptime-soak.tar.gz -C target/simnet uptime-soak-nightly
+
+      - name: Upload uptime soak results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-uptime-soak
+          path: simnet-uptime-soak.tar.gz
+
   snapshot-partition:
     name: Snapshot partition recovery audit
     runs-on: ubuntu-latest
