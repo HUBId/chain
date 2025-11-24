@@ -55,7 +55,14 @@ pub struct SnapshotStreamStatusResponse {
 }
 
 pub async fn start_snapshot_cluster() -> Result<TestCluster> {
-    let cluster = TestCluster::start_with(2, |cfg, idx| {
+    start_snapshot_cluster_with_limit(2, None).await
+}
+
+pub async fn start_snapshot_cluster_with_limit(
+    count: usize,
+    max_inbound_sessions: Option<usize>,
+) -> Result<TestCluster> {
+    let cluster = TestCluster::start_with(count, |cfg, idx| {
         let metrics_listener = TcpListener::bind("127.0.0.1:0").context("bind metrics listener")?;
         let metrics_addr = metrics_listener
             .local_addr()
@@ -66,6 +73,9 @@ pub async fn start_snapshot_cluster() -> Result<TestCluster> {
         cfg.rollout.feature_gates.recursive_proofs = true;
         cfg.rollout.telemetry.enabled = true;
         cfg.rollout.telemetry.metrics.listen = Some(metrics_addr);
+        if idx == 0 {
+            cfg.network.p2p.snapshot_max_inbound_sessions = max_inbound_sessions;
+        }
         if idx == 0 {
             cfg.network.p2p.bootstrap_peers.clear();
         }
