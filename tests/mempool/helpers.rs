@@ -1,9 +1,13 @@
 use std::fs;
 use std::path::Path;
 
+use std::collections::BTreeSet;
+
 use rpp_chain::config::{NodeConfig, QueueWeightsConfig};
 use rpp_chain::consensus::{BftVote, BftVoteKind, SignedBftVote};
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_chain::types::RppStarkProof;
 use rpp_chain::types::{
     Account, ChainProof, ExecutionTrace, PendingTransactionSummary, ProofKind, ProofPayload,
     ReputationWeights, SignedTransaction, Stake, StarkProof, Tier, Transaction,
@@ -11,6 +15,7 @@ use rpp_chain::types::{
 };
 use rpp_p2p::GossipTopic;
 use serde_json;
+use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::time::{timeout, Duration};
 
@@ -42,7 +47,66 @@ pub(super) fn sample_node_config(base: &Path, mempool_limit: usize) -> NodeConfi
     config
 }
 
-pub(super) fn sample_transaction_bundle(to: &str, nonce: u64, fee: u64) -> TransactionProofBundle {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ProofBackend {
+    Stwo,
+    #[cfg(feature = "backend-plonky3")]
+    Plonky3,
+    #[cfg(feature = "backend-rpp-stark")]
+    RppStark,
+}
+
+pub(super) fn enabled_backends() -> Vec<ProofBackend> {
+    let mut backends = vec![ProofBackend::Stwo];
+    #[cfg(feature = "backend-plonky3")]
+    {
+        backends.push(ProofBackend::Plonky3);
+    }
+    #[cfg(feature = "backend-rpp-stark")]
+    {
+        backends.push(ProofBackend::RppStark);
+    }
+    backends
+}
+
+pub(super) fn backend_for_index(backends: &[ProofBackend], index: usize) -> ProofBackend {
+    assert!(
+        !backends.is_empty(),
+        "at least one proof backend must be enabled to run mempool probes",
+    );
+    let rotated = index % backends.len();
+    backends[rotated]
+}
+
+pub(super) fn observed_backends(
+    transactions: &[PendingTransactionSummary],
+) -> BTreeSet<ProofBackend> {
+    let mut observed = BTreeSet::new();
+    for tx in transactions {
+        let Some(proof) = &tx.proof else { continue };
+        match proof {
+            ChainProof::Stwo(_) => {
+                observed.insert(ProofBackend::Stwo);
+            }
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => {
+                observed.insert(ProofBackend::Plonky3);
+            }
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => {
+                observed.insert(ProofBackend::RppStark);
+            }
+        }
+    }
+    observed
+}
+
+pub(super) fn sample_transaction_bundle(
+    to: &str,
+    nonce: u64,
+    fee: u64,
+    backend: ProofBackend,
+) -> TransactionProofBundle {
     let keypair = generate_keypair();
     let from = address_from_public_key(&keypair.public);
     let tx = Transaction::new(from.clone(), to.to_string(), 42, fee, nonce, None);
@@ -62,24 +126,37 @@ pub(super) fn sample_transaction_bundle(to: &str, nonce: u64, fee: u64) -> Trans
     };
 
     let payload = ProofPayload::Transaction(witness.clone());
-    let proof = StarkProof {
-        kind: ProofKind::Transaction,
-        commitment: String::new(),
-        public_inputs: Vec::new(),
-        payload: payload.clone(),
-        trace: ExecutionTrace {
-            segments: Vec::new(),
-        },
-        commitment_proof: Default::default(),
-        fri_proof: Default::default(),
+    let proof = match backend {
+        ProofBackend::Stwo => ChainProof::Stwo(StarkProof {
+            kind: ProofKind::Transaction,
+            commitment: String::new(),
+            public_inputs: Vec::new(),
+            payload: payload.clone(),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            commitment_proof: Default::default(),
+            fri_proof: Default::default(),
+        }),
+        #[cfg(feature = "backend-plonky3")]
+        ProofBackend::Plonky3 => {
+            let payload_hint = json!({
+                "nonce": nonce,
+                "fee": fee,
+                "backend": "plonky3",
+            });
+            ChainProof::Plonky3(payload_hint)
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        ProofBackend::RppStark => {
+            let params = vec![0xAA, 0x10, (nonce % 0xff) as u8, (fee % 0xff) as u8];
+            let public_inputs = format!("nonce-{nonce}-fee-{fee}").into_bytes();
+            let proof_bytes = vec![0xBB, 0x20, (nonce % 0xff) as u8, (fee % 0xff) as u8];
+            ChainProof::RppStark(RppStarkProof::new(params, public_inputs, proof_bytes))
+        }
     };
 
-    TransactionProofBundle::new(
-        signed_tx,
-        ChainProof::Stwo(proof),
-        Some(witness),
-        Some(payload),
-    )
+    TransactionProofBundle::new(signed_tx, proof, Some(witness), Some(payload))
 }
 
 pub(super) async fn recv_witness_transaction(

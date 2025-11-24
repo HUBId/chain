@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, thread, time::Duration};
+use std::{collections::BTreeSet, env, fs, path::PathBuf, thread, time::Duration};
 
 use anyhow::{Context, Result};
 use tempfile::tempdir;
@@ -14,8 +14,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::helpers::{
-    drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
-    witness_topic,
+    backend_for_index, drain_witness_channel, enabled_backends, observed_backends,
+    recv_witness_transaction, sample_node_config, sample_transaction_bundle, witness_topic,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +253,7 @@ async fn mempool_status_probe_flags_queue_saturation_alerts_inner(
 ) -> Result<()> {
     let tempdir = tempdir()?;
     let mempool_limit = 6usize;
+    let backends = enabled_backends();
 
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
@@ -265,7 +266,8 @@ async fn mempool_status_probe_flags_queue_saturation_alerts_inner(
     let mut witness_rx = handle.subscribe_witness_gossip(witness_topic());
     let recipient = handle.address().to_string();
     for index in 0..mempool_limit as u64 {
-        let bundle = sample_transaction_bundle(&recipient, index, 10 + index);
+        let backend = backend_for_index(&backends, index as usize);
+        let bundle = sample_transaction_bundle(&recipient, index, 10 + index, backend);
         handle
             .submit_transaction(bundle)
             .expect("transaction should be accepted until saturation");
@@ -288,11 +290,34 @@ async fn mempool_status_probe_flags_queue_saturation_alerts_inner(
         mempool_limit,
         "saturated mempool should report full transaction queue",
     );
+    let expected_backends: BTreeSet<_> = backends.iter().copied().collect();
+    let observed_backends = observed_backends(&snapshot.transactions);
+    assert!(
+        observed_backends.is_superset(&expected_backends),
+        "saturation probe should surface all enabled backends: observed={observed_backends:?} expected={expected_backends:?}",
+    );
 
     let probe = MempoolStatusProbe::new(0.8, 1.0);
 
     let critical_alerts = probe.evaluate(&snapshot, mempool_limit);
-    let critical_payload = encode_alert_payload(&critical_alerts);
+    let backend_labels: Vec<_> = expected_backends
+        .iter()
+        .map(|backend| format!("{backend:?}"))
+        .collect();
+    let observed_backend_labels: Vec<_> = observed_backends
+        .iter()
+        .map(|backend| format!("{backend:?}"))
+        .collect();
+    let mut critical_payload = encode_alert_payload(&critical_alerts);
+    if let Some(payload) = critical_payload.as_object_mut() {
+        payload.insert(
+            "backends".to_string(),
+            json!({
+                "expected": backend_labels,
+                "observed": observed_backend_labels,
+            }),
+        );
+    }
     artifacts.record_payload("critical", critical_payload.clone());
     assert!(
         critical_alerts

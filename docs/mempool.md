@@ -47,6 +47,11 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   queue depths before and after recovery, recovered queue order, and the number of overflow
   submissions rejected. CI collects the same payloads under `artifacts/mempool/<matrix>/spam` to aid
   root-cause analysis when rate-limit regressions trip the test.【F:tests/mempool/spam_recovery.rs†L18-L164】【F:.github/workflows/ci.yml†L940-L1004】
+* Spam/DoS probes rotate submissions across every enabled proof backend (STWO, Plonky3, and
+  backend-rpp-stark) to ensure mixed node populations preserve acceptance, eviction ordering,
+  restart semantics, and alert payloads regardless of which zk stack is active. CI exercises the
+  `mixed-backend-rpp-stark` integration matrix to pin coverage for rpp-stark deployments alongside
+  the default backend.【F:tests/mempool/spam_recovery.rs†L63-L233】【F:tests/mempool/status_probe.rs†L63-L183】【F:.github/workflows/ci.yml†L928-L973】
 
 ### Interpreting probe alerts
 
