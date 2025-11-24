@@ -5,7 +5,8 @@
 > **Related references:** [Security policy & reporting](../SECURITY.md),
 > [Observability overview](./observability.md) & [runbook](./runbooks/observability.md),
 > [Zero-knowledge backend procedures](./zk_backends.md),
-> [RPP-STARK verifier alert operations](./operations/zk_backends.md)
+> [RPP-STARK verifier alert operations](./operations/zk_backends.md),
+> [Incident response runbook](./operations/incidents.md)
 
 The validator process exposes `/health/live` and `/health/ready` probes on the
 configured RPC listener as soon as startup completes. Integration coverage in
@@ -81,7 +82,10 @@ silence, and escalate after **15 minutes** if mitigation remains unclear. Keep
 the PagerDuty incident timeline updated with hypotheses, silences, and the
 current owner so incoming responders and security liaisons can pick up the
 investigation without repeating earlier steps. Link the incident postmortem to
-the shared operations log once the alert clears.
+the shared operations log once the alert clears. Major forks, verifier outages,
+or pruning stalls should be handled with the [incident response runbook](./operations/incidents.md),
+which sets the same acknowledgement and stabilisation timelines and captures
+the commands/metrics to apply during on-call mitigation.
 
 ## Mempool incident response
 

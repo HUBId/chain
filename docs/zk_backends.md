@@ -4,7 +4,8 @@
 >
 > **Complementary guides:** [Observability runbook](./runbooks/observability.md),
 > [Security policy & reporting](../SECURITY.md),
-> [RPP vendor refresh procedure](./operations/rpp_vendor_update.md)
+> [RPP vendor refresh procedure](./operations/rpp_vendor_update.md),
+> [Incident response runbook](./operations/incidents.md)
 
 ## rpp-stark (stable)
 
