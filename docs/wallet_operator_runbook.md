@@ -128,7 +128,24 @@ or `HardwareDisabled` errors do not appear during normal sends.【F:config/walle
 wallet feature guards before shipping artifacts. Capture the test log and attach
 it to the change record.【F:Makefile†L1-L40】
 
-## 5. Troubleshooting quick reference
+## 5. Key rotation drills
+
+1. **Hot→cold→hot rotation** – Transition the daemon into watch-only mode to
+   simulate removal of the hot key, confirm signing/broadcast attempts return
+   `WatchOnlyError::{SigningDisabled,BroadcastDisabled}`, then re-enable the hot
+   wallet and submit a fresh draft to prove nonces/locks continue to advance
+   after the rotation.【F:tests/wallet_key_rotation_e2e.rs†L1-L124】
+2. **Missing key detection** – Exercise a watch-only rotation without an xpub to
+   confirm the runtime surfaces the "signing disabled" guard instead of falling
+   back to a partially configured keyring.【F:tests/wallet_key_rotation_e2e.rs†L126-L170】
+3. **Outdated key handling** – Rotate to an intentionally stale cold profile
+   (birthday height ahead of the indexed tip) and verify broadcasts are blocked
+   with the same watch-only guard until the hot key is restored.【F:tests/wallet_key_rotation_e2e.rs†L149-L170】
+4. **Runbook evidence** – Capture CLI logs for the enable/disable operations and
+   attach them alongside the regression test output so responders can trace the
+   rotation attempt and the expected error paths.
+
+## 6. Troubleshooting quick reference
 
 | Symptom | Likely cause | Remediation |
 | --- | --- | --- |
@@ -149,7 +166,7 @@ long-lived deployments and include timestamps in collection pipelines.【F:scrip
 See the [wallet operations guide](operations/wallet.md#log-collection-and-retention)
 for platform-specific log shipping and retention recommendations.
 
-## 6. Audit log review & telemetry verification
+## 7. Audit log review & telemetry verification
 
 1. **Proof/VRF audit trail** – The Electrs tracker embeds proof envelopes and
 VRF audit objects in transaction metadata. Use `rpp-wallet history` or the GUI
@@ -166,14 +183,14 @@ emit metrics matching the telemetry overview. For Electrs and wallet tracker
 integrations, confirm `telemetry_endpoint` values respond on their configured
 ports and capture sample scrapes for change tickets.【F:config/wallet.toml†L152-L168】【F:docs/telemetry.md†L1-L68】
 
-## 7. Telemetry opt-out verification
+## 8. Telemetry opt-out verification
 
 If telemetry remains disabled, document the decision by capturing `config diff`
 output showing `enabled = false` under `[electrs.cache.telemetry]` and
 `[electrs.tracker]`. Attach the logs from a wallet launch proving no telemetry
 listener was bound (absence of `Listening on …telemetry…` messages).
 
-## 8. Regression automation hook
+## 9. Regression automation hook
 
 The repository ships a lightweight regression target for wallet operators:
 
