@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose, Engine as _};
 use futures::Stream;
@@ -368,11 +368,15 @@ impl StateSyncServer {
             ))
         })?;
 
+        let (timetoke_budget, uptime_budget) = node.snapshot_download_budgets();
+
         Ok(SnapshotStream::new(
             node,
             root,
             total,
             self.metrics.clone(),
+            timetoke_budget,
+            uptime_budget,
             permit,
             Arc::clone(&self.active_streams),
         ))
@@ -388,6 +392,9 @@ pub struct SnapshotStream {
     metrics: Arc<RuntimeMetrics>,
     chunks_served: u64,
     last_chunk_at: Instant,
+    started_at: Instant,
+    timetoke_budget: Duration,
+    uptime_budget: Duration,
     permit: Option<OwnedSemaphorePermit>,
     active_streams: Arc<AtomicUsize>,
 }
@@ -398,6 +405,8 @@ impl SnapshotStream {
         root: Hash,
         total: u32,
         metrics: Arc<RuntimeMetrics>,
+        timetoke_budget: Duration,
+        uptime_budget: Duration,
         permit: OwnedSemaphorePermit,
         active_streams: Arc<AtomicUsize>,
     ) -> Self {
@@ -412,9 +421,33 @@ impl SnapshotStream {
             metrics,
             chunks_served: 0,
             last_chunk_at: Instant::now(),
+            started_at: Instant::now(),
+            timetoke_budget,
+            uptime_budget,
             permit: Some(permit),
             active_streams,
         }
+    }
+
+    fn enforce_budgets(&self) -> Option<StateSyncChunkError> {
+        let elapsed = self.started_at.elapsed();
+        if elapsed > self.timetoke_budget {
+            return Some(StateSyncChunkError::BudgetExceeded {
+                budget: "timetoke",
+                limit: self.timetoke_budget,
+                elapsed,
+            });
+        }
+
+        if elapsed > self.uptime_budget {
+            return Some(StateSyncChunkError::BudgetExceeded {
+                budget: "uptime",
+                limit: self.uptime_budget,
+                elapsed,
+            });
+        }
+
+        None
     }
 
     pub fn root(&self) -> Hash {
@@ -439,6 +472,11 @@ impl Stream for SnapshotStream {
             return Poll::Ready(None);
         }
 
+        if let Some(err) = self.enforce_budgets() {
+            self.finished = true;
+            return Poll::Ready(Some(Err(err)));
+        }
+
         let index = self.next_index;
         self.next_index = self
             .next_index
@@ -446,6 +484,12 @@ impl Stream for SnapshotStream {
             .expect("state sync stream index overflow");
 
         let result = self.node.state_sync_session_chunk(index);
+        if matches!(result, Ok(_)) {
+            if let Some(err) = self.enforce_budgets() {
+                self.finished = true;
+                return Poll::Ready(Some(Err(err)));
+            }
+        }
         match &result {
             Ok(_) => {
                 let now = Instant::now();

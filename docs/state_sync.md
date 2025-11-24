@@ -104,6 +104,22 @@ surface metadata mismatches, missing receipts, or proof errors immediately. Unit
 and integration tests cover the REST and SSE routes to guarantee these payloads
 stay stable as the pipeline evolves.【F:rpp/rpc/tests/state_sync.rs†L71-L436】
 
+### Snapshot download budgets
+
+Snapshot streams now enforce two timing budgets sourced from the node
+configuration. `snapshot_download.timetoke_budget_secs` limits how long a stream
+can run before it risks invalidating time-toke accrual windows, while
+`snapshot_download.uptime_budget_secs` caps total runtime to preserve uptime
+reporting SLAs.【F:rpp/runtime/config.rs†L2680-L2811】【F:rpp/runtime/sync.rs†L334-L520】
+Slow sessions that exceed either threshold abort with a `state sync exceeded
+<budget> budget` error so operators can retry against healthier peers.【F:rpp/rpc/api.rs†L959-L1003】【F:rpp/runtime/sync.rs†L334-L520】
+
+Recommended settings keep the timetoke budget under 15 minutes and the uptime
+budget under 30 minutes, aligning with the default one-hour time-toke observation
+window while leaving headroom for retries. Tune the values upward only after
+confirming bandwidth constraints, since any overrun halts the stream early to
+protect the reputation pipeline.【F:rpp/runtime/config.rs†L2680-L2811】
+
 ## CI and automation hooks
 
 State sync validation is wired into the light-client tests and helper routines in

@@ -84,6 +84,21 @@ impl StateSyncFixture {
     pub fn new() -> Self {
         let chunk_size = DEFAULT_STATE_SYNC_CHUNK;
         let (config, temp_dir) = prepare_config();
+        Self::bootstrap(chunk_size, config, temp_dir)
+    }
+
+    /// Bootstraps a node with a caller-supplied config mutation.
+    pub fn with_config<F>(mut adjust: F) -> Self
+    where
+        F: FnOnce(&mut NodeConfig),
+    {
+        let chunk_size = DEFAULT_STATE_SYNC_CHUNK;
+        let (mut config, temp_dir) = prepare_config();
+        adjust(&mut config);
+        Self::bootstrap(chunk_size, config, temp_dir)
+    }
+
+    fn bootstrap(chunk_size: usize, config: NodeConfig, temp_dir: TempDir) -> Self {
         let snapshot_dir = config.snapshot_dir.clone();
         let node = Node::new(config.clone(), RuntimeMetrics::noop()).expect("node");
         let handle = node.handle();
@@ -97,7 +112,7 @@ impl StateSyncFixture {
             collect_state_sync_artifacts(&engine, chunk_size).expect("state sync artifacts");
         assert!(
             !artifacts.plan.chunks.is_empty(),
-            "state sync plan should contain at least one chunk"
+            "state sync plan should contain at least one chunk",
         );
         Self {
             temp_dir,
