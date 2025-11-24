@@ -91,6 +91,35 @@ integration coverage that validates limiter behaviour, gossip drains, and the
 RPC controls for adjusting queue limits and fee weights, giving on-call
 engineers a single reference when the mempool saturates.
 
+## High-availability restart drills
+
+The uptime HA suite (`tests/uptime_ha/mod.rs`) exercises both orderly restarts
+and crash-restarts to prove that consensus epochs, timetoke accounting, and
+wallet-derived nonces survive process cycles. The graceful flow finalises a
+transaction, restarts the validator, and asserts that epochs and block heights
+never regress while wallet balances remain stable after the restart. The crash
+path injects multiple transactions, flips the node to the recursive/Plonky3
+backend on restart, and waits for the mempool to drain with nonces advanced to
+cover every submission.【F:tests/uptime_ha/mod.rs†L15-L197】
+
+Operationally, mirror the same guardrails:
+
+- Query `/status/node` before and after a restart to verify that
+  `backend_health` contains at least one active prover entry and that epochs and
+  block heights never decrease. Any decrease indicates stale snapshots or a
+  failed consensus recovery.
+- Check the timetoke counters for validators in `/status/node` and `/ledger`
+  outputs; hours should be monotonic across restarts, matching the test
+  assertions. A drop requires manual replay of uptime proofs.
+- When toggling zero-knowledge backends (e.g., switching to the recursive
+  pipeline), perform the change during a restart so the new backend is reflected
+  in `backend_health`, and watch the proof verification latency metrics for
+  regressions.
+- Monitor `pending_transactions` immediately after the service returns; counts
+  should rapidly drain to zero as the mempool rehydrates and workflows
+  re-execute. Stuck queues suggest mempool persistence corruption and should
+  trigger a crash dump and rollback.
+
 ## Networking safeguards for on-call rotations
 
 Before returning a node to service, on-call engineers should verify that gossip
