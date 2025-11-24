@@ -98,9 +98,12 @@ PagerDuty and dashboard configuration.【F:ops/alerts/zk/rpp_stark.yaml†L1-L36
    reaped.【F:rpp/runtime/node.rs†L5416-L5460】【F:docs/zk_backends.md†L96-L101】
 3. **Escalate according to the playbook.** If mitigation fails, apply the
    fallback paths documented for backend swaps or enforcement bypasses and loop
-   in release engineering. Every alert acknowledgement must be accompanied by an
-   incident log entry summarising the proof IDs inspected, configuration
-   overrides applied, and whether Stage flags returned to `true`.【F:docs/zk_backends.md†L102-L107】
+   in release engineering. Defer sustained outages or mixed fork/verifier
+   incidents to the central [incident response runbook](./incidents.md) so the
+   pruning, fork-handling, and verifier failover timelines remain aligned.
+   Every alert acknowledgement must be accompanied by an incident log entry
+   summarising the proof IDs inspected, configuration overrides applied, and
+   whether Stage flags returned to `true`.【F:docs/zk_backends.md†L102-L107】
 
 Following these steps keeps the on-call workflow aligned with the incident
 runbook while giving responders explicit telemetry cues to confirm that alerts

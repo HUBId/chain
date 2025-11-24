@@ -67,7 +67,9 @@ shared view:
    nodes that stopped signing rounds.
 3. Compare against network upgrades or backend switches. If lag followed a
    backend change, follow the [Zero-data-loss backend switch procedure](./zk_backends.md#zero-data-loss-backend-switch-procedure)
-   to revert or complete the rollout safely.
+   to revert or complete the rollout safely. If forks or verifier stalls are
+   involved, hand off to the [incident response runbook](./operations/incidents.md)
+   for quorum restart, failover, and pruning safeguards.
 4. Execute the [network snapshot failover runbook](runbooks/network_snapshot_failover.md)
    to shift traffic away from degraded validators and restore proposer rotation.
 5. Document the timeline, Grafana snapshots, and mitigations in the incident log
