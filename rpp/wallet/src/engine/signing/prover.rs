@@ -10,7 +10,7 @@ use super::{
     WitnessPlan,
 };
 use crate::engine::DraftTransaction;
-use metrics::{counter, histogram};
+use metrics::{counter, gauge, histogram};
 use prover_backend_interface::{
     Blake2sHasher, ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader,
 };
@@ -313,7 +313,7 @@ impl ProverJobManager {
         Ok(())
     }
 
-    fn acquire(&self) -> Result<ProverJobPermit, ProverError> {
+    fn acquire(&self, backend: &'static str) -> Result<ProverJobPermit, ProverError> {
         let permit = if let Some(semaphore) = &self.semaphore {
             Some(
                 semaphore
@@ -324,11 +324,13 @@ impl ProverJobManager {
             None
         };
         let deadline = self.timeout.map(|timeout| Instant::now() + timeout);
+        gauge!("wallet.prover.queue.depth", "backend" => backend).increment(1.0);
         Ok(ProverJobPermit {
             _permit: permit,
             deadline,
             timeout: self.timeout,
             token: CancellationToken::new(),
+            backend,
         })
     }
 }
@@ -338,6 +340,7 @@ struct ProverJobPermit {
     deadline: Option<Instant>,
     timeout: Option<Duration>,
     token: CancellationToken,
+    backend: &'static str,
 }
 
 impl ProverJobPermit {
@@ -369,6 +372,12 @@ impl ProverJobPermit {
     }
 }
 
+impl Drop for ProverJobPermit {
+    fn drop(&mut self) {
+        gauge!("wallet.prover.queue.depth", "backend" => self.backend).decrement(1.0);
+    }
+}
+
 fn debug_assert_zeroized(buf: &[u8]) {
     debug_assert!(
         buf.iter().all(|byte| *byte == 0),
@@ -389,7 +398,7 @@ where
     let witness = plan.into_witness().ok_or_else(|| {
         ProverError::Runtime(format!("{backend} witness unavailable during proving"))
     })?;
-    let permit = jobs.acquire()?;
+    let permit = jobs.acquire(backend)?;
     let handle = Handle::try_current().map_err(|err| {
         ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
     })?;
@@ -520,7 +529,8 @@ mod tests {
     use crate::db::UtxoOutpoint;
     use crate::engine::{DraftInput, DraftOutput, DraftTransaction, SpendModel};
     use metrics::{
-        Counter, CounterFn, Histogram, HistogramFn, Key, Metadata, Recorder, SharedString, Unit,
+        Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, Metadata, Recorder,
+        SharedString, Unit,
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -552,7 +562,7 @@ mod tests {
         config.timeout_secs = 1;
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
-        let permit = manager.acquire().expect("permit");
+        let permit = manager.acquire("mock").expect("permit");
 
         let result = runtime.block_on(async move {
             permit
@@ -582,7 +592,7 @@ mod tests {
         config.timeout_secs = 0;
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
-        let permit = manager.acquire().expect("permit");
+        let permit = manager.acquire("mock").expect("permit");
         let cancel_token = permit.cancellation_token();
         let worker_token = cancel_token.clone();
 
@@ -614,9 +624,38 @@ mod tests {
         let mut config = WalletProverConfig::default();
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
-        let _permit = manager.acquire().expect("first permit");
-        let err = manager.acquire().expect_err("second permit should fail");
+        let _permit = manager.acquire("mock").expect("first permit");
+        let err = manager
+            .acquire("mock")
+            .expect_err("second permit should fail");
         assert!(matches!(err, ProverError::Busy));
+    }
+
+    #[test]
+    fn job_queue_depth_tracks_backlog_per_backend() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let mut config = WalletProverConfig::default();
+        config.max_concurrency = 1;
+        let manager = ProverJobManager::new(&config);
+
+        let permit = manager.acquire("mock").expect("first permit");
+        assert_eq!(
+            TestRecorder::gauge_value(&metrics, "wallet.prover.queue.depth{backend=mock}",),
+            Some(1.0)
+        );
+
+        let err = manager
+            .acquire("mock")
+            .expect_err("second permit should be rejected while backlog active");
+        assert!(matches!(err, ProverError::Busy));
+
+        drop(permit);
+        assert_eq!(
+            TestRecorder::gauge_value(&metrics, "wallet.prover.queue.depth{backend=mock}",),
+            Some(0.0)
+        );
     }
 
     #[cfg(feature = "prover-mock")]
@@ -751,6 +790,7 @@ mod tests {
 struct TestRecorderInner {
     counters: Mutex<HashMap<String, u64>>,
     histograms: Mutex<HashMap<String, Vec<f64>>>,
+    gauges: Mutex<HashMap<String, f64>>,
 }
 
 #[derive(Clone)]
@@ -776,6 +816,7 @@ impl TestRecorder {
     fn reset(inner: &Arc<TestRecorderInner>) {
         inner.counters.lock().unwrap().clear();
         inner.histograms.lock().unwrap().clear();
+        inner.gauges.lock().unwrap().clear();
     }
 
     fn counter_value(inner: &Arc<TestRecorderInner>, key: &str) -> Option<u64> {
@@ -790,6 +831,10 @@ impl TestRecorder {
             .get(key)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn gauge_value(inner: &Arc<TestRecorderInner>, key: &str) -> Option<f64> {
+        inner.gauges.lock().unwrap().get(key).copied()
     }
 }
 
@@ -808,8 +853,12 @@ impl Recorder for TestRecorder {
         }))
     }
 
-    fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> metrics::Gauge {
-        metrics::Gauge::noop()
+    fn register_gauge(&self, key: &Key, _: &Metadata<'_>) -> Gauge {
+        let formatted = format_key(key);
+        Gauge::from_arc(Arc::new(TestGaugeHandle {
+            key: formatted,
+            inner: Arc::clone(&self.inner),
+        }))
     }
 
     fn register_histogram(&self, key: &Key, _: &Metadata<'_>) -> Histogram {
@@ -837,6 +886,30 @@ impl CounterFn for TestCounterHandle {
         let mut counters = self.inner.counters.lock().unwrap();
         let entry = counters.entry(self.key.clone()).or_default();
         *entry = (*entry).max(value);
+    }
+}
+
+struct TestGaugeHandle {
+    key: String,
+    inner: Arc<TestRecorderInner>,
+}
+
+impl GaugeFn for TestGaugeHandle {
+    fn increment(&self, value: f64) {
+        let mut gauges = self.inner.gauges.lock().unwrap();
+        let entry = gauges.entry(self.key.clone()).or_default();
+        *entry += value;
+    }
+
+    fn decrement(&self, value: f64) {
+        let mut gauges = self.inner.gauges.lock().unwrap();
+        let entry = gauges.entry(self.key.clone()).or_default();
+        *entry -= value;
+    }
+
+    fn set(&self, value: f64) {
+        let mut gauges = self.inner.gauges.lock().unwrap();
+        gauges.insert(self.key.clone(), value);
     }
 }
 

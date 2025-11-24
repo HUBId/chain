@@ -46,6 +46,9 @@ fn zk_alerts_are_backend_scoped() -> Result<()> {
     let stwo_samples = HashMap::from([
         ("ZkStwoProverFailuresWarning".to_string(), 1.0),
         ("ZkStwoProverFailuresCritical".to_string(), 5.0),
+        ("ZkStwoProverQueueBacklogWarning".to_string(), 3.0),
+        ("ZkStwoProverLatencyCritical".to_string(), 190_000.0),
+        ("ZkStwoProverFailureRateCritical".to_string(), 0.25),
     ]);
 
     let rpp_payloads = simulate_backend_alerts(&rpp_alerts, "rpp-stark", &rpp_samples)?;
@@ -70,7 +73,7 @@ fn zk_alerts_are_backend_scoped() -> Result<()> {
     let stwo_payloads = simulate_backend_alerts(&stwo_alerts, "stwo", &stwo_samples)?;
     assert_eq!(
         stwo_payloads.len(),
-        2,
+        5,
         "all STWO prover alerts should fire for matching backend"
     );
     assert!(

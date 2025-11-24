@@ -32,3 +32,45 @@ groups:
             backend recovers; triage the backend logs and consider a temporary
             backend switch if retries cannot succeed.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
+      - alert: ZkStwoProverQueueBacklogWarning
+        expr: max_over_time(wallet_prover_queue_depth{backend="stwo"}[10m]) > 2
+        for: 10m
+        labels:
+          severity: warning
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO wallet prover queue depth above 2
+          description: >-
+            The STWO wallet prover queue depth stayed above two concurrent jobs
+            for ten minutes. Investigate stuck drafts, reduce concurrency limits,
+            or temporarily drain the queue to keep proof generation responsive.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
+      - alert: ZkStwoProverLatencyCritical
+        expr: histogram_quantile(0.95, sum(rate(rpp_runtime_wallet_prover_job_duration_ms_bucket{backend="stwo"}[10m])) by (le, backend)) > 180000
+        for: 15m
+        labels:
+          severity: critical
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO prover p95 latency above 3 minutes
+          description: >-
+            The 95th percentile STWO wallet prover latency exceeded three
+            minutes for fifteen minutes. Expect users to hit timeouts or retry
+            loops until the backend recovers or the queue is drained.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
+      - alert: ZkStwoProverFailureRateCritical
+        expr: (increase(rpp_runtime_wallet_prover_jobs_total{backend="stwo",result="failure"}[15m]) / increase(rpp_runtime_wallet_prover_jobs_total{backend="stwo"}[15m])) > 0.2
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO prover failure ratio above 20%
+          description: >-
+            More than 20% of STWO wallet prover jobs failed in the last fifteen
+            minutes. Inspect backend logs for repeated codes, reset unhealthy
+            workers, or switch to an alternate backend until error rates drop.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
