@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, thread};
+use std::{collections::BTreeSet, env, fs, path::PathBuf, thread};
 
 use anyhow::Result;
 use serde_json::json;
@@ -10,8 +10,9 @@ use rpp_chain::runtime::node::MempoolStatusExt;
 use rpp_chain::runtime::RuntimeMetrics;
 
 use super::helpers::{
-    drain_witness_channel, recv_witness_transaction, sample_node_config, sample_transaction_bundle,
-    sample_vote, sort_bundles_by_fee_desc, witness_topic,
+    backend_for_index, drain_witness_channel, enabled_backends, observed_backends,
+    recv_witness_transaction, sample_node_config, sample_transaction_bundle, sample_vote,
+    sort_bundles_by_fee_desc, witness_topic,
 };
 use super::status_probe::{AlertSeverity, MempoolStatusProbe};
 
@@ -78,6 +79,7 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
     let tempdir = tempdir()?;
     let mempool_limit = 6usize;
     let overflow = 3usize;
+    let backends = enabled_backends();
 
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
@@ -93,7 +95,8 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
 
     for index in 0..mempool_limit {
         let fee = 10 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, index as u64, fee);
+        let backend = backend_for_index(&backends, index);
+        let bundle = sample_transaction_bundle(&recipient, index as u64, fee, backend);
         let hash = handle
             .submit_transaction(bundle)
             .expect("initial transaction accepted before reaching mempool capacity");
@@ -121,7 +124,9 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
     let mut rejected = 0usize;
     for index in 0..overflow {
         let fee = 100 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee);
+        let backend = backend_for_index(&backends, mempool_limit + index);
+        let bundle =
+            sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee, backend);
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
                 rejected += 1;
@@ -145,6 +150,12 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
         snapshot.transactions.len(),
         mempool_limit,
         "mempool should hold at most the configured limit",
+    );
+    let expected_backends: BTreeSet<_> = backends.iter().copied().collect();
+    let observed = observed_backends(&snapshot.transactions);
+    assert!(
+        observed.is_superset(&expected_backends),
+        "all enabled proof backends should surface in transaction snapshots: observed={observed:?} expected={expected_backends:?}",
     );
     let observed_max_fee = snapshot
         .transactions
@@ -173,7 +184,9 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
 
     for index in 0..overflow {
         let fee = 200 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, (mempool_limit * 2 + index) as u64, fee);
+        let backend = backend_for_index(&backends, mempool_limit * 2 + index);
+        let bundle =
+            sample_transaction_bundle(&recipient, (mempool_limit * 2 + index) as u64, fee, backend);
         let hash = handle
             .submit_transaction(bundle)
             .expect("transaction should be accepted after expanding mempool limit");
@@ -233,6 +246,8 @@ async fn high_volume_spam_triggers_rate_limits_and_recovers() -> Result<()> {
             "pending_transactions": recovered_status.pending_transactions,
             "pending_votes": recovered_status.pending_votes,
         },
+        "proof_backends": backends.iter().map(|backend| format!("{backend:?}")).collect::<Vec<_>>(),
+        "observed_backends": observed.into_iter().map(|backend| format!("{backend:?}")).collect::<Vec<_>>(),
         "eviction_attempts": {
             "rejected_submissions": rejected,
             "overflow": overflow,
@@ -256,6 +271,7 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
     let tempdir = tempdir()?;
     let mempool_limit = 4usize;
     let overflow = 2usize;
+    let backends = enabled_backends();
 
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
@@ -270,7 +286,8 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
     let mut accepted_transactions = Vec::new();
     for index in 0..mempool_limit {
         let fee = 5 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, index as u64, fee);
+        let backend = backend_for_index(&backends, index);
+        let bundle = sample_transaction_bundle(&recipient, index as u64, fee, backend);
         let hash = handle
             .submit_transaction(bundle)
             .expect("transaction should be accepted before saturation");
@@ -291,6 +308,7 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
             &recipient,
             (mempool_limit + offset) as u64,
             1 + offset as u64,
+            backend_for_index(&backends, mempool_limit + offset),
         );
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
@@ -354,6 +372,13 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
         "uptime queue should remain empty during spam probe",
     );
 
+    let expected_backends: BTreeSet<_> = backends.iter().copied().collect();
+    let observed = observed_backends(&snapshot.transactions);
+    assert!(
+        observed.is_superset(&expected_backends),
+        "mixed spam should retain proofs from all enabled backends: observed={observed:?} expected={expected_backends:?}",
+    );
+
     let decoded_transactions = snapshot
         .decode_transactions()
         .expect("decode transaction mempool entries");
@@ -413,6 +438,14 @@ async fn multi_queue_spam_respects_eviction_fairness() -> Result<()> {
             "pending_transactions": node_status.pending_transactions,
             "pending_votes": node_status.pending_votes,
         },
+        "proof_backends": expected_backends
+            .iter()
+            .map(|backend| format!("{backend:?}"))
+            .collect::<Vec<_>>(),
+        "observed_backends": observed
+            .into_iter()
+            .map(|backend| format!("{backend:?}"))
+            .collect::<Vec<_>>(),
         "decoded_transactions": decoded_transactions,
         "decoded_votes": decoded_votes,
         "transaction_queue_order": snapshot
@@ -440,6 +473,7 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
     let mempool_limit = 6usize;
     let overflow = 3usize;
     let expanded_limit = mempool_limit + overflow;
+    let backends = enabled_backends();
 
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
@@ -455,7 +489,8 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
 
     for index in 0..mempool_limit {
         let fee = 10 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, index as u64, fee);
+        let backend = backend_for_index(&backends, index);
+        let bundle = sample_transaction_bundle(&recipient, index as u64, fee, backend);
         restoration_bundles.push(bundle.clone());
         let hash = handle
             .submit_transaction(bundle)
@@ -474,7 +509,9 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
     let mut rejected_bundles = Vec::new();
     for index in 0..overflow {
         let fee = 100 + index as u64;
-        let bundle = sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee);
+        let backend = backend_for_index(&backends, mempool_limit + index);
+        let bundle =
+            sample_transaction_bundle(&recipient, (mempool_limit + index) as u64, fee, backend);
         rejected_bundles.push(bundle.clone());
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
@@ -513,6 +550,12 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
         expanded_limit,
         "recovery should leave a full mempool before restart",
     );
+    let expected_backends: BTreeSet<_> = backends.iter().copied().collect();
+    let recovered_backends = observed_backends(&recovered_snapshot.transactions);
+    assert!(
+        recovered_backends.is_superset(&expected_backends),
+        "recovery snapshot should retain all enabled proof backends: observed={recovered_backends:?} expected={expected_backends:?}",
+    );
 
     drop(witness_rx);
     drop(handle);
@@ -536,6 +579,7 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
     let restored_snapshot = restarted_handle
         .mempool_status()
         .expect("mempool status after restart");
+    let restored_backends = observed_backends(&restored_snapshot.transactions);
     let observed_order: Vec<_> = restored_snapshot
         .transactions
         .iter()
@@ -562,6 +606,14 @@ async fn mempool_restarts_preserve_fee_priority_ordering() -> Result<()> {
         "observed_fee_order": observed_order,
         "pending_after_restart": restored_snapshot.transactions.len(),
         "mempool_limit": expanded_limit,
+        "proof_backends": expected_backends
+            .iter()
+            .map(|backend| format!("{backend:?}"))
+            .collect::<Vec<_>>(),
+        "observed_backends": restored_backends
+            .into_iter()
+            .map(|backend| format!("{backend:?}"))
+            .collect::<Vec<_>>(),
         "alerts": probe_alerts
             .iter()
             .map(|alert| json!({

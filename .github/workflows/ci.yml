@@ -941,6 +941,10 @@ PY
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: false
+          - name: mixed-backend-rpp-stark
+            features: "backend-rpp-stark"
+            no_default_features: ""
+            experimental: false
           - name: wallet-gui
             features: "wallet_gui"
             no_default_features: ""
