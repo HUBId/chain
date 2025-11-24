@@ -110,6 +110,38 @@ table before escalating.
 - Monitor the collector for rate-limit responses; if observed, add retry/backoff
   configuration or provision dedicated telemetry infrastructure.
 
+## Consensus RPC verifier or finality failures
+
+**Symptoms**
+
+- `/consensus/proof/status` returns `503 Service Unavailable` with
+  `code=consensus_verifier_failed` or `code=consensus_finality_unavailable`.
+- Prometheus reports `rpp.runtime.consensus.rpc.failures` increasing with
+  `reason="verifier_failed"` or `reason="finality_gap"`.
+
+**Diagnostics**
+
+1. Check the latest consensus certificate bindings:
+   ```sh
+   curl "$RPC/consensus/proof/status?version=3"
+   ```
+   Verify VRF transcripts and quorum digests match expectations for the current
+   tip.
+2. Inspect validator logs for consensus proof verification failures; look for
+   `external block proof verification failed` entries alongside the proposer
+   address.
+3. Confirm the node is still making progress by comparing `/status/consensus`
+   heights across peers.
+
+**Resolution**
+
+- For `consensus_verifier_failed`, restart the proposer with fresh proof
+  artifacts or roll back to the last known-good snapshot before rejoining the
+  cluster.
+- For `consensus_finality_unavailable`, allow the validator to catch up or
+  investigate upstream consensus stalls. Verify peer connectivity and ensure
+  feature gates such as `consensus_enforcement` remain enabled.
+
 ## Snapshot Catch-up After Rebuilds
 
 **Scenario**: A validator was rebuilt from scratch and now trails the cluster by
