@@ -23,19 +23,37 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 3
+    assert len(results) == 5
 
-    consensus = next(result for result in results if result.case.name == "consensus-anomaly")
-    assert {event.name for event in consensus.fired_events} == cases[0].expected_alerts
+    results_by_case = {result.case.name: result for result in results}
+    expected_case_names = {
+        "consensus-anomaly",
+        "snapshot-anomaly",
+        "uptime-pause",
+        "uptime-recovery",
+        "baseline",
+    }
+    assert set(results_by_case) == expected_case_names
+
+    consensus = results_by_case["consensus-anomaly"]
+    assert {event.name for event in consensus.fired_events} == consensus.case.expected_alerts
     assert len(consensus.webhook_payloads) == len(consensus.fired_events)
     first_payload = consensus.webhook_payloads[0]
-    assert first_payload["alerts"][0]["labels"]["alertname"] in cases[0].expected_alerts
+    assert first_payload["alerts"][0]["labels"]["alertname"] in consensus.case.expected_alerts
 
-    snapshot = next(result for result in results if result.case.name == "snapshot-anomaly")
-    assert {event.name for event in snapshot.fired_events} == cases[1].expected_alerts
+    snapshot = results_by_case["snapshot-anomaly"]
+    assert {event.name for event in snapshot.fired_events} == snapshot.case.expected_alerts
     assert len(snapshot.webhook_payloads) == len(snapshot.fired_events)
 
-    baseline = next(result for result in results if result.case.name == "baseline")
+    uptime_pause = results_by_case["uptime-pause"]
+    assert {event.name for event in uptime_pause.fired_events} == uptime_pause.case.expected_alerts
+    assert len(uptime_pause.webhook_payloads) == len(uptime_pause.fired_events)
+
+    uptime_recovery = results_by_case["uptime-recovery"]
+    assert uptime_recovery.fired_events == []
+    assert uptime_recovery.webhook_payloads == []
+
+    baseline = results_by_case["baseline"]
     assert baseline.fired_events == []
     assert baseline.webhook_payloads == []
 

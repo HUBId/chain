@@ -564,6 +564,54 @@ def _evaluate_snapshot_chunk_failures(
     return AlertComputation(starts_at=start_ts, value=observed, details=detail)
 
 
+def _evaluate_finality_metric(
+    store: MetricStore, metric: str, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        if value is None:
+            continue
+        triggered = value > threshold
+        evaluations.append((timestamp, triggered))
+        if triggered:
+            observed.append((timestamp, value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=peak)
+
+
+def _evaluate_block_height_stall(
+    store: MetricStore, metric: str, window: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+    timestamps = [sample.timestamp for sample in series.samples]
+    evaluations: List[Tuple[float, bool]] = []
+    deltas: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        delta = series.delta_over_window(timestamp, window)
+        stalled = delta is not None and delta <= 0.0
+        evaluations.append((timestamp, stalled))
+        if stalled and delta is not None:
+            deltas.append((timestamp, delta))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    worst_delta = min((delta for ts, delta in deltas if ts >= start_ts), default=None)
+    detail = None
+    if worst_delta is not None:
+        detail = f"block height stalled for {duration/60:.0f}m"
+    return AlertComputation(starts_at=start_ts, value=worst_delta, details=detail)
+
+
 def default_alert_rules() -> List[AlertRule]:
     return [
         AlertRule(
@@ -604,6 +652,66 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook",
             evaluator=_evaluate_consensus_quorum_failure,
+        ),
+        AlertRule(
+            name="ConsensusFinalityLagWarning",
+            severity="warning",
+            service="consensus",
+            summary="Finality lag exceeded 12 slots",
+            description=(
+                "The finalized tip trails the accepted head by more than twelve slots for at least five minutes."
+                " Investigate proposer health and replay recent rounds to confirm quorum participation."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_finality_metric(store, "finality_lag_slots", 12.0, 300.0),
+        ),
+        AlertRule(
+            name="ConsensusFinalityLagCritical",
+            severity="critical",
+            service="consensus",
+            summary="Finality lag exceeded 24 slots",
+            description=(
+                "Finality has stalled for at least twenty-four slots. Trigger the network snapshot failover procedure and"
+                " verify witness signatures before resuming production."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_finality_metric(store, "finality_lag_slots", 24.0, 120.0),
+        ),
+        AlertRule(
+            name="ConsensusFinalizedHeightGapWarning",
+            severity="warning",
+            service="consensus",
+            summary="Finalized height gap above warning budget",
+            description=(
+                "The finalized height trails the accepted head by more than four blocks for five minutes. Correlate with"
+                " finality lag and prepare failover steps if the gap grows."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_finality_metric(store, "finalized_height_gap", 4.0, 300.0),
+        ),
+        AlertRule(
+            name="ConsensusFinalizedHeightGapCritical",
+            severity="critical",
+            service="consensus",
+            summary="Finalized height gap beyond critical budget",
+            description=(
+                "Finalization is lagging the accepted tip by more than eight blocks for at least two minutes. Page the on-call"
+                " and execute the documented failover to restore proposer rotation."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_finality_metric(store, "finalized_height_gap", 8.0, 120.0),
+        ),
+        AlertRule(
+            name="ConsensusLivenessStall",
+            severity="critical",
+            service="consensus",
+            summary="Block production stalled for 10 minutes",
+            description=(
+                "Accepted block height failed to advance for at least ten minutes. Validate proposer health, check peer counts,"
+                " and follow the uptime soak runbook to restore block flow."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_block_height_stall(store, "chain_block_height", 600.0, 600.0),
         ),
         AlertRule(
             name="SnapshotStreamLagWarning",
@@ -975,6 +1083,142 @@ def build_snapshot_baseline_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_uptime_pause_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 4.0),
+                    (300.0, 6.0),
+                    (600.0, 10.0),
+                    (900.0, 12.0),
+                    (1200.0, 15.0),
+                    (1500.0, 22.0),
+                    (1800.0, 26.0),
+                    (2100.0, 27.0),
+                    (2400.0, 12.0),
+                    (2700.0, 8.0),
+                    (3000.0, 5.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (300.0, 2.0),
+                    (600.0, 3.0),
+                    (900.0, 4.5),
+                    (1200.0, 6.0),
+                    (1500.0, 9.0),
+                    (1800.0, 9.5),
+                    (2100.0, 9.0),
+                    (2400.0, 4.0),
+                    (2700.0, 2.0),
+                    (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 100.0),
+                    (300.0, 110.0),
+                    (600.0, 120.0),
+                    (900.0, 130.0),
+                    (1200.0, 140.0),
+                    (1500.0, 140.0),
+                    (1800.0, 140.0),
+                    (2100.0, 140.0),
+                    (2400.0, 140.0),
+                    (2700.0, 150.0),
+                    (3000.0, 160.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_uptime_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 6.0),
+                    (300.0, 5.0),
+                    (600.0, 4.0),
+                    (900.0, 3.0),
+                    (1200.0, 2.5),
+                    (1500.0, 2.0),
+                    (1800.0, 2.0),
+                    (2100.0, 1.5),
+                    (2400.0, 1.0),
+                    (2700.0, 1.0),
+                    (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2.0),
+                    (300.0, 2.0),
+                    (600.0, 1.5),
+                    (900.0, 1.5),
+                    (1200.0, 1.0),
+                    (1500.0, 1.0),
+                    (1800.0, 1.0),
+                    (2100.0, 0.5),
+                    (2400.0, 0.5),
+                    (2700.0, 0.5),
+                    (3000.0, 0.5),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 200.0),
+                    (300.0, 215.0),
+                    (600.0, 230.0),
+                    (900.0, 245.0),
+                    (1200.0, 260.0),
+                    (1500.0, 275.0),
+                    (1800.0, 290.0),
+                    (2100.0, 305.0),
+                    (2400.0, 320.0),
+                    (2700.0, 335.0),
+                    (3000.0, 350.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def default_validation_cases() -> List[ValidationCase]:
     return [
         ValidationCase(
@@ -997,6 +1241,22 @@ def default_validation_cases() -> List[ValidationCase]:
                 "SnapshotChunkFailureSpikeWarning",
                 "SnapshotChunkFailureSpikeCritical",
             },
+        ),
+        ValidationCase(
+            name="uptime-pause",
+            store=build_uptime_pause_store(),
+            expected_alerts={
+                "ConsensusFinalityLagWarning",
+                "ConsensusFinalityLagCritical",
+                "ConsensusFinalizedHeightGapWarning",
+                "ConsensusFinalizedHeightGapCritical",
+                "ConsensusLivenessStall",
+            },
+        ),
+        ValidationCase(
+            name="uptime-recovery",
+            store=build_uptime_recovery_store(),
+            expected_alerts=set(),
         ),
         ValidationCase(
             name="baseline",

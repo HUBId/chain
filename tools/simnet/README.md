@@ -26,6 +26,7 @@ back to `--scenario` for ad-hoc RON files.
 | `small-world` | `tools/simnet/scenarios/small_world_smoke.ron` | Executes the in-process small world smoke harness. | `4` cores / `8 GiB` |
 | `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. | `12` cores / `24 GiB` |
 | `reorg-rpp-stark` | `tools/simnet/scenarios/consensus_reorg_rpp_stark.ron` | Exercises RPP-STARK fork-choice validation and recovery. | `12` cores / `24 GiB` |
+| `uptime-soak` | `tools/simnet/scenarios/uptime_soak.ron` | Multi-hour soak with induced pauses to track uptime/finality health. | `12` cores / `24 GiB` |
 
 Pass a custom path to execute ad-hoc scenarios:
 

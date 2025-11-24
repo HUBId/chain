@@ -647,6 +647,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             scenario_path: "tools/simnet/scenarios/consensus_reorg_rpp_stark.ron",
             description: "Exercise RPP-STARK fork-choice and recovery",
         },
+        SimnetPreset {
+            slug: "uptime-soak",
+            scenario_path: "tools/simnet/scenarios/uptime_soak.ron",
+            description: "Run the multi-hour uptime/finality soak drill",
+        },
     ]
 }
 
