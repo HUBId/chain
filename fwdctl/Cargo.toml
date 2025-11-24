@@ -32,6 +32,7 @@ hex.workspace = true
 log.workspace = true
 nonzero_ext.workspace = true
 serde_json.workspace = true
+serde = { version = "=1.0.225", features = ["derive"] }
 # Regular dependencies
 axum = { version = "=0.6.20" }
 csv = "=1.4.0"
