@@ -128,3 +128,31 @@ groups:
           description: |
             Resume attempts are not succeeding reliably. Check provider availability,
             resume plan identifiers, and recent deploys before restarting consumers.
+
+      - alert: SnapshotResumeChecksumStalled
+        expr: |
+          increase(snapshot_resume_events_total{result="attempt"}[10m]) > 0
+            and delta(snapshot_resume_validated_bytes[10m]) <= 0
+        for: 10m
+        labels:
+          severity: warning
+          component: snapshots
+        annotations:
+          summary: "Snapshot resume checksum progress has stalled"
+          description: |
+            Resume attempts are not advancing checksum validation. Inspect consumer logs
+            for download_error=checksum or digest mismatches and compare plan metadata
+            before retrying.
+
+      - alert: SnapshotResumeChecksumMismatch
+        expr: snapshot_resume_checksum_state{state="mismatch"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          component: snapshots
+        annotations:
+          summary: "Snapshot resume checksum mismatch detected"
+          description: |
+            A resume attempt reported a checksum mismatch. Confirm the consumer is resuming
+            from the correct plan, revalidate the manifest on disk, and consider restarting
+            the stream with a fresh session if mismatches persist.

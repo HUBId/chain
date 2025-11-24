@@ -49,6 +49,18 @@ can see when a provider has rotated its snapshot.【F:rpp/runtime/node.rs†L151
 Integration tests cover both the HTTP and runtime handle surfaces to guard the
 behaviour.【F:tests/network/snapshots_resume.rs†L1-L310】
 
+### Resume telemetry and monitoring
+
+The snapshots behaviour exports resume-specific gauges to track checksum validation as soon as a provider accepts a resume
+request. `snapshot_resume_validated_bytes` and `snapshot_resume_progress_ratio` report the approximate bytes validated and the
+fraction of the advertised plan covered by the resume response, while
+`snapshot_resume_checksum_state{state="mismatch"}` flips to 1 when a checksum error is reported during resume
+handshakes.【F:rpp/p2p/src/behaviour/snapshots.rs†L1002-L1088】【F:rpp/p2p/src/behaviour/snapshots.rs†L2807-L2898】 The snapshot
+resilience dashboard includes panels for these gauges alongside the existing resume success charts so operators can spot stalls
+or mismatches without digging through logs.【F:docs/dashboards/snapshot_resilience.json†L180-L272】 Prometheus alerts fire when
+checksum progress stops advancing or when the checksum state reports a mismatch for more than a few minutes.【F:telemetry/prometheus/cache-rules.yaml†L100-L148】 Assess the most recent progress ratio and checksum state before
+retrying a resume to avoid duplicating corrupt data.
+
 ### Provider concurrency limits
 
 Snapshot providers can cap inbound session concurrency via
