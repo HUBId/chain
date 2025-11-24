@@ -612,6 +612,29 @@ def _evaluate_block_height_stall(
     return AlertComputation(starts_at=start_ts, value=worst_delta, details=detail)
 
 
+def _evaluate_epoch_delay(
+    store: MetricStore, metric: str, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        if value is None:
+            continue
+        delayed = value > threshold
+        evaluations.append((timestamp, delayed))
+        if delayed:
+            observed.append((timestamp, value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=peak)
+
+
 def default_alert_rules() -> List[AlertRule]:
     return [
         AlertRule(
@@ -712,6 +735,34 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_block_height_stall(store, "chain_block_height", 600.0, 600.0),
+        ),
+        AlertRule(
+            name="TimetokeEpochDelayWarning",
+            severity="warning",
+            service="reputation",
+            summary="Timetoke epoch rollover delayed",
+            description=(
+                "Timetoke epochs have not rolled over within the expected window. Validators may not accrue uptime credit; "
+                "inspect timetoke schedulers and recent proposer elections before the delay widens."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_epoch_delay(
+                store, "timetoke_epoch_age_seconds", 3600.0, 600.0
+            ),
+        ),
+        AlertRule(
+            name="TimetokeEpochDelayCritical",
+            severity="critical",
+            service="reputation",
+            summary="Timetoke epoch rollover critically delayed",
+            description=(
+                "Timetoke epochs have stalled for more than ninety minutes. Pause proposer changes and recover the timetoke "
+                "scheduler before resuming normal block production."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_epoch_delay(
+                store, "timetoke_epoch_age_seconds", 5400.0, 600.0
+            ),
         ),
         AlertRule(
             name="SnapshotStreamLagWarning",
@@ -1219,6 +1270,52 @@ def build_uptime_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_timetoke_epoch_delay_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_epoch_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1800.0),
+                    (600.0, 2400.0),
+                    (1200.0, 3600.0),
+                    (1800.0, 4200.0),
+                    (2400.0, 5600.0),
+                    (3000.0, 6600.0),
+                    (3600.0, 7200.0),
+                    (4200.0, 2400.0),
+                    (4800.0, 1800.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_timetoke_epoch_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_epoch_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2400.0),
+                    (600.0, 2100.0),
+                    (1200.0, 1800.0),
+                    (1800.0, 1500.0),
+                    (2400.0, 1200.0),
+                    (3000.0, 900.0),
+                    (3600.0, 800.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def default_validation_cases() -> List[ValidationCase]:
     return [
         ValidationCase(
@@ -1256,6 +1353,19 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="uptime-recovery",
             store=build_uptime_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="timetoke-epoch-delay",
+            store=build_timetoke_epoch_delay_store(),
+            expected_alerts={
+                "TimetokeEpochDelayWarning",
+                "TimetokeEpochDelayCritical",
+            },
+        ),
+        ValidationCase(
+            name="timetoke-epoch-recovery",
+            store=build_timetoke_epoch_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(

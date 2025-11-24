@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import json
 import sys
+from pathlib import Path
 from typing import Sequence
 
 try:  # pragma: no cover - import fallback for direct execution
@@ -35,6 +38,24 @@ def _format_result(result: ValidationResult) -> str:
     return f"[{result.case.name}] fired: {alert_names} (webhook payloads: {payloads})"
 
 
+def _serialize_result(result: ValidationResult) -> dict:
+    fired_alerts = sorted(event.name for event in result.fired_events)
+    return {
+        "case": result.case.name,
+        "expected_alerts": sorted(result.case.expected_alerts),
+        "fired_alerts": fired_alerts,
+        "missing_alerts": sorted(result.case.expected_alerts - set(fired_alerts)),
+        "webhook_payloads": result.webhook_payloads,
+    }
+
+
+def _write_artifacts(results: Sequence[ValidationResult], artifact_dir: Path) -> None:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    payload_path = artifact_dir / "alert_probe_results.json"
+    with payload_path.open("w", encoding="utf-8") as fp:
+        json.dump([_serialize_result(result) for result in results], fp, indent=2)
+
+
 def run_validation() -> Sequence[ValidationResult]:
     validator = AlertValidator(default_alert_rules())
     cases = default_validation_cases()
@@ -44,11 +65,22 @@ def run_validation() -> Sequence[ValidationResult]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run alert probes against synthetic metric stores")
+    parser.add_argument(
+        "--artifacts",
+        type=Path,
+        default=None,
+        help="Optional directory for probe artifacts (JSON summaries)",
+    )
+    args = parser.parse_args()
+
     try:
         results = run_validation()
     except AlertValidationError as exc:
         print(f"::error ::{exc}", file=sys.stderr)
         return 1
+    if args.artifacts is not None:
+        _write_artifacts(results, args.artifacts)
     for result in results:
         print(_format_result(result))
     print("Alert validation completed successfully.")

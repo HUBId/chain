@@ -29,13 +29,16 @@ run to confirm alerts fire and then clear:
 - **Finality lag and height gap** – warning/critical probes assert the thresholds
   in `ConsensusFinalityLag*` and `ConsensusFinalizedHeightGap*` fire once the lag
   exceeds 12/24 slots or the gap grows past 4/8 blocks for the configured
-  windows.【F:tools/alerts/validation.py†L573-L655】【F:tools/alerts/validation.py†L901-L969】
+  windows.【F:tools/alerts/validation.py†L680-L726】【F:tools/alerts/validation.py†L1342-L1375】
 - **Liveness stall** – triggers `ConsensusLivenessStall` when block height
   remains flat for ten minutes, mirroring the soak’s induced pause and ensuring
-  the alert clears when block production resumes.【F:tools/alerts/validation.py†L656-L687】【F:tools/alerts/validation.py†L901-L937】
+  the alert clears when block production resumes.【F:tools/alerts/validation.py†L728-L737】【F:tools/alerts/validation.py†L1137-L1203】
 - **Recovery guard** – the recovery fixture keeps lag and height gaps below
   thresholds while heights advance, proving alerts return to green once the
-  network catches up.【F:tools/alerts/validation.py†L939-L969】【F:tools/alerts/tests/test_alert_validation.py†L15-L57】
+  network catches up.【F:tools/alerts/validation.py†L1205-L1270】【F:tools/alerts/tests/test_alert_validation.py†L15-L61】
+- **Timetoke epoch delay** – simulates a delayed timetoke rollover so
+  `TimetokeEpochDelayWarning` and `TimetokeEpochDelayCritical` page when epoch
+  age exceeds one or one-and-a-half hours, then drop once epochs resume.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
 
 Run the probes with the existing validation harness (`python -m pytest
 tools/alerts/tests`) whenever alert expressions change to preserve coverage.
@@ -65,3 +68,24 @@ When the soak or production telemetry raises uptime/finality alerts:
 5. **Record outcomes.** Attach the simnet summaries and relevant Grafana panels
    to the incident ticket; include the alert probe results when adjusting
    thresholds.
+
+## Alert definitions and probe usage
+
+- **Finality and liveness:** Finality gap and liveness stall probes reuse the
+  consensus alert rules for lag (`finality_lag_slots`, `finalized_height_gap`)
+  and block stalls (`chain_block_height`).【F:tools/alerts/validation.py†L680-L737】
+- **Timetoke epoch delay:** `timetoke_epoch_age_seconds` captures how long the
+  current timetoke epoch has been active; warning and critical alerts fire at
+  one hour and ninety minutes respectively.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
+
+To run the probes locally and capture artifacts:
+
+```bash
+python -m pytest tools/alerts/tests
+python tools/alerts/validate_alerts.py --artifacts target/alert-probes
+```
+
+CI executes the same sequence in the `alert-probes` workflow job and uploads the
+JSON summary as `alert-probes/alert_probe_results.json`. The job fails if any
+expected alert is missing, ensuring regressions are caught before
+merge.【F:.github/workflows/ci.yml†L393-L425】【F:tools/alerts/validate_alerts.py†L64-L87】
