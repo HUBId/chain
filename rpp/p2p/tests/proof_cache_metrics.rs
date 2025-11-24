@@ -58,6 +58,10 @@ impl ProofStorage for BoundedProofStorage {
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
         Ok(self.records.lock().clone())
     }
+
+    fn capacity(&self) -> Option<usize> {
+        Some(self.capacity)
+    }
 }
 
 fn make_payload(tag: &str) -> Vec<u8> {
@@ -143,11 +147,34 @@ fn cache_metrics_snapshot_preserves_export_format() {
         "hits": 0,
         "misses": 0,
         "evictions": 0,
+        "capacity": 0,
     });
     assert_eq!(
         serde_json::to_value(metrics.snapshot()).expect("serializable"),
         expected,
         "telemetry payload for cache metrics should remain stable",
+    );
+}
+
+#[test]
+fn cache_snapshot_captures_backend_capacity() {
+    let metrics = ProofCacheMetrics::default();
+    metrics.configure("rpp-stark", 6);
+    let validator = Arc::new(AcceptAllValidator::default());
+    let storage = Arc::new(BoundedProofStorage::with_capacity(6));
+
+    let _mempool =
+        ProofMempool::new_with_metrics(validator, storage, metrics.clone()).expect("mempool");
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(
+        snapshot.capacity, 6,
+        "configured capacity should be recorded"
+    );
+    assert_eq!(
+        snapshot.backend.as_deref(),
+        Some("rpp-stark"),
+        "backend label should be preserved for telemetry",
     );
 }
 

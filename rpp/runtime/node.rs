@@ -4645,6 +4645,7 @@ impl NodeInner {
         let proof_metrics = self.runtime_metrics.proofs();
         proof_metrics.record_cache_events(
             "gossip-proof-cache",
+            snapshot.backend.as_deref(),
             delta_hits,
             delta_misses,
             delta_evictions,

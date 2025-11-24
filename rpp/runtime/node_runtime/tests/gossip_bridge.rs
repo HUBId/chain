@@ -16,6 +16,7 @@ use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
 use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::Node;
+use rpp_chain::proof_system::ProofVerifierRegistry;
 use rpp_chain::runtime::node_runtime::node::{MetaTelemetryReport, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pNode, PeerTelemetry,
@@ -296,9 +297,13 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     let baseline_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer_id)?;
 
     let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs.json");
+    let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+    let proof_cache_retain = config_b.proof_cache.retain_for_backend(&cache_namespace);
     let processor = Arc::new(NodeGossipProcessor::new(
         handle_b.clone(),
         proof_storage_path,
+        proof_cache_retain,
+        cache_namespace,
     ));
     let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
 
@@ -440,9 +445,13 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
     let baseline_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer_id)?;
 
     let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs_invalid.json");
+    let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+    let proof_cache_retain = config_b.proof_cache.retain_for_backend(&cache_namespace);
     let processor = Arc::new(NodeGossipProcessor::new(
         handle_b.clone(),
         proof_storage_path,
+        proof_cache_retain,
+        cache_namespace,
     ));
     let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
 
@@ -508,10 +517,17 @@ fn proof_cache_rehydrates_on_restart() -> Result<()> {
     let dir = tempdir()?;
     let config = sample_node_config(dir.path());
     let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+    let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+    let proof_cache_retain = config.proof_cache.retain_for_backend(&cache_namespace);
 
     let node = Node::new(config.clone(), RuntimeMetrics::noop())?;
     let handle = node.handle();
-    let processor = NodeGossipProcessor::new(handle.clone(), proof_storage_path.clone());
+    let processor = NodeGossipProcessor::new(
+        handle.clone(),
+        proof_storage_path.clone(),
+        proof_cache_retain,
+        cache_namespace.clone(),
+    );
 
     let bundle = sample_transaction_bundle(handle.address(), 0);
     let payload = serde_json::to_vec(&bundle)?;
@@ -528,8 +544,12 @@ fn proof_cache_rehydrates_on_restart() -> Result<()> {
     let handle_restarted = node_restarted.handle();
     assert!(handle_restarted.mempool_status()?.transactions.is_empty());
 
-    let _rehydrated =
-        NodeGossipProcessor::new(handle_restarted.clone(), proof_storage_path.clone());
+    let _rehydrated = NodeGossipProcessor::new(
+        handle_restarted.clone(),
+        proof_storage_path.clone(),
+        proof_cache_retain,
+        cache_namespace,
+    );
 
     let mempool = handle_restarted.mempool_status()?;
     assert_eq!(mempool.transactions.len(), 1);

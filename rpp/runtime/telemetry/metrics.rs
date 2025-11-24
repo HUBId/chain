@@ -951,11 +951,15 @@ impl ProofMetrics {
     pub fn record_cache_events(
         &self,
         cache: &str,
+        backend: Option<&str>,
         delta_hits: u64,
         delta_misses: u64,
         delta_evictions: u64,
     ) {
-        let attributes = [KeyValue::new("cache", cache.to_string())];
+        let mut attributes = vec![KeyValue::new("cache", cache.to_string())];
+        if let Some(backend) = backend {
+            attributes.push(KeyValue::new("backend", backend.to_string()));
+        }
         if delta_hits > 0 {
             self.cache_hits.add(delta_hits, &attributes);
         }

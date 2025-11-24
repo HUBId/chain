@@ -5,7 +5,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -13,7 +13,7 @@ use crate::vendor::PeerId;
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
 use futures::stream::Stream;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -269,6 +269,10 @@ pub struct ProofCacheMetricsSnapshot {
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
+    #[serde(default)]
+    pub capacity: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -276,9 +280,16 @@ pub struct ProofCacheMetrics {
     hits: Arc<AtomicU64>,
     misses: Arc<AtomicU64>,
     evictions: Arc<AtomicU64>,
+    capacity: Arc<AtomicUsize>,
+    backend: Arc<RwLock<Option<String>>>,
 }
 
 impl ProofCacheMetrics {
+    pub fn configure(&self, backend: impl Into<String>, capacity: usize) {
+        self.record_capacity(capacity);
+        *self.backend.write() = Some(backend.into());
+    }
+
     pub fn record_hit(&self) {
         self.hits.fetch_add(1, Ordering::Relaxed);
     }
@@ -294,11 +305,19 @@ impl ProofCacheMetrics {
         }
     }
 
+    pub fn record_capacity(&self, capacity: usize) {
+        if capacity > 0 {
+            self.capacity.store(capacity, Ordering::Relaxed);
+        }
+    }
+
     pub fn snapshot(&self) -> ProofCacheMetricsSnapshot {
         ProofCacheMetricsSnapshot {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
+            capacity: self.capacity.load(Ordering::Relaxed),
+            backend: self.backend.read().clone(),
         }
     }
 }
@@ -308,12 +327,22 @@ pub trait ProofStorage: std::fmt::Debug + Send + Sync + 'static {
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
         Ok(Vec::new())
     }
+
+    fn capacity(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[derive(Debug, Default)]
 #[allow(dead_code)]
 pub struct MemoryProofStorage {
     records: parking_lot::Mutex<Vec<ProofRecord>>,
+}
+
+impl MemoryProofStorage {
+    pub fn records(&self) -> Vec<ProofRecord> {
+        self.records.lock().clone()
+    }
 }
 
 impl ProofStorage for MemoryProofStorage {
@@ -325,11 +354,9 @@ impl ProofStorage for MemoryProofStorage {
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
         Ok(self.records())
     }
-}
 
-impl MemoryProofStorage {
-    pub fn records(&self) -> Vec<ProofRecord> {
-        self.records.lock().clone()
+    fn capacity(&self) -> Option<usize> {
+        None
     }
 }
 
@@ -845,6 +872,10 @@ impl ProofStorage for PersistentProofStorage {
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
         Ok(self.cache.lock().clone())
     }
+
+    fn capacity(&self) -> Option<usize> {
+        Some(self.retain)
+    }
 }
 
 /// Deduplicating proof mempool fed directly by gossip.
@@ -875,6 +906,9 @@ impl ProofMempool {
         for record in storage.load()? {
             seen.insert(record.digest);
             queue.push_back(record);
+        }
+        if let Some(capacity) = storage.capacity() {
+            cache_metrics.record_capacity(capacity);
         }
         Ok(Self {
             seen,

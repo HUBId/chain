@@ -28,7 +28,7 @@ use tracing::{debug, info, info_span, instrument, warn, Span};
 
 use crate::config::{
     FeatureGates, NetworkAdmissionConfig, NodeConfig, P2pConfig, SnapshotDownloadConfig,
-    TelemetryConfig,
+    TelemetryConfig, DEFAULT_PROOF_CACHE_RETAIN,
 };
 use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
 use crate::node::NetworkIdentityProfile;
@@ -318,6 +318,8 @@ pub struct NodeRuntimeConfig {
     pub metrics: Arc<RuntimeMetrics>,
     pub identity: Option<IdentityProfile>,
     pub proof_storage_path: PathBuf,
+    pub proof_cache_retain: usize,
+    pub proof_cache_namespace: String,
     pub consensus_storage_path: PathBuf,
     pub feature_gates: FeatureGates,
     pub snapshot_provider: Option<SnapshotProviderHandle>,
@@ -326,6 +328,7 @@ pub struct NodeRuntimeConfig {
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
     fn from(config: &NodeConfig) -> Self {
+        let proof_cache_namespace = ProofVerifierRegistry::backend_fingerprint();
         Self {
             identity_path: config.p2p_key_path.clone(),
             p2p: config.network.p2p.clone(),
@@ -334,6 +337,10 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             metrics: RuntimeMetrics::noop(),
             identity: None,
             proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
+            proof_cache_retain: config
+                .proof_cache
+                .retain_for_backend(&proof_cache_namespace),
+            proof_cache_namespace,
             consensus_storage_path: config.consensus_pipeline_path.clone(),
             feature_gates: config.rollout.feature_gates.clone(),
             snapshot_provider: None,
@@ -351,6 +358,8 @@ impl fmt::Debug for NodeRuntimeConfig {
             .field("telemetry", &self.telemetry)
             .field("identity", &self.identity)
             .field("proof_storage_path", &self.proof_storage_path)
+            .field("proof_cache_retain", &self.proof_cache_retain)
+            .field("proof_cache_namespace", &self.proof_cache_namespace)
             .field("consensus_storage_path", &self.consensus_storage_path)
             .field("feature_gates", &self.feature_gates)
             .field(
@@ -619,15 +628,26 @@ impl GossipPipelines {
         config: &NodeRuntimeConfig,
         commands: mpsc::Sender<NodeCommand>,
     ) -> Result<Self, PipelineError> {
-        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
-        let storage = Arc::new(PersistentProofStorage::open_with_namespace(
+        let cache_namespace = config.proof_cache_namespace.clone();
+        let cache_retain = config.proof_cache_retain;
+        let storage = Arc::new(PersistentProofStorage::with_capacity_and_namespace(
             &config.proof_storage_path,
-            cache_namespace,
+            cache_retain,
+            cache_namespace.clone(),
         )?);
         let registry = ProofVerifierRegistry::default();
+        let cache_metrics = registry.cache_metrics();
+        cache_metrics.configure(cache_namespace.clone(), cache_retain);
         let proof_backend = Arc::new(RuntimeTransactionProofVerifier::new(registry.clone()));
         let validator = Arc::new(RuntimeProofValidator::new(proof_backend));
-        let proofs = ProofMempool::new(validator, storage)?;
+        let proofs = ProofMempool::new_with_metrics(validator, storage, cache_metrics)?;
+        info!(
+            target = "p2p.proof.cache",
+            backend = %cache_namespace,
+            retain = cache_retain,
+            path = %config.proof_storage_path.display(),
+            "initialized gossip proof cache",
+        );
         let verifier = Arc::new(RuntimeRecursiveProofVerifier::new(registry));
         let light_client = LightClientSync::new(verifier);
         let consensus_storage = Arc::new(PersistentConsensusStorage::open(
@@ -2623,6 +2643,7 @@ mod tests {
             .map(|path| path.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
             .join("proofs.json");
+        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
         let consensus_storage_path = identity_path
             .parent()
             .map(|path| path.to_path_buf())
@@ -2648,6 +2669,8 @@ mod tests {
             metrics: RuntimeMetrics::noop(),
             identity: None,
             proof_storage_path,
+            proof_cache_retain: DEFAULT_PROOF_CACHE_RETAIN,
+            proof_cache_namespace: cache_namespace,
             consensus_storage_path,
             feature_gates: FeatureGates::default(),
             snapshot_provider: None,
