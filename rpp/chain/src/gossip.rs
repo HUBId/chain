@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use libp2p::PeerId;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::consensus::SignedBftVote;
 use crate::node::NodeHandle;
@@ -42,16 +42,26 @@ pub struct NodeGossipProcessor {
 }
 
 impl NodeGossipProcessor {
-    pub fn new(node: NodeHandle, proof_storage_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        node: NodeHandle,
+        proof_storage_path: impl Into<PathBuf>,
+        proof_cache_retain: usize,
+        proof_cache_namespace: impl Into<String>,
+    ) -> Self {
         let registry = ProofVerifierRegistry::default();
-        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+        let cache_namespace = proof_cache_namespace.into();
         let cache_metrics = registry.cache_metrics();
+        cache_metrics.configure(cache_namespace.clone(), proof_cache_retain);
         let backend = Arc::new(RuntimeTransactionProofVerifier::new(registry));
         let validator = Arc::new(RuntimeProofValidator::new(backend));
         let storage_path = proof_storage_path.into();
         let storage = Arc::new(
-            PersistentProofStorage::open_with_namespace(storage_path, cache_namespace)
-                .expect("persistent proof pipeline must initialise"),
+            PersistentProofStorage::with_capacity_and_namespace(
+                storage_path.clone(),
+                proof_cache_retain,
+                cache_namespace.clone(),
+            )
+            .expect("persistent proof pipeline must initialise"),
         );
         let recovered = storage.load().unwrap_or_else(|err| {
             warn!(?err, "failed to load persisted proof records");
@@ -59,6 +69,13 @@ impl NodeGossipProcessor {
         });
         let proofs = ProofMempool::new_with_metrics(validator, storage, cache_metrics)
             .expect("in-memory proof pipeline must initialise");
+        info!(
+            target = "p2p.proof.cache",
+            backend = %cache_namespace,
+            retain = proof_cache_retain,
+            path = %storage_path.display(),
+            "initialized gossip proof cache",
+        );
         let processor = Self {
             node,
             proofs: Arc::new(Mutex::new(proofs)),

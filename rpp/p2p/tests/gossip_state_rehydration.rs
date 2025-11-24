@@ -14,6 +14,7 @@ use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
 use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::Node;
+use rpp_chain::proof_system::ProofVerifierRegistry;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
 use rpp_chain::runtime::RuntimeMetrics;
@@ -204,9 +205,13 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     handle_b.attach_p2p(handle_b_runtime.clone()).await;
 
     let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs.json");
+    let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+    let proof_cache_retain = config_b.proof_cache.retain_for_backend(&cache_namespace);
     let processor = Arc::new(NodeGossipProcessor::new(
         handle_b.clone(),
         proof_storage_path,
+        proof_cache_retain,
+        cache_namespace,
     ));
     let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
 
@@ -286,9 +291,13 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
         .attach_p2p(handle_b_runtime_restart.clone())
         .await;
 
+    let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+    let proof_cache_retain = config_b.proof_cache.retain_for_backend(&cache_namespace);
     let processor_restart = Arc::new(NodeGossipProcessor::new(
         handle_b_restart.clone(),
         config_b.proof_cache_dir.join("gossip_proofs_restart.json"),
+        proof_cache_retain,
+        cache_namespace,
     ));
     let gossip_worker_restart = spawn_node_event_worker(
         handle_b_runtime_restart.subscribe(),

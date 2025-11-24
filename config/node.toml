@@ -13,6 +13,11 @@ backend = "filesystem"
 
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"
+
+[proof_cache]
+default_retain = 1024
+per_backend_retain = {}
+
 block_time_ms = 5000
 max_block_transactions = 512
 max_block_identity_registrations = 32

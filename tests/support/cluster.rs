@@ -33,6 +33,7 @@ use rpp_chain::node::{
     ConsensusStatus as RuntimeConsensusStatus, Node, NodeHandle, NodeStatus as RuntimeNodeStatus,
 };
 use rpp_chain::orchestration::{PipelineOrchestrator, PipelineStage};
+use rpp_chain::proof_system::ProofVerifierRegistry;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{
     IdentityProfile as RuntimeIdentityProfile, NodeHandle as P2pHandle, NodeInner as P2pNode,
@@ -384,9 +385,13 @@ impl TestClusterNode {
 
         let events = p2p_handle.subscribe();
         let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+        let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+        let proof_cache_retain = config.proof_cache.retain_for_backend(&cache_namespace);
         let processor = Arc::new(NodeGossipProcessor::new(
             node_handle.clone(),
             proof_storage_path,
+            proof_cache_retain,
+            cache_namespace,
         ));
         let gossip_task = spawn_node_event_worker(events, processor, Some(shutdown_rx.clone()));
 
@@ -590,9 +595,13 @@ impl TestCluster {
 
             let events = p2p_handle.subscribe();
             let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+            let cache_namespace = ProofVerifierRegistry::backend_fingerprint();
+            let proof_cache_retain = config.proof_cache.retain_for_backend(&cache_namespace);
             let processor = Arc::new(NodeGossipProcessor::new(
                 node_handle.clone(),
                 proof_storage_path,
+                proof_cache_retain,
+                cache_namespace,
             ));
             let gossip_task = spawn_node_event_worker(events, processor, Some(shutdown_rx.clone()));
 

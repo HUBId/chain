@@ -2022,6 +2022,48 @@ pub const DEFAULT_SNAPSHOT_CHUNK_SIZE: usize = 16;
 pub const DEFAULT_SNAPSHOT_MIN_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 pub const DEFAULT_SNAPSHOT_MAX_CHUNK_SIZE: usize = DEFAULT_SNAPSHOT_CHUNK_SIZE;
 pub const DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS: usize = 4;
+pub const DEFAULT_PROOF_CACHE_RETAIN: usize = 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProofCacheSizingConfig {
+    pub default_retain: usize,
+    pub per_backend_retain: BTreeMap<String, usize>,
+}
+
+impl ProofCacheSizingConfig {
+    pub fn retain_for_backend(&self, backend: &str) -> usize {
+        self.per_backend_retain
+            .get(backend)
+            .copied()
+            .unwrap_or(self.default_retain)
+    }
+
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.default_retain == 0 {
+            return Err(ChainError::Config(
+                "proof_cache.default_retain must be greater than 0".into(),
+            ));
+        }
+        for (backend, retain) in &self.per_backend_retain {
+            if *retain == 0 {
+                return Err(ChainError::Config(format!(
+                    "proof_cache.per_backend_retain.{backend} must be greater than 0"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for ProofCacheSizingConfig {
+    fn default() -> Self {
+        Self {
+            default_retain: DEFAULT_PROOF_CACHE_RETAIN,
+            per_backend_retain: BTreeMap::new(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -2042,6 +2084,8 @@ pub struct NodeConfig {
     pub timetoke_snapshot_key_path: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
     pub proof_cache_dir: PathBuf,
+    #[serde(default)]
+    pub proof_cache: ProofCacheSizingConfig,
     #[serde(default = "default_consensus_pipeline_path")]
     pub consensus_pipeline_path: PathBuf,
     pub block_time_ms: u64,
@@ -2439,6 +2483,7 @@ impl NodeConfig {
                 "node configuration requires max_proof_size_bytes to be greater than 0".into(),
             ));
         }
+        self.proof_cache.validate()?;
         if self.storage.commit_io_budget_bytes == 0 {
             return Err(ChainError::Config(
                 "node configuration storage.commit_io_budget_bytes must be greater than 0".into(),
@@ -2540,6 +2585,7 @@ impl Default for NodeConfig {
             snapshot_dir: default_snapshot_dir(),
             snapshot_checksum_algorithm: SnapshotChecksumAlgorithm::default(),
             proof_cache_dir: default_proof_cache_dir(),
+            proof_cache: ProofCacheSizingConfig::default(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
             block_time_ms: 5_000,
             max_block_transactions: 512,

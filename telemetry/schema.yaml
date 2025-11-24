@@ -52,12 +52,15 @@ metrics:
   - name: rpp.runtime.proof.cache.hits
     labels:
       - cache
+      - backend
   - name: rpp.runtime.proof.cache.misses
     labels:
       - cache
+      - backend
   - name: rpp.runtime.proof.cache.evictions
     labels:
       - cache
+      - backend
   - name: rpp.runtime.reputation.penalties
     labels:
       - label

@@ -18,6 +18,21 @@ values are `backend="stwo"` for proof generation and wallet prover surfaces
 and `proof_backend="rpp-stark"` for verifier signals; alerts in this guide are
 scoped to those labels to keep mixed-backend deployments separate.【F:rpp/runtime/telemetry/metrics.rs†L380-L459】【F:ops/alerts/zk/rpp_stark.yaml†L6-L35】
 
+
+### Proof-cache sizing & observability
+
+- Cache retention is configurable per backend via the `[proof_cache]` block in
+  the node configuration. `default_retain` (default: 1 024) applies to all
+  backends, while `[proof_cache.per_backend_retain]` accepts backend
+  fingerprints from `ProofVerifierRegistry::backend_fingerprint()` (for
+  example `rpp-stark` in this guide). Zero or negative values are rejected
+  during config validation. Startup logs with target `p2p.proof.cache` report
+  the active backend, path, and retain size, and `/status/node` mirrors the
+  applied values under `verifier_metrics.cache.{backend,capacity}`.【F:rpp/runtime/config.rs†L203-L235】【F:rpp/runtime/node_runtime/node.rs†L320-L356】【F:rpp/p2p/src/pipeline.rs†L262-L304】
+- Proof-cache counters `rpp.runtime.proof.cache.{hits,misses,evictions}` now
+  include a `backend` label in addition to `cache=gossip-proof-cache`, enabling
+  per-backend dashboards and alerts; the same backend/capacity values surface
+  in `/status/node` for incident audits.【F:rpp/runtime/telemetry/metrics.rs†L939-L976】【F:telemetry/schema.yaml†L23-L32】【F:rpp/p2p/src/pipeline.rs†L266-L304】
 ### Backend-specific alerts
 
 - **STWO prover failures** – `increase(rpp_runtime_wallet_prover_failures{backend="stwo"}[10m])`
