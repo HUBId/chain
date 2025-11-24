@@ -42,3 +42,18 @@ prompt, and then launch `RPP Wallet` from the Start Menu.
 The `.pkg` installer runs the post-install hook automatically. When using the
 `.dmg`, drag `rpp-wallet-gui.app` into `/Applications`, run
 `hooks/postinstall.sh`, and then eject the disk image.
+
+## Snapshot verification drill
+
+Operators can confirm that pruning snapshots preserve wallet balances and
+nonces by replaying the integration regression locally. From the repository
+root run:
+
+```sh
+cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+  wallet_snapshot_round_trip_default_backend
+```
+
+If the RPP-STARK backend is available, mirror the check with
+`--features backend-rpp-stark` to ensure both zk backends keep wallet state
+stable across snapshot/restore cycles while mempool WAL entries replay.

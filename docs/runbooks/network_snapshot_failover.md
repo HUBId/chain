@@ -97,6 +97,22 @@ non-zero if a session stalls, reports an error string, or exceeds the manifest
 totals. Attach the generated report to the incident timeline so it can be
 compared with the nightly artifact.【F:xtask/src/main.rs†L214-L596】
 
+### Wallet state verification after restore
+
+After replaying snapshots onto replacement nodes, run the wallet snapshot
+regression to confirm balances and nonces match the pre-prune state and that
+queued mempool entries rehydrate from the WAL:
+
+```sh
+cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+  wallet_snapshot_round_trip_default_backend
+```
+
+For deployments that enable the RPP-STARK backend, repeat the command with
+`--features backend-rpp-stark` to exercise both zk backends across branch factor
+configurations. Record the test output in the incident log so auditors can see
+the wallet state survived the snapshot/restore cycle.
+
 ### Snapshot verifier evidence
 
 Vor jeder Freigabe: Führe `cargo xtask snapshot-verifier` aus, um einen

@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
+use std::path::Path;
 
-use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
+use rpp_chain::config::{GenesisAccount, NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::Block;
@@ -44,6 +46,36 @@ fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> 
         blocks.push(block);
     }
     blocks
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("create snapshot root");
+    for entry in fs::read_dir(source).expect("read snapshot source") {
+        let entry = entry.expect("snapshot entry");
+        let dest_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().expect("snapshot entry type");
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &dest_path);
+        } else {
+            fs::copy(entry.path(), dest_path).expect("copy snapshot file");
+        }
+    }
+}
+
+fn persist_test_accounts(storage: &rpp_chain::storage::Storage) -> BTreeMap<String, (u128, u64)> {
+    let mut accounts = storage.load_accounts().expect("load accounts");
+    for (index, account) in accounts.iter_mut().enumerate() {
+        account.nonce = 2 + index as u64;
+        account.credit(10_000 * (index as u128 + 1));
+        storage.persist_account(account).expect("persist account");
+    }
+
+    storage
+        .load_accounts()
+        .expect("reload accounts")
+        .into_iter()
+        .map(|account| (account.address.clone(), (account.balance, account.nonce)))
+        .collect()
 }
 
 fn run_pruning_checkpoint_flow(use_rpp_stark: bool) {
@@ -202,4 +234,131 @@ fn pruning_checkpoint_round_trip_default_backend() {
 #[test]
 fn pruning_checkpoint_round_trip_rpp_stark_backend() {
     run_pruning_checkpoint_flow(true);
+}
+
+fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
+    let temp = TempDir::new().expect("temp dir");
+    let mut config = prepare_config(&temp, use_rpp_stark);
+    config.genesis.accounts = vec![
+        GenesisAccount {
+            address: "wallet-prune-a".into(),
+            balance: 250_000,
+            stake: "250".into(),
+        },
+        GenesisAccount {
+            address: "wallet-prune-b".into(),
+            balance: 180_000,
+            stake: "180".into(),
+        },
+    ];
+
+    let wal_dir = config.data_dir.join("mempool-wal");
+    fs::create_dir_all(&wal_dir).expect("wal dir");
+
+    let node = Node::new(config.clone(), RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let baseline_accounts = persist_test_accounts(&storage);
+
+    let blocks = build_chain(&handle, 6);
+    let payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let pruning_status = handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle")
+        .expect("pruning status");
+    let pruning_tip = pruning_status.plan.tip.height;
+
+    let engine = ReconstructionEngine::new(storage.clone());
+    let artifacts = collect_state_sync_artifacts(&engine, 2).expect("state sync artifacts");
+    assert_eq!(
+        artifacts.plan.tip.height, pruning_tip,
+        "state sync plan should track pruning snapshot tip",
+    );
+    let provider = InMemoryPayloadProvider::new(payloads.clone());
+    for request in artifacts.requests() {
+        let rebuilt = engine
+            .reconstruct_block(request.height, &provider)
+            .expect("reconstruct block");
+        let original = blocks
+            .iter()
+            .find(|block| block.header.height == request.height)
+            .expect("original block");
+        assert_eq!(
+            rebuilt.hash, original.hash,
+            "rebuilt block should match stored commitment",
+        );
+    }
+
+    let backends = enabled_backends();
+    let recipient = handle.address().to_string();
+    let mut wal = FileWal::open(&wal_dir).expect("open mempool wal");
+    for index in 0..2u64 {
+        let backend = backend_for_index(&backends, index as usize);
+        let bundle = sample_transaction_bundle(&recipient, index + 1, 50 + index, backend);
+        handle
+            .submit_transaction(bundle.clone())
+            .expect("enqueue transaction for mempool snapshot");
+        let bytes = serde_json::to_vec(&bundle).expect("serialize mempool bundle");
+        wal.append(&bytes).expect("append bundle to wal");
+    }
+    wal.sync().expect("sync mempool wal");
+    drop(wal);
+
+    drop(node);
+
+    let snapshot_dir = TempDir::new().expect("snapshot dir");
+    let snapshot_data_dir = snapshot_dir.path().join("db-snapshot");
+    copy_dir_all(&config.data_dir, &snapshot_data_dir);
+
+    let mut restored_config = config.clone();
+    restored_config.data_dir = snapshot_data_dir.clone();
+    let restored_node = Node::new(restored_config, RuntimeMetrics::noop()).expect("restored node");
+    let restored_handle = restored_node.handle();
+    let restored_storage = restored_handle.storage();
+
+    let restored_accounts: BTreeMap<_, _> = restored_storage
+        .load_accounts()
+        .expect("reload restored accounts")
+        .into_iter()
+        .map(|account| (account.address.clone(), (account.balance, account.nonce)))
+        .collect();
+    assert_eq!(
+        baseline_accounts, restored_accounts,
+        "wallet balances and nonces should survive prune snapshot restore",
+    );
+
+    let mut wal =
+        FileWal::open(&snapshot_data_dir.join("mempool-wal")).expect("open wal from snapshot");
+    let replayed = wal.replay_from(0).expect("replay wal from snapshot");
+    let recovered: Vec<_> = replayed
+        .into_iter()
+        .map(|(_, payload)| serde_json::from_slice(&payload).expect("decode recovered bundle"))
+        .collect();
+    for bundle in &recovered {
+        restored_handle
+            .submit_transaction(bundle.clone())
+            .expect("replay recovered transaction into restored mempool");
+    }
+
+    let mempool_status = restored_handle
+        .mempool_status()
+        .expect("restored mempool status");
+    assert_eq!(
+        mempool_status.transactions.len(),
+        recovered.len(),
+        "restored mempool should replay snapshot WAL entries",
+    );
+}
+
+#[test]
+fn wallet_snapshot_round_trip_default_backend() {
+    run_wallet_snapshot_round_trip(false);
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[test]
+fn wallet_snapshot_round_trip_rpp_stark_backend() {
+    run_wallet_snapshot_round_trip(true);
 }
