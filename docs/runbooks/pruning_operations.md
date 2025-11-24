@@ -49,7 +49,25 @@ raise incidents when three consecutive scheduled runs fail.
   stores the plan on disk. If the log is missing while `persisted_plan_total`
   remains zero, storage or filesystem permissions likely regressed.【F:rpp/runtime/node.rs†L3200-L3202】【F:rpp/node/src/telemetry/pruning.rs†L36-L40】
 
-## 4. Failure scenarios
+## 4. Verify pruning checkpoints
+
+1. **Capture roots before and after pruning.** Use `fwdctl compare` to hash the
+   Firewood database captured prior to pruning or checkpoint rebuild and the
+   post-pruning database:
+
+   ```bash
+   fwdctl compare --before-db /var/lib/firewood/pre-prune.db --after-db /var/lib/firewood/post-prune.db
+   ```
+
+   Matching roots print `State roots match: <hash>` and exit successfully. If
+   the hashes differ, the command surfaces both digests so operators can halt
+   rollout before distributing a corrupted checkpoint.
+2. **Log the result alongside receipts.** Record the comparison output in the
+   same incident or maintenance log entry that tracks pruning receipts. When the
+   hashes differ, stop snapshot exports and rebuild the checkpoint before
+   resuming pruning automation.
+
+## 5. Failure scenarios
 
 ### A. Repeated cycle failures
 

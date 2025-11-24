@@ -14,6 +14,7 @@ pub mod delete;
 pub mod dump;
 pub mod get;
 pub mod graph;
+pub mod compare;
 mod health;
 pub mod insert;
 pub mod load;
@@ -73,6 +74,8 @@ enum Commands {
     Check(check::Options),
     /// Load key/value pairs from a fixture file
     Load(load::Options),
+    /// Compare state root hashes before and after pruning/checkpointing
+    Compare(compare::Options),
 }
 
 fn main() -> Result<(), api::Error> {
@@ -94,6 +97,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Load(opts) => load::run(opts),
+        Commands::Compare(opts) => compare::run(opts),
     }
 }
 

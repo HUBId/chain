@@ -9,7 +9,7 @@ use predicates::prelude::*;
 use serial_test::serial;
 use std::fs::{self, remove_file};
 use std::path::{Path, PathBuf};
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::{NamedTempFile, TempDir, TempPath};
 
 use serde_json::{json, Map, Value};
 
@@ -28,19 +28,39 @@ macro_rules! fixtures {
 fn fwdctl_load(entries: Vec<(String, String)>) -> Result<()> {
     let (temp_path, path_buf) = write_fixture(entries, FIXTURE_SCHEMA_VERSION)?;
 
-    Command::cargo_bin(PRG)?
-        .arg("load")
-        .arg("--db")
-        .arg(tmpdb::path())
-        .arg("--file")
-        .arg(&path_buf)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Loaded"));
+    fwdctl_load_into_path(&path_buf, tmpdb::path())?;
 
     temp_path.close().map_err(|err| anyhow!(err))?;
 
     Ok(())
+}
+
+fn fwdctl_load_into_path(fixture_path: &Path, db_path: &Path) -> Result<()> {
+    fwdctl_load_entries_from_fixture(fixture_path, db_path)?;
+
+    Ok(())
+}
+
+fn fwdctl_load_entries_from_fixture(fixture_path: &Path, db_path: &Path) -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("load")
+        .arg("--db")
+        .arg(db_path)
+        .arg("--file")
+        .arg(fixture_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Loaded"));
+
+    Ok(())
+}
+
+fn fwdctl_load_into(entries: Vec<(String, String)>, db_path: &Path) -> Result<TempPath> {
+    let (temp_path, path_buf) = write_fixture(entries, FIXTURE_SCHEMA_VERSION)?;
+
+    fwdctl_load_entries_from_fixture(&path_buf, db_path)?;
+
+    Ok(temp_path)
 }
 
 #[test]
@@ -120,6 +140,17 @@ fn fwdctl_delete_db() -> Result<()> {
         eprintln!("failed to delete testing dir: {e}");
         return Err(anyhow!(e));
     }
+
+    Ok(())
+}
+
+fn fwdctl_create_db_at(path: &Path) -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .arg("create")
+        .arg("--db")
+        .arg(path)
+        .assert()
+        .success();
 
     Ok(())
 }
@@ -250,6 +281,72 @@ fn fwdctl_root_hash() -> Result<()> {
         .stdout(predicate::str::is_empty().not());
 
     fwdctl_delete_db()
+}
+
+#[test]
+#[serial]
+fn fwdctl_compare_matching_roots() -> Result<()> {
+    let before_dir = TempDir::new().map_err(|err| anyhow!(err))?;
+    let after_dir = TempDir::new().map_err(|err| anyhow!(err))?;
+
+    let before_db = before_dir.path().join("before_firewood.db");
+    let after_db = after_dir.path().join("after_firewood.db");
+
+    fwdctl_create_db_at(&before_db)?;
+    fwdctl_create_db_at(&after_db)?;
+
+    let temp_before = fwdctl_load_into(fixtures!("key" => "value"), &before_db)?;
+    let temp_after = fwdctl_load_into(fixtures!("key" => "value"), &after_db)?;
+
+    Command::cargo_bin(PRG)?
+        .arg("compare")
+        .arg("--before-db")
+        .arg(&before_db)
+        .arg("--after-db")
+        .arg(&after_db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("State roots match"));
+
+    temp_before
+        .close()
+        .and_then(|_| temp_after.close())
+        .map_err(|err| anyhow!(err))?;
+
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn fwdctl_compare_mismatched_roots() -> Result<()> {
+    let before_dir = TempDir::new().map_err(|err| anyhow!(err))?;
+    let after_dir = TempDir::new().map_err(|err| anyhow!(err))?;
+
+    let before_db = before_dir.path().join("before_firewood.db");
+    let after_db = after_dir.path().join("after_firewood.db");
+
+    fwdctl_create_db_at(&before_db)?;
+    fwdctl_create_db_at(&after_db)?;
+
+    let temp_before = fwdctl_load_into(fixtures!("key" => "value"), &before_db)?;
+    let temp_after = fwdctl_load_into(fixtures!("key" => "different"), &after_db)?;
+
+    Command::cargo_bin(PRG)?
+        .arg("compare")
+        .arg("--before-db")
+        .arg(&before_db)
+        .arg("--after-db")
+        .arg(&after_db)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("State roots differ"));
+
+    temp_before
+        .close()
+        .and_then(|_| temp_after.close())
+        .map_err(|err| anyhow!(err))?;
+
+    Ok(())
 }
 
 #[test]
