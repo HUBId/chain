@@ -547,6 +547,18 @@ fn run_integration_workflows() -> Result<()> {
     apply_integration_feature_flags(&mut command);
     run_command(command, "integration workflows")?;
 
+    let mut pruning = Command::new("cargo");
+    pruning
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("pruning_cross_backend");
+    apply_integration_feature_flags(&mut pruning);
+    run_command(pruning, "pruning checkpoint recovery")?;
+
     let mut lifecycle = Command::new("cargo");
     lifecycle
         .current_dir(&root)
