@@ -98,6 +98,24 @@ To debug a failure:
    an escalation fired or was suppressed, then adjust the expressions or
    thresholds accordingly.
 
+## Clock drift fuzzing and safe budgets
+
+Nightly fuzzing now exercises epoch transitions under skewed clocks and slow
+peers through two complementary checks:
+
+* The integration test in `tests/consensus_epoch_drift.rs` starts four
+  validators with staggered `block_time_ms`/`round_timeout_ms` values, throttles
+  gossip on one peer, and asserts that two epoch transitions complete without
+  fork-choice divergence or excessive round-latency spread (>1.2s).【F:tests/consensus_epoch_drift.rs†L1-L165】
+* The simnet `epoch-drift` profile drives a 30-node small-world mesh with a
+  cross-region partition and churn, recording per-peer latency and consensus
+  summaries for the nightly soak pipeline.【F:tools/simnet/scenarios/consensus_epoch_drift.ron†L1-L20】【F:scenarios/epoch_drift.toml†L1-L70】
+
+The combined drills have held finality steady with ~110ms of per-validator slot
+skew and latency spread under 1.2s. Operators should treat ~1s of additional
+round latency and a one-block height spread as the safe drift budget; crossing
+those limits warrants deeper inspection before tightening alert thresholds.
+
 ## RPP-STARK reorg drills and observability
 
 Nightly simnet runs now include an RPP-STARK-specific reorg scenario that

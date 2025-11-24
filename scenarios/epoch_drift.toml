@@ -1,0 +1,66 @@
+duration_ms = 60000
+
+[topology]
+type = "small_world"
+n = 30
+k = 6
+rewire_p = 0.22
+
+[regions]
+assignments = [
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+]
+
+[links]
+intra = { delay_ms = 20, jitter_ms = 4, loss = 0.0 }
+A-B = { delay_ms = 140, jitter_ms = 30, loss = 0.02 }
+B-C = { delay_ms = 165, jitter_ms = 32, loss = 0.025 }
+A-C = { delay_ms = 125, jitter_ms = 26, loss = 0.018 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 6, jitter_ms = 3 }
+untrusted = { extra_delay_ms = 28, jitter_ms = 12 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.08 }
+
+[traffic.tx.payload]
+min_bytes = 512
+max_bytes = 8192
+
+[[traffic.tx.phases]]
+name = "skewed-warmup"
+duration_ms = 18000
+model = "poisson"
+lambda_per_sec = 18.0
+
+[[traffic.tx.phases]]
+name = "epoch-churn"
+duration_ms = 26000
+model = "poisson"
+lambda_per_sec = 32.0
+
+[[traffic.tx.phases]]
+name = "slow-peer-recovery"
+duration_ms = 16000
+model = "poisson"
+lambda_per_sec = 14.0
+
+[faults.partition]
+start_ms = 20000
+duration_ms = 6000
+group_a = "A"
+group_b = "C"
+
+[faults.churn]
+start_ms = 32000
+rate_per_min = 18.0
+restart_after_ms = 6000
+
+[metrics]
+json = "target/simnet/epoch-drift/summaries/epoch_drift.json"
+csv = "target/simnet/epoch-drift/summaries/epoch_drift.csv"

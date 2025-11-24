@@ -1,0 +1,20 @@
+{
+  "name": "epoch-drift",
+  "description": "Clock-skew and slow-peer soak that stresses epoch transitions and fork-choice recovery",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "resources": {
+    "cpus": 10,
+    "memory_gb": 20
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/epoch_drift.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/epoch_drift.json"
+  },
+  "consensus": null
+}
