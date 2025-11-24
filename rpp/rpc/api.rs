@@ -437,6 +437,10 @@ pub struct ApiContext {
     admission_dual_control: Option<Arc<DualControlApprovalService>>,
     #[cfg(test)]
     test_peerstore: Option<Arc<Peerstore>>,
+    #[cfg(test)]
+    test_subsystem_status: Option<HealthSubsystemStatus>,
+    #[cfg(test)]
+    test_node_ready: Option<bool>,
 }
 
 impl ApiContext {
@@ -511,6 +515,10 @@ impl ApiContext {
             admission_dual_control,
             #[cfg(test)]
             test_peerstore: None,
+            #[cfg(test)]
+            test_subsystem_status: None,
+            #[cfg(test)]
+            test_node_ready: None,
         }
     }
 
@@ -583,6 +591,15 @@ impl ApiContext {
 
     fn node_enabled(&self) -> bool {
         self.node_available() && self.current_mode().includes_node()
+    }
+
+    fn node_ready(&self, mode: RuntimeMode) -> bool {
+        #[cfg(test)]
+        if let Some(ready) = self.test_node_ready {
+            return ready;
+        }
+
+        !mode.includes_node() || self.node_enabled()
     }
 
     fn pruning_status_stream(&self) -> Option<watch::Receiver<Option<PruningJobStatus>>> {
@@ -673,6 +690,28 @@ impl ApiContext {
             .map(|node| health_backend_status(node.verifier_metrics()))
     }
 
+    fn subsystem_status(&self) -> HealthSubsystemStatus {
+        #[cfg(test)]
+        if let Some(status) = self.test_subsystem_status.clone() {
+            return status;
+        }
+
+        let backend = self.backend_status();
+        let zk_ready = backend
+            .as_ref()
+            .map(|status| status.active_backend.is_some())
+            .unwrap_or(false);
+        let pruning_available = self.pruning_service.is_some();
+        let snapshots_available =
+            self.state_sync_server.is_some() || self.snapshot_runtime.is_some();
+
+        HealthSubsystemStatus {
+            zk_ready,
+            pruning_available,
+            snapshots_available,
+        }
+    }
+
     fn require_state_sync_api(
         &self,
     ) -> Result<Arc<dyn StateSyncApi>, (StatusCode, Json<ErrorResponse>)> {
@@ -716,6 +755,18 @@ impl ApiContext {
 
     pub fn with_snapshot_runtime(mut self, runtime: Arc<dyn SnapshotStreamRuntime>) -> Self {
         self.snapshot_runtime = Some(runtime);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_test_subsystem_status(mut self, status: HealthSubsystemStatus) -> Self {
+        self.test_subsystem_status = Some(status);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_test_node_ready(mut self, ready: bool) -> Self {
+        self.test_node_ready = Some(ready);
         self
     }
 
@@ -996,6 +1047,7 @@ struct HealthResponse {
     backend: Option<HealthBackendStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot_breaker: Option<SnapshotBreakerStatus>,
+    subsystems: HealthSubsystemStatus,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1006,15 +1058,22 @@ struct HealthBackendStatus {
     cache: ProofCacheMetricsSnapshot,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct HealthSubsystemStatus {
+    zk_ready: bool,
+    pruning_available: bool,
+    snapshots_available: bool,
+}
+
 #[derive(Serialize)]
 struct HealthReadyResponse {
     status: &'static str,
     ready: bool,
     role: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     backend: Option<HealthBackendStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot_breaker: Option<SnapshotBreakerStatus>,
+    subsystems: HealthSubsystemStatus,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2588,6 +2647,7 @@ async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
         role: mode.as_str(),
         backend: state.backend_status(),
         snapshot_breaker: state.snapshot_breaker_status(),
+        subsystems: state.subsystem_status(),
     })
 }
 
@@ -2643,13 +2703,23 @@ async fn health_live(State(state): State<ApiContext>) -> StatusCode {
 
 async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<HealthReadyResponse>) {
     let mode = state.current_mode();
+    let subsystems = state.subsystem_status();
 
-    let node_ready = !mode.includes_node() || state.node_enabled();
+    let node_ready = state.node_ready(mode);
     let wallet_ready = !mode.includes_wallet() || state.wallet_enabled();
     let orchestrator_ready =
         !matches!(mode, RuntimeMode::Validator) || state.orchestrator_enabled();
 
-    let ready = node_ready && wallet_ready && orchestrator_ready;
+    let zk_ready = !mode.includes_node() || subsystems.zk_ready;
+    let pruning_ready = !mode.includes_node() || subsystems.pruning_available;
+    let snapshots_ready = !mode.includes_node() || subsystems.snapshots_available;
+
+    let ready = node_ready
+        && wallet_ready
+        && orchestrator_ready
+        && zk_ready
+        && pruning_ready
+        && snapshots_ready;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -2664,6 +2734,7 @@ async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<Heal
             role: mode.as_str(),
             backend: state.backend_status(),
             snapshot_breaker: state.snapshot_breaker_status(),
+            subsystems,
         }),
     )
 }
@@ -4243,6 +4314,49 @@ impl StateSyncApi for NodeHandle {
 mod health_tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    use axum::extract::State;
+    use parking_lot::RwLock;
+
+    #[tokio::test]
+    async fn readiness_fails_when_zk_backend_is_unready() {
+        let mode = Arc::new(RwLock::new(RuntimeMode::Node));
+        let context = ApiContext::new(mode, None, None, None, None, false, None, None, false)
+            .with_test_node_ready(true)
+            .with_test_subsystem_status(HealthSubsystemStatus {
+                zk_ready: false,
+                pruning_available: true,
+                snapshots_available: true,
+            });
+
+        let (status, Json(response)) = health_ready(State(context)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert!(!response.subsystems.zk_ready);
+        assert!(response.subsystems.pruning_available);
+        assert!(response.subsystems.snapshots_available);
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_when_pruning_is_unavailable() {
+        let mode = Arc::new(RwLock::new(RuntimeMode::Node));
+        let context = ApiContext::new(mode, None, None, None, None, false, None, None, false)
+            .with_test_node_ready(true)
+            .with_test_subsystem_status(HealthSubsystemStatus {
+                zk_ready: true,
+                pruning_available: false,
+                snapshots_available: true,
+            });
+
+        let (status, Json(response)) = health_ready(State(context)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert!(response.subsystems.zk_ready);
+        assert!(!response.subsystems.pruning_available);
+        assert!(response.subsystems.snapshots_available);
+    }
 
     #[test]
     fn backend_status_uses_last_verification_snapshot() {
