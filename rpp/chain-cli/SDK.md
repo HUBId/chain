@@ -57,3 +57,10 @@ rt.block_on(async {
     assert!(delay >= window.reset_after);
 });
 ```
+
+## Snapshot RPC error mapping
+
+Use `classify_snapshot_error` to convert snapshot RPC responses into a typed
+`SnapshotError`. The helper understands the state-sync error codes described in
+`docs/interfaces/rpc/README.md` and backoffs according to rate-limit headers so
+callers can retry transient verifier failures without guessing delay windows.
