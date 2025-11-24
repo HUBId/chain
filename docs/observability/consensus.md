@@ -38,6 +38,20 @@ Phase‑2 acceptance and to keep operational runbooks aligned with the exported 
   existing `pipeline_consensus_finality.json` dashboards to determine whether a failed quorum impacts the
   overall block pipeline.
 
+### Uptime/finality correlation
+* **Dashboard:** `uptime_finality_correlation.json` overlays restart signals (changes in
+  `process_start_time_seconds` and scrape downtime) with `finality_lag_slots`,
+  `finalized_height_gap`, and chain growth to highlight whether restarts triggered
+  or coincided with stalled finality.【F:docs/dashboards/uptime_finality_correlation.json†L1-L88】
+* **Alert linkage:** the `ConsensusRestartFinalityCorrelation` rule fires when a
+  process restart occurs within a fifteen-minute window of widening finality lag or
+  height gaps, providing a paged signal to correlate the panels.【F:ops/alerts/consensus/finality.yaml†L35-L52】
+* **Interpretation:** if restart spikes line up with increasing lag or height gaps,
+  review the node logs for crash loops and confirm peer counts recover before
+  expecting the finality series to return below their warning thresholds. Sustained
+  block production (a flat or rising block-rate panel) with falling lag indicates
+  the restart cleared the issue; otherwise, escalate to the failover playbook.
+
 ## Operational notes
 
 1. Always capture Grafana screenshots for the VRF histogram and quorum counter when signing off Phase‑2

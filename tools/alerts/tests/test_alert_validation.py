@@ -23,7 +23,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 7
+    assert len(results) == 8
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -31,6 +31,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "snapshot-anomaly",
         "uptime-pause",
         "uptime-recovery",
+        "restart-finality-correlation",
         "timetoke-epoch-delay",
         "timetoke-epoch-recovery",
         "baseline",
@@ -54,6 +55,10 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     uptime_recovery = results_by_case["uptime-recovery"]
     assert uptime_recovery.fired_events == []
     assert uptime_recovery.webhook_payloads == []
+
+    restart_correlation = results_by_case["restart-finality-correlation"]
+    assert {event.name for event in restart_correlation.fired_events} == restart_correlation.case.expected_alerts
+    assert len(restart_correlation.webhook_payloads) == len(restart_correlation.fired_events)
 
     timetoke_delay = results_by_case["timetoke-epoch-delay"]
     assert {event.name for event in timetoke_delay.fired_events} == timetoke_delay.case.expected_alerts
