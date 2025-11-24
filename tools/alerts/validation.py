@@ -1337,6 +1337,166 @@ def build_uptime_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_missed_slot_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2.0),
+                    (120.0, 4.0),
+                    (240.0, 8.0),
+                    (360.0, 14.0),
+                    (480.0, 18.0),
+                    (600.0, 26.0),
+                    (720.0, 25.0),
+                    (840.0, 10.0),
+                    (960.0, 5.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (120.0, 1.5),
+                    (240.0, 2.5),
+                    (360.0, 5.5),
+                    (480.0, 7.5),
+                    (600.0, 9.5),
+                    (720.0, 8.5),
+                    (840.0, 3.5),
+                    (960.0, 1.5),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_block_miss_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10_000.0),
+                    (300.0, 10_025.0),
+                    (600.0, 10_050.0),
+                    (900.0, 10_050.0),
+                    (1200.0, 10_050.0),
+                    (1500.0, 10_050.0),
+                    (1800.0, 10_050.0),
+                    (2100.0, 10_110.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 3.0),
+                    (300.0, 5.0),
+                    (600.0, 6.0),
+                    (900.0, 12.5),
+                    (1200.0, 18.0),
+                    (1500.0, 9.0),
+                    (1800.0, 6.0),
+                    (2100.0, 4.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_missed_slot_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 3.0),
+                    (120.0, 6.0),
+                    (240.0, 10.0),
+                    (360.0, 12.0),
+                    (480.0, 11.0),
+                    (600.0, 8.0),
+                    (720.0, 6.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (120.0, 2.0),
+                    (240.0, 3.0),
+                    (360.0, 3.5),
+                    (480.0, 3.0),
+                    (600.0, 2.0),
+                    (720.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_block_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 5_000.0),
+                    (300.0, 5_015.0),
+                    (600.0, 5_030.0),
+                    (900.0, 5_050.0),
+                    (1200.0, 5_075.0),
+                    (1500.0, 5_110.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 4.0),
+                    (300.0, 5.0),
+                    (600.0, 6.0),
+                    (900.0, 6.5),
+                    (1200.0, 5.5),
+                    (1500.0, 4.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_restart_finality_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -1489,6 +1649,31 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="uptime-recovery",
             store=build_uptime_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="missed-slots",
+            store=build_missed_slot_store(),
+            expected_alerts={
+                "ConsensusFinalityLagWarning",
+                "ConsensusFinalityLagCritical",
+                "ConsensusFinalizedHeightGapWarning",
+                "ConsensusFinalizedHeightGapCritical",
+            },
+        ),
+        ValidationCase(
+            name="missed-slot-recovery",
+            store=build_missed_slot_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="missed-blocks",
+            store=build_block_miss_store(),
+            expected_alerts={"ConsensusLivenessStall", "ConsensusFinalityLagWarning"},
+        ),
+        ValidationCase(
+            name="missed-block-recovery",
+            store=build_block_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(
