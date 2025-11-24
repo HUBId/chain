@@ -15,7 +15,10 @@ fn artifacts_dir(label: &str) -> PathBuf {
     workspace_root().join("target").join("simnet").join(label)
 }
 
-fn run_simnet_scenario(name: &str) -> (std::process::ExitStatus, String, String) {
+fn run_simnet_scenario(
+    name: &str,
+    extra_args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+) -> (std::process::ExitStatus, String, String) {
     let workspace = workspace_root();
     let scenario = workspace.join("tools/simnet/tests/data").join(name);
     let artifacts = artifacts_dir(&format!("test-{name}"));
@@ -23,7 +26,8 @@ fn run_simnet_scenario(name: &str) -> (std::process::ExitStatus, String, String)
         fs::remove_dir_all(&artifacts).expect("clean previous artifacts");
     }
 
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .current_dir(&workspace)
         .arg("run")
         .arg("--quiet")
@@ -36,9 +40,13 @@ fn run_simnet_scenario(name: &str) -> (std::process::ExitStatus, String, String)
         .arg(&scenario)
         .arg("--artifacts-dir")
         .arg(&artifacts)
-        .env("RUST_LOG", "off")
-        .output()
-        .expect("spawn cargo run simnet");
+        .env("RUST_LOG", "off");
+
+    for arg in extra_args {
+        command.arg(arg);
+    }
+
+    let output = command.output().expect("spawn cargo run simnet");
 
     (
         output.status,
@@ -49,7 +57,7 @@ fn run_simnet_scenario(name: &str) -> (std::process::ExitStatus, String, String)
 
 #[test]
 fn rejects_zero_peer_topology() {
-    let (status, _stdout, stderr) = run_simnet_scenario("invalid_zero_peers.ron");
+    let (status, _stdout, stderr) = run_simnet_scenario("invalid_zero_peers.ron", []);
 
     assert!(!status.success(), "simnet should reject zero-peer topology");
     assert_ne!(status.code().unwrap_or_default(), 0);
@@ -61,7 +69,7 @@ fn rejects_zero_peer_topology() {
 
 #[test]
 fn rejects_negative_link_loss() {
-    let (status, _stdout, stderr) = run_simnet_scenario("invalid_link_loss.ron");
+    let (status, _stdout, stderr) = run_simnet_scenario("invalid_link_loss.ron", []);
 
     assert!(!status.success(), "simnet should reject invalid link loss");
     assert_ne!(status.code().unwrap_or_default(), 0);
@@ -73,7 +81,7 @@ fn rejects_negative_link_loss() {
 
 #[test]
 fn rejects_empty_consensus_parameters() {
-    let (status, _stdout, stderr) = run_simnet_scenario("invalid_consensus.ron");
+    let (status, _stdout, stderr) = run_simnet_scenario("invalid_consensus.ron", []);
 
     assert!(
         !status.success(),
@@ -83,5 +91,33 @@ fn rejects_empty_consensus_parameters() {
     assert!(
         stderr.contains("consensus.runs must be greater than zero"),
         "stderr should mention invalid consensus runs, got: {stderr}"
+    );
+}
+
+#[test]
+fn rejects_insufficient_resources_without_override() {
+    let (status, _stdout, stderr) = run_simnet_scenario("insufficient_resources.ron", []);
+
+    assert!(
+        !status.success(),
+        "simnet should reject runs that do not meet resource guidance"
+    );
+    assert!(
+        stderr.contains("host resources below scenario guidance"),
+        "stderr should mention resource guidance, got: {stderr}"
+    );
+}
+
+#[test]
+fn allows_resource_override_flag() {
+    let (status, _stdout, stderr) = run_simnet_scenario(
+        "insufficient_resources.ron",
+        ["--allow-insufficient-resources"],
+    );
+
+    assert!(status.success(), "override flag should permit running");
+    assert!(
+        stderr.contains("resource guidance"),
+        "resource totals should be logged, got: {stderr}"
     );
 }

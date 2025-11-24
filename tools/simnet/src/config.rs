@@ -26,8 +26,16 @@ pub struct SimnetConfig {
     pub p2p: Option<P2pConfig>,
     #[serde(default)]
     pub consensus: Option<ConsensusLoadConfig>,
+    #[serde(default)]
+    pub resources: Option<ResourceLimits>,
     #[serde(skip)]
     source_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceLimits {
+    pub cpus: usize,
+    pub memory_gb: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -162,6 +170,15 @@ impl SimnetConfig {
             }
         }
 
+        if let Some(resources) = &self.resources {
+            if resources.cpus == 0 {
+                bail!("resources.cpus must be greater than zero");
+            }
+            if resources.memory_gb == 0 {
+                bail!("resources.memory_gb must be greater than zero");
+            }
+        }
+
         Ok(())
     }
 
@@ -253,6 +270,12 @@ impl SimnetConfig {
                 _ => '-',
             })
             .collect()
+    }
+}
+
+impl ResourceLimits {
+    pub fn memory_bytes(&self) -> u64 {
+        self.memory_gb * 1024 * 1024 * 1024
     }
 }
 

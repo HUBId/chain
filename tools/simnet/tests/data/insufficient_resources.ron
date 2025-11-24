@@ -1,0 +1,14 @@
+{
+  "name": "insufficient-resources",
+  "description": "Minimal scenario used to exercise resource checks",
+  "duration_secs": 0,
+  "env": {},
+  "nodes": [],
+  "wallets": [],
+  "p2p": null,
+  "consensus": null,
+  "resources": {
+    "cpus": 512,
+    "memory_gb": 4096
+  }
+}

@@ -5,6 +5,10 @@
   "env": {
     "RUST_LOG": "info"
   },
+  "resources": {
+    "cpus": 6,
+    "memory_gb": 12
+  },
   "nodes": [],
   "wallets": [],
   "p2p": {

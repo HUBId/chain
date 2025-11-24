@@ -27,3 +27,4 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rpp-sim = { path = "../../rpp/sim" }
+sysinfo = { version = "0.30", features = ["multithread"] }

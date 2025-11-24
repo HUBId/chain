@@ -6,6 +6,10 @@
     "RUST_LOG": "info",
     "RUST_BACKTRACE": "1"
   },
+  "resources": {
+    "cpus": 12,
+    "memory_gb": 24
+  },
   "nodes": [
     {
       "label": "consensus-reorg-stark",

@@ -5,6 +5,10 @@
   "env": {
     "RUST_LOG": "info"
   },
+  "resources": {
+    "cpus": 4,
+    "memory_gb": 8
+  },
   "nodes": [
     {
       "label": "integration-block-pipeline",
