@@ -223,6 +223,25 @@ jobs:
           set -euo pipefail
           cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture
 
+  rpp-stark-conflict-drill:
+    name: RPP-STARK conflict handling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Exercise conflicting transaction rejection
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain \
+            --features "backend-rpp-stark,wallet-integration,wallet-ui" \
+            --test rpp_stark_conflicts -- --nocapture
+
   uptime-ha-drills:
     name: Uptime HA restart drills
     runs-on: ubuntu-latest
