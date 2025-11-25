@@ -267,6 +267,33 @@ mod tests {
             })
     }
 
+    fn cycle_counter_has_result(
+        exported: &[ResourceMetrics],
+        name: &str,
+        reason: &str,
+        result: &str,
+    ) -> bool {
+        exported
+            .iter()
+            .flat_map(|resource| resource.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .filter(|metric| metric.name() == name)
+            .any(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => sum.data_points().iter().any(|dp| {
+                    dp.value() > 0
+                        && dp.attributes().iter().any(|kv| {
+                            kv.key.as_str() == "reason"
+                                && matches!(&kv.value, Value::String(v) if v.as_str() == reason)
+                        })
+                        && dp.attributes().iter().any(|kv| {
+                            kv.key.as_str() == "result"
+                                && matches!(&kv.value, Value::String(v) if v.as_str() == result)
+                        })
+                }),
+                _ => false,
+            })
+    }
+
     fn sample_status(missing: usize, stored: usize) -> PruningJobStatus {
         PruningJobStatus {
             plan: StateSyncPlan {
@@ -341,6 +368,28 @@ mod tests {
             "rpp.node.pruning.failures_total",
             "scheduled",
             "storage"
+        ));
+    }
+
+    #[test]
+    fn aborted_cycle_surfaces_failure_metrics() {
+        let (metrics, exporter, provider) = setup_meter();
+
+        metrics.record_cycle(
+            CycleReason::Manual,
+            CycleOutcome::Failure,
+            Duration::from_millis(500),
+            None,
+        );
+
+        provider.force_flush().unwrap();
+        let exported = exporter.get_finished_metrics().unwrap();
+
+        assert!(cycle_counter_has_result(
+            &exported,
+            "rpp.node.pruning.cycle_total",
+            "manual",
+            "failure",
         ));
     }
 }
