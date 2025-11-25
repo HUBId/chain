@@ -22,6 +22,22 @@ provides operator hints for common actions.
   node rejects a transaction (for example, because of an invalid signature), the
   lock table is cleared so the inputs can be retried.
 
+## Offline signing workflow
+- Keep the air-gapped host responsible for `send create` and `send sign` so the
+  signing keys never touch an online machine. Point the CLI at a loopback RPC
+  endpoint, for example:
+  - `rpp-wallet send create --to <addr> --amount 100000 --fee-rate 2 --rpc http://127.0.0.1:9090`
+  - `rpp-wallet send sign --draft-id <draft-id> --rpc http://127.0.0.1:9090`
+- Capture the `tx_hex` (and `proof_hex` when present) printed by `send sign`
+  into a removable medium. The hex blob already includes the witness signature
+  and nonce checked by the wallet prover.
+- Move only the hex payload to an online relay host. Submit it without
+  unlocking keys via:
+  - `rpp-wallet send broadcast-raw --tx-hex $(cat offline_tx.hex) --rpc https://wallet.example.net`
+- Preserve the signed blob until the transaction is mined so you can resubmit
+  if the network temporarily rejects it. Never export or copy the keystore to
+  the relay host.
+
 ## Handling restarts
 - Wallet state (UTXOs, locks, policy config, and prover metadata) lives on disk
   alongside the keystore. Restarting the wallet with the same data directory is

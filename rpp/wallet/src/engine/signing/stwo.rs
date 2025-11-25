@@ -164,6 +164,93 @@ fn derive_timestamp(seed: [u8; 8]) -> u64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::wallet::WalletProverConfig;
+    use crate::db::UtxoOutpoint;
+    use crate::engine::signing::prover::ProverJobManager;
+    use crate::engine::{DraftInput, DraftTransaction};
+
+    fn sample_draft(amount: u128) -> DraftTransaction {
+        let input = DraftInput {
+            outpoint: UtxoOutpoint::new([1u8; 32], 0),
+            value: amount.saturating_mul(2),
+            confirmations: 6,
+        };
+        let output = DraftOutput::new("wallet.recipient", amount, false);
+        let change = DraftOutput::new("wallet.change", amount, true);
+        DraftTransaction {
+            inputs: vec![input],
+            outputs: vec![output, change],
+            fee_rate: 12,
+            fee: 500,
+            spend_model: SpendModel::Exact { amount },
+        }
+    }
+
+    #[test]
+    fn offline_witness_preserves_signature_and_nonce() {
+        let draft = sample_draft(50_000);
+        let manager = ProverJobManager::new(&WalletProverConfig::default());
+        let adapter = StwoWitnessAdapter::new(1_000_000);
+        let plan = adapter.prepare_witness(&manager, &draft).expect("plan");
+        let expected_len = plan.witness_bytes();
+        let witness_bytes = plan.into_witness().expect("witness bytes");
+        assert_eq!(witness_bytes.as_slice().len(), expected_len);
+
+        let witness = decode_tx_witness(&witness_bytes).expect("decode witness");
+        assert!(witness.signed_tx.verify().is_ok());
+        assert_eq!(
+            witness.sender_account.nonce + 1,
+            witness.signed_tx.payload.nonce
+        );
+        assert_eq!(
+            witness.signed_tx.payload.amount,
+            draft
+                .outputs
+                .iter()
+                .find(|output| !output.change)
+                .map(|output| output.value)
+                .expect("primary output"),
+        );
+        assert_eq!(u128::from(witness.signed_tx.payload.fee), draft.fee);
+    }
+
+    #[test]
+    fn distinct_drafts_produce_fresh_nonces() {
+        let manager = ProverJobManager::new(&WalletProverConfig::default());
+        let adapter = StwoWitnessAdapter::new(1_000_000);
+
+        let first = adapter
+            .prepare_witness(&manager, &sample_draft(10_000))
+            .expect("first witness")
+            .into_witness()
+            .expect("first bytes");
+        let second = adapter
+            .prepare_witness(&manager, &sample_draft(20_000))
+            .expect("second witness")
+            .into_witness()
+            .expect("second bytes");
+
+        let first_witness = decode_tx_witness(&first).expect("decode first");
+        let second_witness = decode_tx_witness(&second).expect("decode second");
+
+        assert_ne!(
+            first_witness.signed_tx.payload.nonce,
+            second_witness.signed_tx.payload.nonce,
+        );
+        assert_eq!(
+            first_witness.sender_account.nonce + 1,
+            first_witness.signed_tx.payload.nonce
+        );
+        assert_eq!(
+            second_witness.sender_account.nonce + 1,
+            second_witness.signed_tx.payload.nonce
+        );
+    }
+}
+
 fn wallet_address_from_public_key(key: &ed25519_dalek::VerifyingKey) -> String {
     let hash: [u8; 32] = Blake2sHasher::hash(key.as_bytes()).into();
     hex::encode(hash)

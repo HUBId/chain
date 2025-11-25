@@ -293,6 +293,19 @@ fn run_wallet_feature_matrix() -> Result<()> {
         run_wallet_feature_guard_suite(&root, &scenario, &chain_base_features)?;
     }
 
+    run_command(
+        Command::new("cargo")
+            .current_dir(&root)
+            .arg("test")
+            .arg("-p")
+            .arg("rpp-wallet")
+            .arg("--locked")
+            .arg("--features")
+            .arg("prover-stwo,backup")
+            .arg("engine::signing::stwo::tests"),
+        "wallet offline signing regression guard",
+    )?;
+
     let mut wallet_e2e = Command::new("cargo");
     wallet_e2e
         .current_dir(&root)
