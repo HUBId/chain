@@ -18,6 +18,8 @@ pub enum SimnetProfile {
     SmallWorld,
     #[value(alias = "reorg-stark", alias = "consensus-reorg-stark")]
     ReorgStark,
+    #[value(alias = "canary-rolling", alias = "canary_rolling")]
+    CanaryRolling,
 }
 
 impl SimnetProfile {
@@ -30,6 +32,7 @@ impl SimnetProfile {
             SimnetProfile::Flood,
             SimnetProfile::SmallWorld,
             SimnetProfile::ReorgStark,
+            SimnetProfile::CanaryRolling,
         ]
     }
 
@@ -42,6 +45,7 @@ impl SimnetProfile {
             SimnetProfile::Flood => "flood",
             SimnetProfile::SmallWorld => "small-world",
             SimnetProfile::ReorgStark => "reorg-stark",
+            SimnetProfile::CanaryRolling => "canary-rolling",
         }
     }
 
@@ -54,6 +58,7 @@ impl SimnetProfile {
             SimnetProfile::Flood => "tools/simnet/scenarios/partitioned_flood.ron",
             SimnetProfile::SmallWorld => "tools/simnet/scenarios/small_world_smoke.ron",
             SimnetProfile::ReorgStark => "tools/simnet/scenarios/consensus_reorg_stark.ron",
+            SimnetProfile::CanaryRolling => "tools/simnet/scenarios/canary_rolling_restart.ron",
         })
     }
 }
@@ -109,6 +114,11 @@ mod tests {
                 SimnetProfile::ReorgStark,
                 "tools/simnet/scenarios/consensus_reorg_stark.ron",
                 "reorg-stark",
+            ),
+            (
+                SimnetProfile::CanaryRolling,
+                "tools/simnet/scenarios/canary_rolling_restart.ron",
+                "canary-rolling",
             ),
         ];
 

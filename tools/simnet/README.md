@@ -24,6 +24,7 @@ back to `--scenario` for ad-hoc RON files.
 | `partition` | `tools/simnet/scenarios/snapshot_partition.ron` | Partitions validators while testing snapshot recovery. | `8` cores / `16 GiB` |
 | `flood` (also `partitioned-flood`) | `tools/simnet/scenarios/partitioned_flood.ron` | Runs the partitioned flood drill using gossip templates. | `6` cores / `12 GiB` |
 | `small-world` | `tools/simnet/scenarios/small_world_smoke.ron` | Executes the in-process small world smoke harness. | `4` cores / `8 GiB` |
+| `canary-rolling` | `tools/simnet/scenarios/canary_rolling_restart.ron` | Simulates a canary rolling restart with zk proving/verification and wallet tracker coverage. | `12` cores / `24 GiB` |
 | `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. | `12` cores / `24 GiB` |
 | `reorg-rpp-stark` | `tools/simnet/scenarios/consensus_reorg_rpp_stark.ron` | Exercises RPP-STARK fork-choice validation and recovery. | `12` cores / `24 GiB` |
 | `epoch-drift` | `tools/simnet/scenarios/consensus_epoch_drift.ron` | Injects skewed latency and slow peers to fuzz epoch transitions and fork-choice stability. | `10` cores / `20 GiB` |

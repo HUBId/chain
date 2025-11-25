@@ -1296,3 +1296,27 @@ PY
         with:
           name: simnet-regression
           path: target/simnet/regression-ci
+
+  simnet-canary-rolling:
+    name: Canary rolling deploy simulation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: simnet-canary-rolling
+      - name: Run canary rolling regression
+        run: |
+          set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
+          rm -rf target/simnet/canary-rolling-ci
+          cargo run -p simnet --bin regression -- \
+            --artifacts-root target/simnet/canary-rolling-ci \
+            --scenario tools/simnet/scenarios/canary_rolling_restart.ron
+      - name: Upload canary rollout artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-canary-rolling
+          path: target/simnet/canary-rolling-ci

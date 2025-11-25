@@ -92,6 +92,7 @@ const DEFAULT_SCENARIOS: &[&str] = &[
     "tools/simnet/scenarios/consensus_quorum_stress.ron",
     "tools/simnet/scenarios/snapshot_rebuild.ron",
     "tools/simnet/scenarios/gossip_backpressure.ron",
+    "tools/simnet/scenarios/canary_rolling_restart.ron",
 ];
 
 #[tokio::main]

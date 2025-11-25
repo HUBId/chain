@@ -1,0 +1,41 @@
+[sim]
+seed = 202506
+# Include the churn window plus pre/post traffic to mirror a canary rollout.
+duration_ms = 24000
+
+[topology]
+type = "small_world"
+n = 16
+k = 4
+rewire_p = 0.08
+
+[traffic.tx]
+publisher_bias = { type = "uniform" }
+
+[[traffic.tx.phases]]
+name = "pre-rollout"
+duration_ms = 6000
+model = "poisson"
+lambda_per_sec = 4.0
+
+[[traffic.tx.phases]]
+name = "rolling-restart"
+duration_ms = 9000
+model = "poisson"
+lambda_per_sec = 7.0
+
+[[traffic.tx.phases]]
+name = "post-rollout"
+duration_ms = 9000
+model = "poisson"
+lambda_per_sec = 5.0
+
+[faults.churn]
+start_ms = 5000
+# Approximate a single-node rolling restart cadence.
+rate_per_min = 24.0
+restart_after_ms = 1800
+
+[metrics]
+json = "target/sim-smoke/canary-rolling-summary.json"
+csv = "target/sim-smoke/canary-rolling-summary.csv"
