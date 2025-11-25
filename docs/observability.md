@@ -130,6 +130,27 @@ The nightly chaos workflow executes the entire OTLP failure suite (initial
 startup failures, failover, and timeout recovery) so regressions in telemetry
 backpressure or alerting surface without blocking day-to-day development.
 
+## Consensus chaos drills
+
+Nightly simnet jobs now run a consensus chaos preset (`consensus-chaos`) that
+introduces leader delays, gossip drops, and temporary validator isolation. To
+exercise the drill locally, call `cargo xtask test-simnet` or run a single
+scenario via `cargo xtask simnet --profile consensus-chaos`. Artifacts live
+under `target/simnet/consensus-chaos` and include:
+
+- `summaries/consensus_chaos.json` and `summaries/consensus_chaos.csv` for
+  propagation, recovery, and fault timelines.
+- `summaries/chaos_alert.json`, a synthetic Alertmanager payload that flips to
+  `status=firing` when propagation p95 exceeds the default 500 ms ceiling or
+  when no resume events are recorded after a partition.
+- `logs/` for node-level stdout/stderr during the chaos phases.
+
+Operators should expect at least one `partition_start`/`partition_end` pair in
+the summary faults list and resume latencies below 5 s. Nightly runs under both
+Plonky3 and RPP-STARK feature sets; if the alert stub reports `status=firing`,
+pull the corresponding `consensus-chaos` artifact bundle from the Actions run
+and inspect resume timings and peer traffic skew before clearing the alert.
+
 ## Telemetry schema allowlist
 
 Runtime metrics exported by the node are validated against an allowlist stored

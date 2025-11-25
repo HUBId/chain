@@ -9,12 +9,12 @@ use clap::{Parser, Subcommand};
 use firewood::v2::api;
 
 pub mod check;
+pub mod compare;
 pub mod create;
 pub mod delete;
 pub mod dump;
 pub mod get;
 pub mod graph;
-pub mod compare;
 mod health;
 pub mod insert;
 pub mod load;

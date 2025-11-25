@@ -88,7 +88,8 @@ fn fallback_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
 }
 
 type TestHandler = AuthenticatedRpcHandler<TestHandlerFn, JsonRpcRequest>;
-type TestHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
+type TestHandlerFn =
+    Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
 
 #[derive(Clone)]
 struct TestRpcServer {
@@ -156,7 +157,8 @@ fn rpc_error_response(
         } else {
             JsonRpcError::new(err.code(), err.to_string(), err.details().cloned())
         };
-        let mut response = (err.status(), Json(JsonRpcResponse::error(id, payload))).into_response();
+        let mut response =
+            (err.status(), Json(JsonRpcResponse::error(id, payload))).into_response();
         if let Some(window) = err.rate_limit() {
             apply_rate_limit_headers(response.headers_mut(), window.clone());
         }
@@ -194,8 +196,14 @@ fn apply_rate_limit_headers(headers: &mut HeaderMap<HeaderValue>, window: RateLi
 fn build_router() -> Router {
     let metrics = Arc::new(RuntimeMetrics::noop());
     let mut handlers = HashMap::new();
-    handlers.insert(LIMITED_METHOD.to_string(), rate_limited_handler(Arc::clone(&metrics)));
-    handlers.insert(SIGNING_METHOD.to_string(), signing_error_handler(Arc::clone(&metrics)));
+    handlers.insert(
+        LIMITED_METHOD.to_string(),
+        rate_limited_handler(Arc::clone(&metrics)),
+    );
+    handlers.insert(
+        SIGNING_METHOD.to_string(),
+        signing_error_handler(Arc::clone(&metrics)),
+    );
 
     let server = Arc::new(TestRpcServer {
         handlers,
@@ -242,15 +250,28 @@ async fn rate_limits_emit_headers_and_retry_after() {
         .expect("second response");
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     let headers = second.headers();
-    assert_eq!(headers.get("x-ratelimit-limit").and_then(|v| v.to_str().ok()), Some("1"));
-    assert_eq!(headers.get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()), Some("0"));
+    assert_eq!(
+        headers
+            .get("x-ratelimit-limit")
+            .and_then(|v| v.to_str().ok()),
+        Some("1")
+    );
+    assert_eq!(
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
+    );
     let reset = headers
         .get("x-ratelimit-reset")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
         .expect("reset header");
     assert!(reset >= 1 && reset <= 60);
-    assert_eq!(headers.get("retry-after").and_then(|v| v.to_str().ok()), Some(&reset.to_string()));
+    assert_eq!(
+        headers.get("retry-after").and_then(|v| v.to_str().ok()),
+        Some(&reset.to_string())
+    );
 
     let body = to_bytes(second.into_body()).await.expect("limit body");
     let response: JsonRpcResponse = serde_json::from_slice(&body).expect("parse response");
@@ -297,5 +318,8 @@ async fn signing_errors_include_wallet_code_payloads() {
     assert_eq!(error.code, WalletRpcErrorCode::DraftUnsigned.as_i32());
     let payload = error.data.expect("error payload");
     assert_eq!(payload["code"], Value::String("DRAFT_UNSIGNED".into()));
-    assert_eq!(payload["details"]["reason"], Value::String("missing signature".into()));
+    assert_eq!(
+        payload["details"]["reason"],
+        Value::String("missing signature".into())
+    );
 }

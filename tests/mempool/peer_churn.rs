@@ -31,10 +31,15 @@ impl ChurnArtifact {
             "[mempool] peer churn artifacts will be written to: {} (on failure)",
             path.display()
         );
-        Self { path, payload: None }
+        Self {
+            path,
+            payload: None,
+        }
     }
 
-    fn set_payload(&mut self, payload: serde_json::Value) { self.payload = Some(payload); }
+    fn set_payload(&mut self, payload: serde_json::Value) {
+        self.payload = Some(payload);
+    }
 }
 
 impl Drop for ChurnArtifact {
@@ -42,7 +47,9 @@ impl Drop for ChurnArtifact {
         if !thread::panicking() {
             return;
         }
-        let Some(payload) = self.payload.as_ref() else { return; };
+        let Some(payload) = self.payload.as_ref() else {
+            return;
+        };
 
         if let Some(parent) = self.path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -134,7 +141,8 @@ async fn peer_churn_respects_rate_limits_and_preserves_queue_ordering() -> Resul
         match handle.submit_transaction(bundle) {
             Ok(hash) => {
                 accepted.push((hash.clone(), fee));
-                let deliveries = recv_churn_events(&mut primary_rx, &mut churned_peers, &hash).await;
+                let deliveries =
+                    recv_churn_events(&mut primary_rx, &mut churned_peers, &hash).await;
                 witness_deliveries.push((hash.clone(), deliveries));
             }
             Err(ChainError::MempoolFull(_)) => {
@@ -159,9 +167,16 @@ async fn peer_churn_respects_rate_limits_and_preserves_queue_ordering() -> Resul
         mempool_limit,
         "mempool should cap accepted transactions at configured limit",
     );
-    assert_eq!(rejected, overflow, "overflow submissions should be rejected");
+    assert_eq!(
+        rejected, overflow,
+        "overflow submissions should be rejected"
+    );
 
-    let mut fees: Vec<_> = pending_snapshot.transactions.iter().map(|tx| tx.fee).collect();
+    let mut fees: Vec<_> = pending_snapshot
+        .transactions
+        .iter()
+        .map(|tx| tx.fee)
+        .collect();
     let mut expected_fees: Vec<_> = accepted
         .iter()
         .rev()
@@ -178,11 +193,15 @@ async fn peer_churn_respects_rate_limits_and_preserves_queue_ordering() -> Resul
     let probe = MempoolStatusProbe::new(0.6, 0.9);
     let alerts = probe.evaluate(&pending_snapshot, mempool_limit);
     assert!(
-        alerts.iter().any(|alert| alert.severity == AlertSeverity::Warning),
+        alerts
+            .iter()
+            .any(|alert| alert.severity == AlertSeverity::Warning),
         "probe should emit at least a warning when occupancy nears capacity",
     );
     assert!(
-        alerts.iter().any(|alert| alert.severity == AlertSeverity::Critical),
+        alerts
+            .iter()
+            .any(|alert| alert.severity == AlertSeverity::Critical),
         "probe should flag a critical alert once the mempool is saturated",
     );
 
@@ -197,8 +216,7 @@ async fn peer_churn_respects_rate_limits_and_preserves_queue_ordering() -> Resul
     let artifact_dir = env::var("MEMPOOL_PEER_CHURN_ARTIFACT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target/artifacts/mempool-peer-churn")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/artifacts/mempool-peer-churn")
         });
     let mut artifact = ChurnArtifact::new(artifact_dir.join("peer-churn.json"));
     artifact.set_payload(json!({

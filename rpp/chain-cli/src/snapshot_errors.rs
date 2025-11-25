@@ -138,19 +138,24 @@ mod tests {
     use hyper::{Body, Request, Response as HyperResponse, Server, StatusCode as HyperStatus};
     use tokio::sync::oneshot;
 
-    async fn run_mock_server(response_body: &'static str, status: HyperStatus) -> (String, oneshot::Sender<()>) {
+    async fn run_mock_server(
+        response_body: &'static str,
+        status: HyperStatus,
+    ) -> (String, oneshot::Sender<()>) {
         let make_service = make_service_fn(move |_| {
             let body = response_body;
             async move {
                 Ok::<_, hyper::Error>(service_fn(move |_req: Request<Body>| {
                     let body = body;
                     async move {
-                        Ok::<_, hyper::Error>(HyperResponse::builder()
-                            .status(status)
-                            .header("Content-Type", "application/json")
-                            .header("X-RateLimit-Reset", "1")
-                            .body(Body::from(Bytes::from(body)))
-                            .unwrap())
+                        Ok::<_, hyper::Error>(
+                            HyperResponse::builder()
+                                .status(status)
+                                .header("Content-Type", "application/json")
+                                .header("X-RateLimit-Reset", "1")
+                                .body(Body::from(Bytes::from(body)))
+                                .unwrap(),
+                        )
                     }
                 }))
             }
@@ -173,9 +178,7 @@ mod tests {
         let (server, shutdown) = run_mock_server(payload, HyperStatus::SERVICE_UNAVAILABLE).await;
 
         let client = reqwest::Client::new();
-        let response = client.get(format!("{server}/state-sync"))
-            .send()
-            .await;
+        let response = client.get(format!("{server}/state-sync")).send().await;
 
         let err = classify_snapshot_error(response, Duration::from_millis(20))
             .await

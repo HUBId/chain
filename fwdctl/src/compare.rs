@@ -7,17 +7,25 @@ use std::path::PathBuf;
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api::{self, Db as _};
-use firewood_storage::TrieHash;
 use firewood_storage::noop_storage_metrics;
+use firewood_storage::TrieHash;
 
 #[derive(Debug, Args)]
 pub struct Options {
     /// Path to the database captured before pruning or checkpointing
-    #[arg(long, value_name = "BEFORE_DB", help = "Path to state before pruning or checkpointing")]
+    #[arg(
+        long,
+        value_name = "BEFORE_DB",
+        help = "Path to state before pruning or checkpointing"
+    )]
     pub before_db: PathBuf,
 
     /// Path to the database after pruning or checkpointing
-    #[arg(long, value_name = "AFTER_DB", help = "Path to state after pruning or checkpointing")]
+    #[arg(
+        long,
+        value_name = "AFTER_DB",
+        help = "Path to state after pruning or checkpointing"
+    )]
     pub after_db: PathBuf,
 }
 
@@ -45,7 +53,11 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         hash = format_hash(&after_hash)
     );
 
-    Err(StateMismatchError { before_hash, after_hash }.into())
+    Err(StateMismatchError {
+        before_hash,
+        after_hash,
+    }
+    .into())
 }
 
 fn root_hash(db_path: &PathBuf) -> Result<Option<TrieHash>, api::Error> {

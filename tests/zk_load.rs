@@ -7,9 +7,7 @@ use anyhow::{Context, Result};
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use futures::future::try_join_all;
 use rand::{rngs::StdRng, SeedableRng};
-use rpp_chain::zk::rpp_verifier::{
-    RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure,
-};
+use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
 use rpp_stark::backend::params_limit_to_node_bytes;
 use rpp_stark::params::deserialize_params;
 use tokio::sync::Semaphore;
@@ -42,7 +40,10 @@ async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
     );
 
     let rpp_metrics = run_rpp_batch().await.context("rpp-stark verifier batch")?;
-    assert!(rpp_metrics.oversize_failure_recorded, "oversized proofs must fail");
+    assert!(
+        rpp_metrics.oversize_failure_recorded,
+        "oversized proofs must fail"
+    );
 
     Ok(())
 }
@@ -78,7 +79,10 @@ async fn run_stwo_batch() -> Result<BatchMetrics> {
         }));
     }
 
-    let latencies: Vec<Duration> = try_join_all(jobs).await?.into_iter().collect::<Result<_, _>>()?;
+    let latencies: Vec<Duration> = try_join_all(jobs)
+        .await?
+        .into_iter()
+        .collect::<Result<_, _>>()?;
     let elapsed = start.elapsed().max(Duration::from_millis(1));
     let throughput_per_second = latencies.len() as f64 / elapsed.as_secs_f64();
 
@@ -146,7 +150,11 @@ fn build_uptime_witness(job: u64) -> UptimeWitness {
     let wallet_address = format!("{:064x}", job + 9);
     let window_start = job * 10;
     let window_end = window_start + 5;
-    let commitment = hex::encode(UptimeProof::commitment_bytes(&wallet_address, window_start, window_end));
+    let commitment = hex::encode(UptimeProof::commitment_bytes(
+        &wallet_address,
+        window_start,
+        window_end,
+    ));
 
     UptimeWitness {
         wallet_address,
@@ -179,8 +187,7 @@ async fn run_rpp_batch() -> Result<BatchMetrics> {
     let verifier = Arc::new(RppStarkVerifier::new());
 
     let stark_params = deserialize_params(&params).context("decode stark params")?;
-    let node_limit = params_limit_to_node_bytes(&stark_params)
-        .context("map node size limit")?;
+    let node_limit = params_limit_to_node_bytes(&stark_params).context("map node size limit")?;
 
     let semaphore = Arc::new(Semaphore::new(RPP_CONCURRENCY));
     let start = Instant::now();
@@ -201,13 +208,21 @@ async fn run_rpp_batch() -> Result<BatchMetrics> {
         }));
     }
 
-    let latencies: Vec<Duration> = try_join_all(jobs).await?.into_iter().collect::<Result<_, _>>()?;
+    let latencies: Vec<Duration> = try_join_all(jobs)
+        .await?
+        .into_iter()
+        .collect::<Result<_, _>>()?;
     let elapsed = start.elapsed().max(Duration::from_millis(1));
     let throughput_per_second = latencies.len() as f64 / elapsed.as_secs_f64();
 
     let oversize_failure_recorded = matches!(
         verifier
-            .verify(&params, &public_inputs, &[proof.clone(), vec![0u8; 2048]].concat(), node_limit)
+            .verify(
+                &params,
+                &public_inputs,
+                &[proof.clone(), vec![0u8; 2048]].concat(),
+                node_limit
+            )
             .expect_err("oversized proof should fail"),
         RppStarkVerifierError::VerificationFailed {
             failure: RppStarkVerifyFailure::ProofTooLarge { .. },
@@ -221,4 +236,3 @@ async fn run_rpp_batch() -> Result<BatchMetrics> {
         oversize_failure_recorded,
     })
 }
-
