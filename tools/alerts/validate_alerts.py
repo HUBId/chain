@@ -9,6 +9,7 @@ from typing import Sequence
 try:  # pragma: no cover - import fallback for direct execution
     from .validation import (
         AlertValidationError,
+        AlertValidationAggregateError,
         AlertValidator,
         AlertWebhookServer,
         RecordedWebhookClient,
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - direct script execution fallback
     sys.path.append(str(PACKAGE_ROOT))
     from validation import (  # type: ignore[assignment]
         AlertValidationError,
+        AlertValidationAggregateError,
         AlertValidator,
         AlertWebhookServer,
         RecordedWebhookClient,
@@ -35,7 +37,8 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 def _format_result(result: ValidationResult) -> str:
     alert_names = ", ".join(sorted(event.name for event in result.fired_events)) or "no alerts"
     payloads = len(result.webhook_payloads)
-    return f"[{result.case.name}] fired: {alert_names} (webhook payloads: {payloads})"
+    status = "ok" if result.error is None else "failed"
+    return f"[{result.case.name}] {status} :: fired: {alert_names} (webhook payloads: {payloads})"
 
 
 def _serialize_result(result: ValidationResult) -> dict:
@@ -46,6 +49,14 @@ def _serialize_result(result: ValidationResult) -> dict:
         "fired_alerts": fired_alerts,
         "missing_alerts": sorted(result.case.expected_alerts - set(fired_alerts)),
         "webhook_payloads": result.webhook_payloads,
+        "error": None
+        if result.error is None
+        else {
+            "message": str(result.error),
+            "missing": result.error.missing,
+            "unexpected": result.error.unexpected,
+            "webhook_alerts": result.error.webhook_alerts,
+        },
     }
 
 
@@ -61,7 +72,7 @@ def run_validation() -> Sequence[ValidationResult]:
     cases = default_validation_cases()
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
-        return validator.run(cases, client)
+        return validator.run(cases, client, fail_fast=False)
 
 
 def main() -> int:
@@ -74,15 +85,23 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    errors: Sequence[AlertValidationError] = []
     try:
         results = run_validation()
+    except AlertValidationAggregateError as exc:
+        results = exc.results
+        errors = exc.errors
     except AlertValidationError as exc:
-        print(f"::error ::{exc}", file=sys.stderr)
-        return 1
+        results = []
+        errors = [exc]
     if args.artifacts is not None:
         _write_artifacts(results, args.artifacts)
     for result in results:
         print(_format_result(result))
+    if errors:
+        for error in errors:
+            print(f"::error ::{error}", file=sys.stderr)
+        return 1
     print("Alert validation completed successfully.")
     return 0
 

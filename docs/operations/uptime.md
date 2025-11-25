@@ -47,6 +47,12 @@ run to confirm alerts fire and then clear:
   `process_start_time_seconds`) that coincides with widening finality lag and
   finalized height gaps to assert the new `ConsensusRestartFinalityCorrelation`
   rule fires alongside the standard warning alerts.【F:tools/alerts/validation.py†L882-L955】【F:ops/alerts/consensus/finality.yaml†L35-L52】
+- **Join and removal churn** – `uptime-join` keeps `uptime_participation_ratio`,
+  `uptime_observation_age_seconds`, and `timetoke_accrual_hours_total`
+  progressing through node joins, while `uptime-departure` forces those
+  metrics below the SLA to prove `UptimeParticipationDrop*`,
+  `UptimeObservationGap*`, and `TimetokeAccrualStall*` alerts fire on sustained
+  drops.【F:tools/alerts/validation.py†L852-L1064】【F:tools/alerts/validation.py†L1318-L1428】【F:tools/alerts/tests/test_alert_validation.py†L19-L88】
 
 Run the probes with the existing validation harness (`python -m pytest
 tools/alerts/tests`) whenever alert expressions change to preserve coverage.
@@ -76,6 +82,11 @@ When the soak or production telemetry raises uptime/finality alerts:
 5. **Record outcomes.** Attach the simnet summaries and relevant Grafana panels
    to the incident ticket; include the alert probe results when adjusting
    thresholds.
+6. **Handle churn-induced drops.** When `UptimeParticipationDrop*` or
+   `UptimeObservationGap*` fire after adding or removing validators, restart the
+   uptime scheduler on the affected nodes, revalidate RPC and gossip reachability,
+   and pause further removals until `timetoke_accrual_hours_total` recovers above
+   the warning rate.【F:tools/alerts/validation.py†L1066-L1164】【F:tools/alerts/validation.py†L1318-L1428】
 
 ## Alert definitions and probe usage
 
@@ -128,4 +139,4 @@ CI executes the same sequence in the `alert-probes` workflow job and uploads the
 JSON summary as `alert-probes/alert_probe_results.json` plus an `exit_code.txt`
 capturing probe failures. The nightly drill mirrors the CI job and preserves
 artifacts even when probes fail, making it easier to debug missed-slot or block
-stall regressions.【F:.github/workflows/ci.yml†L393-L425】【F:.github/workflows/nightly.yml†L1-L87】【F:tools/alerts/validate_alerts.py†L64-L87】
+stall regressions.【F:.github/workflows/ci.yml†L393-L425】【F:.github/workflows/nightly.yml†L1-L87】【F:tools/alerts/validate_alerts.py†L16-L87】【F:tools/alerts/validate_alerts.py†L89-L131】
