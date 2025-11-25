@@ -158,6 +158,12 @@ it to the change record.【F:Makefile†L1-L40】
 Reference the [wallet troubleshooting catalog](troubleshooting/wallet.md) for a
 longer list of RPC/CLI error codes, health checks, and diagnostic commands.
 
+**Health probes** – `/health/ready` now includes wallet-specific booleans:
+`wallet_signer_ready` (watch-only or signer failures), `wallet_connected`
+(runtime attached to a node), and `wallet_key_cache_ready` (keystore present).
+Alert on any `false` response and correlate with watcher logs or keystore
+mounts before restarting the runtime.
+
 **Log locations** – When running via `scripts/run_wallet_mode.sh`, STDOUT/ERR is
 the primary log stream. Override `RPP_WALLET_LOG_LEVEL` or pass
 `--log-level debug` to surface TLS, RBAC, and sync traces. Redirect the process

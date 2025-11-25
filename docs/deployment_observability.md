@@ -87,14 +87,18 @@ not expose failure states, so migrate automation to the new probes where
 possible.【F:rpp/rpc/api.rs†L2250-L2316】【F:rpp/rpc/api.rs†L2318-L2348】
 
 The readiness payload also surfaces `subsystems` fields for zk proof readiness
-(`zk_ready`), pruning service availability, and snapshot streaming
-availability. When any of these booleans is `false`, `/health/ready` returns
-`503` and the response identifies the failing subsystem so operators can route
-the alert to the right playbook (e.g., missing proof backend features or a
-pruning daemon crash). Kubernetes `readinessProbes` and systemd watchdogs can
-consume these signals directly via HTTP 503/200 responses; use the JSON payload
-to annotate incidents and dashboards with the exact failing subsystem instead of
-relying solely on the status code.【F:rpp/rpc/api.rs†L1020-L1077】【F:rpp/rpc/api.rs†L2618-L2668】
+(`zk_ready`), pruning service availability, snapshot streaming availability, and
+wallet health. Wallet probes expose whether the signer is usable
+(`wallet_signer_ready`), whether the wallet runtime is attached to a node
+(`wallet_connected`), and whether the keystore/key cache is available on disk
+(`wallet_key_cache_ready`). When any of these booleans is `false`,
+`/health/ready` returns `503` and the response identifies the failing
+subsystem so operators can route the alert to the right playbook (e.g., missing
+proof backend features, a pruning daemon crash, or an unhealthy signer). Kubernetes
+`readinessProbes` and systemd watchdogs can consume these signals directly via
+HTTP 503/200 responses; use the JSON payload to annotate incidents and
+dashboards with the exact failing subsystem instead of relying solely on the
+status code.【F:rpp/rpc/api.rs†L1020-L1097】【F:rpp/rpc/api.rs†L2630-L2742】
 
 ## Port & Endpoint Usage
 
