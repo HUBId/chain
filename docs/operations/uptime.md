@@ -86,6 +86,37 @@ When the soak or production telemetry raises uptime/finality alerts:
   current timetoke epoch has been active; warning and critical alerts fire at
   one hour and ninety minutes respectively.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
 
+## SLA targets and reporting
+
+### Targets
+
+- **Missed proposer slots:** Keep `finality_lag_slots` below twelve slots under
+  normal conditions; hitting twenty-four slots for two minutes is treated as an
+  SLA breach and pages the on-call.【F:ops/alerts/consensus/finality.yaml†L5-L34】【F:ops/alerts/consensus/finality.yaml†L17-L34】
+- **Finalized height gap:** Maintain a gap under four blocks; a sustained gap of
+  eight blocks for two minutes is the critical SLA ceiling.【F:ops/alerts/consensus/finality.yaml†L35-L66】
+- **Block production:** `chain_block_height` must advance within ten minutes to
+  avoid a liveness breach; the stall probe models this SLA in the alert
+  validation harness.【F:tools/alerts/validation.py†L780-L808】
+
+### Measurement
+
+- **Prometheus expressions:** The SLA budgets are encoded directly in the alert
+  rules via `max_over_time(finality_lag_slots[5m]) > {12,24}` and
+  `max_over_time(finalized_height_gap[5m]) > {4,8}`. The CI alert probes reuse
+  the same thresholds to replay missed-slot and stalled-finality scenarios.
+- **Synthetic probes:** `tools/alerts/validation.py` centralizes the SLA
+  thresholds so both the Prometheus expressions and the probe fixtures share the
+  same numbers, preventing drift between alerting and validation.【F:tools/alerts/validation.py†L16-L43】【F:tools/alerts/tests/test_alert_validation.py†L1-L86】
+
+### Reporting cadence
+
+- **CI gates:** The `alert-probes` job in CI runs the probes and fails the build
+  when SLA alerts regress, uploading artifacts for triage.【F:.github/workflows/ci.yml†L419-L458】
+- **Nightly soak:** The weekly `nightly-simnet` run repeats the probes and logs
+  SLA breaches alongside uptime soak artifacts, keeping trend data available for
+  the ops review.【F:.github/workflows/nightly.yml†L1-L87】
+
 To run the probes locally and capture artifacts:
 
 ```bash

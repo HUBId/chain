@@ -8,8 +8,10 @@ groups:
         labels:
           severity: warning
           team: consensus
+          sla: finality
+          sla_target: max_finality_lag_slots
         annotations:
-          summary: Finality lag exceeded 12 slots
+          summary: Finality lag breached the 12-slot SLA budget
           description: >-
             Validators have trailed the head by more than twelve slots for five
             minutes. Inspect recent rounds and ensure the active proposer set is
@@ -21,8 +23,10 @@ groups:
         labels:
           severity: critical
           team: consensus
+          sla: finality
+          sla_target: max_finality_lag_slots
         annotations:
-          summary: Finality lag exceeded 24 slots
+          summary: Finality lag exceeded the 24-slot SLA ceiling
           description: >-
             Finality has stalled for at least twenty-four slots. Trigger the
             network snapshot failover procedures to route traffic away from the
@@ -34,8 +38,10 @@ groups:
         labels:
           severity: warning
           team: consensus
+          sla: finality
+          sla_target: max_finalized_height_gap_blocks
         annotations:
-          summary: Finalized height gap above warning budget
+          summary: Finalized height gap above the 4-block SLA budget
           description: >-
             The finalized height trails the best accepted block by more than four
             heights for five minutes. Correlate with finality lag panels and
@@ -47,8 +53,10 @@ groups:
         labels:
           severity: critical
           team: consensus
+          sla: finality
+          sla_target: max_finalized_height_gap_blocks
         annotations:
-          summary: Finalized height gap beyond critical budget
+          summary: Finalized height gap beyond the 8-block SLA ceiling
           description: >-
             Finality height has lagged the accepted tip by more than eight blocks
             for two minutes. Page the on-call and execute the documented
