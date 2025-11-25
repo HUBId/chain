@@ -103,3 +103,17 @@ raise incidents when three consecutive scheduled runs fail.
 3. If the counter does not change, check the command queue depth and logs for
    rejected overrides, then restart the node with explicit `--pruning-resume` to
    unblock automation.
+
+### D. Roll back a failed pruning attempt
+
+1. Inspect the most recent `"pruning cycle failed"` warning to confirm the error
+   class (for example `error=storage` when `persist_plan` cannot write the
+   snapshot plan).【F:rpp/node/src/services/pruning.rs†L392-L400】
+2. Clear the offending filesystem state. When the snapshot directory path points
+   to a file or a volume mounted read-only, remove the blocking file or remount
+   the volume with write permissions before retrying.
+3. Retry a manual cycle and verify `cycle_total{result="failure"}` stops
+   incrementing while `cycle_total{result="success"}` and `persisted_plan_total{persisted="true"}`
+   increase again.【F:rpp/node/src/telemetry/pruning.rs†L25-L116】 Use `/snapshots/jobs`
+   or the validator telemetry RPC to confirm a new pruning status is cached
+   after recovery.【F:rpp/runtime/node.rs†L3200-L3215】

@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 
 use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
+use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::Block;
@@ -115,6 +116,47 @@ fn pruning_recovery_is_atomic_across_restart() {
 
     drop(engine);
     drop(storage);
+    drop(handle);
+    drop(node);
+    drop(temp);
+}
+
+#[test]
+fn pruning_rolls_back_after_snapshot_persist_failure() {
+    let mut _rng = seeded_rng("pruning_rolls_back_after_snapshot_persist_failure");
+
+    let (mut config, temp) = prepare_config();
+    let snapshot_file = temp.path().join("snapshots");
+    fs::write(&snapshot_file, "locked").expect("create blocking snapshot path");
+    config.snapshot_dir = snapshot_file.clone();
+
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+
+    let attempt = handle.run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH);
+    assert!(
+        matches!(attempt, Err(ChainError::Io(_))),
+        "pruning cycle should surface storage IO errors"
+    );
+    assert!(
+        handle.pruning_job_status().is_none(),
+        "failed cycles should not cache pruning status"
+    );
+
+    fs::remove_file(&snapshot_file).expect("clear blocking snapshot path");
+    fs::create_dir_all(&snapshot_file).expect("create snapshot directory");
+
+    let retry = handle
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("retry pruning cycle")
+        .expect("pruning status after retry");
+
+    assert!(retry.persisted_path.is_some(), "retry should persist plan");
+    assert!(
+        retry.missing_heights.is_empty(),
+        "retry should succeed after IO recovery"
+    );
+
     drop(handle);
     drop(node);
     drop(temp);

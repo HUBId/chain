@@ -15,6 +15,10 @@ The Firewood storage feature combinations and zk backend permutations run in CI 
 | Branch factor 256 + io-uring with pruning (default backend) | branch_factor_256, io-uring, pruning enabled | combined-feature-lanes | ≈45–55 min | Runs the combined lane (`cargo xtask test-combined-lane`) to ensure storage feature gates, pruning checks, and core smokes are exercised together. |
 | Branch factor 256 + io-uring with pruning (backend-rpp-stark) | branch_factor_256, io-uring, backend-rpp-stark, pruning enabled | combined-feature-lanes | ≈50–60 min | Mirrors the combined storage/pruning lane with `backend-rpp-stark` enabled to guard against backend-specific regressions. |
 
+The combined-feature lanes also exercise the pruning rollback guardrail added in
+`pruning_rolls_back_after_snapshot_persist_failure`, ensuring aborted cycles can
+be retried cleanly after filesystem faults.
+
 ## Pruned snapshot zk recovery coverage
 
 `cargo xtask test-integration` exercises the pruned snapshot round-trip in both the default and `backend-rpp-stark` matrix rows. The `wallet_snapshot_round_trip_*` cases prune state, take a disk snapshot, restore it, verify pruning proofs, and ensure the mempool WAL replays consistently.

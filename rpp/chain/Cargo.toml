@@ -300,6 +300,10 @@ name = "pruning_cross_backend"
 path = "../../tests/pruning_cross_backend.rs"
 
 [[test]]
+name = "recovery_pruning"
+path = "../../tests/recovery_pruning.rs"
+
+[[test]]
 name = "deployment_feature_gates"
 path = "../../tests/deployment/feature_gates.rs"
 
