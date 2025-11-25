@@ -696,6 +696,7 @@ impl ApiContext {
             return status;
         }
 
+        let mode = self.current_mode();
         let backend = self.backend_status();
         let zk_ready = backend
             .as_ref()
@@ -705,10 +706,31 @@ impl ApiContext {
         let snapshots_available =
             self.state_sync_server.is_some() || self.snapshot_runtime.is_some();
 
+        #[cfg(feature = "wallet-integration")]
+        let (wallet_signer_ready, wallet_connected, wallet_key_cache_ready) =
+            if mode.includes_wallet() {
+                if let Some(wallet) = self.wallet.as_ref() {
+                    let signer_ready = !wallet.is_watch_only();
+                    let connected = wallet.node_runtime_running();
+                    let key_cache_ready = wallet.keystore_path().exists();
+                    (signer_ready, connected, key_cache_ready)
+                } else {
+                    (false, false, false)
+                }
+            } else {
+                (true, true, true)
+            };
+
+        #[cfg(not(feature = "wallet-integration"))]
+        let (wallet_signer_ready, wallet_connected, wallet_key_cache_ready) = (true, true, true);
+
         HealthSubsystemStatus {
             zk_ready,
             pruning_available,
             snapshots_available,
+            wallet_signer_ready,
+            wallet_connected,
+            wallet_key_cache_ready,
         }
     }
 
@@ -1064,6 +1086,9 @@ struct HealthSubsystemStatus {
     zk_ready: bool,
     pruning_available: bool,
     snapshots_available: bool,
+    wallet_signer_ready: bool,
+    wallet_connected: bool,
+    wallet_key_cache_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -2714,13 +2739,19 @@ async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<Heal
     let zk_ready = !mode.includes_node() || subsystems.zk_ready;
     let pruning_ready = !mode.includes_node() || subsystems.pruning_available;
     let snapshots_ready = !mode.includes_node() || subsystems.snapshots_available;
+    let wallet_signer_ready = !mode.includes_wallet() || subsystems.wallet_signer_ready;
+    let wallet_connected = !mode.includes_wallet() || subsystems.wallet_connected;
+    let wallet_key_cache_ready = !mode.includes_wallet() || subsystems.wallet_key_cache_ready;
 
     let ready = node_ready
         && wallet_ready
         && orchestrator_ready
         && zk_ready
         && pruning_ready
-        && snapshots_ready;
+        && snapshots_ready
+        && wallet_signer_ready
+        && wallet_connected
+        && wallet_key_cache_ready;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -4355,6 +4386,9 @@ mod health_tests {
                 zk_ready: false,
                 pruning_available: true,
                 snapshots_available: true,
+                wallet_signer_ready: true,
+                wallet_connected: true,
+                wallet_key_cache_ready: true,
             });
 
         let (status, Json(response)) = health_ready(State(context)).await;
@@ -4375,6 +4409,9 @@ mod health_tests {
                 zk_ready: true,
                 pruning_available: false,
                 snapshots_available: true,
+                wallet_signer_ready: true,
+                wallet_connected: true,
+                wallet_key_cache_ready: true,
             });
 
         let (status, Json(response)) = health_ready(State(context)).await;
@@ -4384,6 +4421,29 @@ mod health_tests {
         assert!(response.subsystems.zk_ready);
         assert!(!response.subsystems.pruning_available);
         assert!(response.subsystems.snapshots_available);
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_when_wallet_is_unready() {
+        let mode = Arc::new(RwLock::new(RuntimeMode::Wallet));
+        let context = ApiContext::new(mode, None, None, None, None, false, None, None, false)
+            .with_test_node_ready(true)
+            .with_test_subsystem_status(HealthSubsystemStatus {
+                zk_ready: true,
+                pruning_available: true,
+                snapshots_available: true,
+                wallet_signer_ready: false,
+                wallet_connected: false,
+                wallet_key_cache_ready: false,
+            });
+
+        let (status, Json(response)) = health_ready(State(context)).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert!(!response.subsystems.wallet_signer_ready);
+        assert!(!response.subsystems.wallet_connected);
+        assert!(!response.subsystems.wallet_key_cache_ready);
     }
 
     #[test]
