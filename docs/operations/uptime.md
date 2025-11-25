@@ -97,6 +97,27 @@ When the soak or production telemetry raises uptime/finality alerts:
   current timetoke epoch has been active; warning and critical alerts fire at
   one hour and ninety minutes respectively.【F:tools/alerts/validation.py†L740-L766】【F:tools/alerts/validation.py†L1273-L1316】
 
+## Clock drift thresholds and mitigation
+
+- **Backward skew guardrail:** Uptime proofs must never claim an observation
+  window that ends after the node clock. Both STWO and Plonky3 provers reject
+  witnesses where `node_clock < window_end`, and the verifier records the
+  rejection so it can be surfaced as an alert.【F:tests/uptime_clock_skew.rs†L25-L99】
+- **Forward skew tolerance:** The proofs allow forward skew but operations
+  should treat any clock more than five minutes ahead of NTP as a release
+  blocker. Alerts should watch for spikes in uptime rejection metrics alongside
+  host-level NTP drift gauges.
+
+When drift triggers an alert:
+
+1. Compare the host clock against your stratum-1 reference and resync with
+   `chronyc makestep` or an equivalent NTP step once the offset is confirmed.
+2. Restart only the uptime scheduler (or the validator service if scheduler
+   restart is unavailable) to pick up the corrected clock without disrupting
+   consensus traffic.
+3. Confirm the verifier rejection counters stop climbing and that subsequent
+   uptime proofs are accepted before closing the incident.【F:tests/uptime_clock_skew.rs†L25-L99】
+
 ## SLA targets and reporting
 
 ### Targets

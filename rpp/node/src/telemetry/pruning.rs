@@ -279,17 +279,19 @@ mod tests {
             .flat_map(|scope| scope.metrics())
             .filter(|metric| metric.name() == name)
             .any(|metric| match metric.data() {
-                AggregatedMetrics::U64(MetricData::Sum(sum)) => sum.data_points().iter().any(|dp| {
-                    dp.value() > 0
-                        && dp.attributes().iter().any(|kv| {
-                            kv.key.as_str() == "reason"
-                                && matches!(&kv.value, Value::String(v) if v.as_str() == reason)
-                        })
-                        && dp.attributes().iter().any(|kv| {
-                            kv.key.as_str() == "result"
-                                && matches!(&kv.value, Value::String(v) if v.as_str() == result)
-                        })
-                }),
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => {
+                    sum.data_points().iter().any(|dp| {
+                        dp.value() > 0
+                            && dp.attributes().iter().any(|kv| {
+                                kv.key.as_str() == "reason"
+                                    && matches!(&kv.value, Value::String(v) if v.as_str() == reason)
+                            })
+                            && dp.attributes().iter().any(|kv| {
+                                kv.key.as_str() == "result"
+                                    && matches!(&kv.value, Value::String(v) if v.as_str() == result)
+                            })
+                    })
+                }
                 _ => false,
             })
     }
