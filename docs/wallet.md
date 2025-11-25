@@ -3,6 +3,11 @@
 This guide summarizes the wallet workflows exercised by the end-to-end tests and
 provides operator hints for common actions.
 
+For backend- and config-specific guidance, consult the
+[wallet zk backend and config support matrix](./wallet/zk_support_matrix.md),
+which maps supported prover features to the recommended size and determinism
+flags.
+
 ## Account creation and funding
 - Use the wallet CLI or SDK to derive fresh external addresses for incoming
   funds. Addresses are derived deterministically from the root seed; restoring
