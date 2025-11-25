@@ -4,9 +4,9 @@ use anyhow::{anyhow, Context, Result};
 use tempfile::tempdir;
 
 use rpp_chain::proof_system::ProofVerifierRegistry;
-use rpp_chain::runtime::types::uptime::UptimeClaim;
 use rpp_chain::runtime::types::proofs::ChainProof;
 use rpp_chain::runtime::types::proofs::ProofPayload;
+use rpp_chain::runtime::types::uptime::UptimeClaim;
 
 #[cfg(feature = "prover-stwo")]
 use rpp_chain::storage::Storage;

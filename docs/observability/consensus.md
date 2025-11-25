@@ -38,6 +38,19 @@ Phase‑2 acceptance and to keep operational runbooks aligned with the exported 
   existing `pipeline_consensus_finality.json` dashboards to determine whether a failed quorum impacts the
   overall block pipeline.
 
+### Block production schedule adherence
+* **Metrics:**
+  * `consensus_block_schedule_slots_total` counts scheduled block slots grouped by epoch. Each proposer tick
+    records the epoch label so you can correlate missing production with epoch rollovers.【F:rpp/runtime/telemetry/metrics.rs†L115-L339】【F:rpp/runtime/node.rs†L8110-L8126】
+  * `consensus:block_production_ratio:5m` (recording rule) divides block height increases by the scheduled slot
+    count over a five-minute window to surface production gaps relative to the configured block interval.【F:telemetry/prometheus/runtime-rules.yaml†L5-L43】
+* **Targets:** Maintain a production ratio of at least 0.9 over sustained ten-minute windows. Temporary dips
+  during proposer handoff should recover within a single window; longer deficits point to VRF participation or
+  peer connectivity problems.
+* **Alerts:** `ConsensusBlockProductionLagWarning` triggers below 0.9 for ten minutes and escalates to
+  `ConsensusBlockProductionLagCritical` below 0.75, both linking to the block production runbook for recovery
+  steps.【F:telemetry/prometheus/runtime-rules.yaml†L45-L78】【F:ops/alerts/consensus/liveness.yaml†L1-L52】
+
 ### Uptime/finality correlation
 * **Dashboard:** `uptime_finality_correlation.json` overlays restart signals (changes in
   `process_start_time_seconds` and scrape downtime) with `finality_lag_slots`,

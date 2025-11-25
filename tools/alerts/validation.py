@@ -49,6 +49,22 @@ UPTIME_SLA = UptimeServiceLevel(
     timetoke_window_seconds=900.0,
 )
 
+
+@dataclass(frozen=True)
+class BlockProductionServiceLevel:
+    warning_ratio: float
+    critical_ratio: float
+    window_seconds: float
+    duration_seconds: float
+
+
+BLOCK_PRODUCTION_SLA = BlockProductionServiceLevel(
+    warning_ratio=0.9,
+    critical_ratio=0.75,
+    window_seconds=300.0,
+    duration_seconds=600.0,
+)
+
 import socketserver
 
 
@@ -768,6 +784,42 @@ def _evaluate_block_height_stall(
     return AlertComputation(starts_at=start_ts, value=worst_delta, details=detail)
 
 
+def _evaluate_block_production_ratio(
+    store: MetricStore, threshold: float, window: float, duration: float
+) -> Optional[AlertComputation]:
+    expected_series = store.series("consensus_block_schedule_slots_total")
+    produced_series = store.series("chain_block_height")
+    if expected_series is None or produced_series is None:
+        return None
+
+    timestamps = sorted(store.all_timestamps())
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        expected_delta = expected_series.delta_over_window(timestamp, window)
+        produced_delta = produced_series.delta_over_window(timestamp, window)
+        ratio = None
+        if (
+            expected_delta is not None
+            and expected_delta > 0.0
+            and produced_delta is not None
+        ):
+            ratio = produced_delta / expected_delta
+        degraded = ratio is not None and ratio < threshold
+        evaluations.append((timestamp, degraded))
+        if ratio is not None:
+            observed.append((timestamp, ratio))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    worst_ratio = min((ratio for ts, ratio in observed if ts >= start_ts), default=None)
+    detail = None
+    if worst_ratio is not None:
+        detail = f"block production ratio={worst_ratio:.2f} over {window/60:.0f}m"
+    return AlertComputation(starts_at=start_ts, value=worst_ratio, details=detail)
+
+
 def _evaluate_rpc_availability(
     store: MetricStore, threshold: float, window: float, duration: float
 ) -> Optional[AlertComputation]:
@@ -1046,6 +1098,40 @@ def default_alert_rules() -> List[AlertRule]:
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
             evaluator=lambda store: _evaluate_block_height_stall(
                 store, "chain_block_height", FINALITY_SLA.stall_duration_seconds, FINALITY_SLA.stall_duration_seconds
+            ),
+        ),
+        AlertRule(
+            name="ConsensusBlockProductionLagWarning",
+            severity="warning",
+            service="consensus",
+            summary="Block production rate below 90% of schedule",
+            description=(
+                "Block production is lagging the scheduled slot rate by more than ten percent for at least ten minutes."
+                " Inspect proposer rotation, VRF submissions, and peer connectivity before the gap widens."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#block-production-rate-and-slot-budget",
+            evaluator=lambda store: _evaluate_block_production_ratio(
+                store,
+                threshold=BLOCK_PRODUCTION_SLA.warning_ratio,
+                window=BLOCK_PRODUCTION_SLA.window_seconds,
+                duration=BLOCK_PRODUCTION_SLA.duration_seconds,
+            ),
+        ),
+        AlertRule(
+            name="ConsensusBlockProductionLagCritical",
+            severity="critical",
+            service="consensus",
+            summary="Block production rate below 75% of schedule",
+            description=(
+                "Block production is below seventy-five percent of the scheduled slot rate for at least ten minutes."
+                " Page the on-call and run the consensus liveness remediation until the rate returns to budget."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#block-production-rate-and-slot-budget",
+            evaluator=lambda store: _evaluate_block_production_ratio(
+                store,
+                threshold=BLOCK_PRODUCTION_SLA.critical_ratio,
+                window=BLOCK_PRODUCTION_SLA.window_seconds,
+                duration=BLOCK_PRODUCTION_SLA.duration_seconds,
             ),
         ),
         AlertRule(
@@ -1997,6 +2083,36 @@ def build_block_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_block_schedule_deficit_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    schedule_increments = [12.0] * 18
+    produced_increments = [12.0, 12.0] + [6.0] * 12 + [12.0] * 4
+    definitions.append(
+        _build_counter_from_increments(
+            "consensus_block_schedule_slots_total", {}, schedule_increments
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments("chain_block_height", {}, produced_increments)
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_block_schedule_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    schedule_increments = [12.0] * 18
+    produced_increments = [12.0, 12.0] + [6.0] * 6 + [12.0] * 10
+    definitions.append(
+        _build_counter_from_increments(
+            "consensus_block_schedule_slots_total", {}, schedule_increments
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments("chain_block_height", {}, produced_increments)
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_rpc_outage_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
 
@@ -2273,6 +2389,19 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="missed-block-recovery",
             store=build_block_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="block-schedule-deficit",
+            store=build_block_schedule_deficit_store(),
+            expected_alerts={
+                "ConsensusBlockProductionLagWarning",
+                "ConsensusBlockProductionLagCritical",
+            },
+        ),
+        ValidationCase(
+            name="block-schedule-recovery",
+            store=build_block_schedule_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(

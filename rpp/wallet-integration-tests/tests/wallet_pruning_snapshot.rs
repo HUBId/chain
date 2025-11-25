@@ -12,9 +12,7 @@ use rpp_wallet::config::wallet::{
 use rpp_wallet::db::WalletStore;
 use rpp_wallet::indexer::checkpoints::persist_birthday_height;
 use rpp_wallet::indexer::client::{IndexedUtxo, IndexerClient, TransactionPayload, TxOutpoint};
-use rpp_wallet::tests::{
-    wait_for, RecordingNodeClient, TestIndexer,
-};
+use rpp_wallet::tests::{wait_for, RecordingNodeClient, TestIndexer};
 use rpp_wallet::wallet::{Wallet, WalletMode, WalletPaths, WalletSyncCoordinator};
 use serde_json::json;
 use tempfile::TempDir;
@@ -24,7 +22,11 @@ use zeroize::Zeroizing;
 async fn wallet_prunes_snapshots_and_restores_balances() -> Result<()> {
     let fixture = SnapshotRestoreFixture::new().context("initialise pruning snapshot fixture")?;
 
-    let sync = Arc::new(fixture.start_sync().context("start initial sync coordinator")?);
+    let sync = Arc::new(
+        fixture
+            .start_sync()
+            .context("start initial sync coordinator")?,
+    );
     let wallet = fixture.wallet();
 
     wait_for(|| {
@@ -51,7 +53,11 @@ async fn wallet_prunes_snapshots_and_restores_balances() -> Result<()> {
     wallet
         .broadcast(&first_draft.draft)
         .context("broadcast initial draft")?;
-    assert_eq!(fixture.node().submission_count(), 1, "first receipt recorded");
+    assert_eq!(
+        fixture.node().submission_count(),
+        1,
+        "first receipt recorded"
+    );
 
     sync.shutdown()
         .await
@@ -85,7 +91,10 @@ async fn wallet_prunes_snapshots_and_restores_balances() -> Result<()> {
         .balance()
         .context("read restored balance")?
         .total();
-    assert_eq!(restored_balance, initial_balance, "balance restored after snapshot");
+    assert_eq!(
+        restored_balance, initial_balance,
+        "balance restored after snapshot"
+    );
 
     let second_recipient = restored_wallet
         .derive_address(false)
@@ -99,7 +108,11 @@ async fn wallet_prunes_snapshots_and_restores_balances() -> Result<()> {
     restored_wallet
         .broadcast(&second_draft.draft)
         .context("broadcast post-restore draft")?;
-    assert_eq!(restored.node().submission_count(), 1, "restored receipts recorded");
+    assert_eq!(
+        restored.node().submission_count(),
+        1,
+        "restored receipts recorded"
+    );
 
     restored_sync
         .shutdown()
@@ -254,7 +267,8 @@ impl SnapshotRestoreFixture {
             .file_name()
             .and_then(|name| name.to_str())
             .context("derive backup filename")?;
-        fs::copy(export, restore_backups.join(backup_name)).context("copy backup to restore dir")?;
+        fs::copy(export, restore_backups.join(backup_name))
+            .context("copy backup to restore dir")?;
 
         let import = backup_import(
             store.as_ref(),
@@ -265,8 +279,14 @@ impl SnapshotRestoreFixture {
         )
         .context("import pruning snapshot backup")?;
 
-        assert!(import.restored_keystore, "keystore should restore from backup");
-        assert_eq!(import.rescan_from, self.birthday, "birthday checkpoint restored");
+        assert!(
+            import.restored_keystore,
+            "keystore should restore from backup"
+        );
+        assert_eq!(
+            import.rescan_from, self.birthday,
+            "birthday checkpoint restored"
+        );
 
         let node = Arc::new(RecordingNodeClient::default());
         let mut policy = WalletPolicyConfig::default();
@@ -322,7 +342,8 @@ impl SnapshotRestoreFixture {
         let base = artifact_dir();
         fs::create_dir_all(&base).context("create pruning snapshot artifact directory")?;
         let path = base.join("summary.json");
-        fs::write(&path, serde_json::to_vec_pretty(&artifact)?).context("write pruning snapshot artifact")?;
+        fs::write(&path, serde_json::to_vec_pretty(&artifact)?)
+            .context("write pruning snapshot artifact")?;
         Ok(())
     }
 }

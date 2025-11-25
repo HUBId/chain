@@ -8107,6 +8107,7 @@ impl NodeInner {
         self.prune_consensus_rounds_below(height);
         self.ledger.sync_epoch_for_height(height);
         let epoch = self.ledger.current_epoch();
+        self.runtime_metrics.record_block_schedule_slot(epoch);
         let accounts_snapshot = self.ledger.accounts_snapshot();
         let (validators, observers) = classify_participants(&accounts_snapshot);
         let vrf_pool = self.gather_vrf_submissions(epoch, tip_snapshot.last_hash, &validators);

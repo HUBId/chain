@@ -115,6 +115,7 @@ pub struct RuntimeMetrics {
     consensus_witness_events: Counter<u64>,
     consensus_slashing_events: Counter<u64>,
     consensus_failed_votes: Counter<u64>,
+    consensus_block_schedule_slots_total: Counter<u64>,
     chain_block_height: Histogram<u64>,
     network_peer_counts: Histogram<u64>,
     reputation_penalties: Counter<u64>,
@@ -320,6 +321,11 @@ impl RuntimeMetrics {
             consensus_failed_votes: meter
                 .u64_counter("rpp.runtime.consensus.failed_votes")
                 .with_description("Total failed consensus vote registrations")
+                .with_unit("1")
+                .build(),
+            consensus_block_schedule_slots_total: meter
+                .u64_counter("rpp.runtime.consensus.block_schedule.slots")
+                .with_description("Expected consensus block production slots grouped by epoch")
                 .with_unit("1")
                 .build(),
             chain_block_height: meter
@@ -713,6 +719,13 @@ impl RuntimeMetrics {
         let reason = reason.into();
         let attributes = [KeyValue::new("reason", reason)];
         self.consensus_failed_votes.add(1, &attributes);
+    }
+
+    /// Record the expected block production slot for the provided epoch.
+    pub fn record_block_schedule_slot(&self, epoch: u64) {
+        let attributes = [KeyValue::new("epoch", epoch as i64)];
+        self.consensus_block_schedule_slots_total
+            .add(1, &attributes);
     }
 
     /// Record the latest observed block height.

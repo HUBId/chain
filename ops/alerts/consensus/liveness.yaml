@@ -7,6 +7,18 @@ groups:
         labels:
           component: consensus
 
+      - record: consensus:block_schedule_slots:5m
+        expr: increase(consensus_block_schedule_slots_total[5m])
+        labels:
+          component: consensus
+
+      - record: consensus:block_production_ratio:5m
+        expr: |
+          increase(chain_block_height[5m])
+            / clamp_min(consensus:block_schedule_slots:5m, 1)
+        labels:
+          component: consensus
+
       - alert: ConsensusLivenessStall
         expr: consensus:block_height_delta:5m <= 0
         for: 10m
@@ -20,4 +32,34 @@ groups:
           description: >-
             Accepted block height has not advanced for ten minutes. Inspect proposer health,
             peer connectivity, and gossip flow before redirecting traffic to healthy nodes.
-          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability
+        runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability
+
+      - alert: ConsensusBlockProductionLagWarning
+        expr: consensus:block_production_ratio:5m < 0.9
+        for: 10m
+        labels:
+          severity: warning
+          team: consensus
+          sla: liveness
+          sla_target: block_production_rate
+        annotations:
+          summary: Block production rate below 90% of schedule
+          description: >-
+            Blocks are being produced at less than 90% of the scheduled slot rate for at least ten minutes.
+            Investigate proposer rotation, VRF submissions, and peer connectivity before the gap widens.
+        runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#block-production-rate-and-slot-budget
+
+      - alert: ConsensusBlockProductionLagCritical
+        expr: consensus:block_production_ratio:5m < 0.75
+        for: 10m
+        labels:
+          severity: critical
+          team: consensus
+          sla: liveness
+          sla_target: block_production_rate
+        annotations:
+          summary: Block production rate below 75% of schedule
+          description: >-
+            Blocks are being produced at less than 75% of the scheduled slot rate for at least ten minutes. Page the on-call
+            and execute the consensus liveness runbook to restore proposer health before finality stalls.
+        runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#block-production-rate-and-slot-budget
