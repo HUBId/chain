@@ -318,6 +318,22 @@ fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
     let restored_handle = restored_node.handle();
     let restored_storage = restored_handle.storage();
 
+    let restored_chain = restored_storage
+        .load_blockchain()
+        .expect("load restored blockchain");
+    let mut previous: Option<Block> = None;
+    for block in &restored_chain {
+        if block.header.height == 0 {
+            previous = Some(block.clone());
+            continue;
+        }
+
+        block
+            .verify_pruning(previous.as_ref())
+            .expect("pruning proof should verify after snapshot restore");
+        previous = Some(block.clone());
+    }
+
     let restored_accounts: BTreeMap<_, _> = restored_storage
         .load_accounts()
         .expect("reload restored accounts")
