@@ -6,7 +6,7 @@ use std::path::Path;
 use rpp_chain::config::{GenesisAccount, NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
-use rpp_chain::runtime::types::Block;
+use rpp_chain::runtime::types::{Block, BlockMetadata, ValidatedPruningEnvelope};
 use rpp_chain::runtime::RuntimeMetrics;
 use serde_json::Value;
 use storage_firewood::wal::{FileWal, WalError};
@@ -90,7 +90,7 @@ fn run_pruning_checkpoint_flow(use_rpp_stark: bool) {
     let storage = handle.storage();
 
     let blocks = build_chain(&handle, 5);
-    let payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+    let mut payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let pruning_status = handle
         .run_pruning_cycle(3, DEFAULT_PRUNING_RETENTION_DEPTH)
@@ -135,6 +135,70 @@ fn run_pruning_checkpoint_flow(use_rpp_stark: bool) {
             .verify_pruning(previous.as_ref())
             .expect("pruning proof should verify after reconstruction");
     }
+
+    let finalized_block = {
+        let previous = blocks.last().expect("previous block for advance");
+        let block = make_dummy_block(previous.header.height + 1, Some(previous));
+        let metadata = BlockMetadata::from(&block);
+        storage
+            .store_block(&block, &metadata)
+            .expect("store advanced block");
+        payloads.insert(block.header.height, BlockPayload::from_block(&block));
+        let _ = storage
+            .prune_block_payload(block.header.height)
+            .expect("prune advanced block payload");
+        blocks.push(block.clone());
+        block
+    };
+
+    let advanced_status = handle
+        .run_pruning_cycle(3, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle after consensus advance")
+        .expect("pruning status after consensus advance");
+
+    assert_eq!(
+        advanced_status.plan.tip.height, finalized_block.header.height,
+        "checkpoint tip should track finalized head height",
+    );
+    assert_eq!(
+        advanced_status.plan.tip.hash, finalized_block.hash,
+        "checkpoint tip hash should track finalized head",
+    );
+    assert_eq!(
+        advanced_status.plan.tip.new_state_root, finalized_block.header.state_root,
+        "checkpoint state root should match finalized head",
+    );
+
+    let advanced_provider = InMemoryPayloadProvider::new(payloads.clone());
+    let advanced_artifacts = collect_state_sync_artifacts(&engine, 2)
+        .expect("state sync artifacts after consensus advance");
+    assert_eq!(
+        advanced_artifacts.plan.tip.height, finalized_block.header.height,
+        "state sync plan should refresh to finalized head",
+    );
+    let rebuilt_head = engine
+        .reconstruct_block(finalized_block.header.height, &advanced_provider)
+        .expect("reconstruct finalized head after advance");
+    let previous = blocks
+        .iter()
+        .rev()
+        .nth(1)
+        .expect("previous block for finalized head")
+        .clone();
+    rebuilt_head
+        .verify_pruning(Some(&previous))
+        .expect("zk pruning proof should verify for finalized head");
+    assert_eq!(
+        rebuilt_head.header.state_root, finalized_block.header.state_root,
+        "rebuilt state root should match finalized head",
+    );
+
+    let persisted_proof = storage
+        .load_pruning_proof(finalized_block.header.height)
+        .expect("load pruning proof for finalized head")
+        .expect("pruning proof persisted for finalized head");
+    ValidatedPruningEnvelope::new(persisted_proof, &finalized_block.header, Some(&previous))
+        .expect("persisted pruning proof verifies against finalized head");
 
     let mut wal = FileWal::open(&wal_dir).expect("open mempool wal");
     let recipient = handle.address().to_string();

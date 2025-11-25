@@ -959,6 +959,23 @@ PY
           name: worm-export-smoke
           path: target/worm-export-smoke
 
+  pruning-checkpoints:
+    name: Pruning checkpoints against finalized head
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pruning-checkpoints
+      - name: Validate pruning checkpoint replay
+        run: |
+          set -euo pipefail
+          export RPP_PROVER_DETERMINISTIC=1
+          cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+            pruning_checkpoint_round_trip_default_backend
+
   snapshot-verifier:
     name: Snapshot verifier smoke test
     runs-on: ubuntu-latest

@@ -24,17 +24,23 @@ The scenarios:
 2. Capture the pruning checkpoint plan to `checkpoint-<height>.json`.
 3. Reconstruct pruned payloads from an in-memory provider and verify their
    pruning proofs and hashes match the originals.
-4. Append a handful of synthetic transactions to a dedicated mempool WAL,
+4. Advance consensus by appending a new block after the pruning cycle and
+   assert the refreshed checkpoint tip height/hash/state-root equals the
+   finalized head.
+5. Reload the persisted pruning proof for the finalized head and validate it
+   with `ValidatedPruningEnvelope` so zk commitments match the header digests.
+6. Append a handful of synthetic transactions to a dedicated mempool WAL,
    inject a partial record to mimic a crash, and replay the intact entries.
-5. Restart the node, rehydrate the mempool from the recovered WAL contents, and
+7. Restart the node, rehydrate the mempool from the recovered WAL contents, and
    confirm the checkpoint still lines up with the reconstructed tip height.
 
 ## Signals to watch
 
-* The pruning plan tip height should match the persisted checkpoint even after
-  recovery.
+* The pruning plan tip height/hash/state-root should match the finalized head
+  even if consensus advanced mid-prune.
 * Reconstructed blocks must hash to the same value they held before pruning and
-  pass `verify_pruning` against their predecessor.
+  pass `verify_pruning` against their predecessor. The persisted pruning proof
+  for the finalized head must validate via `ValidatedPruningEnvelope`.
 * WAL replay should resurrect the queued transactions so the mempool count after
   restart equals the recovered WAL length.
 
