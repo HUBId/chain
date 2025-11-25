@@ -141,6 +141,13 @@ skew and latency spread under 1.2s. Operators should treat ~1s of additional
 round latency and a one-block height spread as the safe drift budget; crossing
 those limits warrants deeper inspection before tightening alert thresholds.
 
+Complementary uptime skew tests enforce the same discipline at the proof layer:
+unit coverage now injects backwards clock offsets into both STWO and Plonky3
+uptime provers and expects them to reject the skew while recording rejection
+metrics for alerting. A corrupted uptime payload that rewrites the embedded
+clock forces the verifier to emit a rejection that can be wired to paging so
+clock drift never silently bypasses proof validation.【F:tests/uptime_clock_skew.rs†L1-L99】
+
 ## RPP-STARK reorg drills and observability
 
 Nightly simnet runs now include an RPP-STARK-specific reorg scenario that
