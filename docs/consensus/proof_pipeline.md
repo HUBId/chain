@@ -45,3 +45,23 @@ payloads.
 > **Operations link:** Alert thresholds and on-call response guidance for the
 > RPP-STARK verifier are documented in
 > [operations/zk_backends.md](../operations/zk_backends.md).
+
+## Operator signals
+
+Runtime nodes surface several cues that a peer is attempting to inject
+conflicting or malformed proofs:
+
+- **`verifier_metrics.per_backend["rpp-stark"].rejected`** increments whenever
+  a RPP-STARK verification fails (for example, when a transaction proof has
+  been tampered with). The `last` snapshot captures the most recent backend
+  outcome, so operators can confirm that the rejection path was exercised
+  during an incident.
+- **Pipeline logs** still emit the precise `ChainError::Transaction` cause, but
+  the telemetry counter provides a durable breadcrumb even if logs roll over.
+- **Slashing events** remain the authoritative view of penalties applied to
+  peers that repeatedly gossip conflicting material.
+
+The integration test `tests/rpp_stark_conflicts.rs` executes a duplicate spend
+and a tampered proof on a three-node cluster to assert that RPP-STARK proofs
+are rejected, the rejection counters move forward, and the runtime surfaces a
+clear operator signal in telemetry.
