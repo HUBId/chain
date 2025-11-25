@@ -88,7 +88,10 @@ new optional dependencies so the audit trail stays in sync (Issue #1).
   [security policy](./SECURITY.md) for reporting channels, the
   [observability guide and runbook](./docs/observability.md) for telemetry
   hardening, and the [zero-knowledge backend procedures](./docs/zk_backends.md)
-  before promoting releases or rotating on-call shifts.
+  before promoting releases or rotating on-call shifts. The
+  [documentation review checklist](./RELEASE.md#documentation-review-checklist)
+  tracks the current config validation, health probe, zk backend, pruning,
+  wallet, and uptime alert smokes to rerun before each release.
 
 ## Proof of Lottery (POL)
 

@@ -25,6 +25,12 @@ the REST/RPC workflows exposed by the running node.
 > · [Plonky3 runbook](./runbooks/plonky3.md)
 > · [Incident Runbook: rpp-stark verification failures](./zk_backends.md#incident-runbook-rpp-stark-verification-failures)
 
+Use the [documentation review checklist](../RELEASE.md#documentation-review-checklist)
+before every rollout to replay the config validation, health probes, zk backend
+verification, pruning readiness, wallet smoke, and uptime alert checks. Update
+the commands and dashboard links there if defaults change so release sign-offs
+stay in sync with the active operator workflows.
+
 ## Build and install the CLI
 
 Compile the binary with the release profile and select the backend that matches
