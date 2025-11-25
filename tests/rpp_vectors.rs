@@ -153,18 +153,21 @@ impl ReportSnapshot {
 
     fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writeln!(writer, "report.total_bytes: {}", self.total_bytes)?;
-        println!("[rpp-golden-vector-checksum] report.total_bytes: {}", self.total_bytes);
+        println!(
+            "[rpp-golden-vector-checksum] report.total_bytes: {}",
+            self.total_bytes
+        );
 
         writeln!(writer, "report.flags.params: {}", self.flags.params)?;
         writeln!(writer, "report.flags.public: {}", self.flags.public)?;
         writeln!(writer, "report.flags.merkle: {}", self.flags.merkle)?;
         writeln!(writer, "report.flags.fri: {}", self.flags.fri)?;
-        writeln!(writer, "report.flags.composition: {}", self.flags.composition)?;
         writeln!(
             writer,
-            "report.flags.all_passed: {}",
-            self.flags.all_passed
+            "report.flags.composition: {}",
+            self.flags.composition
         )?;
+        writeln!(writer, "report.flags.all_passed: {}", self.flags.all_passed)?;
 
         if let Some(len) = self.trace_indices_len {
             writeln!(writer, "report.trace_query_indices.len: {len}")?;
@@ -184,11 +187,7 @@ impl ReportSnapshot {
                     "report.stage_timings.merkle_ns: {}",
                     timings.merkle_ns
                 )?;
-                writeln!(
-                    writer,
-                    "report.stage_timings.fri_ns: {}",
-                    timings.fri_ns
-                )?;
+                writeln!(writer, "report.stage_timings.fri_ns: {}", timings.fri_ns)?;
                 writeln!(
                     writer,
                     "report.stage_timings.total_ns: {}",

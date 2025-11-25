@@ -651,6 +651,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             description: "Drive a quorum stress drill against validators",
         },
         SimnetPreset {
+            slug: "consensus-chaos",
+            scenario_path: "tools/simnet/scenarios/consensus_chaos.ron",
+            description: "Delay leaders, drop gossip, and isolate validators to validate consensus recovery alerts",
+        },
+        SimnetPreset {
             slug: "partition",
             scenario_path: "tools/simnet/scenarios/snapshot_partition.ron",
             description: "Partition validators while exercising snapshot recovery",
@@ -880,6 +885,7 @@ fn run_simnet_smoke() -> Result<()> {
         "block-pipeline",
         "state-sync-guard",
         "quorum-stress",
+        "consensus-chaos",
         "epoch-drift",
         "partition",
     ];

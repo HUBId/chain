@@ -7,9 +7,7 @@ pub use error::{
     RppStarkFriIssue, RppStarkMerkleSection, RppStarkSerializationContext, RppStarkVerifierError,
     RppStarkVerifyFailure,
 };
-pub use report::{
-    RppStarkStageTimings, RppStarkVerificationFlags, RppStarkVerificationReport,
-};
+pub use report::{RppStarkStageTimings, RppStarkVerificationFlags, RppStarkVerificationReport};
 
 use rpp_stark::backend::{ensure_proof_size_consistency, params_limit_to_node_bytes};
 use rpp_stark::config::{

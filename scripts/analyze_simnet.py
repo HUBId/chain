@@ -201,6 +201,35 @@ def render_report(path: Path, summary: Dict[str, Any]) -> str:
     return render_network_report(path, summary)
 
 
+def write_chaos_alert(path: Path, summary: Dict[str, Any], failed: bool) -> None:
+    alert_path = path.parent / "chaos_alert.json"
+    propagation = summary.get("propagation") or {}
+    recovery = summary.get("recovery") or {}
+    alert = {
+        "receiver": "consensus-chaos-harness",
+        "status": "firing" if failed else "resolved",
+        "alerts": [
+            {
+                "status": "firing" if failed else "resolved",
+                "labels": {
+                    "alertname": "ConsensusChaosDrill",
+                    "severity": "critical" if failed else "info",
+                },
+                "annotations": {
+                    "summary": "Consensus chaos drill latency and recovery checks",
+                    "description": "Partition, churn, and spam injections should not stall quorum formation.",
+                    "propagation_p95_ms": propagation.get("p95_ms"),
+                    "resume_events": len(recovery.get("resume_latencies_ms") or []),
+                    "max_resume_ms": recovery.get("max_resume_latency_ms"),
+                },
+            }
+        ],
+    }
+    alert_path.parent.mkdir(parents=True, exist_ok=True)
+    with alert_path.open("w", encoding="utf-8") as handle:
+        json.dump(alert, handle, indent=2)
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -294,6 +323,7 @@ def main(argv: List[str]) -> int:
         summary = load_summary(path)
         print(render_report(path, summary))
         print()
+        failure_start = len(failures)
 
         if summary.get("kind") == "consensus-load":
             prove = (summary.get("prove_ms") or {}).get("p95")
@@ -393,7 +423,7 @@ def main(argv: List[str]) -> int:
                 )
 
         scenario_slug = path.stem.lower()
-        if "flood" in scenario_slug or "partition" in scenario_slug:
+        if "flood" in scenario_slug or "partition" in scenario_slug or "chaos" in scenario_slug:
             check_peer_traffic(path, summary, args, failures)
 
         resource_usage = summary.get("resource_usage")
@@ -418,6 +448,11 @@ def main(argv: List[str]) -> int:
                     failure_roots.append(path)
             else:
                 failures.append(f"{path} missing max_rss_bytes in resource_usage")
+                failure_roots.append(path)
+
+        if "chaos" in scenario_slug:
+            write_chaos_alert(path, summary, len(failures) > failure_start)
+            if len(failures) > failure_start:
                 failure_roots.append(path)
 
     if failures:

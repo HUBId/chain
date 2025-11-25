@@ -1014,7 +1014,8 @@ impl SnapshotStreamMetrics {
         let resume_events = Family::<Vec<(String, String)>, Counter>::default();
         let resume_validated_bytes = Gauge::default();
         let resume_progress_ratio = Gauge::default();
-        let resume_checksum_state = Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
+        let resume_checksum_state =
+            Family::<Vec<(String, String)>, Gauge<u64, AtomicU64>>::default();
         registry.register(
             "snapshot_resume_events_total",
             "Snapshot resume attempts grouped by result",
