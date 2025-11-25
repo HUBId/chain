@@ -1,6 +1,6 @@
 #![doc = include_str!("../SDK.md")]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::future::Future;
@@ -18,6 +18,8 @@ use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex,
     DynVrfKeyStore, VrfKeyIdentifier, VrfKeyStore, VrfKeypair,
 };
+use rpp_chain::node::PruningJobStatus;
+use rpp_chain::reputation::TimetokeParams;
 use rpp_chain::runtime::config::{
     NodeConfig, SecretsBackendConfig, SecretsConfig, SnapshotChecksumAlgorithm, TelemetryConfig,
     WalletConfig, WalletConfigExt, DEFAULT_SNAPSHOT_MAX_CONCURRENT_CHUNK_DOWNLOADS,
@@ -71,6 +73,7 @@ where
 #[derive(Debug)]
 pub enum CliError {
     Bootstrap(BootstrapError),
+    Status { code: i32, message: String },
     Other(anyhow::Error),
 }
 
@@ -78,6 +81,7 @@ impl CliError {
     pub fn exit_code(&self) -> i32 {
         match self {
             CliError::Bootstrap(err) => err.exit_code(),
+            CliError::Status { code, .. } => *code,
             CliError::Other(_) => 1,
         }
     }
@@ -87,6 +91,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CliError::Bootstrap(err) => write!(f, "{err}"),
+            CliError::Status { message, .. } => write!(f, "{message}"),
             CliError::Other(err) => write!(f, "{err}"),
         }
     }
@@ -96,6 +101,7 @@ impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CliError::Bootstrap(err) => Some(err),
+            CliError::Status { .. } => None,
             CliError::Other(err) => Some(err.as_ref()),
         }
     }
@@ -162,6 +168,8 @@ enum ValidatorCommand {
     Telemetry(TelemetryCommand),
     /// Manage uptime proofs via the validator RPC
     Uptime(UptimeCommand),
+    /// Query health endpoints and summarise validator readiness
+    Health(HealthCommand),
     /// Run validator setup checks and rotate VRF material
     Setup(ValidatorSetupCommand),
     /// Control snapshot streaming sessions through the RPC service
@@ -222,6 +230,21 @@ struct TelemetryCommand {
     /// Pretty-print the JSON response
     #[arg(long, default_value_t = false)]
     pretty: bool,
+}
+
+#[derive(Args, Clone)]
+struct HealthCommand {
+    /// Base URL of the validator RPC endpoint
+    #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:7070")]
+    rpc_url: String,
+
+    /// Optional bearer token for secured RPC deployments
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// Emit the summary as JSON for automation and alerting pipelines
+    #[arg(long, default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -605,6 +628,9 @@ where
             Some(ValidatorCommand::Uptime(command)) => {
                 handle_uptime_command(command).await.map_err(CliError::from)
             }
+            Some(ValidatorCommand::Health(command)) => {
+                handle_health_command(command).await.map_err(CliError::from)
+            }
             Some(ValidatorCommand::Setup(command)) => run_validator_setup(command).await,
             Some(ValidatorCommand::Snapshot(command)) => handle_snapshot_command(command)
                 .await
@@ -752,6 +778,515 @@ async fn fetch_telemetry(command: TelemetryCommand) -> Result<()> {
         println!("{}", body);
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum OverallHealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+impl OverallHealthStatus {
+    fn exit_code(self) -> i32 {
+        match self {
+            OverallHealthStatus::Healthy => 0,
+            OverallHealthStatus::Degraded => 20,
+            OverallHealthStatus::Unhealthy => 21,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct HealthSummary {
+    overall: OverallHealthStatus,
+    issues: Vec<String>,
+    readiness: Option<ReadinessSummary>,
+    health: Option<HealthResponsePayload>,
+    consensus: Option<ConsensusFinalitySummary>,
+    zk_backend: Option<BackendSummary>,
+    pruning: Option<PruningJobStatus>,
+    wallet: Option<WalletReadinessSummary>,
+    uptime_backlog: Option<usize>,
+    timetoke_records: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReadinessSummary {
+    ready: bool,
+    status: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HealthSubsystemStatus {
+    zk_ready: bool,
+    pruning_available: bool,
+    snapshots_available: bool,
+    wallet_signer_ready: bool,
+    wallet_connected: bool,
+    wallet_key_cache_ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackendVerificationSnapshot {
+    backend: String,
+    outcome: String,
+    #[serde(default)]
+    bypassed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct BackendVerificationMetrics {
+    #[serde(default)]
+    accepted: u64,
+    #[serde(default)]
+    rejected: u64,
+    #[serde(default)]
+    bypassed: u64,
+    #[serde(default)]
+    total_duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ProofCacheMetricsSnapshot {
+    #[serde(default)]
+    hits: u64,
+    #[serde(default)]
+    misses: u64,
+    #[serde(default)]
+    evictions: u64,
+    #[serde(default)]
+    capacity: usize,
+    #[serde(default)]
+    backend: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct VerifierMetricsSnapshot {
+    #[serde(default)]
+    per_backend: HashMap<String, BackendVerificationMetrics>,
+    #[serde(default)]
+    cache: ProofCacheMetricsSnapshot,
+    #[serde(default)]
+    last: Option<BackendVerificationSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct BackendSummary {
+    #[serde(default)]
+    active_backend: Option<String>,
+    #[serde(default)]
+    last_verification: Option<BackendVerificationSnapshot>,
+    #[serde(default)]
+    cache: Option<ProofCacheMetricsSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HealthResponsePayload {
+    status: String,
+    address: String,
+    role: String,
+    #[serde(default)]
+    backend: Option<BackendSummary>,
+    #[serde(default)]
+    subsystems: HealthSubsystemStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HealthReadyResponsePayload {
+    status: String,
+    ready: bool,
+    role: String,
+    #[serde(default)]
+    backend: Option<BackendSummary>,
+    #[serde(default)]
+    subsystems: HealthSubsystemStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConsensusSnapshot {
+    height: u64,
+    round: u64,
+    commit_power: String,
+    quorum_threshold: String,
+    quorum_reached: bool,
+    #[serde(default)]
+    quorum_latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct NodeStatusSnapshot {
+    #[serde(default)]
+    pending_uptime_proofs: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ValidatorStatusSnapshot {
+    consensus: ConsensusSnapshot,
+    node: NodeStatusSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ValidatorMempoolSnapshot {
+    #[serde(default)]
+    uptime_proofs: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ValidatorTelemetrySnapshot {
+    #[serde(default)]
+    mempool: ValidatorMempoolSnapshot,
+    timetoke_params: TimetokeParams,
+    #[serde(default)]
+    pruning: Option<PruningJobStatus>,
+    #[serde(default)]
+    verifier_metrics: Option<VerifierMetricsSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConsensusFinalitySummary {
+    height: u64,
+    round: u64,
+    quorum_reached: bool,
+    commit_power: String,
+    quorum_threshold: String,
+    quorum_latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct WalletReadinessSummary {
+    signer: Option<bool>,
+    connected: Option<bool>,
+    key_cache: Option<bool>,
+}
+
+impl WalletReadinessSummary {
+    fn register(&mut self, subsystems: &HealthSubsystemStatus) {
+        self.signer = Some(subsystems.wallet_signer_ready);
+        self.connected = Some(subsystems.wallet_connected);
+        self.key_cache = Some(subsystems.wallet_key_cache_ready);
+    }
+
+    fn not_ready(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if matches!(self.signer, Some(false)) {
+            missing.push("wallet signer");
+        }
+        if matches!(self.connected, Some(false)) {
+            missing.push("wallet connectivity");
+        }
+        if matches!(self.key_cache, Some(false)) {
+            missing.push("wallet key cache");
+        }
+        missing
+    }
+}
+
+struct HttpResponse<T> {
+    status: StatusCode,
+    payload: T,
+}
+
+async fn get_with_status<T: for<'de> Deserialize<'de>>(
+    client: &Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<HttpResponse<T>> {
+    let mut request = client.get(url);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await?;
+    let status = response.status();
+    let payload = response.json::<T>().await?;
+
+    Ok(HttpResponse { status, payload })
+}
+
+async fn get_json<T: for<'de> Deserialize<'de>>(
+    client: &Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<T> {
+    let response = get_with_status(client, url, token).await?;
+    if !response.status.is_success() {
+        anyhow::bail!("{} returned {}", url, response.status);
+    }
+
+    Ok(response.payload)
+}
+
+async fn handle_health_command(command: HealthCommand) -> Result<()> {
+    let summary = collect_health_summary(&command).await?;
+
+    if command.json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        render_health_summary(&summary);
+    }
+
+    match summary.overall {
+        OverallHealthStatus::Healthy => Ok(()),
+        status => Err(CliError::Status {
+            code: status.exit_code(),
+            message: summary.issues.join("; "),
+        }),
+    }
+}
+
+async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build health HTTP client")?;
+    let base = command.rpc_url.trim_end_matches('/');
+
+    let readiness = get_with_status::<HealthReadyResponsePayload>(
+        &client,
+        &format!("{}/health/ready", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map_err(|err| anyhow!("health readiness probe: {err}"));
+
+    let health = get_with_status::<HealthResponsePayload>(
+        &client,
+        &format!("{}/health", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map_err(|err| anyhow!("health status probe: {err}"));
+
+    let validator_status = get_json::<ValidatorStatusSnapshot>(
+        &client,
+        &format!("{}/validator/status", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map_err(|err| anyhow!("validator status: {err}"));
+
+    let telemetry = get_json::<ValidatorTelemetrySnapshot>(
+        &client,
+        &format!("{}/validator/telemetry", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map_err(|err| anyhow!("validator telemetry: {err}"));
+
+    let timetoke_records = get_json::<Vec<Value>>(
+        &client,
+        &format!("{}/ledger/timetoke", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map(|records| records.len())
+    .map_err(|err| anyhow!("timetoke snapshot: {err}"));
+
+    let mut issues = Vec::new();
+    let mut critical = Vec::new();
+
+    let readiness_summary = readiness.ok().map(|probe| {
+        if !probe.payload.ready {
+            issues.push("ready probe reports the node is unavailable".into());
+        }
+        ReadinessSummary {
+            ready: probe.payload.ready,
+            status: probe.status.as_u16(),
+        }
+    });
+
+    let (health_status, wallet_summary, backend_summary) = match health {
+        Ok(status) => {
+            let payload = status.payload;
+            let subsystems = payload.subsystems.clone();
+            let mut wallet = WalletReadinessSummary::default();
+            wallet.register(&subsystems);
+
+            if !subsystems.zk_ready {
+                issues.push("zk backend not ready".into());
+            }
+            if !subsystems.pruning_available {
+                issues.push("pruning subsystem unavailable".into());
+            }
+            if !subsystems.wallet_signer_ready {
+                issues.push("wallet signer unavailable".into());
+            }
+            if !subsystems.wallet_connected {
+                issues.push("wallet RPC not connected".into());
+            }
+            if !subsystems.wallet_key_cache_ready {
+                issues.push("wallet key cache still warming".into());
+            }
+
+            let backend = payload.backend.clone();
+
+            (Some(payload), Some(wallet), backend)
+        }
+        Err(err) => {
+            critical.push(format!("failed to query /health: {err}"));
+            (None, None, None)
+        }
+    };
+
+    let consensus = match validator_status {
+        Ok(status) => {
+            if !status.consensus.quorum_reached {
+                issues.push("consensus quorum not reached".into());
+            }
+            Some(ConsensusFinalitySummary {
+                height: status.consensus.height,
+                round: status.consensus.round,
+                quorum_reached: status.consensus.quorum_reached,
+                commit_power: status.consensus.commit_power,
+                quorum_threshold: status.consensus.quorum_threshold,
+                quorum_latency_ms: status.consensus.quorum_latency_ms,
+            })
+        }
+        Err(err) => {
+            critical.push(format!("failed to query validator status: {err}"));
+            None
+        }
+    };
+
+    let (pruning, uptime_backlog) = match telemetry {
+        Ok(snapshot) => (
+            snapshot.pruning.clone(),
+            Some(snapshot.mempool.uptime_proofs),
+        ),
+        Err(err) => {
+            critical.push(format!("failed to query validator telemetry: {err}"));
+            (None, None)
+        }
+    };
+
+    let timetoke_records = match timetoke_records {
+        Ok(count) => Some(count),
+        Err(err) => {
+            issues.push(format!("timetoke snapshot unavailable: {err}"));
+            None
+        }
+    };
+
+    if let Some(job) = pruning.as_ref() {
+        if !job.missing_heights.is_empty() {
+            issues.push(format!(
+                "pruning job still missing {} heights",
+                job.missing_heights.len()
+            ));
+        }
+    }
+
+    if let Some(wallet) = wallet_summary.as_ref() {
+        for entry in wallet.not_ready() {
+            issues.push(format!("{entry} not ready"));
+        }
+    }
+
+    let overall = if !critical.is_empty() {
+        issues.extend(critical);
+        OverallHealthStatus::Unhealthy
+    } else if issues.is_empty() {
+        OverallHealthStatus::Healthy
+    } else {
+        OverallHealthStatus::Degraded
+    };
+
+    Ok(HealthSummary {
+        overall,
+        issues,
+        readiness: readiness_summary,
+        health: health_status,
+        consensus,
+        zk_backend: backend_summary,
+        pruning,
+        wallet: wallet_summary,
+        uptime_backlog,
+        timetoke_records,
+    })
+}
+
+fn render_health_summary(summary: &HealthSummary) {
+    println!("Overall: {:?}", summary.overall);
+    if let Some(ready) = summary.readiness.as_ref() {
+        println!("Readiness: ready={} (HTTP {})", ready.ready, ready.status);
+    } else {
+        println!("Readiness: unavailable");
+    }
+
+    if let Some(consensus) = summary.consensus.as_ref() {
+        println!(
+            "Consensus: height={} round={} quorum_reached={} commit_power={}/{}",
+            consensus.height,
+            consensus.round,
+            consensus.quorum_reached,
+            consensus.commit_power,
+            consensus.quorum_threshold
+        );
+        if let Some(latency) = consensus.quorum_latency_ms {
+            println!("  quorum_latency_ms={}", latency);
+        }
+    } else {
+        println!("Consensus: unavailable");
+    }
+
+    if let Some(backend) = summary.zk_backend.as_ref() {
+        println!(
+            "ZK backend: {:?}",
+            backend.active_backend.as_deref().unwrap_or("unknown")
+        );
+        if let Some(last) = backend.last_verification.as_ref() {
+            println!(
+                "  last_verification: backend={} outcome={} bypassed={}",
+                last.backend, last.outcome, last.bypassed
+            );
+        }
+        if let Some(cache) = backend.cache.as_ref() {
+            println!(
+                "  cache hits={} misses={} evictions={} capacity={}",
+                cache.hits, cache.misses, cache.evictions, cache.capacity
+            );
+        }
+    } else {
+        println!("ZK backend: unavailable");
+    }
+
+    if let Some(pruning) = summary.pruning.as_ref() {
+        println!(
+            "Pruning: pending_missing_heights={} stored_proofs={}",
+            pruning.missing_heights.len(),
+            pruning.stored_proofs.len()
+        );
+    } else {
+        println!("Pruning: no active job reported");
+    }
+
+    if let Some(wallet) = summary.wallet.as_ref() {
+        println!(
+            "Wallet: signer_ready={} connected={} key_cache_ready={}",
+            wallet.signer.unwrap_or(false),
+            wallet.connected.unwrap_or(false),
+            wallet.key_cache.unwrap_or(false)
+        );
+    } else {
+        println!("Wallet: unavailable");
+    }
+
+    if let Some(backlog) = summary.uptime_backlog {
+        println!("Uptime proofs queued: {}", backlog);
+    }
+
+    if let Some(records) = summary.timetoke_records {
+        println!("Timetoke records in snapshot: {}", records);
+    }
+
+    if !summary.issues.is_empty() {
+        println!("Alerts:");
+        for issue in &summary.issues {
+            println!("- {issue}");
+        }
+    }
 }
 
 async fn handle_uptime_command(command: UptimeCommand) -> Result<()> {
@@ -1116,10 +1651,13 @@ fn snapshot_proxy_url(value: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_snapshot_client, SnapshotConnectionArgs, ValidatorConfigArgs};
+    use super::{
+        build_snapshot_client, collect_health_summary, HealthCommand, OverallHealthStatus,
+        SnapshotConnectionArgs, ValidatorConfigArgs,
+    };
     use hyper::header::PROXY_AUTHORIZATION;
     use hyper::service::{make_service_fn, service_fn};
-    use hyper::{Body, Request, Response, Server};
+    use hyper::{Body, Request, Response, Server, StatusCode};
     use std::convert::Infallible;
     use std::net::SocketAddr;
     use std::path::PathBuf;
@@ -1168,6 +1706,50 @@ mod tests {
             observed.proxy_authorization.as_deref(),
             Some("Basic dXNlcjpwYXNzd29yZA==")
         );
+        shutdown_tx.send(()).ok();
+    }
+
+    #[tokio::test]
+    async fn reports_healthy_summary() {
+        let (addr, shutdown_tx) = spawn_health_server(false).await;
+        let command = HealthCommand {
+            rpc_url: format!("http://{}", addr),
+            auth_token: None,
+            json: false,
+        };
+
+        let summary = collect_health_summary(&command)
+            .await
+            .expect("health summary to succeed");
+
+        assert_eq!(summary.overall, OverallHealthStatus::Healthy);
+        assert_eq!(summary.uptime_backlog, Some(0));
+        assert_eq!(summary.timetoke_records, Some(1));
+        assert!(summary.issues.is_empty());
+
+        shutdown_tx.send(()).ok();
+    }
+
+    #[tokio::test]
+    async fn reports_degraded_summary() {
+        let (addr, shutdown_tx) = spawn_health_server(true).await;
+        let command = HealthCommand {
+            rpc_url: format!("http://{}", addr),
+            auth_token: None,
+            json: false,
+        };
+
+        let summary = collect_health_summary(&command)
+            .await
+            .expect("health summary to succeed");
+
+        assert_eq!(summary.overall, OverallHealthStatus::Degraded);
+        assert!(summary
+            .issues
+            .iter()
+            .any(|issue| issue.contains("unavailable")));
+        assert!(summary.issues.iter().any(|issue| issue.contains("quorum")));
+
         shutdown_tx.send(()).ok();
     }
 
@@ -1232,6 +1814,91 @@ mod tests {
         }));
 
         (proxy_addr, request_rx, shutdown_tx)
+    }
+
+    async fn spawn_health_server(degraded: bool) -> (SocketAddr, oneshot::Sender<()>) {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let make_service = make_service_fn(move |_conn| async move {
+            Ok::<_, Infallible>(service_fn(move |req: Request<Body>| async move {
+                let path = req.uri().path();
+                let (status, body) = match path {
+                    "/health" => health_payload(degraded),
+                    "/health/ready" => readiness_payload(degraded),
+                    "/validator/status" => validator_status_payload(degraded),
+                    "/validator/telemetry" => telemetry_payload(degraded),
+                    "/ledger/timetoke" => (StatusCode::OK, Body::from("[{\"id\":1}]")),
+                    _ => (StatusCode::NOT_FOUND, Body::from("")),
+                };
+
+                Ok::<_, Infallible>(Response::builder().status(status).body(body).unwrap())
+            }))
+        });
+
+        let server = Server::bind(&SocketAddr::from(([127, 0, 0, 1], 0))).serve(make_service);
+        let addr = server.local_addr();
+        tokio::spawn(server.with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        (addr, shutdown_tx)
+    }
+
+    fn health_payload(degraded: bool) -> (StatusCode, Body) {
+        let subsystems = if degraded {
+            "{\"zk_ready\":false,\"pruning_available\":false,\"snapshots_available\":true,\"wallet_signer_ready\":false,\"wallet_connected\":false,\"wallet_key_cache_ready\":false}"
+        } else {
+            "{\"zk_ready\":true,\"pruning_available\":true,\"snapshots_available\":true,\"wallet_signer_ready\":true,\"wallet_connected\":true,\"wallet_key_cache_ready\":true}"
+        };
+        let body = format!(
+            "{{\"status\":\"ok\",\"address\":\"0.0.0.0\",\"role\":\"validator\",\"backend\":{{\"active_backend\":\"plonky3\",\"cache\":{{\"hits\":1,\"misses\":0,\"evictions\":0,\"capacity\":16}}}},\"subsystems\":{subsystems}}}"
+        );
+        (StatusCode::OK, Body::from(body))
+    }
+
+    fn readiness_payload(degraded: bool) -> (StatusCode, Body) {
+        let ready = if degraded { "false" } else { "true" };
+        let status = if degraded {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        };
+        let subsystems = if degraded {
+            "{\"zk_ready\":false,\"pruning_available\":false,\"snapshots_available\":false,\"wallet_signer_ready\":false,\"wallet_connected\":false,\"wallet_key_cache_ready\":false}"
+        } else {
+            "{\"zk_ready\":true,\"pruning_available\":true,\"snapshots_available\":true,\"wallet_signer_ready\":true,\"wallet_connected\":true,\"wallet_key_cache_ready\":true}"
+        };
+        (
+            status,
+            Body::from(format!(
+                "{{\"status\":\"{status}\",\"ready\":{ready},\"role\":\"validator\",\"subsystems\":{subsystems}}}",
+                status = if degraded { "unavailable" } else { "ok" }
+            )),
+        )
+    }
+
+    fn validator_status_payload(degraded: bool) -> (StatusCode, Body) {
+        let quorum = if degraded { "false" } else { "true" };
+        let body = format!(
+            "{{\"consensus\":{{\"height\":10,\"round\":2,\"commit_power\":\"70\",\"quorum_threshold\":\"67\",\"quorum_reached\":{quorum},\"quorum_latency_ms\":5}},\"node\":{{\"pending_uptime_proofs\":{pending}}}}}",
+            pending = if degraded { 3 } else { 0 }
+        );
+        (StatusCode::OK, Body::from(body))
+    }
+
+    fn telemetry_payload(degraded: bool) -> (StatusCode, Body) {
+        let pruning = if degraded {
+            "\"pruning\":{\"plan\":{\"snapshot\":{\"commitments\":{\"global_state_root\":\"00\"}},\"chunks\":[]},\"missing_heights\":[1,2],\"stored_proofs\":[],\"last_updated\":0}"
+        } else {
+            "\"pruning\":null"
+        };
+
+        let body = format!(
+            "{{\"mempool\":{{\"uptime_proofs\":{uptime}}},\"timetoke_params\":{{\"minimum_window_secs\":3600,\"accrual_cap_hours\":720,\"decay_interval_secs\":86400,\"decay_step_hours\":1,\"sync_interval_secs\":600}},{pruning}}}",
+            uptime = if degraded { 3 } else { 0 },
+            pruning = pruning
+        );
+        (StatusCode::OK, Body::from(body))
     }
 }
 
