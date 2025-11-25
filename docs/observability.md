@@ -42,6 +42,27 @@ before the node starts processing traffic.【F:rpp/runtime/config.rs†L3885-L39
 The Prometheus scrape contains both series, allowing dashboards and automated
 checks to confirm that exporter failures have been observed.
 
+### Proof-verification log fields
+
+Consensus validation and STARK verification logs now share a common set of
+labels so operators and tooling can pivot between successes and failures:
+
+- `peer_id`: libp2p peer that delivered the block or proof bundle ("unknown"
+  when the source is not networked, such as locally generated proofs).
+- `height` / `slot`: consensus height and round/slot associated with the
+  verification attempt. These fields remain present even when the values are
+  unknown, simplifying log parsing.
+- `backend`: proof system used for verification (for example `rpp-stark` or
+  `stwo`).
+- `proof_id`: stable identifier for the proof under test (block hash for
+  consensus proofs, transaction or request hash for other circuits).
+- `circuit`: circuit family being checked (`state`, `pruning`, `recursive`,
+  `consensus`, or other verification circuits such as `transaction`).
+
+Both success and failure events emit the full field set on the `proofs` and
+`telemetry` targets so dashboards and log pipelines can filter consistently
+across backend types.
+
 ### Alerting and recovery
 
 The nightly workflow runs the chaos drill without blocking mainline merges and

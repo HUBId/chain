@@ -203,6 +203,38 @@ struct RppStarkProofSizeSnapshot {
     size_bucket: &'static str,
 }
 
+#[derive(Clone, Default)]
+struct ProofLogLabels {
+    peer_id: Option<String>,
+    height: Option<u64>,
+    slot: Option<u64>,
+    proof_id: Option<String>,
+    circuit: Option<String>,
+}
+
+struct ProofLogLabelValues<'a> {
+    peer_id: &'a str,
+    height: Option<u64>,
+    slot: Option<u64>,
+    proof_id: &'a str,
+    circuit: &'a str,
+}
+
+impl ProofLogLabels {
+    fn resolve(&self, proof_kind: ProofVerificationKind) -> ProofLogLabelValues<'_> {
+        ProofLogLabelValues {
+            peer_id: self.peer_id.as_deref().unwrap_or("unknown"),
+            height: self.height,
+            slot: self.slot,
+            proof_id: self.proof_id.as_deref().unwrap_or("unknown"),
+            circuit: self
+                .circuit
+                .as_deref()
+                .unwrap_or_else(|| proof_kind.as_str()),
+        }
+    }
+}
+
 #[cfg(feature = "backend-rpp-stark")]
 fn record_rpp_stark_size_metrics(
     proof_metrics: &ProofMetrics,
@@ -1626,6 +1658,7 @@ pub struct ExternalFinalizationContext {
     block: Block,
     previous_block: Option<Block>,
     archived_votes: Vec<SignedBftVote>,
+    peer_id: Option<NetworkPeerId>,
 }
 
 pub enum FinalizationOutcome {
@@ -3404,9 +3437,23 @@ mod zk_backend_validation_tests {
         };
         let proof_bytes = 5 * 1024 * 1024 + 12;
         let size_bucket = proof_size_bucket(proof_bytes);
+        let labels = ProofLogLabels {
+            peer_id: Some("peer.test".into()),
+            height: Some(10),
+            slot: Some(3),
+            proof_id: Some("proof.test".into()),
+            circuit: Some("consensus".into()),
+        };
+        let resolved = labels.resolve(ProofVerificationKind::Consensus);
 
         warn!(
             target = "proofs",
+            peer_id = resolved.peer_id,
+            height = ?resolved.height,
+            slot = ?resolved.slot,
+            proof_id = resolved.proof_id,
+            circuit = resolved.circuit,
+            backend = ProofVerificationBackend::RppStark.as_str(),
             proof_backend = "rpp-stark",
             proof_kind = ProofVerificationKind::Consensus.as_str(),
             valid = false,
@@ -3860,6 +3907,7 @@ mod tests {
                 block: block.clone(),
                 previous_block,
                 archived_votes: block.bft_votes.clone(),
+                peer_id: None,
             }))
             .expect("finalize external");
 
@@ -4065,6 +4113,7 @@ mod tests {
                 block: tampered_block.clone(),
                 previous_block,
                 archived_votes: tampered_block.bft_votes.clone(),
+                peer_id: None,
             },
         ));
 
@@ -4926,20 +4975,26 @@ impl NodeInner {
     }
 
     fn log_external_block_verification_failure(
-        height: u64,
-        round: u32,
+        labels: &ProofLogLabels,
         proposer: &Address,
         backend: ProofVerificationBackend,
-        proof_kind: &'static str,
+        proof_kind: ProofVerificationKind,
         err: &ChainError,
     ) {
+        let resolved = labels.resolve(proof_kind);
+
         warn!(
-            height,
-            round,
+            target = "proofs",
+            peer_id = resolved.peer_id,
+            height = ?resolved.height,
+            slot = ?resolved.slot,
+            proof_id = resolved.proof_id,
+            circuit = resolved.circuit,
             proposer = %proposer,
             ?err,
-            proof_kind,
+            backend = backend.as_str(),
             proof_backend = backend.as_str(),
+            proof_kind = proof_kind.as_str(),
             "external block proof verification failed"
         );
     }
@@ -4949,8 +5004,10 @@ impl NodeInner {
         &self,
         proof_kind: ProofVerificationKind,
         proof: &ChainProof,
+        labels: ProofLogLabels,
     ) -> ChainResult<RppStarkVerificationReport> {
         let started = Instant::now();
+        let resolved_labels = labels.resolve(proof_kind);
         match self
             .verifiers
             .verify_rpp_stark_with_report_raw(proof, proof_kind.as_str())
@@ -4962,6 +5019,7 @@ impl NodeInner {
                     proof,
                     &report,
                     started.elapsed(),
+                    &resolved_labels,
                 );
                 Ok(report)
             }
@@ -4972,6 +5030,7 @@ impl NodeInner {
                     proof,
                     started.elapsed(),
                     &err,
+                    &resolved_labels,
                 );
                 Err(self.verifiers.map_rpp_stark_error(proof_kind.as_str(), err))
             }
@@ -4986,6 +5045,7 @@ impl NodeInner {
         proof: &ChainProof,
         report: &RppStarkVerificationReport,
         duration: Duration,
+        labels: &ProofLogLabelValues,
     ) {
         let flags = report.flags();
         let proof_metrics = self.runtime_metrics.proofs();
@@ -5036,10 +5096,18 @@ impl NodeInner {
         }
         record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
 
+        let resolved = labels;
+        let backend_name = backend.as_str();
         let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
         if let Some(snapshot) = snapshot {
             info!(
                 target = "proofs",
+                peer_id = resolved.peer_id,
+                height = ?resolved.height,
+                slot = ?resolved.slot,
+                proof_id = resolved.proof_id,
+                circuit = resolved.circuit,
+                backend = backend_name,
                 proof_backend = "rpp-stark",
                 proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
@@ -5060,6 +5128,12 @@ impl NodeInner {
             );
             info!(
                 target = "telemetry",
+                peer_id = resolved.peer_id,
+                height = ?resolved.height,
+                slot = ?resolved.slot,
+                proof_id = resolved.proof_id,
+                circuit = resolved.circuit,
+                backend = backend_name,
                 proof_backend = "rpp-stark",
                 proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
@@ -5080,6 +5154,12 @@ impl NodeInner {
             let proof_bytes = report.total_bytes();
             info!(
                 target = "proofs",
+                peer_id = resolved.peer_id,
+                height = ?resolved.height,
+                slot = ?resolved.slot,
+                proof_id = resolved.proof_id,
+                circuit = resolved.circuit,
+                backend = backend_name,
                 proof_backend = "rpp-stark",
                 proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
@@ -5097,6 +5177,12 @@ impl NodeInner {
             );
             info!(
                 target = "telemetry",
+                peer_id = resolved.peer_id,
+                height = ?resolved.height,
+                slot = ?resolved.slot,
+                proof_id = resolved.proof_id,
+                circuit = resolved.circuit,
+                backend = backend_name,
                 proof_backend = "rpp-stark",
                 proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
@@ -5121,6 +5207,7 @@ impl NodeInner {
         proof: &ChainProof,
         duration: Duration,
         error: &RppStarkVerifierError,
+        labels: &ProofLogLabelValues,
     ) {
         let proof_metrics = self.runtime_metrics.proofs();
         let outcome = ProofVerificationOutcome::Fail;
@@ -5162,6 +5249,12 @@ impl NodeInner {
                 if let Some(snapshot) = snapshot {
                     warn!(
                         target = "proofs",
+                        peer_id = labels.peer_id,
+                        height = ?labels.height,
+                        slot = ?labels.slot,
+                        proof_id = labels.proof_id,
+                        circuit = labels.circuit,
+                        backend = backend.as_str(),
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
@@ -5176,6 +5269,12 @@ impl NodeInner {
                     );
                     warn!(
                         target = "telemetry",
+                        peer_id = labels.peer_id,
+                        height = ?labels.height,
+                        slot = ?labels.slot,
+                        proof_id = labels.proof_id,
+                        circuit = labels.circuit,
+                        backend = backend.as_str(),
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
@@ -5191,6 +5290,12 @@ impl NodeInner {
                 } else {
                     warn!(
                         target = "proofs",
+                        peer_id = labels.peer_id,
+                        height = ?labels.height,
+                        slot = ?labels.slot,
+                        proof_id = labels.proof_id,
+                        circuit = labels.circuit,
+                        backend = backend.as_str(),
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
@@ -5202,6 +5307,12 @@ impl NodeInner {
                     );
                     warn!(
                         target = "telemetry",
+                        peer_id = labels.peer_id,
+                        height = ?labels.height,
+                        slot = ?labels.slot,
+                        proof_id = labels.proof_id,
+                        circuit = labels.circuit,
+                        backend = backend.as_str(),
                         proof_backend = "rpp-stark",
                         proof_kind = proof_kind.as_str(),
                         valid = false,
@@ -5237,6 +5348,12 @@ impl NodeInner {
                 }
                 warn!(
                     target = "proofs",
+                    peer_id = labels.peer_id,
+                    height = ?labels.height,
+                    slot = ?labels.slot,
+                    proof_id = labels.proof_id,
+                    circuit = labels.circuit,
+                    backend = backend.as_str(),
                     proof_backend = "rpp-stark",
                     proof_kind = proof_kind.as_str(),
                     valid = false,
@@ -5246,6 +5363,12 @@ impl NodeInner {
                 );
                 warn!(
                     target = "telemetry",
+                    peer_id = labels.peer_id,
+                    height = ?labels.height,
+                    slot = ?labels.slot,
+                    proof_id = labels.proof_id,
+                    circuit = labels.circuit,
+                    backend = backend.as_str(),
                     proof_backend = "rpp-stark",
                     proof_kind = proof_kind.as_str(),
                     valid = false,
@@ -6359,6 +6482,11 @@ impl NodeInner {
                             .verify_rpp_stark_with_metrics(
                                 ProofVerificationKind::Transaction,
                                 &bundle.proof,
+                                ProofLogLabels {
+                                    proof_id: Some(tx_hash.clone()),
+                                    circuit: Some("transaction".into()),
+                                    ..Default::default()
+                                },
                             )
                             .map(|_| ()),
                         _ => self.verifiers.verify_transaction(&bundle.proof),
@@ -8514,9 +8642,23 @@ impl NodeInner {
 
         let state_proof = stark_bundle.state_proof.clone();
         #[cfg(feature = "backend-rpp-stark")]
+        let base_labels = ProofLogLabels {
+            height: Some(height),
+            slot: Some(round.round().into()),
+            proof_id: Some(block_hash.clone()),
+            ..Default::default()
+        };
+        #[cfg(feature = "backend-rpp-stark")]
         let state_result = match &state_proof {
             ChainProof::RppStark(_) => self
-                .verify_rpp_stark_with_metrics(ProofVerificationKind::State, &state_proof)
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::State,
+                    &state_proof,
+                    ProofLogLabels {
+                        circuit: Some("state".into()),
+                        ..base_labels.clone()
+                    },
+                )
                 .map(|_| ()),
             _ => self.verifiers.verify_state(&state_proof),
         };
@@ -8537,7 +8679,14 @@ impl NodeInner {
         #[cfg(feature = "backend-rpp-stark")]
         let pruning_result = match &pruning_stark {
             ChainProof::RppStark(_) => self
-                .verify_rpp_stark_with_metrics(ProofVerificationKind::Pruning, &pruning_stark)
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Pruning,
+                    &pruning_stark,
+                    ProofLogLabels {
+                        circuit: Some("pruning".into()),
+                        ..base_labels.clone()
+                    },
+                )
                 .map(|_| ()),
             _ => self.verifiers.verify_pruning(&pruning_stark),
         };
@@ -8558,7 +8707,14 @@ impl NodeInner {
         #[cfg(feature = "backend-rpp-stark")]
         let recursive_result = match &recursive_stark {
             ChainProof::RppStark(_) => self
-                .verify_rpp_stark_with_metrics(ProofVerificationKind::Recursive, &recursive_stark)
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Recursive,
+                    &recursive_stark,
+                    ProofLogLabels {
+                        circuit: Some("recursive".into()),
+                        ..base_labels.clone()
+                    },
+                )
                 .map(|_| ()),
             _ => self.verifiers.verify_recursive(&recursive_stark),
         };
@@ -8578,7 +8734,14 @@ impl NodeInner {
         #[cfg(feature = "backend-rpp-stark")]
         let consensus_result = match &consensus_proof {
             ChainProof::RppStark(_) => self
-                .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, &consensus_proof)
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Consensus,
+                    &consensus_proof,
+                    ProofLogLabels {
+                        circuit: Some("consensus".into()),
+                        ..base_labels.clone()
+                    },
+                )
                 .map(|_| ()),
             _ => self.verifiers.verify_consensus(&consensus_proof),
         };
@@ -8715,6 +8878,7 @@ impl NodeInner {
             mut block,
             mut previous_block,
             archived_votes,
+            peer_id,
         } = ctx;
 
         if !round.commit_reached() {
@@ -8762,12 +8926,24 @@ impl NodeInner {
 
         let round_number = round.round();
         #[cfg(feature = "backend-rpp-stark")]
+        let base_labels = ProofLogLabels {
+            peer_id: peer_id.as_ref().map(|peer| peer.to_string()),
+            height: Some(height),
+            slot: Some(round_number.into()),
+            proof_id: Some(block.hash.clone()),
+            ..Default::default()
+        };
+        #[cfg(feature = "backend-rpp-stark")]
         let state_backend = proof_backend(&block.stark.state_proof);
         let state_result = match &block.stark.state_proof {
             ChainProof::RppStark(_) => self
                 .verify_rpp_stark_with_metrics(
                     ProofVerificationKind::State,
                     &block.stark.state_proof,
+                    ProofLogLabels {
+                        circuit: Some("state".into()),
+                        ..base_labels.clone()
+                    },
                 )
                 .map(|_| ()),
             _ => self.verifiers.verify_state(&block.stark.state_proof),
@@ -8776,11 +8952,13 @@ impl NodeInner {
         let state_result = self.verifiers.verify_state(&block.stark.state_proof);
         if let Err(err) = state_result {
             Self::log_external_block_verification_failure(
-                height,
-                round_number,
+                &ProofLogLabels {
+                    circuit: Some("state".into()),
+                    ..base_labels.clone()
+                },
                 &block.header.proposer,
                 state_backend,
-                "state",
+                ProofVerificationKind::State,
                 &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
@@ -8795,6 +8973,10 @@ impl NodeInner {
                 .verify_rpp_stark_with_metrics(
                     ProofVerificationKind::Pruning,
                     &block.stark.pruning_proof,
+                    ProofLogLabels {
+                        circuit: Some("pruning".into()),
+                        ..base_labels.clone()
+                    },
                 )
                 .map(|_| ()),
             _ => self.verifiers.verify_pruning(&block.stark.pruning_proof),
@@ -8803,11 +8985,13 @@ impl NodeInner {
         let pruning_result = self.verifiers.verify_pruning(&block.stark.pruning_proof);
         if let Err(err) = pruning_result {
             Self::log_external_block_verification_failure(
-                height,
-                round_number,
+                &ProofLogLabels {
+                    circuit: Some("pruning".into()),
+                    ..base_labels.clone()
+                },
                 &block.header.proposer,
                 pruning_backend,
-                "pruning",
+                ProofVerificationKind::Pruning,
                 &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
@@ -8826,6 +9010,10 @@ impl NodeInner {
                 .verify_rpp_stark_with_metrics(
                     ProofVerificationKind::Recursive,
                     &block.stark.recursive_proof,
+                    ProofLogLabels {
+                        circuit: Some("recursive".into()),
+                        ..base_labels.clone()
+                    },
                 )
                 .map(|_| ()),
             _ => self
@@ -8838,11 +9026,13 @@ impl NodeInner {
             .verify_recursive(&block.stark.recursive_proof);
         if let Err(err) = recursive_result {
             Self::log_external_block_verification_failure(
-                height,
-                round_number,
+                &ProofLogLabels {
+                    circuit: Some("recursive".into()),
+                    ..base_labels.clone()
+                },
                 &block.header.proposer,
                 recursive_backend,
-                "recursive",
+                ProofVerificationKind::Recursive,
                 &err,
             );
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
@@ -8859,7 +9049,14 @@ impl NodeInner {
             let consensus_backend = proof_backend(proof);
             let consensus_result = match proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, proof)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Consensus,
+                        proof,
+                        ProofLogLabels {
+                            circuit: Some("consensus".into()),
+                            ..base_labels.clone()
+                        },
+                    )
                     .map(|_| ()),
                 _ => self.verifiers.verify_consensus(proof),
             };
@@ -8867,11 +9064,13 @@ impl NodeInner {
             let consensus_result = self.verifiers.verify_consensus(proof);
             if let Err(err) = consensus_result {
                 Self::log_external_block_verification_failure(
-                    height,
-                    round_number,
+                    &ProofLogLabels {
+                        circuit: Some("consensus".into()),
+                        ..base_labels.clone()
+                    },
                     &block.header.proposer,
                     consensus_backend,
-                    "consensus",
+                    ProofVerificationKind::Consensus,
                     &err,
                 );
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
@@ -9590,9 +9789,23 @@ mod telemetry_metrics_tests {
         };
         let proof_bytes = 5 * 1024 * 1024 + 12;
         let size_bucket = proof_size_bucket(proof_bytes);
+        let labels = ProofLogLabels {
+            peer_id: Some("peer.test".into()),
+            height: Some(10),
+            slot: Some(3),
+            proof_id: Some("proof.test".into()),
+            circuit: Some("consensus".into()),
+        };
+        let resolved = labels.resolve(ProofVerificationKind::Consensus);
 
         warn!(
             target = "proofs",
+            peer_id = resolved.peer_id,
+            height = ?resolved.height,
+            slot = ?resolved.slot,
+            proof_id = resolved.proof_id,
+            circuit = resolved.circuit,
+            backend = ProofVerificationBackend::RppStark.as_str(),
             proof_backend = "rpp-stark",
             proof_kind = ProofVerificationKind::Consensus.as_str(),
             valid = false,
@@ -9607,27 +9820,78 @@ mod telemetry_metrics_tests {
         );
 
         assert!(logs_contain("size_bucket=gt_4_mib"));
+        assert!(logs_contain("peer_id=peer.test"));
+        assert!(logs_contain("proof_id=proof.test"));
+        assert!(logs_contain("backend=rpp-stark"));
+        assert!(logs_contain("circuit=consensus"));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[traced_test]
+    fn rpp_stark_success_logs_include_context_fields() {
+        let labels = ProofLogLabels {
+            peer_id: Some("peer.success".into()),
+            height: Some(11),
+            slot: Some(4),
+            proof_id: Some("proof.success".into()),
+            circuit: Some("state".into()),
+        };
+        let resolved = labels.resolve(ProofVerificationKind::State);
+
+        info!(
+            target = "proofs",
+            peer_id = resolved.peer_id,
+            height = ?resolved.height,
+            slot = ?resolved.slot,
+            proof_id = resolved.proof_id,
+            circuit = resolved.circuit,
+            backend = ProofVerificationBackend::RppStark.as_str(),
+            proof_backend = "rpp-stark",
+            proof_kind = ProofVerificationKind::State.as_str(),
+            valid = true,
+            proof_bytes = 1024u64,
+            size_bucket = proof_size_bucket(1024),
+            params_bytes = 256u64,
+            public_inputs_bytes = 128u64,
+            payload_bytes = 640u64,
+            verify_duration_ms = 3u64,
+            "rpp-stark proof verification",
+        );
+
+        assert!(logs_contain("peer_id=peer.success"));
+        assert!(logs_contain("proof_id=proof.success"));
+        assert!(logs_contain("backend=rpp-stark"));
+        assert!(logs_contain("circuit=state"));
     }
 
     #[traced_test]
     fn external_block_failure_logs_include_backend_identity() {
         let err = ChainError::Crypto("expected failure".into());
+        let labels = ProofLogLabels {
+            peer_id: Some("12D3KooWtest".into()),
+            height: Some(42),
+            slot: Some(7),
+            proof_id: Some("block-hash".into()),
+            circuit: Some("state".into()),
+        };
 
         RuntimeInner::log_external_block_verification_failure(
-            42,
-            7,
+            &labels,
             &Address::from("validator-rpp"),
             ProofVerificationBackend::RppStark,
-            "state",
+            ProofVerificationKind::State,
             &err,
         );
 
+        let alt_labels = ProofLogLabels {
+            circuit: Some("pruning".into()),
+            ..labels.clone()
+        };
         RuntimeInner::log_external_block_verification_failure(
-            42,
-            7,
+            &alt_labels,
             &Address::from("validator-failover"),
             ProofVerificationBackend::Stwo,
-            "pruning",
+            ProofVerificationKind::Pruning,
             &err,
         );
 
