@@ -57,10 +57,6 @@ async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
 
     let rpp_metrics = run_rpp_batch().await.context("rpp-stark verifier batch")?;
     assert!(
-        rpp_metrics.oversize_failure_recorded,
-        "oversized proofs must fail"
-    );
-    assert!(
         rpp_metrics.throughput_per_second >= RPP_THROUGHPUT_SLA,
         "rpp-stark throughput should stay above the SLA floor"
     );
@@ -71,6 +67,10 @@ async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
     assert!(
         failure_rate(&rpp_metrics) <= RPP_ERROR_RATE_SLA,
         "rpp-stark failure ratio should remain within the SLA"
+    );
+    assert!(
+        rpp_metrics.oversize_failure_recorded,
+        "oversized proofs must fail"
     );
 
     Ok(())
