@@ -12,12 +12,13 @@ use serde_json::Value;
 use std::convert::TryInto;
 
 use crate::crypto::address_from_public_key;
+use crate::plonky3::aggregation::MAX_BATCHED_PROOFS;
 use crate::plonky3::circuit::consensus::{
     ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, VotePower,
 };
 use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
-use crate::plonky3::prover::Plonky3Prover;
+use crate::plonky3::prover::{telemetry_snapshot, Plonky3Prover};
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, crypto::COMMITMENT_LEN, proof::Plonky3Proof, public_inputs};
 use crate::proof_system::{ProofProver, ProofVerifier};
@@ -33,6 +34,7 @@ use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
 const TRANSACTION_SEED: [u8; 32] = [7u8; 32];
+const SECOND_TRANSACTION_SEED: [u8; 32] = [9u8; 32];
 
 fn test_prover() -> Plonky3Prover {
     Plonky3Prover::new()
@@ -65,7 +67,11 @@ fn canonical_pruning_header() -> BlockHeader {
 }
 
 fn sample_transaction() -> SignedTransaction {
-    let mut rng = StdRng::from_seed(TRANSACTION_SEED);
+    sample_transaction_with_seed(TRANSACTION_SEED)
+}
+
+fn sample_transaction_with_seed(seed: [u8; 32]) -> SignedTransaction {
+    let mut rng = StdRng::from_seed(seed);
     let keypair = Keypair::generate(&mut rng);
     let from = address_from_public_key(&keypair.public);
     let tx = Transaction::new(from.clone(), from.clone(), 42, 1, 0, None);
@@ -909,4 +915,85 @@ fn recursive_roundtrip_spans_state_and_transactions() {
         broken_links,
     );
     assert!(verifier.verify_bundle(&broken_link_bundle, None).is_err());
+}
+
+#[test]
+fn recursive_batch_enforces_size_gate_and_reports_latency() {
+    let prover = test_prover();
+    let verifier = test_verifier();
+
+    let tx_a = sample_transaction();
+    let tx_b = sample_transaction_with_seed(SECOND_TRANSACTION_SEED);
+    let tx_proof_a = prover
+        .prove_transaction(prover.build_transaction_witness(&tx_a).unwrap())
+        .unwrap();
+    let tx_proof_b = prover
+        .prove_transaction(prover.build_transaction_witness(&tx_b).unwrap())
+        .unwrap();
+
+    let state_witness = prover
+        .build_state_witness("prev", "next", &[], &[tx_a.clone(), tx_b.clone()])
+        .unwrap();
+    let state_proof = prover.prove_state_transition(state_witness).unwrap();
+
+    let header = canonical_pruning_header();
+    let pruning = pruning_from_previous(None, &header);
+    let pruning_witness = prover
+        .build_pruning_witness(None, &[], &[], pruning.as_ref(), Vec::new())
+        .unwrap();
+    let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
+
+    let before = telemetry_snapshot();
+    let start = std::time::Instant::now();
+    let recursive_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[tx_proof_a.clone(), tx_proof_b.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            pruning.as_ref(),
+            &pruning_proof,
+            11,
+        )
+        .unwrap();
+    let recursive_proof = prover.prove_recursive(recursive_witness).unwrap();
+    let duration_ms = start.elapsed().as_millis();
+    let after = telemetry_snapshot();
+
+    verifier.verify_recursive(&recursive_proof).unwrap();
+    assert!(
+        duration_ms > 0,
+        "recursive proving must record a positive latency"
+    );
+    assert!(after.proofs_generated > before.proofs_generated);
+    assert!(after.last_success_ms.unwrap_or(0) >= before.last_success_ms.unwrap_or(0));
+    let throughput = (after.proofs_generated - before.proofs_generated) as f64 * 1000.0
+        / duration_ms.max(1) as f64;
+    assert!(throughput.is_finite() && throughput > 0.0);
+
+    let oversized_batch: Vec<_> = std::iter::repeat(tx_proof_a)
+        .take(MAX_BATCHED_PROOFS + 1)
+        .collect();
+    let oversized_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &oversized_batch,
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            pruning.as_ref(),
+            &pruning_proof,
+            12,
+        )
+        .unwrap();
+    let err = prover.prove_recursive(oversized_witness).unwrap_err();
+    assert!(
+        err.to_string().contains("recursive aggregation batch of"),
+        "unexpected error: {err:?}"
+    );
 }

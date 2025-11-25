@@ -8,6 +8,9 @@ use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_pruning::{Envelope, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
+/// Maximum number of proofs that may participate in a single recursive batch.
+pub(crate) const MAX_BATCHED_PROOFS: usize = 64;
+
 /// Snapshot of the ledger commitments that must anchor the recursive witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateCommitmentSnapshot {
@@ -90,6 +93,15 @@ fn fold_pruning_digests(
 ) -> ChainResult<FieldElement> {
     RecursiveCircuit::fold_pruning_digests(hasher, parameters, binding_digest, segment_commitments)
         .map_err(|err| ChainError::Crypto(err.to_string()))
+}
+
+fn ensure_batch_size(total: usize) -> ChainResult<()> {
+    if total > MAX_BATCHED_PROOFS {
+        return Err(ChainError::Config(format!(
+            "recursive aggregation batch of {total} proofs exceeds limit {MAX_BATCHED_PROOFS}"
+        )));
+    }
+    Ok(())
 }
 
 fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
@@ -202,6 +214,12 @@ impl RecursiveAggregator {
         state_roots: &StateCommitmentSnapshot,
         block_height: u64,
     ) -> ChainResult<RecursiveWitness> {
+        let total = identity_proofs.len()
+            + tx_proofs.len()
+            + uptime_proofs.len()
+            + consensus_proofs.len()
+            + usize::from(previous_recursive.is_some());
+        ensure_batch_size(total)?;
         let previous_commitment = extract_previous_commitment(previous_recursive)?;
 
         let mut identity_commitments = Vec::with_capacity(identity_proofs.len());
@@ -898,6 +916,69 @@ mod tests {
             witness.pruning_segment_commitments,
             pruning_segment_commitments
         );
+    }
+
+    #[test]
+    fn aggregator_rejects_batches_over_limit() {
+        let aggregator = RecursiveAggregator::with_blueprint();
+        let params = StarkParameters::blueprint_default();
+        let pruning_envelope = sample_pruning_envelope();
+        let state_roots = sample_state_roots(0);
+        let state_proof = dummy_state_proof(&params, "aa".repeat(32));
+        let identity_proof = dummy_identity_proof(&params, "bb".repeat(32));
+
+        let oversized_batch: Vec<_> = (0..=MAX_BATCHED_PROOFS)
+            .map(|idx| dummy_transaction_proof(&params, format!("{:064x}", idx)))
+            .collect();
+
+        let result = aggregator.build_witness(
+            None,
+            &[identity_proof],
+            &oversized_batch,
+            &[],
+            &[],
+            &state_proof,
+            &pruning_envelope,
+            &state_roots,
+            9,
+        );
+
+        assert!(
+            matches!(result, Err(err) if err.to_string().contains("recursive aggregation batch")),
+            "expected batch size guard to trigger"
+        );
+    }
+
+    #[test]
+    fn aggregator_batches_multiple_transactions_with_latency_snapshot() {
+        let aggregator = RecursiveAggregator::with_blueprint();
+        let params = StarkParameters::blueprint_default();
+        let pruning_envelope = sample_pruning_envelope();
+        let state_roots = sample_state_roots(4);
+        let state_proof = dummy_state_proof(&params, "cc".repeat(32));
+        let identity_proof = dummy_identity_proof(&params, "dd".repeat(32));
+        let tx_proofs: Vec<_> = (0..3)
+            .map(|idx| dummy_transaction_proof(&params, format!("{:064x}", idx + 10)))
+            .collect();
+
+        let start = std::time::Instant::now();
+        let witness = aggregator
+            .build_witness(
+                None,
+                &[identity_proof],
+                &tx_proofs,
+                &[],
+                &[],
+                &state_proof,
+                &pruning_envelope,
+                &state_roots,
+                10,
+            )
+            .expect("aggregate batch witness");
+        let elapsed_ms = start.elapsed().as_millis();
+
+        assert_eq!(witness.tx_commitments.len(), tx_proofs.len());
+        assert!(elapsed_ms > 0, "aggregation latency should be measurable");
     }
 
     #[test]
