@@ -88,6 +88,10 @@ wallet RPC surface. Enable them together:
   each release candidate.【F:docs/wallet_operator_runbook.md†L68-L117】
 * Map drills and screenshots back to the UAT checklist so evidence stays
   centralized.【F:docs/wallet_uat_checklist.md†L3-L34】
+* Run the pruning snapshot smoke test (`cargo xtask test-integration`) to prove
+  that wallet backups survive directory wipes and restores. The test publishes
+  `logs/wallet-pruning-snapshot/summary.json` so responders can review balances
+  and submission counts without re-running the drill.【F:xtask/src/main.rs†L575-L604】【F:docs/testing/wallet_pruning_snapshot.md†L1-L29】
 
 ## Runbook drills and escalation
 

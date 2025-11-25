@@ -587,6 +587,18 @@ fn run_integration_workflows() -> Result<()> {
     apply_integration_feature_flags(&mut pruning);
     run_command(pruning, "pruning checkpoint recovery")?;
 
+    let mut wallet_pruning = Command::new("cargo");
+    wallet_pruning
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("wallet-integration-tests")
+        .arg("--locked")
+        .arg("--test")
+        .arg("wallet_pruning_snapshot");
+    apply_feature_flags(&mut wallet_pruning);
+    run_command(wallet_pruning, "wallet pruning snapshot smoke")?;
+
     let mut lifecycle = Command::new("cargo");
     lifecycle
         .current_dir(&root)
