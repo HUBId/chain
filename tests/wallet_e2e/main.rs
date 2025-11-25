@@ -7,13 +7,17 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use common::wallet::{wait_for, WalletTestBuilder};
+use common::wallet::{wait_for, wait_for_status, WalletTestBuilder};
+use rpp::runtime::wallet::sync::SyncMode;
 use rpp_wallet::engine::{BuilderError, EngineError};
+use rpp_wallet::indexer::client::{IndexedUtxo, TransactionPayload, TxOutpoint};
 use rpp_wallet::node_client::NodeClientError;
 use rpp_wallet::wallet::WalletError;
+use rpp_wallet::zsi::prove::DummyBackend;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn submits_signed_transactions_across_restarts() -> Result<()> {
@@ -162,6 +166,177 @@ async fn surfaces_insufficient_funds_and_rejection_errors() -> Result<()> {
             .is_empty(),
         "locks released after failed submission"
     );
+
+    sync.shutdown()
+        .await
+        .context("shutdown wallet sync coordinator")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciles_reorgs_for_rest_wallets() -> Result<()> {
+    let fixture = WalletTestBuilder::default()
+        .with_deposits(vec![110_000, 70_000])
+        .with_latest_height(240)
+        .build()
+        .context("prepare wallet fixture")?;
+    let wallet = fixture.wallet();
+    let sync = Arc::new(
+        fixture
+            .start_sync()
+            .context("start wallet sync coordinator")?,
+    );
+
+    wait_for(|| {
+        let wallet = Arc::clone(&wallet);
+        async move {
+            wallet
+                .balance()
+                .map(|balance| balance.total() >= 180_000)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    let recipient = wallet
+        .derive_address(false)
+        .context("derive recipient before reorg")?;
+    let draft = wallet
+        .create_draft(recipient, 60_000, Some(2))
+        .context("create outbound draft")?;
+    let first_lock = rpp_wallet::wallet::Wallet::draft_lock_id(&draft.draft);
+    let _ = wallet
+        .sign_and_prove(&draft.draft)
+        .context("sign outbound draft")?;
+    wallet
+        .broadcast(&draft.draft)
+        .context("broadcast outbound draft")?;
+
+    let reorg_height = fixture.latest_height() + 3;
+    let reclaimed = fixture
+        .deposits()
+        .first()
+        .expect("first deposit present")
+        .address
+        .clone();
+    let mut reorg_txid = [9u8; 32];
+    reorg_txid[31] = 7;
+    let reorg_utxo = IndexedUtxo::new(
+        TxOutpoint::new(reorg_txid, 0),
+        185_000,
+        hex::decode(&reclaimed).expect("decode reorg address"),
+        Some(reorg_height.saturating_sub(1)),
+    );
+    let reorg_payload = TransactionPayload::new(
+        reorg_txid,
+        Some(reorg_height.saturating_sub(1)),
+        Cow::Owned(vec![0xaa, 0xbb, 0xcc]),
+    );
+
+    fixture.indexer().rewrite_chain(
+        reorg_height,
+        vec![(reclaimed.clone(), reorg_utxo.clone(), reorg_payload)],
+    );
+
+    sync.request_rescan(fixture.birthday_height())
+        .context("request wallet rescan")?;
+
+    let _ = wait_for_status(&sync, |status| {
+        status.latest_height >= reorg_height && matches!(status.mode, SyncMode::Rescan { .. })
+    })
+    .await;
+
+    assert!(wallet
+        .pending_locks()
+        .context("load locks after reorg")?
+        .is_empty());
+
+    let balance = wallet.balance().context("load balance after reorg")?;
+    assert_eq!(balance.total(), reorg_utxo.value(), "balance reconciles");
+
+    let next = wallet
+        .create_draft(wallet.derive_address(false)?, 40_000, Some(2))
+        .context("create draft after reorg")?;
+    let next_lock = rpp_wallet::wallet::Wallet::draft_lock_id(&next.draft);
+    assert_ne!(first_lock, next_lock, "nonce/lock id advanced after fork");
+
+    sync.shutdown()
+        .await
+        .context("shutdown wallet sync coordinator")?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconciles_reorgs_for_cli_and_zk_backends() -> Result<()> {
+    let fixture = WalletTestBuilder::default()
+        .with_deposits(vec![95_000])
+        .with_latest_height(180)
+        .with_zsi_backend(Arc::new(DummyBackend::default()))
+        .build()
+        .context("prepare zk wallet fixture")?;
+    let wallet = fixture.wallet();
+    let sync = Arc::new(
+        fixture
+            .start_sync()
+            .context("start wallet sync coordinator")?,
+    );
+
+    wait_for(|| {
+        let wallet = Arc::clone(&wallet);
+        async move {
+            wallet
+                .balance()
+                .map(|balance| balance.total() == 95_000)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    let recipient = wallet
+        .derive_address(false)
+        .context("derive cli recipient")?;
+    let draft = wallet
+        .create_draft(recipient, 25_000, Some(1))
+        .context("prepare cli draft")?;
+    wallet
+        .sign_and_prove(&draft.draft)
+        .context("sign cli draft")?;
+    wallet
+        .broadcast(&draft.draft)
+        .context("broadcast cli draft")?;
+
+    let reorg_height = fixture.latest_height() + 2;
+    let mut txid = [5u8; 32];
+    txid[0] = 13;
+    let restored = IndexedUtxo::new(
+        TxOutpoint::new(txid, 1),
+        120_000,
+        hex::decode(&fixture.deposits()[0].address).expect("decode restored address"),
+        Some(reorg_height.saturating_sub(1)),
+    );
+    let restored_payload = TransactionPayload::new(
+        txid,
+        Some(reorg_height.saturating_sub(1)),
+        Cow::Owned(vec![0xde, 0xad, 0xbe, 0xef]),
+    );
+    fixture.indexer().rewrite_chain(
+        reorg_height,
+        vec![(
+            fixture.deposits()[0].address.clone(),
+            restored.clone(),
+            restored_payload,
+        )],
+    );
+
+    sync.request_rescan(fixture.birthday_height())
+        .context("request cli rescan")?;
+    let status = wait_for_status(&sync, |status| status.latest_height >= reorg_height).await;
+    assert!(matches!(status.mode, SyncMode::Rescan { .. }));
+
+    let balance = wallet.balance().context("balance after cli reorg")?;
+    assert_eq!(balance.spendable(), restored.value(), "cli view reconciles");
 
     sync.shutdown()
         .await

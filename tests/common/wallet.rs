@@ -240,10 +240,6 @@ impl WalletTestFixture {
         Arc::clone(&self.wallet)
     }
 
-    pub fn node(&self) -> Arc<MockNodeClient> {
-        Arc::clone(&self.node)
-    }
-
     pub fn indexer(&self) -> Arc<MockIndexer> {
         Arc::clone(&self.indexer)
     }
@@ -258,6 +254,10 @@ impl WalletTestFixture {
 
     pub fn deposits(&self) -> &[DepositRecord] {
         &self.deposits
+    }
+
+    pub fn node(&self) -> Arc<MockNodeClient> {
+        Arc::clone(&self.node)
     }
 
     pub fn total_deposit(&self) -> u64 {
@@ -339,6 +339,25 @@ impl MockIndexer {
     pub fn set_latest_height(&self, height: u64) {
         let mut state = self.state.lock().unwrap();
         state.latest_height = height;
+    }
+
+    pub fn rewrite_chain(
+        &self,
+        latest_height: u64,
+        utxos: Vec<(String, IndexedUtxo, TransactionPayload)>,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        state.latest_height = latest_height;
+        state.statuses.clear();
+        state.utxos.clear();
+        state.transactions.clear();
+
+        for (address, utxo, payload) in utxos {
+            let hash = decode_address(&address);
+            state.statuses.insert(hash);
+            state.utxos.entry(hash).or_default().push(utxo);
+            state.transactions.insert(payload.txid, payload);
+        }
     }
 }
 

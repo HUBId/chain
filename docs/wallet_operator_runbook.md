@@ -190,7 +190,28 @@ output showing `enabled = false` under `[electrs.cache.telemetry]` and
 `[electrs.tracker]`. Attach the logs from a wallet launch proving no telemetry
 listener was bound (absence of `Listening on …telemetry…` messages).
 
-## 9. Regression automation hook
+## 9. Reorg handling playbook
+
+1. **Detect divergence quickly** – Keep the wallet RPC `sync_status` panel on the
+   dashboard during deployments. A sudden drop in `latest_height` paired with a
+   rescan request indicates a reorg is underway. Encourage operators to cross
+   check the node tip hash before retrying submissions so they avoid replaying
+   transactions on an outdated fork.【F:docs/wallet_monitoring.md†L24-L53】
+2. **Pause outbound flows** – When a reorg is detected, pause CLI or REST
+   submissions and let the wallet finish its automatic rescan. Pending locks
+   should clear once the reorged height is rescanned; retry drafts only after
+   `mode = Rescan` transitions back to `Resume` in the sync status view.
+3. **Confirm balances and nonces** – After the rescan, run `rpp-wallet balance`
+   or the REST `wallet.balance` call to confirm spendable funds reflect the new
+   chain. Draft lock identifiers should advance when you rebuild a payment,
+   proving nonces were recalculated on the post-reorg tip.
+4. **Escalate lingering divergence** – If pending locks remain or the sync mode
+   sticks on `Rescan`, restart the wallet with increased log verbosity and file
+   a ticket with the rescan range and tip hashes attached. Capture the RPC
+   responses from `sync_status`, `pending_locks`, and the node head to speed up
+   incident triage.
+
+## 10. Regression automation hook
 
 The repository ships a lightweight regression target for wallet operators:
 
