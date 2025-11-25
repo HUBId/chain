@@ -1,15 +1,16 @@
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose, Engine as _};
 use futures::Stream;
 use hex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use crate::reputation::Tier;
@@ -41,6 +42,7 @@ use rpp_pruning::{
     TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tracing::warn;
 
 use crate::runtime::node::{
     NodeInner, StateSyncChunkError, StateSyncSessionCache, StateSyncVerificationStatus,
@@ -899,6 +901,23 @@ pub struct ReconstructionPlan {
     pub requests: Vec<ReconstructionRequest>,
 }
 
+/// Metadata persisted alongside pruning checkpoints for recovery and auditing.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningCheckpointMetadata {
+    pub height: u64,
+    pub timestamp: u64,
+    pub backend: String,
+}
+
+/// Persisted pruning checkpoint that combines the reconstruction plan with metadata
+/// describing when and how it was captured.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningCheckpoint {
+    #[serde(flatten)]
+    pub plan: ReconstructionPlan,
+    pub metadata: PruningCheckpointMetadata,
+}
+
 impl ReconstructionPlan {
     pub fn is_fully_hydrated(&self) -> bool {
         self.requests.is_empty()
@@ -1395,11 +1414,100 @@ impl ReconstructionEngine {
         fs::create_dir_all(dir)?;
         let filename = format!("snapshot-{}.json", plan.snapshot.height);
         let path = dir.join(filename);
-        let encoded = serde_json::to_vec_pretty(plan).map_err(|err| {
+        let metadata = PruningCheckpointMetadata {
+            height: plan.snapshot.height,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            backend: format!("{:?}", plan.tip.recursive_system),
+        };
+        let checkpoint = PruningCheckpoint {
+            plan: plan.clone(),
+            metadata,
+        };
+        let encoded = serde_json::to_vec_pretty(&checkpoint).map_err(|err| {
             ChainError::Config(format!("failed to encode reconstruction plan: {err}"))
         })?;
-        fs::write(&path, encoded)?;
+        let tmp_path = path.with_extension("partial");
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(&encoded)?;
+        file.sync_all()?;
+        fs::rename(&tmp_path, &path)?;
         Ok(path)
+    }
+
+    /// Returns the most recent valid pruning checkpoint on disk, if any.
+    pub fn recover_checkpoint(&self) -> ChainResult<Option<PruningCheckpoint>> {
+        let Some(dir) = self.snapshot_dir.as_ref() else {
+            return Ok(None);
+        };
+
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+
+        let mut candidates: Vec<PruningCheckpoint> = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("snapshot-")
+                || path.extension().and_then(|ext| ext.to_str()) != Some("json")
+            {
+                continue;
+            }
+
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    warn!(?path, ?err, "failed to read pruning checkpoint");
+                    continue;
+                }
+            };
+
+            let checkpoint: PruningCheckpoint = match serde_json::from_slice(&bytes) {
+                Ok(checkpoint) => checkpoint,
+                Err(err) => {
+                    warn!(?path, ?err, "failed to decode pruning checkpoint");
+                    continue;
+                }
+            };
+
+            if checkpoint.metadata.height != checkpoint.plan.snapshot.height {
+                warn!(
+                    ?path,
+                    metadata_height = checkpoint.metadata.height,
+                    snapshot_height = checkpoint.plan.snapshot.height,
+                    "pruning checkpoint height mismatch",
+                );
+                continue;
+            }
+
+            let backend = format!("{:?}", checkpoint.plan.tip.recursive_system);
+            if checkpoint.metadata.backend != backend {
+                warn!(
+                    ?path,
+                    recorded = checkpoint.metadata.backend,
+                    expected = backend,
+                    "pruning checkpoint backend mismatch",
+                );
+                continue;
+            }
+
+            candidates.push(checkpoint);
+        }
+
+        let latest = candidates.into_iter().max_by(|a, b| {
+            (a.metadata.height, a.metadata.timestamp)
+                .cmp(&(b.metadata.height, b.metadata.timestamp))
+        });
+
+        Ok(latest)
     }
 }
 

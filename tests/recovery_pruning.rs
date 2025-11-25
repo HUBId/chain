@@ -1,11 +1,12 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 
 use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
-use rpp_chain::runtime::sync::ReconstructionEngine;
+use rpp_chain::runtime::sync::{PruningCheckpoint, ReconstructionEngine};
 use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
 use tempfile::TempDir;
@@ -155,6 +156,72 @@ fn pruning_rolls_back_after_snapshot_persist_failure() {
     assert!(
         retry.missing_heights.is_empty(),
         "retry should succeed after IO recovery"
+    );
+
+    drop(handle);
+    drop(node);
+    drop(temp);
+}
+
+#[test]
+fn pruning_checkpoint_recovery_rejects_partial_files() {
+    let (config, temp) = prepare_config();
+    let snapshot_dir = config.snapshot_dir.clone();
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let blocks = build_chain(&handle, 3);
+    install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let status = handle
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle")
+        .expect("pruning status");
+    let checkpoint_path = Path::new(
+        status
+            .persisted_path
+            .as_ref()
+            .expect("checkpoint path should be recorded"),
+    )
+    .to_path_buf();
+
+    let checkpoint_bytes = fs::read(&checkpoint_path).expect("read pruning checkpoint");
+    let checkpoint: PruningCheckpoint =
+        serde_json::from_slice(&checkpoint_bytes).expect("decode pruning checkpoint");
+    assert_eq!(
+        checkpoint.metadata.height, checkpoint.plan.snapshot.height,
+        "metadata should track snapshot height",
+    );
+    assert!(
+        !checkpoint.metadata.backend.is_empty(),
+        "backend recorded in metadata"
+    );
+    assert!(
+        checkpoint.metadata.timestamp > 0,
+        "checkpoint timestamp populated"
+    );
+
+    // Simulate a crash mid-write by writing a truncated payload to a different checkpoint path.
+    let partial_path = checkpoint_path
+        .parent()
+        .expect("checkpoint parent")
+        .join("snapshot-999999.json");
+    let partial_bytes = &checkpoint_bytes[..checkpoint_bytes.len() / 2];
+    fs::write(&partial_path, partial_bytes).expect("write partial checkpoint");
+
+    let engine = ReconstructionEngine::with_snapshot_dir(storage, snapshot_dir);
+    let recovered = engine
+        .recover_checkpoint()
+        .expect("recover pruning checkpoint")
+        .expect("checkpoint should be recovered");
+    assert_eq!(
+        recovered.metadata.height, checkpoint.metadata.height,
+        "recovery should ignore corrupted checkpoints",
+    );
+    assert_eq!(
+        recovered.metadata.backend, checkpoint.metadata.backend,
+        "backend metadata should survive recovery",
     );
 
     drop(handle);
