@@ -12,6 +12,12 @@ use super::params::Plonky3Parameters;
 use super::proof::Plonky3Proof;
 use super::prover::Plonky3Backend;
 
+/// Maximum number of proofs that may be folded into a single recursive batch.
+///
+/// This bound keeps aggregation witnesses and prover telemetry in a predictable
+/// range for CI and wallet workloads.
+pub(crate) const MAX_BATCHED_PROOFS: usize = 64;
+
 pub(super) struct RecursiveAggregator {
     backend: Plonky3Backend,
     params: Plonky3Parameters,
@@ -20,6 +26,20 @@ pub(super) struct RecursiveAggregator {
 impl RecursiveAggregator {
     pub fn new(params: Plonky3Parameters, backend: Plonky3Backend) -> Self {
         Self { backend, params }
+    }
+
+    fn ensure_batch_size(witness: &RecursiveWitness) -> ChainResult<()> {
+        let total = witness.identity_proofs.len()
+            + witness.transaction_proofs.len()
+            + witness.uptime_proofs.len()
+            + witness.consensus_proofs.len()
+            + usize::from(witness.previous_recursive.is_some());
+        if total > MAX_BATCHED_PROOFS {
+            return Err(ChainError::Config(format!(
+                "recursive aggregation batch of {total} proofs exceeds limit {MAX_BATCHED_PROOFS}"
+            )));
+        }
+        Ok(())
     }
 
     fn decode_and_verify(proof: &ChainProof, expected: &str) -> ChainResult<Plonky3Proof> {
@@ -71,6 +91,7 @@ impl RecursiveAggregator {
     }
 
     pub fn finalize(&self, witness: &RecursiveWitness) -> ChainResult<Plonky3Proof> {
+        Self::ensure_batch_size(witness)?;
         if let Some(previous) = &witness.previous_recursive {
             Self::decode_and_verify(previous, "recursive")?;
         }

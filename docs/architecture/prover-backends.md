@@ -91,3 +91,16 @@ produces byte-identical proofs in repeated runs. CI exports this flag to reduce
 test flakiness; unset it when running throughput or latency benchmarks so the
 backends can use fresh randomness during performance experiments.【F:rpp/zk/backend-interface/src/determinism.rs†L1-L35】【F:prover/plonky3_backend/src/lib.rs†L552-L584】【F:prover/prover_stwo_backend/src/utils/fri.rs†L108-L135】
 
+## Aggregation performance envelopes
+
+Recursive aggregation now enforces a shared batch ceiling of 64 proofs across
+the Plonky3 and STWO backends to keep witness sizes predictable for nightly CI
+and wallet nodes.【F:rpp/proofs/plonky3/aggregation.rs†L12-L33】【F:rpp/proofs/stwo/aggregation/mod.rs†L9-L37】
+The Plonky3 prover surfaces per-proof latency and throughput via
+`telemetry_snapshot`, and the aggregation tests assert that successful runs bump
+the telemetry counters while failed batches map to configuration errors rather
+than opaque prover failures.【F:rpp/proofs/plonky3/tests.rs†L916-L980】 STWO
+aggregation tests build multi-transaction batches and record the elapsed time
+needed to derive the recursive witness, ensuring the batch guard triggers
+before large inputs make it to the prover.【F:rpp/proofs/stwo/aggregation/mod.rs†L357-L426】
+
