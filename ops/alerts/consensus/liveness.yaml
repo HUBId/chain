@@ -1,0 +1,23 @@
+groups:
+  - name: consensus-liveness
+    interval: 30s
+    rules:
+      - record: consensus:block_height_delta:5m
+        expr: increase(chain_block_height[5m])
+        labels:
+          component: consensus
+
+      - alert: ConsensusLivenessStall
+        expr: consensus:block_height_delta:5m <= 0
+        for: 10m
+        labels:
+          severity: critical
+          team: consensus
+          sla: liveness
+          sla_target: block_progress
+        annotations:
+          summary: Block production stalled for 10 minutes
+          description: >-
+            Accepted block height has not advanced for ten minutes. Inspect proposer health,
+            peer connectivity, and gossip flow before redirecting traffic to healthy nodes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability

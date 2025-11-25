@@ -26,7 +26,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 14
+    assert len(results) == 16
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -40,6 +40,8 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "missed-slot-recovery",
         "missed-blocks",
         "missed-block-recovery",
+        "rpc-availability-outage",
+        "rpc-availability-recovery",
         "restart-finality-correlation",
         "timetoke-epoch-delay",
         "timetoke-epoch-recovery",
@@ -88,6 +90,14 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     missed_block_recovery = results_by_case["missed-block-recovery"]
     assert missed_block_recovery.fired_events == []
     assert missed_block_recovery.webhook_payloads == []
+
+    rpc_outage = results_by_case["rpc-availability-outage"]
+    assert {event.name for event in rpc_outage.fired_events} == rpc_outage.case.expected_alerts
+    assert len(rpc_outage.webhook_payloads) == len(rpc_outage.fired_events)
+
+    rpc_recovery = results_by_case["rpc-availability-recovery"]
+    assert rpc_recovery.fired_events == []
+    assert rpc_recovery.webhook_payloads == []
 
     restart_correlation = results_by_case["restart-finality-correlation"]
     assert {event.name for event in restart_correlation.fired_events} == restart_correlation.case.expected_alerts

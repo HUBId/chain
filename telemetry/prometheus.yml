@@ -3,6 +3,7 @@ global:
 
 rule_files:
   - /etc/prometheus/cache-rules.yaml
+  - /etc/prometheus/runtime-rules.yaml
 
 scrape_configs:
   - job_name: rpp-node
