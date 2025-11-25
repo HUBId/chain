@@ -55,6 +55,19 @@ impl ProcessHandle {
             "process exited"
         );
 
+        if !status.success() {
+            let detail = status
+                .code()
+                .map(|code| format!("exit status {code}"))
+                .unwrap_or_else(|| "terminated by signal".to_string());
+            return Err(anyhow!(
+                "process {} {} (logs: {})",
+                self.label,
+                detail,
+                self.log_path.display()
+            ));
+        }
+
         let mut tasks = self.stream_tasks;
         tasks.push(self.log_task);
         if let Err(err) = try_join_all(tasks).await {

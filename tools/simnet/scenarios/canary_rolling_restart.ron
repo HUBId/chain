@@ -1,0 +1,57 @@
+{
+  "name": "canary-rolling-restart",
+  "description": "Simulate a rolling restart against a small-world cluster while validating zk consensus and wallet tracker operations",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "resources": {
+    "cpus": 12,
+    "memory_gb": 24
+  },
+  "nodes": [
+    {
+      "label": "wallet-tracker-regression",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--locked",
+        "--package",
+        "wallet-integration-tests",
+        "--test",
+        "vendor_electrs_tracker_scenario",
+        "--features",
+        "vendor_electrs_test_support,backend-rpp-stark",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--exact",
+        "vendor_electrs_tracker_end_to_end"
+      ],
+      "startup_timeout_ms": 180000,
+      "ready_log": "test result:",
+      "working_dir": "../.."
+    }
+  ],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/canary_rolling_restart.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/canary_rolling_summary.json"
+  },
+  "consensus": {
+    "runs": 48,
+    "validators": 24,
+    "witness_commitments": 120,
+    "security_bits": 128,
+    "use_gpu": false,
+    "seed": 202506,
+    "tamper": {
+      "vrf": true,
+      "quorum_roots": true,
+      "every_n": 6
+    },
+    "summary_path": "summaries/canary_rolling_consensus.json",
+    "csv_path": "summaries/canary_rolling_consensus.csv"
+  }
+}
