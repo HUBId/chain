@@ -719,37 +719,41 @@ mod tests {
     use crate::proof_backend::BackendError;
     use crate::vrf::VRF_PROOF_LENGTH;
 
+    type TestResult = Result<(), String>;
+
     #[test]
-    fn decode_proofs_rejects_truncated_entries() {
+    fn decode_proofs_rejects_truncated_entries() -> TestResult {
         let expected = VRF_PROOF_LENGTH;
         let truncated = expected.saturating_sub(1);
         let mut entry = ConsensusVrfEntry::default();
         entry.proof = "aa".repeat(truncated);
 
-        let error = decode_proofs(&[entry]).expect_err("should reject truncated proof");
-        match error {
-            BackendError::Failure(message) => {
-                assert!(message.contains(&format!("must encode {expected} bytes")));
-                assert!(message.contains(&format!("found {truncated}")));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let error = decode_proofs(&[entry])
+            .err()
+            .ok_or_else(|| "should reject truncated proof".to_string())?;
+        let BackendError::Failure(message) = error else {
+            return Err("unexpected error kind".to_string());
+        };
+        assert!(message.contains(&format!("must encode {expected} bytes")));
+        assert!(message.contains(&format!("found {truncated}")));
+        Ok(())
     }
 
     #[test]
-    fn decode_proofs_rejects_oversized_entries() {
+    fn decode_proofs_rejects_oversized_entries() -> TestResult {
         let expected = VRF_PROOF_LENGTH;
         let oversized = expected + 1;
         let mut entry = ConsensusVrfEntry::default();
         entry.proof = "bb".repeat(oversized);
 
-        let error = decode_proofs(&[entry]).expect_err("should reject oversized proof");
-        match error {
-            BackendError::Failure(message) => {
-                assert!(message.contains(&format!("must encode {expected} bytes")));
-                assert!(message.contains(&format!("found {oversized}")));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let error = decode_proofs(&[entry])
+            .err()
+            .ok_or_else(|| "should reject oversized proof".to_string())?;
+        let BackendError::Failure(message) = error else {
+            return Err("unexpected error kind".to_string());
+        };
+        assert!(message.contains(&format!("must encode {expected} bytes")));
+        assert!(message.contains(&format!("found {oversized}")));
+        Ok(())
     }
 }

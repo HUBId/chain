@@ -312,6 +312,24 @@ PY
           set -euo pipefail
           cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
 
+  panic-lints:
+    name: Panic/unwrap guard (consensus + verifier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: panic-lints
+      - name: Enforce panic policy on consensus + snapshot verifier
+        run: |
+          set -euo pipefail
+          cargo clippy --manifest-path rpp/consensus/Cargo.toml --all-targets --all-features -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+          cargo clippy -p snapshot-verify --all-targets --all-features -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+
   cargo-audit:
     name: Dependency advisories
     runs-on: ubuntu-latest

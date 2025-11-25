@@ -1,3 +1,6 @@
+#![deny(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -499,44 +502,63 @@ fn verify_segments(
             .as_ref()
             .cloned()
             .unwrap_or_else(|| format!("segment_{index}"));
-        let expected_size = segment.size_bytes;
-        let expected_checksum = segment
+        let expected_size = match segment.size_bytes {
+            Some(size) => size,
+            None => {
+                metadata_incomplete += 1;
+                reports.push(SegmentReport {
+                    segment: name.clone(),
+                    path: chunk_root.join(&name).display().to_string(),
+                    checksum_algorithm,
+                    status: SegmentStatus::MissingMetadata,
+                    expected_size: None,
+                    actual_size: None,
+                    expected_checksum: None,
+                    actual_checksum: None,
+                    error: Some("segment missing required metadata".to_string()),
+                });
+                continue;
+            }
+        };
+        let expected_checksum = match segment
             .checksum
             .as_ref()
             .or(segment.sha256.as_ref())
-            .map(|s| s.to_lowercase());
+            .map(|s| s.to_lowercase())
+        {
+            Some(checksum) => checksum,
+            None => {
+                metadata_incomplete += 1;
+                reports.push(SegmentReport {
+                    segment: name.clone(),
+                    path: chunk_root.join(&name).display().to_string(),
+                    checksum_algorithm,
+                    status: SegmentStatus::MissingMetadata,
+                    expected_size: Some(expected_size),
+                    actual_size: None,
+                    expected_checksum: None,
+                    actual_checksum: None,
+                    error: Some("segment missing required metadata".to_string()),
+                });
+                continue;
+            }
+        };
         let path = chunk_root.join(&name);
-
-        if segment.name.is_none() || expected_size.is_none() || expected_checksum.is_none() {
-            metadata_incomplete += 1;
-            reports.push(SegmentReport {
-                segment: name,
-                path: path.display().to_string(),
-                checksum_algorithm,
-                status: SegmentStatus::MissingMetadata,
-                expected_size,
-                actual_size: None,
-                expected_checksum: expected_checksum.clone(),
-                actual_checksum: None,
-                error: Some("segment missing required metadata".to_string()),
-            });
-            continue;
-        }
 
         let (status, actual_size, actual_checksum, error) = match fs::metadata(&path) {
             Ok(metadata) => {
                 let size = metadata.len();
-                if size != expected_size.unwrap() {
+                if size != expected_size {
                     (SegmentStatus::SizeMismatch, Some(size), None, None)
                 } else {
                     match compute_checksum(
                         &path,
-                        expected_size,
+                        Some(expected_size),
                         checksum_algorithm,
                         verbose_progress,
                     ) {
                         Ok(actual_hash) => {
-                            if actual_hash == expected_checksum.as_deref().unwrap() {
+                            if actual_hash == expected_checksum {
                                 (SegmentStatus::Verified, Some(size), Some(actual_hash), None)
                             } else {
                                 (
@@ -574,9 +596,9 @@ fn verify_segments(
             path: path.display().to_string(),
             checksum_algorithm,
             status,
-            expected_size,
+            expected_size: Some(expected_size),
             actual_size,
-            expected_checksum: segment.sha256.clone(),
+            expected_checksum: Some(expected_checksum),
             actual_checksum,
             error,
         });
@@ -776,6 +798,7 @@ mod tests {
     use metrics_exporter_prometheus::PrometheusBuilder;
     use serde_json::{json, Value};
     use std::convert::TryFrom;
+    use std::error::Error;
     use std::io::Cursor;
     use std::sync::OnceLock;
     use tempfile::TempDir;
@@ -842,6 +865,82 @@ mod tests {
         .unwrap();
 
         (manifest_path, chunk_dir)
+    }
+
+    #[test]
+    fn surfaces_missing_segment_metadata() -> Result<(), Box<dyn Error>> {
+        let temp = TempDir::new()?;
+        let chunk_root = temp.path().join("chunks");
+        fs::create_dir_all(&chunk_root)?;
+
+        let manifest = SnapshotManifest {
+            version: SNAPSHOT_MANIFEST_VERSION,
+            checksum_algorithm: Some(ChecksumAlgorithm::Sha256),
+            segments: vec![ManifestSegment {
+                name: Some("chunk-0.bin".to_string()),
+                size_bytes: None,
+                checksum: None,
+                sha256: None,
+            }],
+        };
+
+        let (reports, summary) =
+            verify_segments(&manifest, &chunk_root, ChecksumAlgorithm::Sha256, false);
+
+        assert_eq!(summary.metadata_incomplete, 1);
+        assert_eq!(summary.verified, 0);
+        assert_matches!(
+            reports.first().map(|r| &r.status),
+            Some(SegmentStatus::MissingMetadata)
+        );
+        assert_eq!(
+            reports.first().and_then(|report| report.error.as_deref()),
+            Some("segment missing required metadata"),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn surfaces_checksum_mismatches() -> Result<(), Box<dyn Error>> {
+        let temp = TempDir::new()?;
+        let chunk_root = temp.path().join("chunks");
+        fs::create_dir_all(&chunk_root)?;
+
+        let path = chunk_root.join("chunk-0.bin");
+        fs::write(&path, b"hello world")?;
+        let incorrect_checksum = hex::encode(Sha256::digest(b"different"));
+
+        let manifest = SnapshotManifest {
+            version: SNAPSHOT_MANIFEST_VERSION,
+            checksum_algorithm: Some(ChecksumAlgorithm::Sha256),
+            segments: vec![ManifestSegment {
+                name: Some("chunk-0.bin".to_string()),
+                size_bytes: Some(11),
+                checksum: Some(incorrect_checksum.clone()),
+                sha256: None,
+            }],
+        };
+
+        let (reports, summary) =
+            verify_segments(&manifest, &chunk_root, ChecksumAlgorithm::Sha256, false);
+
+        assert_eq!(summary.checksum_mismatches, 1);
+        assert_eq!(summary.verified, 0);
+        assert_matches!(
+            reports.first().map(|r| &r.status),
+            Some(SegmentStatus::ChecksumMismatch)
+        );
+        assert_eq!(
+            reports.first().and_then(|r| r.expected_checksum.as_deref()),
+            Some(incorrect_checksum.as_str())
+        );
+        assert_ne!(
+            reports.first().and_then(|r| r.actual_checksum.as_deref()),
+            Some(incorrect_checksum.as_str())
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -1226,7 +1325,9 @@ mod tests {
         for entry in &lines {
             assert_eq!(entry["event"], "checksum_progress");
             assert_eq!(entry["total_bytes"], Value::from(data.len() as u64));
-            let bytes_downloaded = entry["bytes_downloaded"].as_u64().expect("bytes_downloaded");
+            let bytes_downloaded = entry["bytes_downloaded"]
+                .as_u64()
+                .expect("bytes_downloaded");
             assert!(bytes_downloaded >= last_bytes);
             last_bytes = bytes_downloaded;
             assert!(entry["bytes_per_second"].as_f64().expect("rate") >= 0.0);
@@ -1235,7 +1336,10 @@ mod tests {
         }
 
         let final_entry = lines.last().expect("final progress entry");
-        assert_eq!(final_entry["bytes_downloaded"], Value::from(data.len() as u64));
+        assert_eq!(
+            final_entry["bytes_downloaded"],
+            Value::from(data.len() as u64)
+        );
         assert_eq!(final_entry["checksum_progress"], Value::from(1.0));
     }
 
@@ -1268,7 +1372,9 @@ mod tests {
         for entry in &lines {
             assert_eq!(entry["event"], "checksum_progress");
             assert!(entry["total_bytes"].is_null());
-            let bytes_downloaded = entry["bytes_downloaded"].as_u64().expect("bytes_downloaded");
+            let bytes_downloaded = entry["bytes_downloaded"]
+                .as_u64()
+                .expect("bytes_downloaded");
             assert!(bytes_downloaded >= last_bytes);
             last_bytes = bytes_downloaded;
             assert!(entry["bytes_per_second"].as_f64().expect("rate") >= 0.0);

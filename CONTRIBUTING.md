@@ -45,6 +45,16 @@ The storage hashing and zk-backend combinations covered by CI are summarized in
 [`docs/development/testing_matrix.md`](docs/development/testing_matrix.md) so
 contributors can quickly map feature flags to the job IDs that exercise them.
 
+### Panic and unwrap discipline
+
+The consensus engine (`rpp/consensus`) and snapshot verifier (`tools/snapshot-verify`) deny
+`panic!`, `.unwrap()`, and `.expect()` in production paths. Prefer structured error types and
+propagate failures to callers rather than aborting, and add focused tests that assert the error
+variants you return. The **Panic/unwrap guard (consensus + verifier)** CI job enforces this policy
+by running Clippy with `-D clippy::panic -D clippy::unwrap_used -D clippy::expect_used` against the
+two crates; keep any necessary test-only allowances scoped to `#[cfg(test)]` blocks with a short
+justification so runtime code stays panic-free.
+
 ### Documentation checks
 
 Pull requests that modify documentation automatically run the **Docs** workflow
