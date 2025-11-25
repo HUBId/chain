@@ -24,6 +24,11 @@ their OTLP form; apply your collector's naming transforms as needed.
 - **Block height parity.** Display the latest samples from
   `rpp.runtime.chain.block_height` versus the canonical height from your indexer
   to catch lagging nodes.【F:rpp/runtime/telemetry/metrics.rs†L193-L200】
+- **Consensus liveness vs RPC availability.** Use the recorded
+  `consensus:block_height_delta:5m` series to flag true block production stalls
+  while pairing `rpc:availability_ratio:5m` with scrape health to isolate API
+  outages that do not affect consensus. The updated uptime/finality dashboard
+  renders both signals side-by-side for operators.【F:ops/alerts/consensus/liveness.yaml†L1-L22】【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:docs/dashboards/uptime_finality_correlation.json†L1-L93】
 
 ## Wallet
 

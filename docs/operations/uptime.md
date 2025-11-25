@@ -47,6 +47,11 @@ run to confirm alerts fire and then clear:
   `process_start_time_seconds`) that coincides with widening finality lag and
   finalized height gaps to assert the new `ConsensusRestartFinalityCorrelation`
   rule fires alongside the standard warning alerts.【F:tools/alerts/validation.py†L882-L955】【F:ops/alerts/consensus/finality.yaml†L35-L52】
+- **RPC availability** – issues steady `/health/live` calls where the success
+  ratio drops below 99% for more than five minutes (and below 95% for ten),
+  proving `RpcAvailabilityDegraded*` alerts trip while consensus liveness still
+  advances via `consensus:block_height_delta:5m`. Recovery fixtures return the
+  ratio above 99% to confirm alerts clear independently of liveness probes.【F:tools/alerts/validation.py†L151-L223】【F:tools/alerts/validation.py†L1988-L2042】【F:ops/alerts/rpc/availability.yaml†L1-L32】
 - **Join and removal churn** – `uptime-join` keeps `uptime_participation_ratio`,
   `uptime_observation_age_seconds`, and `timetoke_accrual_hours_total`
   progressing through node joins, while `uptime-departure` forces those
@@ -87,6 +92,20 @@ When the soak or production telemetry raises uptime/finality alerts:
    uptime scheduler on the affected nodes, revalidate RPC and gossip reachability,
    and pause further removals until `timetoke_accrual_hours_total` recovers above
    the warning rate.【F:tools/alerts/validation.py†L1066-L1164】【F:tools/alerts/validation.py†L1318-L1428】
+
+### Consensus liveness and RPC availability
+
+- **Consensus liveness (`ConsensusLivenessStall`).** Fires when
+  `consensus:block_height_delta:5m` stays flat for ten minutes. Validate gossip
+  connectivity, proposer rotation, and P2P health; if blocks still fail to
+  advance, drain traffic to healthy validators until the delta turns positive
+  again.【F:ops/alerts/consensus/liveness.yaml†L1-L22】【F:tools/alerts/validation.py†L64-L128】【F:docs/dashboards/uptime_finality_correlation.json†L69-L93】
+- **RPC availability (`RpcAvailabilityDegraded*`).** Trips when the RPC success
+  ratio (`rpc:availability_ratio:5m`) falls below 99%/95% for five/ten minutes.
+  Check ingress or load balancer health, validate `/health/ready` responses, and
+  consider redirecting client traffic while consensus continues to make
+  progress. Use the uptime/finality dashboard panel to confirm the API outage is
+  isolated from consensus liveness and finality graphs.【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:tools/alerts/validation.py†L128-L223】【F:docs/dashboards/uptime_finality_correlation.json†L1-L93】
 
 ## Alert definitions and probe usage
 

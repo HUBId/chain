@@ -1,0 +1,64 @@
+groups:
+  - name: consensus-liveness
+    interval: 30s
+    rules:
+      - record: consensus:block_height_delta:5m
+        expr: increase(chain_block_height[5m])
+        labels:
+          component: consensus
+
+      - alert: ConsensusLivenessStall
+        expr: consensus:block_height_delta:5m <= 0
+        for: 10m
+        labels:
+          severity: critical
+          team: consensus
+          sla: liveness
+          sla_target: block_progress
+        annotations:
+          summary: Block production stalled for 10 minutes
+          description: >-
+            Accepted block height has not advanced for ten minutes. Inspect proposer health,
+            peer connectivity, and gossip flow before redirecting traffic to healthy nodes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability
+
+  - name: rpc-availability
+    interval: 30s
+    rules:
+      - record: rpc:availability_ratio:5m
+        expr: |
+          sum(rate(rpp_runtime_rpc_request_total{result="success"}[5m]))
+            /
+          clamp_min(sum(rate(rpp_runtime_rpc_request_total[5m])), 0.0001)
+        labels:
+          component: rpc
+
+      - alert: RpcAvailabilityDegradedWarning
+        expr: rpc:availability_ratio:5m < 0.99
+        for: 5m
+        labels:
+          severity: warning
+          team: rpc
+          sla: availability
+          sla_target: rpc_success_ratio
+        annotations:
+          summary: RPC availability dipped below 99%
+          description: >-
+            RPC responses have fallen below the 99% success target for five minutes. Check ingress,
+            recent deploys, and node health before the outage widens.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability
+
+      - alert: RpcAvailabilityDegradedCritical
+        expr: rpc:availability_ratio:5m < 0.95
+        for: 10m
+        labels:
+          severity: critical
+          team: rpc
+          sla: availability
+          sla_target: rpc_success_ratio
+        annotations:
+          summary: RPC availability below 95% for 10 minutes
+          description: >-
+            RPC endpoints have been failing more than 5% of requests for ten minutes. Page the on-call,
+            validate node readiness, and consider draining traffic while recovering the API layer.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability

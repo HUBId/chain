@@ -133,6 +133,22 @@ class MetricStore:
     def series(self, metric: str, labels: Optional[Dict[str, str]] = None) -> Optional[MetricSeries]:
         return self._series.get(_series_key(metric, labels))
 
+    def series_by_metric(self, metric: str) -> Sequence[Tuple[Dict[str, str], MetricSeries]]:
+        matches: List[Tuple[Dict[str, str], MetricSeries]] = []
+        for key, series in self._series.items():
+            metric_name, _, label_str = key.partition("|")
+            if metric_name != metric:
+                continue
+            labels: Dict[str, str] = {}
+            if label_str:
+                for pair in label_str.split(","):
+                    if "=" not in pair:
+                        continue
+                    k, v = pair.split("=", maxsplit=1)
+                    labels[k] = v
+            matches.append((labels, series))
+        return matches
+
     def all_timestamps(self) -> Iterator[float]:
         seen: Set[float] = set()
         for metric_series in self._series.values():
@@ -711,6 +727,25 @@ def _evaluate_restart_finality_correlation(
 def _evaluate_block_height_stall(
     store: MetricStore, metric: str, window: float, duration: float
 ) -> Optional[AlertComputation]:
+    delta_series = store.series("consensus:block_height_delta:5m")
+    if delta_series is not None:
+        evaluations: List[Tuple[float, bool]] = []
+        observed: List[Tuple[float, float]] = []
+        for timestamp in store.all_timestamps():
+            delta = delta_series.value_at(timestamp)
+            stalled = delta is not None and delta <= 0.0
+            evaluations.append((timestamp, stalled))
+            if delta is not None:
+                observed.append((timestamp, delta))
+        fired, start_ts = _sustained(evaluations, duration)
+        if not fired or start_ts is None:
+            return None
+        worst_delta = min((value for ts, value in observed if ts >= start_ts), default=None)
+        detail = None
+        if worst_delta is not None:
+            detail = f"block production delta={worst_delta:.0f} over {window/60:.0f}m"
+        return AlertComputation(starts_at=start_ts, value=worst_delta, details=detail)
+
     series = store.series(metric)
     if series is None:
         return None
@@ -731,6 +766,54 @@ def _evaluate_block_height_stall(
     if worst_delta is not None:
         detail = f"block height stalled for {duration/60:.0f}m"
     return AlertComputation(starts_at=start_ts, value=worst_delta, details=detail)
+
+
+def _evaluate_rpc_availability(
+    store: MetricStore, threshold: float, window: float, duration: float
+) -> Optional[AlertComputation]:
+    rpc_series = store.series_by_metric("rpp_runtime_rpc_request_total")
+    success_series = [series for labels, series in rpc_series if labels.get("result") == "success"]
+    other_results = [series for labels, series in rpc_series if labels.get("result") in {"client_error", "server_error"}]
+
+    if not success_series:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        success_rate = 0.0
+        success_observed = False
+        for series in success_series:
+            delta = series.delta_over_window(timestamp, window)
+            if delta is None:
+                continue
+            success_observed = True
+            success_rate += delta / window
+
+        total_rate = success_rate
+        for series in other_results:
+            delta = series.delta_over_window(timestamp, window)
+            if delta is None:
+                continue
+            total_rate += delta / window
+
+        if total_rate <= 0.0 or not success_observed:
+            evaluations.append((timestamp, False))
+            continue
+
+        ratio = success_rate / total_rate
+        degraded = ratio < threshold
+        evaluations.append((timestamp, degraded))
+        observed.append((timestamp, ratio))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    lowest_ratio = min((ratio for ts, ratio in observed if ts >= start_ts), default=None)
+    detail = None
+    if lowest_ratio is not None:
+        detail = f"success ratio={lowest_ratio:.3f}"
+    return AlertComputation(starts_at=start_ts, value=lowest_ratio, details=detail)
 
 
 def _evaluate_epoch_delay(
@@ -955,14 +1038,42 @@ def default_alert_rules() -> List[AlertRule]:
             name="ConsensusLivenessStall",
             severity="critical",
             service="consensus",
-            summary="Block production stalled for 10 minutes",
+            summary="Consensus liveness stalled for 10 minutes",
             description=(
-                "Accepted block height failed to advance for at least ten minutes. Validate proposer health, check peer counts,"
-                " and follow the uptime soak runbook to restore block flow."
+                "Accepted block height failed to advance for at least ten minutes. Validate proposer health, check peer"
+                " counts, and follow the uptime soak runbook to restore block flow."
             ),
-            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
             evaluator=lambda store: _evaluate_block_height_stall(
                 store, "chain_block_height", FINALITY_SLA.stall_duration_seconds, FINALITY_SLA.stall_duration_seconds
+            ),
+        ),
+        AlertRule(
+            name="RpcAvailabilityDegradedWarning",
+            severity="warning",
+            service="rpc",
+            summary="RPC availability dropped below 99%",
+            description=(
+                "RPC responses fell below the 99% success target for at least five minutes. Inspect ingress, recent"
+                " deploys, and node health before the outage widens."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
+            evaluator=lambda store: _evaluate_rpc_availability(
+                store, threshold=0.99, window=300.0, duration=300.0
+            ),
+        ),
+        AlertRule(
+            name="RpcAvailabilityDegradedCritical",
+            severity="critical",
+            service="rpc",
+            summary="RPC availability below 95% for 10 minutes",
+            description=(
+                "RPC endpoints failed more than 5% of requests for ten minutes. Page the on-call, validate node readiness,"
+                " and consider draining traffic while recovering the API layer."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
+            evaluator=lambda store: _evaluate_rpc_availability(
+                store, threshold=0.95, window=300.0, duration=600.0
             ),
         ),
         AlertRule(
@@ -1166,6 +1277,17 @@ def default_alert_rules() -> List[AlertRule]:
 
 def _build_samples(pairs: Sequence[Tuple[float, float]]) -> List[Sample]:
     return [Sample(timestamp=ts, value=value) for ts, value in pairs]
+
+
+def _build_counter_from_increments(
+    metric: str, labels: Dict[str, str], increments: Sequence[float]
+) -> MetricDefinition:
+    samples: List[Tuple[float, float]] = []
+    total = 0.0
+    for minute, increment in enumerate(increments):
+        total += increment
+        samples.append((minute * 60.0, total))
+    return MetricDefinition(metric=metric, labels=labels, samples=_build_samples(samples))
 
 
 def _build_vrf_bucket_definitions(increment_per_minute: Dict[str, float], minutes: int) -> List[MetricDefinition]:
@@ -1875,6 +1997,88 @@ def build_block_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_rpc_outage_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "success", "method": "health_live"},
+            increments=[100.0] * 5 + [50.0] * 10,
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "client_error", "method": "health_live"},
+            increments=[0.0] * 5 + [50.0] * 10,
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "server_error", "method": "health_live"},
+            increments=[0.0] * 15,
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus:block_height_delta:5m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 75.0),
+                    (300.0, 75.0),
+                    (600.0, 75.0),
+                    (900.0, 75.0),
+                    (1200.0, 75.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_rpc_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "success", "method": "health_live"},
+            increments=[100.0] * 12,
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "client_error", "method": "health_live"},
+            increments=[0.0] * 12,
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_runtime_rpc_request_total",
+            labels={"result": "server_error", "method": "health_live"},
+            increments=[0.0] * 12,
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus:block_height_delta:5m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 75.0),
+                    (300.0, 75.0),
+                    (600.0, 75.0),
+                    (900.0, 75.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_restart_finality_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -2069,6 +2273,16 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="missed-block-recovery",
             store=build_block_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="rpc-availability-outage",
+            store=build_rpc_outage_store(),
+            expected_alerts={"RpcAvailabilityDegradedWarning", "RpcAvailabilityDegradedCritical"},
+        ),
+        ValidationCase(
+            name="rpc-availability-recovery",
+            store=build_rpc_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(
