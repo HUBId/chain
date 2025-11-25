@@ -269,6 +269,57 @@ metrics:
       - - proof_backend
         - proof_kind
         - stage
+  - name: rpp.node.pruning.cycle_duration_ms
+    labels:
+      - shard
+      - partition
+      - reason
+      - result
+  - name: rpp.node.pruning.cycle_total
+    labels:
+      - shard
+      - partition
+      - reason
+      - result
+  - name: rpp.node.pruning.failures_total
+    labels:
+      - shard
+      - partition
+      - reason
+      - error
+  - name: rpp.node.pruning.keys_processed
+    labels:
+      - shard
+      - partition
+      - reason
+  - name: rpp.node.pruning.missing_heights
+    labels:
+      - shard
+      - partition
+  - name: rpp.node.pruning.pause_transitions
+    labels:
+      - shard
+      - partition
+      - state
+  - name: rpp.node.pruning.persisted_plan_total
+    labels:
+      - shard
+      - partition
+      - reason
+      - persisted
+  - name: rpp.node.pruning.retention_depth
+    labels:
+      - shard
+      - partition
+  - name: rpp.node.pruning.stored_proofs
+    labels:
+      - shard
+      - partition
+  - name: rpp.node.pruning.time_remaining_ms
+    labels:
+      - shard
+      - partition
+      - reason
   - name: telemetry_otlp_failures_total
     labels:
       - phase

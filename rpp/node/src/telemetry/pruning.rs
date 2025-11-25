@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -20,10 +21,14 @@ pub struct PruningMetrics {
     stored_proofs: Histogram<u64>,
     retention_depth: Histogram<u64>,
     pause_transitions: Counter<u64>,
+    shard_label: KeyValue,
+    partition_label: KeyValue,
 }
 
 impl PruningMetrics {
     const METER_NAME: &'static str = "rpp-node.pruning";
+    const SHARD_ENV: &'static str = "RPP_PRUNING_SHARD";
+    const PARTITION_ENV: &'static str = "RPP_PRUNING_PARTITION";
 
     fn new(meter: Meter) -> Self {
         let cycle_duration_ms = meter
@@ -81,6 +86,15 @@ impl PruningMetrics {
             .with_unit("1")
             .build();
 
+        let shard_label = KeyValue::new(
+            "shard",
+            env::var(Self::SHARD_ENV).unwrap_or_else(|_| "primary".to_string()),
+        );
+        let partition_label = KeyValue::new(
+            "partition",
+            env::var(Self::PARTITION_ENV).unwrap_or_else(|_| "0".to_string()),
+        );
+
         Self {
             cycle_duration_ms,
             cycle_total,
@@ -92,6 +106,8 @@ impl PruningMetrics {
             stored_proofs,
             retention_depth,
             pause_transitions,
+            shard_label,
+            partition_label,
         }
     }
 
@@ -108,29 +124,30 @@ impl PruningMetrics {
     ) {
         let reason_attr = reason.as_str();
         let outcome_attr = outcome.as_str();
-        let attrs = [
+        let attrs = self.with_base_labels([
             KeyValue::new("reason", reason_attr),
             KeyValue::new("result", outcome_attr),
-        ];
+        ]);
         self.cycle_duration_ms
             .record(duration.as_secs_f64() * 1_000.0, &attrs);
         self.cycle_total.add(1, &attrs);
 
         let persisted = status.and_then(|s| s.persisted_path.as_ref()).is_some();
-        let persisted_attrs = [
+        let persisted_attrs = self.with_base_labels([
             KeyValue::new("reason", reason_attr),
             KeyValue::new("persisted", if persisted { "true" } else { "false" }),
-        ];
+        ]);
         self.persisted_plan.add(1, &persisted_attrs);
 
         if let Some(status) = status {
             let processed = status.stored_proofs.len() as u64;
+            let backlog_labels = self.base_labels();
             self.missing_heights
-                .record(status.missing_heights.len() as u64, &[]);
+                .record(status.missing_heights.len() as u64, &backlog_labels);
             self.stored_proofs
-                .record(status.stored_proofs.len() as u64, &[]);
-            self.keys_processed
-                .record(processed, &[KeyValue::new("reason", reason_attr)]);
+                .record(status.stored_proofs.len() as u64, &backlog_labels);
+            let processed_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);
+            self.keys_processed.record(processed, &processed_attrs);
 
             if processed > 0 {
                 let remaining = status
@@ -139,30 +156,42 @@ impl PruningMetrics {
                     .saturating_sub(status.stored_proofs.len());
                 let per_key_ms = duration.as_secs_f64() * 1_000.0 / processed as f64;
                 let estimate_ms = per_key_ms * remaining as f64;
-                self.time_remaining_ms
-                    .record(estimate_ms, &[KeyValue::new("reason", reason_attr)]);
+                let estimate_attrs =
+                    self.with_base_labels([KeyValue::new("reason", reason_attr)]);
+                self.time_remaining_ms.record(estimate_ms, &estimate_attrs);
             }
         }
     }
 
     pub fn record_failure(&self, reason: CycleReason, error: &'static str) {
-        self.failures_total.add(
-            1,
-            &[
-                KeyValue::new("reason", reason.as_str()),
-                KeyValue::new("error", error),
-            ],
-        );
+        let attrs = self.with_base_labels([
+            KeyValue::new("reason", reason.as_str()),
+            KeyValue::new("error", error),
+        ]);
+        self.failures_total.add(1, &attrs);
     }
 
     pub fn record_retention_depth(&self, depth: u64) {
-        self.retention_depth.record(depth, &[]);
+        self.retention_depth.record(depth, &self.base_labels());
     }
 
     pub fn record_pause_state(&self, paused: bool) {
         let state = if paused { "paused" } else { "resumed" };
-        self.pause_transitions
-            .add(1, &[KeyValue::new("state", state)]);
+        let attrs = self.with_base_labels([KeyValue::new("state", state)]);
+        self.pause_transitions.add(1, &attrs);
+    }
+
+    fn base_labels(&self) -> Vec<KeyValue> {
+        vec![self.shard_label.clone(), self.partition_label.clone()]
+    }
+
+    fn with_base_labels(
+        &self,
+        extra: impl IntoIterator<Item = KeyValue>,
+    ) -> Vec<KeyValue> {
+        let mut labels = self.base_labels();
+        labels.extend(extra);
+        labels
     }
 }
 
@@ -199,6 +228,7 @@ impl CycleOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use opentelemetry::{global, Value};
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
@@ -236,6 +266,42 @@ mod tests {
                     .any(|point| expectation(point.sum() as f64)),
                 _ => false,
             })
+    }
+
+    fn metric_has_labels(
+        exported: &[ResourceMetrics],
+        name: &str,
+        expected: &[(&str, &str)],
+    ) -> bool {
+        exported
+            .iter()
+            .flat_map(|resource| resource.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .filter(|metric| metric.name() == name)
+            .any(|metric| match metric.data() {
+                AggregatedMetrics::F64(MetricData::Histogram(data)) => data
+                    .data_points()
+                    .iter()
+                    .any(|point| attrs_match(point.attributes(), expected)),
+                AggregatedMetrics::U64(MetricData::Histogram(data)) => data
+                    .data_points()
+                    .iter()
+                    .any(|point| attrs_match(point.attributes(), expected)),
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                    .data_points()
+                    .iter()
+                    .any(|point| attrs_match(point.attributes(), expected)),
+                _ => false,
+            })
+    }
+
+    fn attrs_match(attrs: &[KeyValue], expected: &[(&str, &str)]) -> bool {
+        expected.iter().all(|(key, value)| {
+            attrs.iter().any(|kv| {
+                kv.key.as_str() == *key
+                    && matches!(&kv.value, Value::String(v) if v.as_str() == *value)
+            })
+        })
     }
 
     fn counter_has_attrs(
@@ -393,5 +459,65 @@ mod tests {
             "manual",
             "failure",
         ));
+    }
+
+    #[test]
+    fn metrics_include_shard_and_partition_labels() {
+        let shard = "shard-a";
+        let partition = "partition-1";
+        let prior_shard = env::var(PruningMetrics::SHARD_ENV).ok();
+        let prior_partition = env::var(PruningMetrics::PARTITION_ENV).ok();
+        env::set_var(PruningMetrics::SHARD_ENV, shard);
+        env::set_var(PruningMetrics::PARTITION_ENV, partition);
+
+        let (metrics, exporter, provider) = setup_meter();
+        let status = sample_status(3, 1);
+
+        metrics.record_cycle(
+            CycleReason::Manual,
+            CycleOutcome::Success,
+            Duration::from_secs(2),
+            Some(&status),
+        );
+        metrics.record_failure(CycleReason::Manual, "storage");
+
+        provider.force_flush().unwrap();
+        let exported = exporter.get_finished_metrics().unwrap();
+
+        assert!(metric_has_labels(
+            &exported,
+            "rpp.node.pruning.cycle_total",
+            &["shard", "partition", "reason", "result"]
+                .into_iter()
+                .zip([shard, partition, "manual", "success"])
+                .collect::<Vec<_>>()
+        ));
+
+        assert!(metric_has_labels(
+            &exported,
+            "rpp.node.pruning.missing_heights",
+            &[("shard", shard), ("partition", partition)]
+        ));
+
+        assert!(metric_has_labels(
+            &exported,
+            "rpp.node.pruning.failures_total",
+            &["shard", "partition", "reason", "error"]
+                .into_iter()
+                .zip([shard, partition, "manual", "storage"])
+                .collect::<Vec<_>>()
+        ));
+
+        if let Some(value) = prior_shard {
+            env::set_var(PruningMetrics::SHARD_ENV, value);
+        } else {
+            env::remove_var(PruningMetrics::SHARD_ENV);
+        }
+
+        if let Some(value) = prior_partition {
+            env::set_var(PruningMetrics::PARTITION_ENV, value);
+        } else {
+            env::remove_var(PruningMetrics::PARTITION_ENV);
+        }
     }
 }

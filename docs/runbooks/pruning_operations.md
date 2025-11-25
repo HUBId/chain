@@ -26,13 +26,13 @@ before applying overrides.
 
 | Metric | Type | Labels | Operational use |
 |--------|------|--------|-----------------|
-| `rpp.node.pruning.cycle_total` | Counter | `reason`, `result` | Alert when scheduled cycles fail repeatedly or when manual runs dominate.【F:rpp/node/src/telemetry/pruning.rs†L31-L35】【F:rpp/node/src/services/pruning.rs†L391-L399】 |
-| `rpp.node.pruning.cycle_duration_ms` | Histogram | `reason`, `result` | Plot p50/p95 to ensure rebuilds complete before the next cadence tick.【F:rpp/node/src/telemetry/pruning.rs†L25-L30】【F:rpp/node/src/services/pruning.rs†L391-L399】 |
-| `rpp.node.pruning.persisted_plan_total` | Counter | `reason`, `persisted` | Detect when cycles stop emitting snapshot plans (possible storage regression).【F:rpp/node/src/telemetry/pruning.rs†L36-L40】【F:rpp/runtime/node.rs†L3200-L3202】 |
-| `rpp.node.pruning.missing_heights` | Histogram | — | Surface sudden growth in backlog requiring manual hydration.【F:rpp/node/src/telemetry/pruning.rs†L41-L44】【F:rpp/runtime/node.rs†L3200-L3207】 |
-| `rpp.node.pruning.stored_proofs` | Histogram | — | Validate that pruning proofs continue to sync to storage.【F:rpp/node/src/telemetry/pruning.rs†L46-L49】【F:rpp/runtime/node.rs†L3200-L3207】 |
-| `rpp.node.pruning.retention_depth` | Histogram | — | Confirm override depth applied during incidents.【F:rpp/node/src/telemetry/pruning.rs†L51-L55】【F:rpp/node/src/services/pruning.rs†L356-L399】 |
-| `rpp.node.pruning.pause_transitions` | Counter | `state` | Alert when the service is paused longer than the agreed maintenance window.【F:rpp/node/src/telemetry/pruning.rs†L56-L59】【F:rpp/node/src/services/pruning.rs†L356-L366】 |
+| `rpp.node.pruning.cycle_total` | Counter | `shard`, `partition`, `reason`, `result` | Alert when scheduled cycles fail repeatedly or when manual runs dominate within a shard.【F:rpp/node/src/telemetry/pruning.rs†L25-L116】【F:rpp/node/src/services/pruning.rs†L391-L399】 |
+| `rpp.node.pruning.cycle_duration_ms` | Histogram | `shard`, `partition`, `reason`, `result` | Plot p50/p95 to ensure rebuilds complete before the next cadence tick in each shard.【F:rpp/node/src/telemetry/pruning.rs†L25-L116】【F:rpp/node/src/services/pruning.rs†L391-L399】 |
+| `rpp.node.pruning.persisted_plan_total` | Counter | `shard`, `partition`, `reason`, `persisted` | Detect when cycles stop emitting snapshot plans (possible storage regression) on a shard.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/runtime/node.rs†L3200-L3202】 |
+| `rpp.node.pruning.missing_heights` | Histogram | `shard`, `partition` | Surface sudden growth in backlog requiring manual hydration for a shard.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/runtime/node.rs†L3200-L3207】 |
+| `rpp.node.pruning.stored_proofs` | Histogram | `shard`, `partition` | Validate that pruning proofs continue to sync to storage.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/runtime/node.rs†L3200-L3207】 |
+| `rpp.node.pruning.retention_depth` | Histogram | `shard`, `partition` | Confirm override depth applied during incidents.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L399】 |
+| `rpp.node.pruning.pause_transitions` | Counter | `shard`, `partition`, `state` | Alert when the service is paused longer than the agreed maintenance window.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L366】 |
 
 Dashboards should plot the histograms as time-series (e.g. last sample) or
 aggregated percentiles. Combine `cycle_total` with failure-specific alerts to
