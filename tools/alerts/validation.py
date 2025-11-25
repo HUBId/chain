@@ -11,6 +11,24 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
+
+@dataclass(frozen=True)
+class FinalityServiceLevel:
+    lag_warning_slots: float
+    lag_critical_slots: float
+    gap_warning_blocks: float
+    gap_critical_blocks: float
+    stall_duration_seconds: float
+
+
+FINALITY_SLA = FinalityServiceLevel(
+    lag_warning_slots=12.0,
+    lag_critical_slots=24.0,
+    gap_warning_blocks=4.0,
+    gap_critical_blocks=8.0,
+    stall_duration_seconds=600.0,
+)
+
 import socketserver
 
 
@@ -739,7 +757,12 @@ def default_alert_rules() -> List[AlertRule]:
                 " Investigate proposer health and replay recent rounds to confirm quorum participation."
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
-            evaluator=lambda store: _evaluate_finality_metric(store, "finality_lag_slots", 12.0, 300.0),
+            evaluator=lambda store: _evaluate_finality_metric(
+                store,
+                "finality_lag_slots",
+                FINALITY_SLA.lag_warning_slots,
+                300.0,
+            ),
         ),
         AlertRule(
             name="ConsensusFinalityLagCritical",
@@ -751,7 +774,12 @@ def default_alert_rules() -> List[AlertRule]:
                 " verify witness signatures before resuming production."
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
-            evaluator=lambda store: _evaluate_finality_metric(store, "finality_lag_slots", 24.0, 120.0),
+            evaluator=lambda store: _evaluate_finality_metric(
+                store,
+                "finality_lag_slots",
+                FINALITY_SLA.lag_critical_slots,
+                120.0,
+            ),
         ),
         AlertRule(
             name="ConsensusFinalizedHeightGapWarning",
@@ -763,7 +791,12 @@ def default_alert_rules() -> List[AlertRule]:
                 " finality lag and prepare failover steps if the gap grows."
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
-            evaluator=lambda store: _evaluate_finality_metric(store, "finalized_height_gap", 4.0, 300.0),
+            evaluator=lambda store: _evaluate_finality_metric(
+                store,
+                "finalized_height_gap",
+                FINALITY_SLA.gap_warning_blocks,
+                300.0,
+            ),
         ),
         AlertRule(
             name="ConsensusFinalizedHeightGapCritical",
@@ -775,7 +808,12 @@ def default_alert_rules() -> List[AlertRule]:
                 " and execute the documented failover to restore proposer rotation."
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
-            evaluator=lambda store: _evaluate_finality_metric(store, "finalized_height_gap", 8.0, 120.0),
+            evaluator=lambda store: _evaluate_finality_metric(
+                store,
+                "finalized_height_gap",
+                FINALITY_SLA.gap_critical_blocks,
+                120.0,
+            ),
         ),
         AlertRule(
             name="ConsensusRestartFinalityCorrelation",
@@ -788,7 +826,11 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_restart_finality_correlation(
-                store, lag_threshold=12.0, gap_threshold=4.0, restart_window=900.0, duration=300.0
+                store,
+                lag_threshold=FINALITY_SLA.lag_warning_slots,
+                gap_threshold=FINALITY_SLA.gap_warning_blocks,
+                restart_window=900.0,
+                duration=300.0,
             ),
         ),
         AlertRule(
@@ -801,7 +843,9 @@ def default_alert_rules() -> List[AlertRule]:
                 " and follow the uptime soak runbook to restore block flow."
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
-            evaluator=lambda store: _evaluate_block_height_stall(store, "chain_block_height", 600.0, 600.0),
+            evaluator=lambda store: _evaluate_block_height_stall(
+                store, "chain_block_height", FINALITY_SLA.stall_duration_seconds, FINALITY_SLA.stall_duration_seconds
+            ),
         ),
         AlertRule(
             name="TimetokeEpochDelayWarning",

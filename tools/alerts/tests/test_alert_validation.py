@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from tools.alerts.validation import (
     AlertValidationError,
     AlertValidator,
     AlertWebhookServer,
+    FINALITY_SLA,
     RecordedWebhookClient,
     ValidationCase,
     default_alert_rules,
@@ -105,3 +107,19 @@ def test_alert_validator_detects_missing_alerts(validator: AlertValidator) -> No
         with pytest.raises(AlertValidationError) as excinfo:
             validator.run([case], client)
     assert "NonexistentAlert" in str(excinfo.value)
+
+
+def test_finality_alerts_match_sla_thresholds() -> None:
+    with open("ops/alerts/consensus/finality.yaml", "r", encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle)
+
+    expressions = {
+        rule["alert"]: rule["expr"]
+        for group in manifest.get("groups", [])
+        for rule in group.get("rules", [])
+    }
+
+    assert f"> {int(FINALITY_SLA.lag_warning_slots)}" in expressions["ConsensusFinalityLagWarning"]
+    assert f"> {int(FINALITY_SLA.lag_critical_slots)}" in expressions["ConsensusFinalityLagCritical"]
+    assert f"> {int(FINALITY_SLA.gap_warning_blocks)}" in expressions["ConsensusFinalizedHeightGapWarning"]
+    assert f"> {int(FINALITY_SLA.gap_critical_blocks)}" in expressions["ConsensusFinalizedHeightGapCritical"]
