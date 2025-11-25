@@ -25,6 +25,29 @@ before artifacts are published. At a minimum:
    ([`docs/network/admission.md`](docs/network/admission.md)) to capture new
    endpoints, authentication rules, rate limits, or privacy guarantees required
    by the release. Coordinate with policy approvers when changes are needed.
+4. Re-run the operational smoke checklist below (kept here to stay current) and
+   update the referenced dashboards/commands if defaults change:
+   - **Configuration validation:** `cargo run -p rpp-chain -- node --dry-run --config config/node.toml` and
+     `cargo run -p rpp-chain -- wallet --dry-run --wallet-config config/wallet.toml` must both exit 0. Capture
+     any warnings about deprecated keys so the operator guide and sample configs stay aligned.【F:docs/rpp_node_operator_guide.md†L45-L65】
+   - **Health probes:** `curl -sf http://127.0.0.1:7070/status/node` and `curl -sf http://127.0.0.1:7070/status/consensus`
+     should return `ok`/advancing rounds; keep the probe paths consistent with the observability runbook and
+     update dashboards if the schemas change.【F:rpp/runtime/node.rs†L6323-L6466】【F:docs/runbooks/observability.md†L27-L69】
+   - **ZK backend verification:** After builds, run
+     ```
+     ./scripts/verify_release_features.sh --target x86_64-unknown-linux-gnu --profile release
+     ```
+     to prove mock/unsupported prover flags are absent. Pair the result with `/status/node` backend snapshots and the
+     `consensus_proof_validation` dashboard export before tagging.【F:scripts/verify_release_features.sh†L1-L35】【F:docs/dashboards/consensus_proof_validation.json†L1-L200】
+   - **Pruning readiness:** Confirm gates and cadence via `cargo run -p rpp-chain -- validator --dry-run --config config/node.toml \
+     --pruning-cadence-secs 1800 --pruning-retention-depth 5000` and exercise `curl -sS -X POST /snapshots/snapshot` with a
+     bearer token to verify receipts match the pruning runbook.【F:docs/runbooks/pruning.md†L1-L46】
+   - **Wallet smoke:** `cargo run -p rpp-chain -- wallet --dry-run --wallet-config config/wallet.toml` plus a test RPC call
+     (`cargo run -p rpp-chain -- wallet rpc ping --wallet-config config/wallet.toml`) should succeed so the bundled
+     wallet config stays deployable. Update screenshots/CLI snippets if flags move.【F:docs/rpp_node_operator_guide.md†L55-L78】【F:docs/README.md†L3-L24】
+   - **Uptime alerts:** Load `docs/dashboards/uptime_finality_correlation.json` (or the production import path) and confirm
+     alert rules still watch `rpp.runtime.uptime.*`/`rpp.runtime.finality.*` pairs. Note any rule name or label changes in the
+     observability guide so on-call handoffs match the live dashboards.【F:docs/dashboards/uptime_finality_correlation.json†L1-L200】【F:docs/runbooks/observability.md†L27-L69】
 
 Capture the sign-off in the release tracking doc or PR description so the
 review history is discoverable when tags are audited.
