@@ -6,6 +6,10 @@
 > [Security policy & reporting](../SECURITY.md),
 > [RPP vendor refresh procedure](./operations/rpp_vendor_update.md),
 > [Incident response runbook](./operations/incidents.md)
+>
+> **Wallet consumers:** The [wallet zk backend and config support matrix](./wallet/zk_support_matrix.md)
+> lists the prover settings (size gates, determinism) we support for wallet
+> flows across the available backends.
 
 ## rpp-stark (stable)
 
