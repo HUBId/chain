@@ -92,6 +92,15 @@ or pruning stalls should be handled with the [incident response runbook](./opera
 which sets the same acknowledgement and stabilisation timelines and captures
 the commands/metrics to apply during on-call mitigation.
 
+For zk incidents, treat the backend SLAs as hard guardrails: STWO prover p95
+latency should stay below 120 s (critical at 180 s) with at least 0.5
+proofs/sec of successful throughput and <10 % (<20 % critical) failures, while
+RPP-STARK verification keeps the 3.2 s p95 ceiling, 0.8 proofs/sec throughput
+floor, and 2 %/5 % stage-failure limits. The Alertmanager rules under
+`ops/alerts/zk/` and the Grafana panels in the same folder encode these
+budgets; follow the backend-specific playbook to triage (drain queues, lower
+concurrency, switch backends) before escalating.【F:ops/alerts/zk/stwo.yaml†L1-L93】【F:ops/alerts/zk/rpp_stark.yaml†L33-L103】【F:ops/alerts/zk/stwo_grafana.json†L1-L104】【F:ops/alerts/zk/rpp_stark_grafana.json†L1-L126】【F:docs/operations/zk_backends.md†L7-L35】
+
 ## Mempool incident response
 
 High-volume spam or DoS incidents should follow the

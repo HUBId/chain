@@ -30,6 +30,12 @@ use prover_stwo_backend::{reputation::Tier, ReputationWeights};
 
 const STWO_CONCURRENCY: usize = 2;
 const RPP_CONCURRENCY: usize = 3;
+const STWO_LATENCY_SLA_P95: Duration = Duration::from_secs(120);
+const STWO_THROUGHPUT_SLA: f64 = 0.5;
+const STWO_ERROR_RATE_SLA: f64 = 0.1;
+const RPP_LATENCY_SLA_P95: Duration = Duration::from_millis(3200);
+const RPP_THROUGHPUT_SLA: f64 = 0.8;
+const RPP_ERROR_RATE_SLA: f64 = 0.02;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
@@ -37,12 +43,32 @@ async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
 
     let stwo_metrics = run_stwo_batch().await.context("stwo batch generation")?;
     assert!(
-        stwo_metrics.throughput_per_second > 0.1,
-        "stwo throughput should stay above minimal floor"
+        stwo_metrics.throughput_per_second >= STWO_THROUGHPUT_SLA,
+        "stwo throughput should stay above the SLA floor"
+    );
+    assert!(
+        percentile_ms(&stwo_metrics.latencies, 0.95) <= STWO_LATENCY_SLA_P95,
+        "stwo p95 latency should respect the SLA budget"
+    );
+    assert!(
+        failure_rate(&stwo_metrics) <= STWO_ERROR_RATE_SLA,
+        "stwo failure ratio should remain within the SLA"
     );
 
     let rpp_metrics = run_rpp_batch().await.context("rpp-stark verifier batch")?;
     assert!(rpp_metrics.oversize_failure_recorded, "oversized proofs must fail");
+    assert!(
+        rpp_metrics.throughput_per_second >= RPP_THROUGHPUT_SLA,
+        "rpp-stark throughput should stay above the SLA floor"
+    );
+    assert!(
+        percentile_ms(&rpp_metrics.latencies, 0.95) <= RPP_LATENCY_SLA_P95,
+        "rpp-stark p95 latency should respect the SLA budget"
+    );
+    assert!(
+        failure_rate(&rpp_metrics) <= RPP_ERROR_RATE_SLA,
+        "rpp-stark failure ratio should remain within the SLA"
+    );
 
     Ok(())
 }
@@ -50,6 +76,7 @@ async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
 struct BatchMetrics {
     latencies: Vec<Duration>,
     throughput_per_second: f64,
+    failures: usize,
     oversize_failure_recorded: bool,
 }
 
@@ -85,6 +112,7 @@ async fn run_stwo_batch() -> Result<BatchMetrics> {
     Ok(BatchMetrics {
         latencies,
         throughput_per_second,
+        failures: 0,
         oversize_failure_recorded: false,
     })
 }
@@ -218,7 +246,33 @@ async fn run_rpp_batch() -> Result<BatchMetrics> {
     Ok(BatchMetrics {
         latencies,
         throughput_per_second,
+        failures: 0,
         oversize_failure_recorded,
     })
+}
+
+fn percentile_ms(latencies: &[Duration], percentile: f64) -> Duration {
+    assert!(
+        !latencies.is_empty(),
+        "percentile requires at least one latency sample"
+    );
+    let mut samples: Vec<f64> = latencies
+        .iter()
+        .map(|d| d.as_secs_f64())
+        .collect();
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let rank = ((samples.len() as f64 - 1.0) * percentile).ceil() as usize;
+    let value = samples[rank.min(samples.len() - 1)];
+    Duration::from_secs_f64(value)
+}
+
+fn failure_rate(metrics: &BatchMetrics) -> f64 {
+    let total = metrics.latencies.len() + metrics.failures;
+    if total == 0 {
+        0.0
+    } else {
+        metrics.failures as f64 / total as f64
+    }
 }
 

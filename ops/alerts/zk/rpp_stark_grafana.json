@@ -86,6 +86,72 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "stat",
+      "title": "Throughput (proofs/sec)",
+      "description": "Rate of successful verification events normalised by 5 stages per proof",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "options": {
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rpp_stark_stage_checks_total{proof_backend=\"rpp-stark\",result=\"ok\"}[5m])) / 5",
+          "legendFormat": "throughput"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.8 },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Failure ratio",
+      "description": "Stage failure ratio across all proof kinds",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "options": {
+        "orientation": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "increase(rpp_stark_stage_checks_total{proof_backend=\"rpp-stark\",result=\"fail\"}[15m]) / clamp_min(increase(rpp_stark_stage_checks_total{proof_backend=\"rpp-stark\"}[15m]), 1)",
+          "legendFormat": "failure_ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.02 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      }
     }
   ]
 }

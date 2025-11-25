@@ -69,6 +69,17 @@
 > `backend-rpp-stark`-Monitoring. Siehe
 > [RPP-STARK Verifier Alert Operations](operations/zk_backends.md).
 
+- Die SLA-Grenzen für die produktiven Backends sind explizit im Alerting und in
+  den Grafana-Dashboards verankert: STWO-Proofs müssen p95 unter 120 Sekunden
+  bleiben, die Erfolgsrate darf 10 % (Warning) bzw. 20 % (Critical) nicht
+  überschreiten und der Durchsatz muss mindestens 0,5 Proofs/Sekunde betragen,
+  solange Jobs anstehen. Der RPP-STARK-Verifier behält den 3,2 s-p95-Latency-Budget,
+  einen Durchsatz-Floor von 0,8 Proofs/Sekunde (5 Stages/Proof) und toleriert nur
+  2 % bzw. 5 % Stage-Failures. Die Regeln leben unter `ops/alerts/zk/*.yaml`,
+  passende Panels unter `ops/alerts/zk/*_grafana.json`, und die CI-Loadtests
+  (`tests/zk_load.rs`) spiegeln dieselben Budgets wider, damit Regressionen den
+  Build blockieren.【F:ops/alerts/zk/stwo.yaml†L1-L93】【F:ops/alerts/zk/rpp_stark.yaml†L33-L103】【F:ops/alerts/zk/stwo_grafana.json†L1-L104】【F:ops/alerts/zk/rpp_stark_grafana.json†L1-L126】【F:tests/zk_load.rs†L5-L210】
+
 - `NodeInner::verify_rpp_stark_with_metrics` (implementiert in `rpp/runtime/node.rs`) ruft den Registry-Helper auf und emittiert strukturierte Logs (`valid`, `proof_bytes`, `verify_duration_ms`, Stage-Flags) mit Label `proof_backend="rpp-stark"` und `proof_kind` (z. B. `"transaction"`).
 - Zusätzlich landen die Kennzahlen auf dem `telemetry`-Target. Erfolgreiche Prüfungen loggen `params_ok`, `public_ok`, `merkle_ok`, `fri_ok`, `composition_ok` sowie `params_bytes`, `public_inputs_bytes` und `payload_bytes`.
 - Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt. Oversize- und Limit-Mismatch-Fälle tragen dieselben Byte-Felder und Buckets, wodurch Alerting-Regeln auf `result="fail"` aufsetzen können.【F:rpp/runtime/node.rs†L4526-L4720】【F:rpp/runtime/node.rs†L4649-L4720】

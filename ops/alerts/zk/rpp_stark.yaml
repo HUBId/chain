@@ -88,3 +88,46 @@ groups:
             exceeded 30 per minute. Review backend fingerprints, cache retention, or
             gossip spam before verifier load spikes further.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkFailureRateWarning
+        expr: (increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[15m]) / clamp_min(increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark"}[15m]), 1)) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: RPP-STARK verification failures above 2%
+          description: >-
+            More than 2% of RPP-STARK verification stages failed in the last
+            fifteen minutes. Inspect the stage label to isolate regressions and
+            replay recent proofs before proofs are slashed.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkFailureRateCritical
+        expr: (increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="fail"}[15m]) / clamp_min(increase(rpp_stark_stage_checks_total{proof_backend="rpp-stark"}[15m]), 1)) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: RPP-STARK verification failures above 5%
+          description: >-
+            More than 5% of RPP-STARK verification stages failed in the last
+            fifteen minutes. Expect consensus proofs to be rejected; page the on-call
+            and prepare a backend rollback if mitigation fails.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response
+      - alert: ZkRppStarkThroughputCritical
+        expr: clamp_min(0.8 - (sum(rate(rpp_stark_stage_checks_total{proof_backend="rpp-stark",result="ok"}[5m])) / 5), 0) > 0 and sum(rate(rpp_stark_stage_checks_total{proof_backend="rpp-stark"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: rpp-stark
+        annotations:
+          summary: RPP-STARK verifier throughput below 0.8 proofs/sec
+          description: >-
+            Successful RPP-STARK verification throughput stayed below 0.8 proofs/sec
+            for ten minutes while proofs continued arriving. Investigate hardware
+            saturation, parameter changes, or oversized payloads before finality
+            falls behind.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#alert-triage-and-response

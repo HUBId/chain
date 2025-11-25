@@ -18,6 +18,25 @@ values are `backend="stwo"` for proof generation and wallet prover surfaces
 and `proof_backend="rpp-stark"` for verifier signals; alerts in this guide are
 scoped to those labels to keep mixed-backend deployments separate.【F:rpp/runtime/telemetry/metrics.rs†L380-L459】【F:ops/alerts/zk/rpp_stark.yaml†L6-L35】
 
+### Backend SLAs and dashboards
+
+- **STWO prover latency:** p95 should stay under **120 s** (warning) and
+  **180 s** (critical) using
+  `histogram_quantile(0.95, sum(rate(rpp_runtime_wallet_prover_job_duration_ms_bucket{backend="stwo"}[10m])) by (le, backend))`.
+  Throughput must remain above **0.5 proofs/sec** while jobs are arriving, and
+  failure ratios should stay below **10 %** (warning) and **20 %** (critical)
+  using `rpp_runtime_wallet_prover_jobs_total`. Alerts and Grafana panels encode
+  these budgets under `ops/alerts/zk/stwo.yaml` and
+  `ops/alerts/zk/stwo_grafana.json`. Load tests in `tests/zk_load.rs` enforce the
+  same ceilings to fail CI when regressions appear.【F:ops/alerts/zk/stwo.yaml†L1-L93】【F:ops/alerts/zk/stwo_grafana.json†L1-L104】【F:tests/zk_load.rs†L5-L135】
+- **RPP-STARK verifier:** Consensus p95 latency keeps the **3.2 s** ceiling and
+  adds a throughput floor of **0.8 proofs/sec** (normalized by five stages) plus
+  failure ratios below **2 %** (warning) and **5 %** (critical). The signals use
+  `rpp_stark_verify_duration_seconds_bucket` and `rpp_stark_stage_checks_total`
+  with `proof_backend="rpp-stark"`, and the companion Grafana dashboard exposes
+  matching stat panels. CI exercises the same budgets in the zk load harness to
+  ensure Alertmanager thresholds reflect what the backends can sustain.【F:ops/alerts/zk/rpp_stark.yaml†L33-L103】【F:ops/alerts/zk/rpp_stark_grafana.json†L1-L126】【F:tests/zk_load.rs†L136-L210】
+
 
 ### Proof-cache sizing & observability
 
