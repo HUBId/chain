@@ -29,6 +29,26 @@ FINALITY_SLA = FinalityServiceLevel(
     stall_duration_seconds=600.0,
 )
 
+
+@dataclass(frozen=True)
+class UptimeServiceLevel:
+    participation_warning_ratio: float
+    participation_critical_ratio: float
+    uptime_gap_warning_seconds: float
+    uptime_gap_critical_seconds: float
+    timetoke_minimum_rate: float
+    timetoke_window_seconds: float
+
+
+UPTIME_SLA = UptimeServiceLevel(
+    participation_warning_ratio=0.97,
+    participation_critical_ratio=0.94,
+    uptime_gap_warning_seconds=900.0,
+    uptime_gap_critical_seconds=1800.0,
+    timetoke_minimum_rate=0.00025,
+    timetoke_window_seconds=900.0,
+)
+
 import socketserver
 
 
@@ -200,6 +220,7 @@ class ValidationResult:
     case: ValidationCase
     fired_events: List[AlertEvent]
     webhook_payloads: List[Dict[str, object]]
+    error: Optional[AlertValidationError] = None
 
 
 class AlertValidationError(RuntimeError):
@@ -227,12 +248,27 @@ class AlertValidationError(RuntimeError):
         self.webhook_alerts = list(webhook_alerts)
 
 
+class AlertValidationAggregateError(RuntimeError):
+    def __init__(self, errors: Sequence[AlertValidationError], results: Sequence[ValidationResult]):
+        message = "; ".join(str(error) for error in errors)
+        super().__init__(f"{len(errors)} alert validation failures: {message}")
+        self.errors = list(errors)
+        self.results = list(results)
+
+
 class AlertValidator:
     def __init__(self, rules: Sequence[AlertRule]):
         self._rules = list(rules)
 
-    def run(self, cases: Sequence[ValidationCase], webhook: "RecordedWebhookClient") -> List[ValidationResult]:
+    def run(
+        self,
+        cases: Sequence[ValidationCase],
+        webhook: "RecordedWebhookClient",
+        *,
+        fail_fast: bool = True,
+    ) -> List[ValidationResult]:
         results: List[ValidationResult] = []
+        errors: List[AlertValidationError] = []
         for case in cases:
             fired_events: List[AlertEvent] = []
             for rule in self._rules:
@@ -257,8 +293,22 @@ class AlertValidator:
             unexpected = sorted(fired_names - expected_names)
             payload_set = set(payload_alerts)
             if missing or unexpected or payload_set != fired_names or len(payload_alerts) != len(fired_events):
-                raise AlertValidationError(case.name, missing, unexpected, payload_alerts)
+                error = AlertValidationError(case.name, missing, unexpected, payload_alerts)
+                results.append(
+                    ValidationResult(
+                        case=case,
+                        fired_events=fired_events,
+                        webhook_payloads=payloads,
+                        error=error,
+                    )
+                )
+                errors.append(error)
+                if fail_fast:
+                    raise error
+                continue
             results.append(ValidationResult(case=case, fired_events=fired_events, webhook_payloads=payloads))
+        if errors:
+            raise AlertValidationAggregateError(errors, results)
         return results
 
 
@@ -706,6 +756,74 @@ def _evaluate_epoch_delay(
     return AlertComputation(starts_at=start_ts, value=peak)
 
 
+def _evaluate_uptime_participation(
+    store: MetricStore, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series("uptime_participation_ratio")
+    if series is None:
+        return None
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        if value is None:
+            continue
+        degraded = value < threshold
+        evaluations.append((timestamp, degraded))
+        if degraded:
+            observed.append((timestamp, value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    lowest = min((value for ts, value in observed if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=lowest)
+
+
+def _evaluate_uptime_gap(
+    store: MetricStore, metric: str, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        if value is None:
+            continue
+        breached = value > threshold
+        evaluations.append((timestamp, breached))
+        if breached:
+            observed.append((timestamp, value))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=peak)
+
+
+def _evaluate_timetoke_rate(
+    store: MetricStore, metric: str, window: float, minimum_rate: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+    timestamps = [sample.timestamp for sample in series.samples]
+    evaluations: List[Tuple[float, bool]] = []
+    observed_rates: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        rate = series.rate_over_window(timestamp, window)
+        degraded = rate is not None and rate < minimum_rate
+        if rate is not None:
+            observed_rates.append((timestamp, rate))
+        evaluations.append((timestamp, degraded))
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+    worst = min((rate for ts, rate in observed_rates if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=worst)
+
+
 def default_alert_rules() -> List[AlertRule]:
     return [
         AlertRule(
@@ -873,6 +991,98 @@ def default_alert_rules() -> List[AlertRule]:
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_epoch_delay(
                 store, "timetoke_epoch_age_seconds", 5400.0, 600.0
+            ),
+        ),
+        AlertRule(
+            name="UptimeParticipationDropWarning",
+            severity="warning",
+            service="uptime",
+            summary="Uptime participation dipped below the warning ratio",
+            description=(
+                "Active validator participation fell beneath the 97% SLA target for at least ten minutes. "
+                "Correlate with recent node joins/removals and confirm new validators are producing uptime proofs."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_uptime_participation(
+                store, UPTIME_SLA.participation_warning_ratio, 600.0
+            ),
+        ),
+        AlertRule(
+            name="UptimeParticipationDropCritical",
+            severity="critical",
+            service="uptime",
+            summary="Uptime participation breached the critical ratio",
+            description=(
+                "Validator participation in uptime proofs fell below the 94% critical ceiling. Investigate churn, peer counts, "
+                "and scheduler health to restore coverage before timetoke accrual stalls."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_uptime_participation(
+                store, UPTIME_SLA.participation_critical_ratio, 600.0
+            ),
+        ),
+        AlertRule(
+            name="UptimeObservationGapWarning",
+            severity="warning",
+            service="uptime",
+            summary="Uptime proofs missing beyond the warning gap",
+            description=(
+                "The latest uptime proof age exceeded the 15 minute SLA window. Verify schedulers are running after node joins "
+                "and that gossiped observations reach the reputation manager."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_uptime_gap(
+                store, "uptime_observation_age_seconds", UPTIME_SLA.uptime_gap_warning_seconds, 600.0
+            ),
+        ),
+        AlertRule(
+            name="UptimeObservationGapCritical",
+            severity="critical",
+            service="uptime",
+            summary="Uptime proofs missing beyond the critical gap",
+            description=(
+                "No uptime proofs landed for thirty minutes. Page the on-call to restart schedulers, reseed peers, or remove "
+                "faulty validators before timetoke balances decay."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_uptime_gap(
+                store, "uptime_observation_age_seconds", UPTIME_SLA.uptime_gap_critical_seconds, 600.0
+            ),
+        ),
+        AlertRule(
+            name="TimetokeAccrualStallWarning",
+            severity="warning",
+            service="reputation",
+            summary="Timetoke accrual slowed below the warning rate",
+            description=(
+                "Timetoke credit accrual dipped under the documented rate after validator churn. Inspect the uptime scheduler, "
+                "timetoke sync, and recent node removals before balances decay."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_timetoke_rate(
+                store,
+                "timetoke_accrual_hours_total",
+                UPTIME_SLA.timetoke_window_seconds,
+                UPTIME_SLA.timetoke_minimum_rate,
+                900.0,
+            ),
+        ),
+        AlertRule(
+            name="TimetokeAccrualStallCritical",
+            severity="critical",
+            service="reputation",
+            summary="Timetoke accrual stalled after validator churn",
+            description=(
+                "Timetoke credits stopped increasing for more than thirty minutes. Pause additional removals, restart uptime "
+                "pipelines, and replay missing proofs before the decay cycle slashes healthy operators."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
+            evaluator=lambda store: _evaluate_timetoke_rate(
+                store,
+                "timetoke_accrual_hours_total",
+                UPTIME_SLA.timetoke_window_seconds,
+                UPTIME_SLA.timetoke_minimum_rate,
+                1800.0,
             ),
         ),
         AlertRule(
@@ -1381,6 +1591,130 @@ def build_uptime_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_uptime_join_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_participation_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.985),
+                    (300.0, 0.99),
+                    (600.0, 0.992),
+                    (900.0, 0.993),
+                    (1200.0, 0.992),
+                    (1500.0, 0.991),
+                    (1800.0, 0.993),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 120.0),
+                    (300.0, 180.0),
+                    (600.0, 240.0),
+                    (900.0, 180.0),
+                    (1200.0, 150.0),
+                    (1500.0, 210.0),
+                    (1800.0, 240.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_accrual_hours_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10.0),
+                    (300.0, 10.3),
+                    (600.0, 10.6),
+                    (900.0, 10.95),
+                    (1200.0, 11.3),
+                    (1500.0, 11.6),
+                    (1800.0, 11.95),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_uptime_departure_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_participation_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.99),
+                    (300.0, 0.965),
+                    (600.0, 0.94),
+                    (900.0, 0.925),
+                    (1200.0, 0.92),
+                    (1500.0, 0.918),
+                    (1800.0, 0.915),
+                    (2100.0, 0.9),
+                    (2400.0, 0.9),
+                    (2700.0, 0.9),
+                    (3000.0, 0.9),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 420.0),
+                    (300.0, 780.0),
+                    (600.0, 1200.0),
+                    (900.0, 1680.0),
+                    (1200.0, 1920.0),
+                    (1500.0, 2100.0),
+                    (1800.0, 2100.0),
+                    (2100.0, 2160.0),
+                    (2400.0, 2220.0),
+                    (2700.0, 2400.0),
+                    (3000.0, 2520.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_accrual_hours_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 8.0),
+                    (300.0, 8.1),
+                    (600.0, 8.2),
+                    (900.0, 8.25),
+                    (1200.0, 8.27),
+                    (1500.0, 8.27),
+                    (1800.0, 8.27),
+                    (2100.0, 8.27),
+                    (2400.0, 8.27),
+                    (2700.0, 8.27),
+                    (3000.0, 8.27),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_missed_slot_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -1694,6 +2028,23 @@ def default_validation_cases() -> List[ValidationCase]:
             name="uptime-recovery",
             store=build_uptime_recovery_store(),
             expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="uptime-join",
+            store=build_uptime_join_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="uptime-departure",
+            store=build_uptime_departure_store(),
+            expected_alerts={
+                "TimetokeAccrualStallCritical",
+                "TimetokeAccrualStallWarning",
+                "UptimeObservationGapCritical",
+                "UptimeObservationGapWarning",
+                "UptimeParticipationDropCritical",
+                "UptimeParticipationDropWarning",
+            },
         ),
         ValidationCase(
             name="missed-slots",

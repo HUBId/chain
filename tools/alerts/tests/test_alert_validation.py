@@ -5,6 +5,7 @@ import yaml
 
 from tools.alerts.validation import (
     AlertValidationError,
+    AlertValidationAggregateError,
     AlertValidator,
     AlertWebhookServer,
     FINALITY_SLA,
@@ -25,7 +26,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 12
+    assert len(results) == 14
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -33,6 +34,8 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "snapshot-anomaly",
         "uptime-pause",
         "uptime-recovery",
+        "uptime-join",
+        "uptime-departure",
         "missed-slots",
         "missed-slot-recovery",
         "missed-blocks",
@@ -61,6 +64,14 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     uptime_recovery = results_by_case["uptime-recovery"]
     assert uptime_recovery.fired_events == []
     assert uptime_recovery.webhook_payloads == []
+
+    uptime_join = results_by_case["uptime-join"]
+    assert uptime_join.fired_events == []
+    assert uptime_join.webhook_payloads == []
+
+    uptime_departure = results_by_case["uptime-departure"]
+    assert {event.name for event in uptime_departure.fired_events} == uptime_departure.case.expected_alerts
+    assert len(uptime_departure.webhook_payloads) == len(uptime_departure.fired_events)
 
     missed_slots = results_by_case["missed-slots"]
     assert {event.name for event in missed_slots.fired_events} == missed_slots.case.expected_alerts
@@ -107,6 +118,22 @@ def test_alert_validator_detects_missing_alerts(validator: AlertValidator) -> No
         with pytest.raises(AlertValidationError) as excinfo:
             validator.run([case], client)
     assert "NonexistentAlert" in str(excinfo.value)
+
+
+def test_alert_validator_collects_errors_without_fail_fast(validator: AlertValidator) -> None:
+    anomaly_case = default_validation_cases()[0]
+    invalid_case = ValidationCase(
+        name="aggregate-invalid",
+        store=anomaly_case.store,
+        expected_alerts=anomaly_case.expected_alerts | {"Unexpected"},
+    )
+    with AlertWebhookServer() as server:
+        client = RecordedWebhookClient(server)
+        with pytest.raises(AlertValidationAggregateError) as excinfo:
+            validator.run([invalid_case], client, fail_fast=False)
+    assert excinfo.value.results
+    assert excinfo.value.errors
+    assert excinfo.value.results[0].error is not None
 
 
 def test_finality_alerts_match_sla_thresholds() -> None:
