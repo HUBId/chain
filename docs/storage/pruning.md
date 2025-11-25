@@ -7,6 +7,12 @@ state-sync checkpoint before simulating a WAL crash. The recovered node reloads
 both the pruning plan and any transactions staged in the mempool WAL to ensure
 state hashes and proof verification remain consistent across backends.
 
+Each checkpoint JSON now embeds a `metadata` block that records the snapshot
+height, the Unix timestamp when the plan was persisted, and the proof backend
+used to generate it. The checkpoint and its metadata are written atomically to
+`snapshot-<height>.json`, so recovery routines can ignore truncated files and
+select the newest valid checkpoint by inspecting the metadata.
+
 ## Running the cross-backend drill locally
 
 ```shell
