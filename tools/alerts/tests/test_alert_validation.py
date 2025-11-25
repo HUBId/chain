@@ -8,6 +8,7 @@ from tools.alerts.validation import (
     AlertValidationAggregateError,
     AlertValidator,
     AlertWebhookServer,
+    BLOCK_PRODUCTION_SLA,
     FINALITY_SLA,
     RecordedWebhookClient,
     ValidationCase,
@@ -26,7 +27,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 16
+    assert len(results) == 18
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -40,6 +41,8 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "missed-slot-recovery",
         "missed-blocks",
         "missed-block-recovery",
+        "block-schedule-deficit",
+        "block-schedule-recovery",
         "rpc-availability-outage",
         "rpc-availability-recovery",
         "restart-finality-correlation",
@@ -154,9 +157,31 @@ def test_finality_alerts_match_sla_thresholds() -> None:
         rule["alert"]: rule["expr"]
         for group in manifest.get("groups", [])
         for rule in group.get("rules", [])
+        if "alert" in rule
     }
 
     assert f"> {int(FINALITY_SLA.lag_warning_slots)}" in expressions["ConsensusFinalityLagWarning"]
     assert f"> {int(FINALITY_SLA.lag_critical_slots)}" in expressions["ConsensusFinalityLagCritical"]
     assert f"> {int(FINALITY_SLA.gap_warning_blocks)}" in expressions["ConsensusFinalizedHeightGapWarning"]
     assert f"> {int(FINALITY_SLA.gap_critical_blocks)}" in expressions["ConsensusFinalizedHeightGapCritical"]
+
+
+def test_block_production_alerts_match_sla_thresholds() -> None:
+    with open("ops/alerts/consensus/liveness.yaml", "r", encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle)
+
+    expressions = {
+        rule["alert"]: rule["expr"]
+        for group in manifest.get("groups", [])
+        for rule in group.get("rules", [])
+        if "alert" in rule
+    }
+
+    assert (
+        f"< {BLOCK_PRODUCTION_SLA.warning_ratio}"
+        in expressions["ConsensusBlockProductionLagWarning"]
+    )
+    assert (
+        f"< {BLOCK_PRODUCTION_SLA.critical_ratio}"
+        in expressions["ConsensusBlockProductionLagCritical"]
+    )

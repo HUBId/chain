@@ -149,6 +149,11 @@ When drift triggers an alert:
 - **Block production:** `chain_block_height` must advance within ten minutes to
   avoid a liveness breach; the stall probe models this SLA in the alert
   validation harness.【F:tools/alerts/validation.py†L780-L808】
+- **Slot budget adherence:** Keep the five-minute block production ratio above
+  0.9; dips below 0.75 for ten minutes page on-call via the
+  `ConsensusBlockProductionLag*` alerts. The ratio divides block height
+  increases by scheduled slots (`consensus_block_schedule_slots_total`) to track
+  missed production against the configured block interval.【F:telemetry/prometheus/runtime-rules.yaml†L5-L78】【F:ops/alerts/consensus/liveness.yaml†L1-L52】【F:tools/alerts/validation.py†L865-L1007】
 
 ### Measurement
 

@@ -156,8 +156,7 @@ impl PruningMetrics {
                     .saturating_sub(status.stored_proofs.len());
                 let per_key_ms = duration.as_secs_f64() * 1_000.0 / processed as f64;
                 let estimate_ms = per_key_ms * remaining as f64;
-                let estimate_attrs =
-                    self.with_base_labels([KeyValue::new("reason", reason_attr)]);
+                let estimate_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);
                 self.time_remaining_ms.record(estimate_ms, &estimate_attrs);
             }
         }
@@ -185,10 +184,7 @@ impl PruningMetrics {
         vec![self.shard_label.clone(), self.partition_label.clone()]
     }
 
-    fn with_base_labels(
-        &self,
-        extra: impl IntoIterator<Item = KeyValue>,
-    ) -> Vec<KeyValue> {
+    fn with_base_labels(&self, extra: impl IntoIterator<Item = KeyValue>) -> Vec<KeyValue> {
         let mut labels = self.base_labels();
         labels.extend(extra);
         labels
@@ -228,13 +224,13 @@ impl CycleOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use opentelemetry::{global, Value};
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use rpp_chain::node::PruningJobStatus;
     use rpp_chain::rpp::GlobalStateCommitments;
     use rpp_chain::runtime::sync::{BlockMetadata, SnapshotSummary, StateSyncPlan};
+    use std::env;
 
     fn setup_meter() -> (PruningMetrics, InMemoryMetricExporter, SdkMeterProvider) {
         let exporter = InMemoryMetricExporter::default();
