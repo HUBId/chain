@@ -18,6 +18,12 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
 * Subscribe to the internal `WitnessProofs` gossip channel to confirm that successful submissions
   emit events containing the transaction hash and fee, which is useful when correlating accepted
   transactions with rate limit tuning.【F:tests/mempool/spam_recovery.rs†L31-L40】【F:tests/mempool/spam_recovery.rs†L96-L105】
+* A peer-churn simnet test (`tests/mempool/peer_churn.rs::peer_churn_respects_rate_limits_and_preserves_queue_ordering`) spins
+  up rotating gossip subscribers while flooding the mempool across every enabled proof backend. It asserts that rate-limit
+  rejections fire once the queue is saturated, that the highest-fee ordering survives churn, and that the alert probe surfaces
+  warning/critical signals. On failure, the harness writes `peer-churn.json` to `target/artifacts/mempool-peer-churn`
+  (override with `MEMPOOL_PEER_CHURN_ARTIFACT_DIR`) containing accepted/rejected hashes, alert summaries, backend coverage,
+  and witness delivery counts for debugging.【F:tests/mempool/peer_churn.rs†L1-L213】
 * The `/status/mempool` probe in the integration suite explicitly saturates the queues, verifies that
   warning- and critical-level alerts fire for transactions and identities, and ensures gossip stays
   drained while the probe operates.【F:tests/mempool/status_probe.rs†L77-L163】 Use the same thresholds
