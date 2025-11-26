@@ -141,6 +141,32 @@ Operationally, mirror the same guardrails:
   re-execute. Stuck queues suggest mempool persistence corruption and should
   trigger a crash dump and rollback.
 
+## CI artefacts for consensus/proving/timetoke failures
+
+Nightly simnet runs now upload artefacts keyed by the backend/feature matrix,
+e.g. `simnet-prod-prover-stwo-backend-plonky3` or
+`simnet-regression-prod-plonky3`, and attach a sibling failure bundle whenever a
+job fails. To retrieve them during incidents:
+
+1. Download the labelled bundle from the workflow run (replace `<run-id>` and
+   `<label>` with the GitHub run and artefact names):
+
+   ```
+   gh run download <run-id> --name simnet-<label> --dir artifacts
+   ```
+
+2. Expand the archive to expose the target layout:
+
+   ```
+   tar -xzf artifacts/simnet/<label>/simnet-<label>.tar.gz -C artifacts/simnet/<label>
+   ```
+
+3. Inspect consensus/prover/verifier logs under `artifacts/simnet/<label>/logs`
+   and timetoke telemetry under `artifacts/simnet/<label>/telemetry/timetoke*.jsonl`
+   to determine whether the failure came from proving, verification, or replay
+   lag. Summaries remain under `summaries/` for `python3 scripts/analyze_simnet.py`
+   so the same checks CI performs can be replicated offline.
+
 ## Health integration for orchestrators and Kubernetes
 
 - `/health` keeps returning HTTP 200 for monitoring stacks but now flips the

@@ -94,6 +94,26 @@ The `cargo xtask test-simnet` entry point used in CI and nightly workflows calls
 the same wrapper to run the canonical suite of profiles. When adding new
 presets, update the table above so local runs and automation stay aligned.
 
+### CI artifact layout and failure captures
+
+Nightly and weekly CI jobs publish artefacts under `artifacts/simnet/<label>`
+where `<label>` mirrors the feature/backend matrix (for example,
+`prod-prover-stwo-backend-plonky3` or
+`uptime-soak-prod-prover-stwo-backend-plonky3`). The archive inside the
+directory keeps the same suffix, so extracting a single label is as simple as:
+
+```
+gh run download <run-id> --name simnet-prod-prover-stwo-backend-plonky3
+tar -xzf artifacts/simnet/prod-prover-stwo-backend-plonky3/simnet-prod-prover-stwo-backend-plonky3.tar.gz
+```
+
+When a simnet job fails, CI now runs `scripts/ci/collect_test_artifacts.sh` and
+uploads the redacted logs/metrics alongside the main archive. The failure
+bundle mirrors the simnet target layout and captures consensus load traces,
+prover/verifier logs, and timetoke telemetry (`telemetry/timetoke*.jsonl`) so
+engineers can debug consensus/proving regressions without rerunning the
+scenario locally.
+
 ## Inspecting per-peer traffic metrics
 
 Simnet now records the total bytes in/out for every simulated peer, along with
