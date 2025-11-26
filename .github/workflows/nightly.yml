@@ -233,6 +233,23 @@ jobs:
             eviction_policy_is_fifo_and_hits_survive_eviction \
             eviction_hit_rate_stays_stable_under_pressure
 
+  zk-penalty-guardrails:
+    name: ZK consensus penalty guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Exercise missed-slot and double-sign penalties under zk verification
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --test consensus_censorship_inactivity -- zk_backends_apply_and_log_penalties
+
   zk-load-harness:
     name: ZK backend load harness
     runs-on: ubuntu-latest
