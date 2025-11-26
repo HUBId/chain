@@ -26,6 +26,27 @@ code review and future feature flags.
 * When consolidating UTXOs for validator-grade tiers (TL5), plan sweeps so they
   stay within the unlimited tier before promoting funds to lower tiers.
 
+## Pruning validation for wallet indices
+
+Wallet balance and nonce indices must survive pruning snapshots so wallet proofs
+stay consistent across prover backends. Operators can reuse the pruning
+cross-backend harness to verify this invariant:
+
+```bash
+RPP_PROVER_DETERMINISTIC=1 \
+cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+  wallet_snapshot_round_trip_default_backend
+
+RPP_PROVER_DETERMINISTIC=1 \
+cargo test -p rpp-chain --locked --features backend-rpp-stark --test pruning_cross_backend -- \
+  wallet_snapshot_round_trip_rpp_stark_backend
+```
+
+Both runs assert the restored snapshot keeps every wallet balance/nonce witness
+identical to the pre-pruning index, covering both the default and `backend-rpp-
+stark` prover stacks. Run these checks when validating new pruning snapshots or
+after storage changes that touch wallet account tables.
+
 ## Customizing wallet messages
 
 Operators that white-label the wallet CLI or GUI can override the user-visible

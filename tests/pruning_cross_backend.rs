@@ -8,6 +8,7 @@ use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::{Block, BlockMetadata, ValidatedPruningEnvelope};
 use rpp_chain::runtime::RuntimeMetrics;
+use rpp_chain::rpp::AccountBalanceWitness;
 use serde_json::Value;
 use storage_firewood::wal::{FileWal, WalError};
 use tempfile::TempDir;
@@ -324,6 +325,17 @@ fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
     let storage = handle.storage();
 
     let baseline_accounts = persist_test_accounts(&storage);
+    let baseline_witnesses: BTreeMap<_, _> = storage
+        .load_accounts()
+        .expect("load baseline accounts for proofs")
+        .into_iter()
+        .map(|account| {
+            (
+                account.address.clone(),
+                AccountBalanceWitness::new(account.address, account.balance, account.nonce),
+            )
+        })
+        .collect();
 
     let blocks = build_chain(&handle, 6);
     let payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
@@ -407,6 +419,22 @@ fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
     assert_eq!(
         baseline_accounts, restored_accounts,
         "wallet balances and nonces should survive prune snapshot restore",
+    );
+
+    let restored_witnesses: BTreeMap<_, _> = restored_storage
+        .load_accounts()
+        .expect("reload restored accounts for proofs")
+        .into_iter()
+        .map(|account| {
+            (
+                account.address.clone(),
+                AccountBalanceWitness::new(account.address, account.balance, account.nonce),
+            )
+        })
+        .collect();
+    assert_eq!(
+        baseline_witnesses, restored_witnesses,
+        "wallet balance/nonce witnesses should remain stable after pruning snapshot restore",
     );
 
     let mut wal =

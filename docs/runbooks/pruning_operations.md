@@ -66,6 +66,21 @@ raise incidents when three consecutive scheduled runs fail.
    same incident or maintenance log entry that tracks pruning receipts. When the
    hashes differ, stop snapshot exports and rebuild the checkpoint before
    resuming pruning automation.
+3. **Replay wallet indices across prover backends.** Run the wallet snapshot
+   round-trip tests to confirm balances and nonces (the wallet-facing index) do
+   not drift after pruning. Execute both backends to cover the plonky3 default
+   and the `backend-rpp-stark` stack:
+
+   ```bash
+   RPP_PROVER_DETERMINISTIC=1 cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+     wallet_snapshot_round_trip_default_backend
+
+   RPP_PROVER_DETERMINISTIC=1 cargo test -p rpp-chain --locked --features backend-rpp-stark --test pruning_cross_backend -- \
+     wallet_snapshot_round_trip_rpp_stark_backend
+   ```
+
+   Keep the outputs with the pruning receipts to document which prover stack
+   validated the wallet index for the snapshot.
 
 ## 5. Failure scenarios
 
