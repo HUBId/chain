@@ -9,6 +9,23 @@
     "from": "now-12h",
     "to": "now"
   },
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "refresh": 2,
+        "definition": "label_values(up, environment)",
+        "query": { "query": "label_values(up, environment)", "refId": "PromVar" },
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": ["$__all"] }
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
@@ -30,13 +47,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(changes(process_start_time_seconds[5m]))",
-          "legendFormat": "Process restarts"
+          "expr": "sum by (environment) (changes(process_start_time_seconds{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{environment}} restarts"
         },
         {
           "refId": "B",
-          "expr": "sum(1 - up{job=~\"rpp-node|node\"})",
-          "legendFormat": "Scrape downtime"
+          "expr": "sum by (environment) (1 - up{job=~\"rpp-node|node\", environment=~\"$environment\"})",
+          "legendFormat": "{{environment}} scrape downtime"
         }
       ]
     },
@@ -60,13 +77,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max_over_time(finality_lag_slots[5m])",
-          "legendFormat": "Finality lag (slots)"
+          "expr": "max_over_time(finality_lag_slots{environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} finality lag (slots)"
         },
         {
           "refId": "B",
-          "expr": "max_over_time(finalized_height_gap[5m])",
-          "legendFormat": "Finalized height gap"
+          "expr": "max_over_time(finalized_height_gap{environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} finalized height gap"
         }
       ]
     },
@@ -90,8 +107,39 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "increase(chain_block_height[5m]) / 5",
-          "legendFormat": "Block rate"
+          "expr": "increase(chain_block_height{environment=~\"$environment\"}[5m]) / 5",
+          "legendFormat": "{{environment}} block rate"
+        },
+        {
+          "refId": "B",
+          "expr": "consensus:block_height_delta:5m{environment=~\"$environment\"} / 5",
+          "legendFormat": "{{environment}} recorded block delta"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "RPC Availability",
+      "description": "Tracks RPC success ratio so operators can distinguish API outages from consensus stalls.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rpc:availability_ratio:5m{environment=~\"$environment\"}",
+          "legendFormat": "{{environment}} RPC success ratio"
         }
       ]
     }

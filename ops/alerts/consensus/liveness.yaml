@@ -3,18 +3,18 @@ groups:
     interval: 30s
     rules:
       - record: consensus:block_height_delta:5m
-        expr: increase(chain_block_height[5m])
+        expr: sum by (environment) (increase(chain_block_height[5m]))
         labels:
           component: consensus
 
       - record: consensus:block_schedule_slots:5m
-        expr: increase(consensus_block_schedule_slots_total[5m])
+        expr: sum by (environment) (increase(consensus_block_schedule_slots_total[5m]))
         labels:
           component: consensus
 
       - record: consensus:block_production_ratio:5m
         expr: |
-          increase(chain_block_height[5m])
+          consensus:block_height_delta:5m
             / clamp_min(consensus:block_schedule_slots:5m, 1)
         labels:
           component: consensus
@@ -27,6 +27,7 @@ groups:
           team: consensus
           sla: liveness
           sla_target: block_progress
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Block production stalled for 10 minutes
           description: >-
@@ -42,6 +43,7 @@ groups:
           team: consensus
           sla: liveness
           sla_target: block_production_rate
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Block production rate below 90% of schedule
           description: >-
@@ -57,6 +59,7 @@ groups:
           team: consensus
           sla: liveness
           sla_target: block_production_rate
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Block production rate below 75% of schedule
           description: >-

@@ -461,6 +461,84 @@ PY
           name: alert-probes
           path: artifacts/alert-probes
 
+  staging-slo-probes:
+    name: Staging SLO probes
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    env:
+      SNAPSHOT_RPC_URL: ${{ secrets.SNAPSHOT_RPC_URL }}
+      SNAPSHOT_RPC_TOKEN: ${{ secrets.SNAPSHOT_RPC_TOKEN }}
+      SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
+      SNAPSHOT_MANIFEST_PATH: ${{ secrets.SNAPSHOT_MANIFEST_PATH }}
+      SNAPSHOT_MANIFEST_JSON: ${{ secrets.SNAPSHOT_MANIFEST_JSON }}
+      SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
+      SNAPSHOT_CHUNK_ROOT: ${{ secrets.SNAPSHOT_CHUNK_ROOT }}
+      SNAPSHOT_CHUNK_ARCHIVE_URL: ${{ secrets.SNAPSHOT_CHUNK_ARCHIVE_URL }}
+      SNAPSHOT_CHUNK_ROOT_SUBDIR: ${{ secrets.SNAPSHOT_CHUNK_ROOT_SUBDIR }}
+      SNAPSHOT_MANIFEST_SIGNATURE_PATH: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE_PATH }}
+      SNAPSHOT_MANIFEST_SIGNATURE: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE }}
+      TIMETOKE_PROMETHEUS_URL: ${{ secrets.TIMETOKE_PROMETHEUS_URL }}
+      TIMETOKE_PROMETHEUS_BEARER: ${{ secrets.TIMETOKE_PROMETHEUS_BEARER }}
+      ADMISSION_RPC_URL: ${{ secrets.ADMISSION_RPC_URL }}
+      ADMISSION_RPC_TOKEN: ${{ secrets.ADMISSION_RPC_TOKEN }}
+      ADMISSION_POLICY_PATH: ${{ secrets.ADMISSION_POLICY_PATH }}
+      ADMISSION_MAX_AUDIT_LAG_SECS: ${{ secrets.ADMISSION_MAX_AUDIT_LAG_SECS }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate staging probe inputs
+        run: |
+          set -euo pipefail
+          required=(TIMETOKE_PROMETHEUS_URL SNAPSHOT_RPC_URL ADMISSION_RPC_URL)
+          missing=0
+          for var in "${required[@]}"; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::Missing $var for staging SLO probes" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: Run staging SLO probes
+        id: staging
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/staging-slo-probes
+          args=(staging-soak --output-dir artifacts/staging-slo-probes)
+          [[ -n "${SNAPSHOT_VALIDATOR_CONFIG:-}" ]] && args+=(--snapshot-config "$SNAPSHOT_VALIDATOR_CONFIG")
+          [[ -n "${SNAPSHOT_RPC_URL:-}" ]] && args+=(--snapshot-rpc-url "$SNAPSHOT_RPC_URL")
+          [[ -n "${SNAPSHOT_RPC_TOKEN:-}" ]] && args+=(--snapshot-auth-token "$SNAPSHOT_RPC_TOKEN")
+          [[ -n "${SNAPSHOT_MANIFEST_PATH:-}" ]] && args+=(--snapshot-manifest "$SNAPSHOT_MANIFEST_PATH")
+          [[ -n "${TIMETOKE_PROMETHEUS_URL:-}" ]] && args+=(--timetoke-prometheus-url "$TIMETOKE_PROMETHEUS_URL")
+          [[ -n "${TIMETOKE_PROMETHEUS_BEARER:-}" ]] && args+=(--timetoke-bearer-token "$TIMETOKE_PROMETHEUS_BEARER")
+          [[ -n "${ADMISSION_RPC_URL:-}" ]] && args+=(--admission-rpc-url "$ADMISSION_RPC_URL")
+          [[ -n "${ADMISSION_RPC_TOKEN:-}" ]] && args+=(--admission-auth-token "$ADMISSION_RPC_TOKEN")
+          [[ -n "${ADMISSION_POLICY_PATH:-}" ]] && args+=(--admission-policy-path "$ADMISSION_POLICY_PATH")
+          [[ -n "${ADMISSION_MAX_AUDIT_LAG_SECS:-}" ]] && args+=(--admission-max-audit-lag-secs "$ADMISSION_MAX_AUDIT_LAG_SECS")
+          set +e
+          cargo xtask "${args[@]}"
+          status=$?
+          set -e
+          summary=$(find artifacts/staging-slo-probes -name summary.json -print | sort | tail -n 1)
+          if [[ -n "$summary" ]]; then
+            echo "summary_path=$summary" >>"$GITHUB_OUTPUT"
+          fi
+          echo "exit_status=$status" >>"$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload staging SLO probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-slo-probes
+          path: artifacts/staging-slo-probes
+
   docker-images:
     name: Build container images (${{ matrix.name }})
     runs-on: ubuntu-latest
