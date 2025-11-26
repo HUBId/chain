@@ -49,7 +49,22 @@ raise incidents when three consecutive scheduled runs fail.
   stores the plan on disk. If the log is missing while `persisted_plan_total`
   remains zero, storage or filesystem permissions likely regressed.【F:rpp/runtime/node.rs†L3200-L3202】【F:rpp/node/src/telemetry/pruning.rs†L36-L40】
 
-## 4. Verify pruning checkpoints
+## 4. Startup compatibility matrix
+
+Pruning command-line switches are valid across the storage feature matrix, but
+`--pruning-pause` and `--pruning-resume` are mutually exclusive. The runtime
+fails fast on startup when both are supplied so operators choose a single
+startup state before the pruning worker launches.【F:rpp/node/src/lib.rs†L218-L239】【F:rpp/node/tests/runtime_modes.rs†L44-L75】
+
+| Binary feature set | Storage path | Prover backend | Pruning CLI compatibility |
+|--------------------|--------------|----------------|---------------------------|
+| Default (no extra features) | Sync I/O | plonky3 | `--pruning-pause` **or** `--pruning-resume`; both flags together are rejected. |
+| `io-uring` | io-uring | plonky3 | Same as default; conflicting pause/resume flags abort startup. |
+| `branch_factor_256` | Sync I/O (branch-factor 256 hashing) | plonky3 | Same as default; mutually exclusive pause/resume options. |
+| `io-uring` + `branch_factor_256` | io-uring with branch-factor 256 hashing | plonky3 | Same as default; pause/resume conflict rejected. |
+| `backend-rpp-stark` (+ storage variants above) | Matches storage column | RPP-STARK | Same as default; pause/resume conflict rejected. |
+
+## 5. Verify pruning checkpoints
 
 1. **Capture roots before and after pruning.** Use `fwdctl compare` to hash the
    Firewood database captured prior to pruning or checkpoint rebuild and the
@@ -82,7 +97,7 @@ raise incidents when three consecutive scheduled runs fail.
    Keep the outputs with the pruning receipts to document which prover stack
    validated the wallet index for the snapshot.
 
-## 5. Benchmark pruning throughput
+## 6. Benchmark pruning throughput
 
 1. **Scheduled CI coverage.** The performance workflow now runs the pruning
    benchmark every day across both storage backends (standard and io-uring) and
@@ -105,7 +120,7 @@ raise incidents when three consecutive scheduled runs fail.
    `FIREWOOD_PRUNING_BASELINE` to compare against a freshly generated file when
    refreshing expectations.【F:benchmark/src/pruning.rs†L16-L124】【F:benchmark/src/pruning_baseline.rs†L9-L117】【F:benchmark/baselines/pruning.json†L1-L20】
 
-## 6. Failure scenarios
+## 7. Failure scenarios
 
 ### A. Repeated cycle failures
 

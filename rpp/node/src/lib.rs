@@ -214,6 +214,8 @@ fn ensure_worm_export_configured(mode: RuntimeMode, config: &NodeConfig) -> Boot
 pub async fn run(mode: RuntimeMode, mut options: RuntimeOptions) -> BootstrapResult<()> {
     ensure_prover_backend(mode)?;
 
+    validate_pruning_overrides(&options)?;
+
     let bootstrap_mode = mode;
     let dry_run = options.dry_run;
     let bootstrap_options = options.into_bootstrap_options(mode);
@@ -1508,6 +1510,16 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
     if let Some(paused) = options.pruning.emergency_pause {
         config.pruning.emergency_pause = paused;
     }
+}
+
+fn validate_pruning_overrides(options: &RuntimeOptions) -> BootstrapResult<()> {
+    if options.pruning.pause && options.pruning.resume {
+        return Err(BootstrapError::configuration(anyhow!(
+            "cannot combine --pruning-pause with --pruning-resume; choose a single startup state",
+        )));
+    }
+
+    Ok(())
 }
 
 fn map_tls_version_arg(value: TlsVersionArg) -> TlsVersion {

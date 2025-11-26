@@ -114,6 +114,29 @@ async fn hybrid_listener_conflict_is_reported() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn pruning_pause_and_resume_conflict_rejected() -> Result<()> {
+    assert_pruning_conflict_rejected().await
+}
+
+#[cfg(feature = "io-uring")]
+#[tokio::test]
+async fn pruning_conflict_rejected_with_io_uring() -> Result<()> {
+    assert_pruning_conflict_rejected().await
+}
+
+#[cfg(feature = "branch_factor_256")]
+#[tokio::test]
+async fn pruning_conflict_rejected_with_branch_factor_256() -> Result<()> {
+    assert_pruning_conflict_rejected().await
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[tokio::test]
+async fn pruning_conflict_rejected_with_backend_rpp_stark() -> Result<()> {
+    assert_pruning_conflict_rejected().await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn node_script_handles_shutdown_signal() -> Result<()> {
     let _guard = env_lock().lock().expect("env mutex");
@@ -180,6 +203,24 @@ async fn node_script_handles_shutdown_signal() -> Result<()> {
     Ok(())
 }
 
+async fn assert_pruning_conflict_rejected() -> Result<()> {
+    let mut options = base_runtime_options();
+    options.pruning.pause = true;
+    options.pruning.resume = true;
+    options.dry_run = true;
+
+    let error = rpp_node::run(RuntimeMode::Node, options)
+        .await
+        .expect_err("conflicting pruning flags should fail startup");
+    let message = error.to_string();
+    assert!(
+        message.contains("cannot combine --pruning-pause with --pruning-resume"),
+        "expected pruning conflict message, got: {message}"
+    );
+
+    Ok(())
+}
+
 fn base_runtime_options() -> RuntimeOptions {
     RuntimeOptions {
         config: None,
@@ -191,11 +232,16 @@ fn base_runtime_options() -> RuntimeOptions {
         telemetry_endpoint: None,
         telemetry_auth_token: None,
         telemetry_sample_interval: None,
+        rpc_min_tls_version: None,
+        rpc_tls_cipher_suites: Vec::new(),
         log_level: None,
         log_json: false,
         dry_run: false,
         write_config: false,
+        storage_ring_size: None,
         pruning: PruningCliOverrides::default(),
+        with_node: false,
+        strict_config_validation: false,
     }
 }
 
