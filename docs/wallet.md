@@ -22,6 +22,15 @@ provides operator hints for common actions.
   node rejects a transaction (for example, because of an invalid signature), the
   lock table is cleared so the inputs can be retried.
 
+## Fee estimation
+- Fee estimates are derived from node-provided mempool utilisation and recent
+  block medians. Low utilisation keeps the median rate, while congestion bumps
+  the estimate (capped by the node's max hint and the wallet heuristic limits).
+- Estimates are cached for `cache_ttl_secs` unless explicitly disabled. When the
+  node cannot provide mempool stats the wallet surfaces the RPC error to the
+  caller instead of silently guessing, making it clear when fee guidance is
+  stale.
+
 ## Offline signing workflow
 - Keep the air-gapped host responsible for `send create` and `send sign` so the
   signing keys never touch an online machine. Point the CLI at a loopback RPC
