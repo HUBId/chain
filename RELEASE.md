@@ -21,6 +21,9 @@ before artifacts are published. At a minimum:
    (incident response, snapshot recovery, Plonky3 rollout, pruning, etc.) and
    update mitigations, alert routing, and rollback procedures for any changes
    introduced this cycle.
+   - Confirm the [snapshot restore and wallet recovery guide](docs/runbooks/snapshot_restore_and_wallet_recovery.md) matches the
+     current snapshot export format, pruning receipts, zk backend verification commands, and wallet restore flow before
+     sign-off.
 3. Revalidate the admission and RPC policy reference
    ([`docs/network/admission.md`](docs/network/admission.md)) to capture new
    endpoints, authentication rules, rate limits, or privacy guarantees required

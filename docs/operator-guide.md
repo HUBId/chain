@@ -6,7 +6,8 @@
 > [Observability overview](./observability.md) & [runbook](./runbooks/observability.md),
 > [Zero-knowledge backend procedures](./zk_backends.md),
 > [RPP-STARK verifier alert operations](./operations/zk_backends.md),
-> [Incident response runbook](./operations/incidents.md)
+> [Incident response runbook](./operations/incidents.md),
+> [Snapshot restore and wallet recovery](./runbooks/snapshot_restore_and_wallet_recovery.md)
 
 The validator process exposes `/health/live` and `/health/ready` probes on the
 configured RPC listener as soon as startup completes. Integration coverage in
