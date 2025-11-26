@@ -70,9 +70,10 @@
   verifizieren, dass die Sekundär-Backends greifen, während Size-Gates weiter enforced bleiben
   (`cargo test -p rpp-wallet --features prover-mock fallback_router_ -- --nocapture`).【F:rpp/wallet/src/engine/signing/prover.rs†L996-L1060】
 - Die Drill `zk-penalty-guardrails` lässt sowohl RPP-STARK- als auch STWO-Backends eine verpasste Slot- und Double-Sign-Sequenz
-  durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
-  Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden
-  Incident-Schritten zur Backend-Isolation.【F:tests/consensus/censorship_inactivity.rs†L222-L306】【F:.github/workflows/nightly.yml†L208-L224】
+   durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
+   Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden
+   Incident-Schritten zur Backend-Isolation oder starte das Simnet-Profil `tools/simnet/scenarios/consensus_slashing_backends.ron`
+   wie im Slashing-Runbook beschrieben.【F:tests/consensus/censorship_inactivity.rs†L422-L520】【F:tools/simnet/scenarios/consensus_slashing_backends.ron†L1-L27】【F:docs/runbooks/slashing_incidents.md†L1-L36】【F:.github/workflows/nightly.yml†L1013-L1066】
 
 ### Size-Gate-Mapping
 
