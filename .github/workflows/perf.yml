@@ -116,3 +116,56 @@ jobs:
             smoke-summary.md
             smoke-summary.json
             smoke-summary.html
+
+  pruning:
+    name: Pruning benchmark
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [standard, io-uring]
+        branch_factor: [16, 256]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pruning-benchmark-${{ matrix.backend }}-bf${{ matrix.branch_factor }}
+
+      - name: Run pruning benchmark
+        env:
+          BACKEND: ${{ matrix.backend }}
+          BRANCH_FACTOR: ${{ matrix.branch_factor }}
+        run: |
+          set -euo pipefail
+          FEATURES=()
+          if [ "$BACKEND" = "io-uring" ]; then
+            FEATURES+=("io-uring")
+          fi
+          if [ "$BRANCH_FACTOR" = "256" ]; then
+            FEATURES+=("branch_factor_256")
+          fi
+
+          OUTPUT_PATH="pruning-metrics-${BACKEND}-bf${BRANCH_FACTOR}.json"
+          export FIREWOOD_PRUNING_OUTPUT="${OUTPUT_PATH}"
+
+          LOG_PATH="pruning-${BACKEND}-bf${BRANCH_FACTOR}.log"
+          if [ ${#FEATURES[@]} -gt 0 ]; then
+            cargo +nightly run -p firewood-benchmark --features "${FEATURES[*]}" -- pruning \
+              | tee "${LOG_PATH}"
+          else
+            cargo +nightly run -p firewood-benchmark -- pruning \
+              | tee "${LOG_PATH}"
+          fi
+
+      - name: Upload pruning artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pruning-benchmark-${{ matrix.backend }}-bf${{ matrix.branch_factor }}
+          path: |
+            pruning-${{ matrix.backend }}-bf${{ matrix.branch_factor }}.log
+            pruning-metrics-${{ matrix.backend }}-bf${{ matrix.branch_factor }}.json

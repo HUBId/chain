@@ -82,7 +82,30 @@ raise incidents when three consecutive scheduled runs fail.
    Keep the outputs with the pruning receipts to document which prover stack
    validated the wallet index for the snapshot.
 
-## 5. Failure scenarios
+## 5. Benchmark pruning throughput
+
+1. **Scheduled CI coverage.** The performance workflow now runs the pruning
+   benchmark every day across both storage backends (standard and io-uring) and
+   branch factors (16 and 256). Each matrix entry emits a metrics JSON and log
+   artifact so regressions are visible in the nightly run.【F:.github/workflows/perf.yml†L64-L115】
+2. **Local spot checks.** The pruning benchmark uses a fixed 3×32 workload with
+   deterministic payloads and deferred sync to keep runs lightweight. Execute
+   all four configurations when validating performance locally:
+
+   ```bash
+   cargo +nightly run -p firewood-benchmark -- pruning
+   cargo +nightly run -p firewood-benchmark --features io-uring -- pruning
+   cargo +nightly run -p firewood-benchmark --features branch_factor_256 -- pruning
+   cargo +nightly run -p firewood-benchmark --features "io-uring branch_factor_256" -- pruning
+   ```
+
+   Metrics land at `FIREWOOD_PRUNING_OUTPUT` (defaults to
+   `pruning-metrics.json`) and are validated against the baseline map in
+   `benchmark/baselines/pruning.json`. Override
+   `FIREWOOD_PRUNING_BASELINE` to compare against a freshly generated file when
+   refreshing expectations.【F:benchmark/src/pruning.rs†L16-L124】【F:benchmark/src/pruning_baseline.rs†L9-L117】【F:benchmark/baselines/pruning.json†L1-L20】
+
+## 6. Failure scenarios
 
 ### A. Repeated cycle failures
 
