@@ -6,7 +6,8 @@ This guide walks responders through restoring node state from exported snapshots
 
 1. **Stop daemons and mount storage read-only.** Halt services (`systemctl stop rpp-node rpp-wallet` or equivalent) and remount the data volume read-only to prevent writes during verification.
 2. **Stage artifacts.** Download the most recent storage snapshot bundle and any wallet backup archives to a staging directory. Keep the checksum manifest alongside the artifacts for validation.
-3. **Validate inputs.** Check hashes before applying them:
+3. **Pair backups with snapshots.** Place the encrypted wallet archive (or the full `backups/` directory) in the same staging path as the node snapshot so operators can restore both together without re-downloading secrets. Record the checksum for the backup separately to prove integrity before running the wallet restore command.【F:docs/wallet_operator_runbook.md†L99-L130】
+4. **Validate inputs.** Check hashes before applying them:
    ```bash
    sha256sum -c snapshot.SHA256SUMS
    sha256sum -c wallet-backups.SHA256SUMS
