@@ -149,13 +149,12 @@ impl PruningMetrics {
             let processed_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);
             self.keys_processed.record(processed, &processed_attrs);
 
-            if processed > 0 {
-                let remaining = status
-                    .missing_heights
-                    .len()
-                    .saturating_sub(status.stored_proofs.len());
-                let per_key_ms = duration.as_secs_f64() * 1_000.0 / processed as f64;
-                let estimate_ms = per_key_ms * remaining as f64;
+            let estimate_ms = status
+                .estimated_time_remaining_ms
+                .map(|ms| ms as f64)
+                .or_else(|| compute_time_remaining_ms(processed, status.missing_heights.len(), duration));
+
+            if let Some(estimate_ms) = estimate_ms {
                 let estimate_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);
                 self.time_remaining_ms.record(estimate_ms, &estimate_attrs);
             }
@@ -218,6 +217,20 @@ impl CycleOutcome {
             CycleOutcome::Success => "success",
             CycleOutcome::Failure => "failure",
         }
+    }
+}
+
+fn compute_time_remaining_ms(processed: u64, backlog: usize, duration: Duration) -> Option<f64> {
+    if processed == 0 || backlog <= processed as usize {
+        return None;
+    }
+
+    let per_key_ms = duration.as_secs_f64() * 1_000.0 / processed as f64;
+    let estimate = per_key_ms * backlog.saturating_sub(processed as usize) as f64;
+    if estimate.is_finite() && estimate.is_sign_positive() {
+        Some(estimate)
+    } else {
+        None
     }
 }
 
@@ -388,6 +401,7 @@ mod tests {
             persisted_path: None,
             stored_proofs: (0..stored as u64).collect(),
             last_updated: 0,
+            estimated_time_remaining_ms: None,
         }
     }
 
@@ -416,6 +430,51 @@ mod tests {
             "rpp.node.pruning.time_remaining_ms",
             |v| v >= 3_900.0
         ));
+    }
+
+    #[test]
+    fn calculates_eta_from_cycle_duration() {
+        let status = sample_status(5, 2);
+
+        let eta = status.estimate_time_remaining_ms(Duration::from_secs(4));
+
+        assert_eq!(eta, Some(6_000));
+    }
+
+    #[test]
+    fn metrics_prefer_reported_eta() {
+        let (metrics, exporter, provider) = setup_meter();
+        let mut status = sample_status(4, 2);
+        status.estimated_time_remaining_ms = Some(2_500);
+
+        metrics.record_cycle(
+            CycleReason::Manual,
+            CycleOutcome::Success,
+            Duration::from_secs(2),
+            Some(&status),
+        );
+
+        provider.force_flush().unwrap();
+        let exported = exporter.get_finished_metrics().unwrap();
+
+        assert!(histogram_has_value(
+            &exported,
+            "rpp.node.pruning.time_remaining_ms",
+            |v| (v - 2_500.0).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn eta_tracks_throughput_changes() {
+        let fast = sample_status(10, 4);
+        let slow = sample_status(10, 1);
+
+        let fast_eta = fast.estimate_time_remaining_ms(Duration::from_secs(2));
+        let slow_eta = slow.estimate_time_remaining_ms(Duration::from_secs(2));
+
+        assert_eq!(fast_eta, Some(3_000));
+        assert!(slow_eta.is_some());
+        assert!(slow_eta > fast_eta);
     }
 
     #[test]
