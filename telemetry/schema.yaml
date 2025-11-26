@@ -223,6 +223,14 @@ metrics:
     labels:
       - backend
       - code
+  - name: rpp.runtime.wallet.sync.wallet_height
+    labels: []
+  - name: rpp.runtime.wallet.sync.chain_tip_height
+    labels: []
+  - name: rpp.runtime.wallet.sync.lag.blocks
+    labels: []
+  - name: rpp.runtime.wallet.sync.last_success_timestamp.seconds
+    labels: []
   - name: rpp_stark_params_bytes
     labels:
       - proof_backend

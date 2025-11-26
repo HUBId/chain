@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use firewood_storage::{
@@ -96,6 +96,14 @@ pub struct RuntimeMetrics {
     wallet_runtime_watch_active: Histogram<u64>,
     #[cfg(feature = "wallet-integration")]
     wallet_sync_driver_active: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sync_wallet_height: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sync_chain_tip_height: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sync_lag_blocks: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_last_successful_sync_timestamp: Histogram<u64>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
     rpc_rate_limit_total: RpcClassCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
@@ -207,6 +215,30 @@ impl RuntimeMetrics {
                 .u64_histogram("rpp.runtime.wallet.sync.active")
                 .with_description("Samples indicating whether the wallet sync driver is active")
                 .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sync_wallet_height: meter
+                .u64_histogram("rpp.runtime.wallet.sync.wallet_height")
+                .with_description("Latest wallet chain height observed by the sync driver")
+                .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sync_chain_tip_height: meter
+                .u64_histogram("rpp.runtime.wallet.sync.chain_tip_height")
+                .with_description("Chain tip height observed while syncing the wallet")
+                .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sync_lag_blocks: meter
+                .u64_histogram("rpp.runtime.wallet.sync.lag.blocks")
+                .with_description("Block distance between chain tip and wallet height during sync")
+                .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_last_successful_sync_timestamp: meter
+                .u64_histogram("rpp.runtime.wallet.sync.last_success_timestamp.seconds")
+                .with_description("Unix timestamp of the last successful wallet sync")
+                .with_unit("s")
                 .build(),
             rpc_request_latency: RpcHistogram::new(
                 meter
@@ -556,6 +588,46 @@ impl RuntimeMetrics {
 
     #[cfg(not(feature = "wallet-integration"))]
     pub fn record_wallet_sync_driver_stopped(&self) {}
+
+    /// Record the current wallet height observed by the sync process.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_sync_wallet_height(&self, height: u64) {
+        self.wallet_sync_wallet_height.record(height, &[]);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_sync_wallet_height(&self, _height: u64) {}
+
+    /// Record the latest chain tip height observed while syncing the wallet.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_sync_chain_tip_height(&self, height: u64) {
+        self.wallet_sync_chain_tip_height.record(height, &[]);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_sync_chain_tip_height(&self, _height: u64) {}
+
+    /// Record the lag between the wallet height and the observed chain tip in blocks.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_sync_lag_blocks(&self, lag_blocks: u64) {
+        self.wallet_sync_lag_blocks.record(lag_blocks, &[]);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_sync_lag_blocks(&self, _lag_blocks: u64) {}
+
+    /// Record the timestamp of the last successful wallet sync.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_last_successful_sync(&self, timestamp: SystemTime) {
+        let Ok(duration) = timestamp.duration_since(SystemTime::UNIX_EPOCH) else {
+            return;
+        };
+        self.wallet_last_successful_sync_timestamp
+            .record(duration.as_secs(), &[]);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    pub fn record_wallet_last_successful_sync(&self, _timestamp: SystemTime) {}
 
     /// Record the latency and result of an RPC handler invocation.
     pub fn record_rpc_request(&self, method: RpcMethod, result: RpcResult, duration: Duration) {
