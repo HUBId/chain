@@ -216,7 +216,12 @@ fn paginated_history(backend: &str, reorg_at: Option<u64>) -> Vec<HistoryEntry> 
 fn parse_page_token(token: &str) -> (Option<String>, usize) {
     token
         .split_once(':')
-        .and_then(|(backend, offset)| offset.parse::<usize>().ok().map(|idx| (Some(backend.to_string()), idx)))
+        .and_then(|(backend, offset)| {
+            offset
+                .parse::<usize>()
+                .ok()
+                .map(|idx| (Some(backend.to_string()), idx))
+        })
         .unwrap_or((Some(token.to_string()), 0))
 }
 
@@ -489,10 +494,7 @@ async fn history_pagination_tokens_survive_rate_limits() {
     )
     .await;
     assert_eq!(
-        second_page
-            .entries
-            .first()
-            .map(|entry| entry.txid.as_str()),
+        second_page.entries.first().map(|entry| entry.txid.as_str()),
         Some("tx-2"),
     );
     let final_token = second_page.next_page_token.clone().expect("final token");
@@ -534,7 +536,10 @@ async fn history_pagination_tokens_survive_rate_limits() {
     )
     .await;
     assert_eq!(recovered_page.entries.len(), 0);
-    assert_eq!(recovered_page.prev_page_token.as_deref(), Some("rpp-stark:2"));
+    assert_eq!(
+        recovered_page.prev_page_token.as_deref(),
+        Some("rpp-stark:2")
+    );
 }
 
 #[tokio::test]

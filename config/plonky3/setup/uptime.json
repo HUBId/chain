@@ -1,5 +1,8 @@
 {
   "circuit": "uptime",
+  "metadata": {
+    "proof_version": 1
+  },
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,

@@ -12,6 +12,13 @@ struct ProofVersionSource {
     label: &'static str,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ProofVersionValue {
+    pub path: &'static str,
+    pub label: &'static str,
+    pub value: u64,
+}
+
 const PROOF_VERSION_SOURCES: &[ProofVersionSource] = &[
     ProofVersionSource {
         path: "vendor/rpp-stark/src/proof/types.rs",
@@ -58,8 +65,14 @@ pub(crate) fn proof_version_guard(args: &[String]) -> Result<()> {
     let (base_commit, base_reference) = resolve_base_commit(&workspace, &config)?;
     let changed_files = list_changed_files(&workspace, &base_commit)?;
     let proof_related: Vec<String> = changed_files
-        .into_iter()
+        .iter()
         .filter(|path| is_proof_affecting(path))
+        .cloned()
+        .collect();
+    let circuit_related: Vec<String> = changed_files
+        .iter()
+        .filter(|path| is_circuit_artifact(path))
+        .cloned()
         .collect();
 
     if proof_related.is_empty() {
@@ -94,6 +107,25 @@ pub(crate) fn proof_version_guard(args: &[String]) -> Result<()> {
         }
     }
 
+    if !circuit_related.is_empty() && version_changes.is_empty() {
+        let mut message = String::new();
+        message.push_str(
+            "proof-version-guard: circuit artifacts changed but PROOF_VERSION was not updated.\n",
+        );
+        message.push_str("Changed circuit files:\n");
+        for entry in circuit_related.iter().take(20) {
+            message.push_str(&format!("  - {entry}\n"));
+        }
+        if circuit_related.len() > 20 {
+            message.push_str(&format!("  ... and {} more\n", circuit_related.len() - 20));
+        }
+        message.push_str("Bump the PROOF_VERSION constants before merging:\n");
+        for source in PROOF_VERSION_SOURCES {
+            message.push_str(&format!("  - {} ({})\n", source.path, source.label));
+        }
+        bail!(message);
+    }
+
     if version_changes.is_empty() {
         let mut message = String::new();
         message.push_str(
@@ -120,6 +152,13 @@ pub(crate) fn proof_version_guard(args: &[String]) -> Result<()> {
     for (source, old, new) in version_changes {
         println!("  - {} {old} -> {new} ({})", source.path, source.label);
     }
+
+    if !circuit_related.is_empty() && !changelog_mentions_proof_version(&workspace, &base_commit)? {
+        bail!(
+            "proof-version-guard: circuit artifacts changed with a PROOF_VERSION bump but CHANGELOG.md is missing a PROOF_VERSION entry"
+        );
+    }
+
     Ok(())
 }
 
@@ -277,6 +316,16 @@ fn is_proof_affecting(path: &str) -> bool {
     false
 }
 
+fn is_circuit_artifact(path: &str) -> bool {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    let normalized = normalized.replace('\\', "/");
+    normalized.starts_with("prover/plonky3_backend/params/")
+        || normalized.starts_with("prover/prover_stwo_backend/params/")
+}
+
 fn read_proof_version(
     workspace: &Path,
     reference: &str,
@@ -319,6 +368,55 @@ fn extract_proof_version(contents: &str) -> Option<u64> {
         }
     }
     None
+}
+
+pub(crate) fn current_proof_versions() -> Result<Vec<ProofVersionValue>> {
+    read_proof_versions("HEAD")
+}
+
+fn read_proof_versions(reference: &str) -> Result<Vec<ProofVersionValue>> {
+    let workspace = workspace_root();
+    let mut values = Vec::new();
+    for source in PROOF_VERSION_SOURCES {
+        if let Some(value) = read_proof_version(&workspace, reference, source)? {
+            values.push(ProofVersionValue {
+                path: source.path,
+                label: source.label,
+                value,
+            });
+        }
+    }
+    Ok(values)
+}
+
+fn changelog_mentions_proof_version(workspace: &Path, base: &str) -> Result<bool> {
+    let range = format!("{base}..HEAD");
+    let output = Command::new("git")
+        .current_dir(workspace)
+        .arg("diff")
+        .arg("--unified=0")
+        .arg(&range)
+        .arg("--")
+        .arg("CHANGELOG.md")
+        .output()
+        .with_context(|| format!("git diff --unified=0 {range} -- CHANGELOG.md"))?;
+
+    if !output.status.success() {
+        bail!("git diff {range} -- CHANGELOG.md failed");
+    }
+
+    let diff = String::from_utf8(output.stdout).context("decode changelog diff")?;
+    for line in diff.lines() {
+        if !line.starts_with('+') || line.starts_with("+++") {
+            continue;
+        }
+        let lowered = line.to_ascii_lowercase();
+        if lowered.contains("proof_version") || lowered.contains("proof version") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn proof_version_guard_usage() {

@@ -1,4 +1,7 @@
 {
+  "metadata": {
+    "proof_version": 1
+  },
   "circuits": [
     {
       "circuit": "consensus",

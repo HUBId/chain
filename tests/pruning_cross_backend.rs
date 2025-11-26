@@ -5,10 +5,10 @@ use std::path::Path;
 
 use rpp_chain::config::{GenesisAccount, NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
+use rpp_chain::rpp::AccountBalanceWitness;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::{Block, BlockMetadata, ValidatedPruningEnvelope};
 use rpp_chain::runtime::RuntimeMetrics;
-use rpp_chain::rpp::AccountBalanceWitness;
 use serde_json::Value;
 use storage_firewood::wal::{FileWal, WalError};
 use tempfile::TempDir;

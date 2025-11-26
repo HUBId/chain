@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use rpp_chain::orchestration::PipelineStage;
 use serde_json::json;
 

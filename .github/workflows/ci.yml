@@ -294,6 +294,10 @@ PY
         run: |
           set -euo pipefail
           cargo xtask proof-version-guard
+      - name: Verify proof metadata alignment
+        run: |
+          set -euo pipefail
+          cargo xtask proof-version-metadata
 
   clippy:
     name: Clippy (all targets, all features)
