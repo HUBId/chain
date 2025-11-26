@@ -20,6 +20,14 @@ flag deployments where `last_verification.outcome` reports `Rejected` or
 the TCP listener is released so orchestrators can bind the port again
 immediately after shutdown.
 
+Operators can now query those probes alongside consensus finality, pruning
+progress, wallet readiness, uptime proof backlog, and timetoke snapshot counts
+with `rpp-chain-cli validator health --rpc-url http://host:port`. The command
+exits with `0` when all checks succeed, `20` when a degraded subsystem is
+detected (e.g., missing quorum or wallet signer not ready), and `21` if any
+probe cannot be reached. Use `--json` for automation workflows that need to
+ingest the summarized payloads directly.
+
 Configuration changes are exercised by
 `tests/node_lifecycle.rs::node_restart_applies_feature_gate_changes`. The workflow
 persists updated feature gates and storage backend policies, respawns the
