@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -547,6 +548,12 @@ impl TestCluster {
         let prepared =
             PreparedCluster::prepare_with(count, |config, index| configure(config, index))?;
 
+        let log_root = env::var_os("RPP_PROCESS_CLUSTER_LOG_ROOT").map(PathBuf::from);
+        if let Some(root) = &log_root {
+            fs::create_dir_all(root)
+                .with_context(|| format!("create log root directory at {}", root.display()))?;
+        }
+
         let PreparedCluster {
             nodes: prepared_nodes,
             genesis_accounts,
@@ -877,6 +884,7 @@ pub struct ProcessTestCluster {
     genesis_accounts: Vec<GenesisAccount>,
     binary: String,
     client: Client,
+    log_root: Option<PathBuf>,
 }
 
 impl ProcessTestCluster {
@@ -932,8 +940,10 @@ impl ProcessTestCluster {
                 .spawn()
                 .with_context(|| format!("failed to spawn rpp-node process for node {index}"))?;
 
-            let stdout_task = spawn_output_task(index, "stdout", child.stdout.take());
-            let stderr_task = spawn_output_task(index, "stderr", child.stderr.take());
+            let stdout_task =
+                spawn_output_task(index, "stdout", child.stdout.take(), log_root.as_deref());
+            let stderr_task =
+                spawn_output_task(index, "stderr", child.stderr.take(), log_root.as_deref());
 
             wait_for_process_ready(&client, &mut child, config.network.rpc.listen, index).await?;
 
@@ -954,6 +964,7 @@ impl ProcessTestCluster {
             genesis_accounts,
             binary,
             client,
+            log_root,
         })
     }
 
@@ -975,6 +986,10 @@ impl ProcessTestCluster {
 
     pub fn client(&self) -> Client {
         self.client.clone()
+    }
+
+    pub fn log_root(&self) -> Option<&std::path::Path> {
+        self.log_root.as_deref()
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
@@ -1050,7 +1065,12 @@ impl ProcessTestCluster {
 }
 
 impl ProcessClusterNode {
-    pub async fn respawn(&mut self, binary: &str, client: &Client) -> Result<()> {
+    pub async fn respawn(
+        &mut self,
+        binary: &str,
+        client: &Client,
+        log_root: Option<&std::path::Path>,
+    ) -> Result<()> {
         if self.child.id().is_some() {
             if let Err(err) = send_ctrl_c(&self.child) {
                 tracing::warn!(
@@ -1130,8 +1150,8 @@ impl ProcessClusterNode {
             )
         })?;
 
-        let stdout_task = spawn_output_task(self.index, "stdout", child.stdout.take());
-        let stderr_task = spawn_output_task(self.index, "stderr", child.stderr.take());
+        let stdout_task = spawn_output_task(self.index, "stdout", child.stdout.take(), log_root);
+        let stderr_task = spawn_output_task(self.index, "stderr", child.stderr.take(), log_root);
 
         wait_for_process_ready(client, &mut child, self.rpc_addr, self.index).await?;
 
@@ -1469,7 +1489,7 @@ impl ProcessNodeOrchestratorClient {
         }
     }
 
-    pub async fn pipeline_dashboard(&self) -> Result<HarnessPipelineDashboardSnapshot> {
+    pub async fn pipeline_dashboard_raw(&self) -> Result<String> {
         let url = self.url("wallet/pipeline/dashboard")?;
         let response = self
             .client
@@ -1489,10 +1509,16 @@ impl ProcessNodeOrchestratorClient {
                 body
             ));
         }
+
         response
-            .json()
+            .text()
             .await
-            .context("decode pipeline dashboard response")
+            .context("decode pipeline dashboard response body")
+    }
+
+    pub async fn pipeline_dashboard(&self) -> Result<HarnessPipelineDashboardSnapshot> {
+        let body = self.pipeline_dashboard_raw().await?;
+        serde_json::from_str(&body).context("decode pipeline dashboard response")
     }
 }
 
@@ -1774,20 +1800,44 @@ fn spawn_output_task<T>(
     index: usize,
     label: &'static str,
     stream: Option<T>,
+    log_root: Option<&std::path::Path>,
 ) -> Option<JoinHandle<()>>
 where
     T: Read + Send + 'static,
 {
+    let log_path = log_root.map(|root| root.join(format!("node-{index}-{label}.log")));
     stream.map(|stream| {
         tokio::task::spawn_blocking(move || {
-            let _ = (index, label);
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
+            let mut writer = log_path.as_ref().and_then(|path| {
+                if let Some(parent) = path.parent() {
+                    if let Err(err) = fs::create_dir_all(parent) {
+                        eprintln!(
+                            "failed to create log directory {}: {err:?}",
+                            parent.display()
+                        );
+                        return None;
+                    }
+                }
+
+                match File::create(path) {
+                    Ok(file) => Some(file),
+                    Err(err) => {
+                        eprintln!("failed to open log file {}: {err:?}", path.display());
+                        None
+                    }
+                }
+            });
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
                     Ok(0) => break,
-                    Ok(_) => continue,
+                    Ok(_) => {
+                        if let Some(file) = writer.as_mut() {
+                            let _ = file.write_all(line.as_bytes());
+                        }
+                    }
                     Err(_) => break,
                 }
             }

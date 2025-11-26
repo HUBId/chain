@@ -14,10 +14,26 @@ The Firewood storage feature combinations and zk backend permutations run in CI 
 | STWO backend with Plonky3 verifier | prod, prover-stwo, backend-plonky3 | unit-suites, integration-workflows, simnet-smoke | ≈50–60 min | Exercises the Plonky3 verifier path alongside the STWO prover in every xtask suite. |
 | Branch factor 256 + io-uring with pruning (default backend) | branch_factor_256, io-uring, pruning enabled | combined-feature-lanes | ≈45–55 min | Runs the combined lane (`cargo xtask test-combined-lane`) to ensure storage feature gates, pruning checks, and core smokes are exercised together. |
 | Branch factor 256 + io-uring with pruning (backend-rpp-stark) | branch_factor_256, io-uring, backend-rpp-stark, pruning enabled | combined-feature-lanes | ≈50–60 min | Mirrors the combined storage/pruning lane with `backend-rpp-stark` enabled to guard against backend-specific regressions. |
+| RPP-STARK branch-factor 256 cold start smoke | branch_factor_256, io-uring, backend-rpp-stark | rpp-stark-cold-start | ≈20–30 min | Builds the STARK/`io-uring`/branch-factor-256 binary, runs a cold restart during a minimal transaction flow, and archives node health/metrics logs. |
 
 The combined-feature lanes also exercise the pruning rollback guardrail added in
 `pruning_rolls_back_after_snapshot_persist_failure`, ensuring aborted cycles can
 be retried cleanly after filesystem faults.
+
+## Cold start smoke reproduction
+
+The `rpp-stark-cold-start` job keeps per-node stdout/stderr and health probes under
+`artifacts/rpp-stark-cold-start/` so startup/configuration errors are visible in CI.
+Reproduce the same workload locally with:
+
+```
+RPP_PROCESS_CLUSTER_LOG_ROOT=artifacts/rpp-stark-cold-start \
+  cargo build -p firewood --locked --features "branch_factor_256,io-uring"
+
+RPP_PROCESS_CLUSTER_LOG_ROOT=artifacts/rpp-stark-cold-start \
+  cargo test -p rpp-chain --locked --features backend-rpp-stark \
+  --test end_to_end_pipeline -- orchestrated_pipeline_finalises_transaction
+```
 
 ## Pruned snapshot zk recovery coverage
 

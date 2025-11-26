@@ -151,7 +151,7 @@ async fn node_restart_applies_feature_gate_changes() -> Result<()> {
     let binary = cluster.binary().to_string();
     let respawn_client = cluster.client();
     let node = &mut cluster.nodes_mut()[0];
-    node.respawn(&binary, &respawn_client)
+    node.respawn(&binary, &respawn_client, cluster.log_root())
         .await
         .context("failed to respawn node process")?;
 
