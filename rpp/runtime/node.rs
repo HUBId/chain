@@ -241,6 +241,7 @@ fn record_rpp_stark_size_metrics(
     proof_metrics: &ProofMetrics,
     backend: ProofVerificationBackend,
     proof_kind: ProofVerificationKind,
+    circuit: &str,
     proof: &ChainProof,
     outcome: ProofVerificationOutcome,
 ) -> Option<RppStarkProofSizeSnapshot> {
@@ -251,20 +252,22 @@ fn record_rpp_stark_size_metrics(
     let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
     let size_bucket = proof_size_bucket(proof_bytes);
 
-    proof_metrics.observe_verification_total_bytes(backend, proof_kind, proof_bytes);
+    proof_metrics.observe_verification_total_bytes(backend, proof_kind, circuit, proof_bytes);
     proof_metrics.observe_verification_total_bytes_by_result(
         backend,
         proof_kind,
+        circuit,
         outcome,
         proof_bytes,
     );
-    proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
+    proof_metrics.observe_verification_params_bytes(backend, proof_kind, circuit, params_bytes);
     proof_metrics.observe_verification_public_inputs_bytes(
         backend,
         proof_kind,
+        circuit,
         public_inputs_bytes,
     );
-    proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
+    proof_metrics.observe_verification_payload_bytes(backend, proof_kind, circuit, payload_bytes);
 
     Some(RppStarkProofSizeSnapshot {
         proof_bytes,
@@ -3235,6 +3238,7 @@ mod zk_backend_validation_tests {
         proof_metrics.observe_verification_total_bytes_by_result(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
             ProofVerificationOutcome::Fail,
             5 * 1024 * 1024,
         );
@@ -3301,6 +3305,7 @@ mod zk_backend_validation_tests {
             proof_metrics,
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
             &proof,
             ProofVerificationOutcome::Fail,
         )
@@ -4995,6 +5000,7 @@ impl NodeInner {
     fn record_stwo_proof_size(
         &self,
         proof_kind: ProofVerificationKind,
+        circuit: &str,
         proof: &ChainProof,
         proof_bytes: Option<&[u8]>,
     ) {
@@ -5012,15 +5018,31 @@ impl NodeInner {
             proof_metrics.observe_verification_total_bytes(
                 ProofVerificationBackend::Stwo,
                 proof_kind,
+                circuit,
                 bytes,
             );
             proof_metrics.observe_verification_total_bytes_by_result(
                 ProofVerificationBackend::Stwo,
                 proof_kind,
+                circuit,
                 ProofVerificationOutcome::Ok,
                 bytes,
             );
         }
+    }
+
+    fn record_stwo_outcome(
+        &self,
+        proof_kind: ProofVerificationKind,
+        circuit: &str,
+        outcome: ProofVerificationOutcome,
+    ) {
+        self.runtime_metrics.proofs().record_verification_outcome(
+            ProofVerificationBackend::Stwo,
+            proof_kind,
+            circuit,
+            outcome,
+        );
     }
 
     fn log_external_block_verification_failure(
@@ -5099,23 +5121,27 @@ impl NodeInner {
         let flags = report.flags();
         let proof_metrics = self.runtime_metrics.proofs();
         let outcome = ProofVerificationOutcome::from_bool(report.is_verified());
-        proof_metrics.observe_verification(backend, proof_kind, duration);
+        let resolved = labels;
+        proof_metrics.observe_verification(backend, proof_kind, resolved.circuit, duration);
         if let Some(stage_timings) = report.stage_timings() {
             proof_metrics.observe_verification_stage_duration(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 ProofVerificationStage::Parse,
                 stage_timings.parse,
             );
             proof_metrics.observe_verification_stage_duration(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 ProofVerificationStage::Merkle,
                 stage_timings.merkle,
             );
             proof_metrics.observe_verification_stage_duration(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 ProofVerificationStage::Fri,
                 stage_timings.fri,
             );
@@ -5124,28 +5150,37 @@ impl NodeInner {
             proof_metrics.observe_verification_stage_duration(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 ProofVerificationStage::Adapter,
                 adapter_duration,
             );
         }
-        let snapshot =
-            record_rpp_stark_size_metrics(proof_metrics, backend, proof_kind, proof, outcome);
+        let snapshot = record_rpp_stark_size_metrics(
+            proof_metrics,
+            backend,
+            proof_kind,
+            resolved.circuit,
+            proof,
+            outcome,
+        );
         if snapshot.is_none() {
             proof_metrics.observe_verification_total_bytes(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 report.total_bytes(),
             );
             proof_metrics.observe_verification_total_bytes_by_result(
                 backend,
                 proof_kind,
+                resolved.circuit,
                 outcome,
                 report.total_bytes(),
             );
         }
-        record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
+        record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, resolved.circuit, flags);
+        proof_metrics.record_verification_outcome(backend, proof_kind, resolved.circuit, outcome);
 
-        let resolved = labels;
         let backend_name = backend.as_str();
         let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
         if let Some(snapshot) = snapshot {
@@ -5260,9 +5295,15 @@ impl NodeInner {
     ) {
         let proof_metrics = self.runtime_metrics.proofs();
         let outcome = ProofVerificationOutcome::Fail;
-        proof_metrics.observe_verification(backend, proof_kind, duration);
-        let snapshot =
-            record_rpp_stark_size_metrics(proof_metrics, backend, proof_kind, proof, outcome);
+        proof_metrics.observe_verification(backend, proof_kind, labels.circuit, duration);
+        let snapshot = record_rpp_stark_size_metrics(
+            proof_metrics,
+            backend,
+            proof_kind,
+            labels.circuit,
+            proof,
+            outcome,
+        );
         match error {
             RppStarkVerifierError::VerificationFailed { failure, report } => {
                 let flags = report.flags();
@@ -5270,18 +5311,21 @@ impl NodeInner {
                     proof_metrics.observe_verification_stage_duration(
                         backend,
                         proof_kind,
+                        labels.circuit,
                         ProofVerificationStage::Parse,
                         stage_timings.parse,
                     );
                     proof_metrics.observe_verification_stage_duration(
                         backend,
                         proof_kind,
+                        labels.circuit,
                         ProofVerificationStage::Merkle,
                         stage_timings.merkle,
                     );
                     proof_metrics.observe_verification_stage_duration(
                         backend,
                         proof_kind,
+                        labels.circuit,
                         ProofVerificationStage::Fri,
                         stage_timings.fri,
                     );
@@ -5289,11 +5333,18 @@ impl NodeInner {
                     proof_metrics.observe_verification_stage_duration(
                         backend,
                         proof_kind,
+                        labels.circuit,
                         ProofVerificationStage::Adapter,
                         adapter_duration,
                     );
                 }
-                record_rpp_stark_stage_checks(proof_metrics, backend, proof_kind, flags);
+                record_rpp_stark_stage_checks(
+                    proof_metrics,
+                    backend,
+                    proof_kind,
+                    labels.circuit,
+                    flags,
+                );
                 let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
                 if let Some(snapshot) = snapshot {
                     warn!(
@@ -5427,41 +5478,49 @@ impl NodeInner {
                 );
             }
         }
+
+        proof_metrics.record_verification_outcome(backend, proof_kind, labels.circuit, outcome);
     }
 
     fn record_rpp_stark_stage_checks(
         proof_metrics: &ProofMetrics,
         backend: ProofVerificationBackend,
         proof_kind: ProofVerificationKind,
+        circuit: &str,
         flags: RppStarkVerificationFlags,
     ) {
         proof_metrics.observe_verification_stage(
             backend,
             proof_kind,
+            circuit,
             ProofVerificationStage::Params,
             ProofVerificationOutcome::from_bool(flags.params()),
         );
         proof_metrics.observe_verification_stage(
             backend,
             proof_kind,
+            circuit,
             ProofVerificationStage::Public,
             ProofVerificationOutcome::from_bool(flags.public()),
         );
         proof_metrics.observe_verification_stage(
             backend,
             proof_kind,
+            circuit,
             ProofVerificationStage::Merkle,
             ProofVerificationOutcome::from_bool(flags.merkle()),
         );
         proof_metrics.observe_verification_stage(
             backend,
             proof_kind,
+            circuit,
             ProofVerificationStage::Fri,
             ProofVerificationOutcome::from_bool(flags.fri()),
         );
         proof_metrics.observe_verification_stage(
             backend,
             proof_kind,
+            circuit,
             ProofVerificationStage::Composition,
             ProofVerificationOutcome::from_bool(flags.composition()),
         );
@@ -6526,6 +6585,7 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             {
                 let stwo_started = Instant::now();
+                let circuit = ProofVerificationKind::Transaction.as_str();
                 let verification = if let (Some(bytes), Some(inputs)) =
                     (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
                 {
@@ -6548,6 +6608,13 @@ impl NodeInner {
                     }
                 };
                 if let Err(err) = verification {
+                    let proof_metrics = self.runtime_metrics.proofs();
+                    proof_metrics.record_verification_outcome(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        circuit,
+                        ProofVerificationOutcome::Fail,
+                    );
                     warn!(?err, "transaction proof rejected by verifier");
                     return Err(err);
                 }
@@ -6557,25 +6624,35 @@ impl NodeInner {
                     proof_metrics.observe_verification(
                         ProofVerificationBackend::Stwo,
                         ProofVerificationKind::Transaction,
+                        circuit,
                         duration,
                     );
                     proof_metrics.observe_verification_stage_duration(
                         ProofVerificationBackend::Stwo,
                         ProofVerificationKind::Transaction,
+                        circuit,
                         ProofVerificationStage::Parse,
                         duration,
                     );
                     proof_metrics.observe_verification_stage_duration(
                         ProofVerificationBackend::Stwo,
                         ProofVerificationKind::Transaction,
+                        circuit,
                         ProofVerificationStage::Adapter,
                         Duration::from_millis(0),
                     );
                     let proof_bytes = bundle.stwo_proof_bytes().map(Vec::as_slice);
                     self.record_stwo_proof_size(
                         ProofVerificationKind::Transaction,
+                        circuit,
                         &bundle.proof,
                         proof_bytes,
+                    );
+                    proof_metrics.record_verification_outcome(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        circuit,
+                        ProofVerificationOutcome::Ok,
                     );
                 }
                 if !matches!(bundle.proof, ChainProof::RppStark(_)) {
@@ -6585,6 +6662,7 @@ impl NodeInner {
             #[cfg(not(feature = "backend-rpp-stark"))]
             {
                 let stwo_started = Instant::now();
+                let circuit = ProofVerificationKind::Transaction.as_str();
                 let verification = if let (Some(bytes), Some(inputs)) =
                     (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
                 {
@@ -6594,6 +6672,13 @@ impl NodeInner {
                     self.verifiers.verify_transaction(&bundle.proof)
                 };
                 if let Err(err) = verification {
+                    let proof_metrics = self.runtime_metrics.proofs();
+                    proof_metrics.record_verification_outcome(
+                        ProofVerificationBackend::Stwo,
+                        ProofVerificationKind::Transaction,
+                        circuit,
+                        ProofVerificationOutcome::Fail,
+                    );
                     warn!(?err, "transaction proof rejected by verifier");
                     return Err(err);
                 }
@@ -6602,25 +6687,35 @@ impl NodeInner {
                 proof_metrics.observe_verification(
                     ProofVerificationBackend::Stwo,
                     ProofVerificationKind::Transaction,
+                    circuit,
                     duration,
                 );
                 proof_metrics.observe_verification_stage_duration(
                     ProofVerificationBackend::Stwo,
                     ProofVerificationKind::Transaction,
+                    circuit,
                     ProofVerificationStage::Parse,
                     duration,
                 );
                 proof_metrics.observe_verification_stage_duration(
                     ProofVerificationBackend::Stwo,
                     ProofVerificationKind::Transaction,
+                    circuit,
                     ProofVerificationStage::Adapter,
                     Duration::from_millis(0),
                 );
                 let proof_bytes = bundle.stwo_proof_bytes().map(Vec::as_slice);
                 self.record_stwo_proof_size(
                     ProofVerificationKind::Transaction,
+                    circuit,
                     &bundle.proof,
                     proof_bytes,
+                );
+                proof_metrics.record_verification_outcome(
+                    ProofVerificationBackend::Stwo,
+                    ProofVerificationKind::Transaction,
+                    circuit,
+                    ProofVerificationOutcome::Ok,
                 );
                 Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
             }
@@ -8727,6 +8822,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let state_result = self.verifiers.verify_state(&state_proof);
         if let Err(err) = state_result {
+            if matches!(state_proof, ChainProof::Stwo(_)) {
+                self.record_stwo_outcome(
+                    ProofVerificationKind::State,
+                    ProofVerificationKind::State.as_str(),
+                    ProofVerificationOutcome::Fail,
+                );
+            }
             error!(
                 height,
                 block_hash = %block_hash,
@@ -8735,7 +8837,20 @@ impl NodeInner {
             );
             return Err(err);
         }
-        self.record_stwo_proof_size(ProofVerificationKind::State, &state_proof, None);
+        self.record_stwo_proof_size(
+            ProofVerificationKind::State,
+            ProofVerificationKind::State.as_str(),
+            &state_proof,
+            None,
+        );
+
+        if matches!(state_proof, ChainProof::Stwo(_)) {
+            self.record_stwo_outcome(
+                ProofVerificationKind::State,
+                ProofVerificationKind::State.as_str(),
+                ProofVerificationOutcome::Ok,
+            );
+        }
 
         let pruning_stark = stark_bundle.pruning_proof.clone();
         #[cfg(feature = "backend-rpp-stark")]
@@ -8755,6 +8870,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let pruning_result = self.verifiers.verify_pruning(&pruning_stark);
         if let Err(err) = pruning_result {
+            if matches!(pruning_stark, ChainProof::Stwo(_)) {
+                self.record_stwo_outcome(
+                    ProofVerificationKind::Pruning,
+                    ProofVerificationKind::Pruning.as_str(),
+                    ProofVerificationOutcome::Fail,
+                );
+            }
             error!(
                 height,
                 block_hash = %block_hash,
@@ -8763,7 +8885,20 @@ impl NodeInner {
             );
             return Err(err);
         }
-        self.record_stwo_proof_size(ProofVerificationKind::Pruning, &pruning_stark, None);
+        self.record_stwo_proof_size(
+            ProofVerificationKind::Pruning,
+            ProofVerificationKind::Pruning.as_str(),
+            &pruning_stark,
+            None,
+        );
+
+        if matches!(pruning_stark, ChainProof::Stwo(_)) {
+            self.record_stwo_outcome(
+                ProofVerificationKind::Pruning,
+                ProofVerificationKind::Pruning.as_str(),
+                ProofVerificationOutcome::Ok,
+            );
+        }
 
         let recursive_stark = stark_bundle.recursive_proof.clone();
         #[cfg(feature = "backend-rpp-stark")]
@@ -8783,6 +8918,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let recursive_result = self.verifiers.verify_recursive(&recursive_stark);
         if let Err(err) = recursive_result {
+            if matches!(recursive_stark, ChainProof::Stwo(_)) {
+                self.record_stwo_outcome(
+                    ProofVerificationKind::Recursive,
+                    ProofVerificationKind::Recursive.as_str(),
+                    ProofVerificationOutcome::Fail,
+                );
+            }
             error!(
                 height,
                 block_hash = %block_hash,
@@ -8791,7 +8933,20 @@ impl NodeInner {
             );
             return Err(err);
         }
-        self.record_stwo_proof_size(ProofVerificationKind::Recursive, &recursive_stark, None);
+        self.record_stwo_proof_size(
+            ProofVerificationKind::Recursive,
+            ProofVerificationKind::Recursive.as_str(),
+            &recursive_stark,
+            None,
+        );
+
+        if matches!(recursive_stark, ChainProof::Stwo(_)) {
+            self.record_stwo_outcome(
+                ProofVerificationKind::Recursive,
+                ProofVerificationKind::Recursive.as_str(),
+                ProofVerificationOutcome::Ok,
+            );
+        }
 
         #[cfg(feature = "backend-rpp-stark")]
         let consensus_result = match &consensus_proof {
@@ -8810,6 +8965,13 @@ impl NodeInner {
         #[cfg(not(feature = "backend-rpp-stark"))]
         let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
         if let Err(err) = consensus_result {
+            if matches!(consensus_proof, ChainProof::Stwo(_)) {
+                self.record_stwo_outcome(
+                    ProofVerificationKind::Consensus,
+                    ProofVerificationKind::Consensus.as_str(),
+                    ProofVerificationOutcome::Fail,
+                );
+            }
             error!(
                 height,
                 block_hash = %block_hash,
@@ -8818,7 +8980,20 @@ impl NodeInner {
             );
             return Err(err);
         }
-        self.record_stwo_proof_size(ProofVerificationKind::Consensus, &consensus_proof, None);
+        self.record_stwo_proof_size(
+            ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
+            &consensus_proof,
+            None,
+        );
+
+        if matches!(consensus_proof, ChainProof::Stwo(_)) {
+            self.record_stwo_outcome(
+                ProofVerificationKind::Consensus,
+                ProofVerificationKind::Consensus.as_str(),
+                ProofVerificationOutcome::Ok,
+            );
+        }
 
         let recursive_proof = match previous_block.as_ref() {
             Some(block) => RecursiveProof::extend(
@@ -9026,7 +9201,12 @@ impl NodeInner {
             self.punish_invalid_proof(&block.header.proposer, height, round_number);
             return Err(err);
         }
-        self.record_stwo_proof_size(ProofVerificationKind::State, &block.stark.state_proof, None);
+        self.record_stwo_proof_size(
+            ProofVerificationKind::State,
+            ProofVerificationKind::State.as_str(),
+            &block.stark.state_proof,
+            None,
+        );
 
         #[cfg(feature = "backend-rpp-stark")]
         let pruning_backend = proof_backend(&block.stark.pruning_proof);
@@ -9061,6 +9241,7 @@ impl NodeInner {
         }
         self.record_stwo_proof_size(
             ProofVerificationKind::Pruning,
+            ProofVerificationKind::Pruning.as_str(),
             &block.stark.pruning_proof,
             None,
         );
@@ -9102,6 +9283,7 @@ impl NodeInner {
         }
         self.record_stwo_proof_size(
             ProofVerificationKind::Recursive,
+            ProofVerificationKind::Recursive.as_str(),
             &block.stark.recursive_proof,
             None,
         );
@@ -9140,7 +9322,12 @@ impl NodeInner {
             }
         }
         if let Some(proof) = &block.consensus_proof {
-            self.record_stwo_proof_size(ProofVerificationKind::Consensus, proof, None);
+            self.record_stwo_proof_size(
+                ProofVerificationKind::Consensus,
+                ProofVerificationKind::Consensus.as_str(),
+                proof,
+                None,
+            );
         }
 
         self.ledger.sync_epoch_for_height(height);
@@ -9726,6 +9913,7 @@ mod telemetry_metrics_tests {
             proof_metrics,
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
             RppStarkVerificationFlags::from_bools(true, true, false, true, true),
         );
 
@@ -9737,6 +9925,7 @@ mod telemetry_metrics_tests {
         proof_metrics.observe_verification_stage(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
             adapter_stage,
             ProofVerificationOutcome::Fail,
         );
@@ -9795,6 +9984,7 @@ mod telemetry_metrics_tests {
         proof_metrics.observe_verification_total_bytes_by_result(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Consensus,
+            ProofVerificationKind::Consensus.as_str(),
             ProofVerificationOutcome::Fail,
             5 * 1024 * 1024,
         );

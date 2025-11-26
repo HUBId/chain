@@ -52,3 +52,19 @@ spec:
               and correlate with `rpp.runtime.rpc.rate_limit.total{method,status}` to determine if
               a specific endpoint or tenant is exceeding budgets before raising limits.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/API_SECURITY.md#rate-limiting-and-abuse-protections
+        - alert: ProofVerificationCircuitRegression
+          expr: |
+            (sum by (proof_backend, proof_circuit)(rate(rpp_runtime_proof_verification_outcomes_total{result="fail"}[10m]))
+              /
+            sum by (proof_backend, proof_circuit)(rate(rpp_runtime_proof_verification_outcomes_total[10m]))) > 0.02
+          for: 10m
+          labels:
+            severity: warning
+            service: proofs
+          annotations:
+            summary: Proof verification failures exceed 2% for {{ $labels.proof_backend }} {{ $labels.proof_circuit }}
+            description: |
+              Circuit-specific proof verification failures remain above 2% for 10 minutes. Inspect the
+              pipeline proof validation dashboard for the affected backend/circuit and correlate with
+              stage-level metrics before accepting new proofs.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/observability.md#proof-validation

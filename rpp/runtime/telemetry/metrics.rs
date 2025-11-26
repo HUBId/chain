@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -1000,6 +1001,8 @@ pub struct ProofMetrics {
     generation_size: EnumU64Histogram<ProofKind>,
     generation_total: EnumCounter<ProofKind>,
     verification_duration: Histogram<f64>,
+    verification_outcomes: Counter<u64>,
+    verification_success_ratio: Histogram<f64>,
     verification_total_bytes: Histogram<u64>,
     verification_total_bytes_by_result: Histogram<u64>,
     verification_params_bytes: Histogram<u64>,
@@ -1009,6 +1012,8 @@ pub struct ProofMetrics {
     cache_hits: Counter<u64>,
     cache_misses: Counter<u64>,
     cache_evictions: Counter<u64>,
+    verification_outcome_state:
+        Arc<Mutex<BTreeMap<VerificationOutcomeKey, VerificationOutcomeState>>>,
 }
 
 impl ProofMetrics {
@@ -1041,6 +1046,20 @@ impl ProofMetrics {
                     "Duration of proof verification for the RPP-STARK backend in seconds",
                 )
                 .with_unit("s")
+                .build(),
+            verification_outcomes: meter
+                .u64_counter("rpp.runtime.proof.verification.outcomes")
+                .with_description(
+                    "Total proof verification outcomes grouped by backend, circuit, and result",
+                )
+                .with_unit("1")
+                .build(),
+            verification_success_ratio: meter
+                .f64_histogram("rpp.runtime.proof.verification.success_ratio")
+                .with_description(
+                    "Success ratio for proof verification grouped by backend, circuit, and proof kind",
+                )
+                .with_unit("1")
                 .build(),
             verification_total_bytes: meter
                 .u64_histogram("rpp_stark_proof_total_bytes")
@@ -1087,6 +1106,7 @@ impl ProofMetrics {
                 .with_description("Gossip proof cache evictions observed by the runtime")
                 .with_unit("1")
                 .build(),
+            verification_outcome_state: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -1107,9 +1127,10 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         duration: Duration,
     ) {
-        let attributes = verification_attributes(backend, kind);
+        let attributes = verification_attributes(backend, kind, circuit);
         self.verification_duration
             .record(duration.as_secs_f64(), &attributes);
     }
@@ -1118,10 +1139,11 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         stage: ProofVerificationStage,
         duration: Duration,
     ) {
-        let attributes = verification_attributes_with_stage(backend, kind, stage);
+        let attributes = verification_attributes_with_stage(backend, kind, circuit, stage);
         self.verification_duration
             .record(duration.as_secs_f64(), &attributes);
     }
@@ -1130,9 +1152,10 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         bytes: u64,
     ) {
-        let attributes = verification_attributes(backend, kind);
+        let attributes = verification_attributes(backend, kind, circuit);
         self.verification_total_bytes.record(bytes, &attributes);
     }
 
@@ -1140,10 +1163,11 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         outcome: ProofVerificationOutcome,
         bytes: u64,
     ) {
-        let attributes = verification_attributes_with_outcome(backend, kind, outcome);
+        let attributes = verification_attributes_with_outcome(backend, kind, circuit, outcome);
         self.verification_total_bytes_by_result
             .record(bytes, &attributes);
     }
@@ -1152,9 +1176,10 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         bytes: u64,
     ) {
-        let attributes = verification_attributes(backend, kind);
+        let attributes = verification_attributes(backend, kind, circuit);
         self.verification_params_bytes.record(bytes, &attributes);
     }
 
@@ -1162,9 +1187,10 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         bytes: u64,
     ) {
-        let attributes = verification_attributes(backend, kind);
+        let attributes = verification_attributes(backend, kind, circuit);
         self.verification_public_inputs_bytes
             .record(bytes, &attributes);
     }
@@ -1173,9 +1199,10 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         bytes: u64,
     ) {
-        let attributes = verification_attributes(backend, kind);
+        let attributes = verification_attributes(backend, kind, circuit);
         self.verification_payload_bytes.record(bytes, &attributes);
     }
 
@@ -1206,37 +1233,71 @@ impl ProofMetrics {
         &self,
         backend: ProofVerificationBackend,
         kind: ProofVerificationKind,
+        circuit: &str,
         stage: ProofVerificationStage,
         outcome: ProofVerificationOutcome,
     ) {
-        let attributes = [
-            KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
-            KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
-            KeyValue::new(ProofVerificationStage::KEY, stage.as_str()),
-            KeyValue::new(ProofVerificationOutcome::KEY, outcome.as_str()),
-        ];
+        let attributes =
+            verification_attributes_with_stage_and_outcome(backend, kind, circuit, stage, outcome);
         self.verification_stage_checks.add(1, &attributes);
+    }
+
+    pub fn record_verification_outcome(
+        &self,
+        backend: ProofVerificationBackend,
+        kind: ProofVerificationKind,
+        circuit: &str,
+        outcome: ProofVerificationOutcome,
+    ) {
+        let attributes = verification_attributes_with_outcome(backend, kind, circuit, outcome);
+        self.verification_outcomes.add(1, &attributes);
+
+        let key = verification_outcome_key(backend, kind, circuit);
+        let mut guard = self.verification_outcome_state.lock();
+        let entry = guard
+            .entry(key)
+            .or_insert_with(VerificationOutcomeState::default);
+        let ratio = entry.record(outcome);
+        let ratio_attributes = verification_ratio_attributes(backend, kind, circuit);
+        self.verification_success_ratio
+            .record(ratio, &ratio_attributes);
     }
 }
 
 fn verification_attributes(
     backend: ProofVerificationBackend,
     kind: ProofVerificationKind,
-) -> [KeyValue; 2] {
+    circuit: &str,
+) -> [KeyValue; 3] {
     [
         KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
+    ]
+}
+
+fn verification_ratio_attributes(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    circuit: &str,
+) -> [KeyValue; 3] {
+    [
+        KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
     ]
 }
 
 fn verification_attributes_with_outcome(
     backend: ProofVerificationBackend,
     kind: ProofVerificationKind,
+    circuit: &str,
     outcome: ProofVerificationOutcome,
-) -> [KeyValue; 3] {
+) -> [KeyValue; 4] {
     [
         KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
         KeyValue::new(ProofVerificationOutcome::KEY, outcome.as_str()),
     ]
 }
@@ -1244,12 +1305,30 @@ fn verification_attributes_with_outcome(
 fn verification_attributes_with_stage(
     backend: ProofVerificationBackend,
     kind: ProofVerificationKind,
+    circuit: &str,
     stage: ProofVerificationStage,
-) -> [KeyValue; 3] {
+) -> [KeyValue; 4] {
     [
         KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
         KeyValue::new(ProofVerificationStage::KEY, stage.as_str()),
+    ]
+}
+
+fn verification_attributes_with_stage_and_outcome(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    circuit: &str,
+    stage: ProofVerificationStage,
+    outcome: ProofVerificationOutcome,
+) -> [KeyValue; 5] {
+    [
+        KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
+        KeyValue::new(ProofVerificationStage::KEY, stage.as_str()),
+        KeyValue::new(ProofVerificationOutcome::KEY, outcome.as_str()),
     ]
 }
 
@@ -1833,6 +1912,8 @@ pub enum ProofVerificationBackend {
     RppStark,
 }
 
+const PROOF_CIRCUIT_KEY: &str = "proof_circuit";
+
 impl ProofVerificationBackend {
     pub const KEY: &'static str = "proof_backend";
 
@@ -1917,6 +1998,42 @@ impl ProofVerificationOutcome {
             Self::Fail
         }
     }
+}
+
+type VerificationOutcomeKey = (String, String, String);
+
+#[derive(Default)]
+struct VerificationOutcomeState {
+    success: u64,
+    failure: u64,
+}
+
+impl VerificationOutcomeState {
+    fn record(&mut self, outcome: ProofVerificationOutcome) -> f64 {
+        match outcome {
+            ProofVerificationOutcome::Ok => self.success = self.success.saturating_add(1),
+            ProofVerificationOutcome::Fail => self.failure = self.failure.saturating_add(1),
+        }
+
+        let total = self.success.saturating_add(self.failure) as f64;
+        if total > 0.0 {
+            self.success as f64 / total
+        } else {
+            0.0
+        }
+    }
+}
+
+fn verification_outcome_key(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    circuit: &str,
+) -> VerificationOutcomeKey {
+    (
+        backend.as_str().to_string(),
+        kind.as_str().to_string(),
+        circuit.to_string(),
+    )
 }
 
 impl MetricLabel for ProofKind {
@@ -2142,32 +2259,44 @@ mod tests {
         metrics.proofs().observe_verification(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             Duration::from_millis(5),
         );
         metrics.proofs().observe_verification_total_bytes(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             2048,
         );
         metrics.proofs().observe_verification_params_bytes(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             256,
         );
         metrics.proofs().observe_verification_public_inputs_bytes(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             512,
         );
         metrics.proofs().observe_verification_payload_bytes(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             1280,
         );
         metrics.proofs().observe_verification_stage(
             ProofVerificationBackend::RppStark,
             ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             ProofVerificationStage::Fri,
+            ProofVerificationOutcome::Ok,
+        );
+        metrics.proofs().record_verification_outcome(
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Transaction,
+            ProofVerificationKind::Transaction.as_str(),
             ProofVerificationOutcome::Ok,
         );
 
@@ -2266,6 +2395,14 @@ mod tests {
             Some(&"1".to_string())
         );
         assert_eq!(
+            seen.get("rpp.runtime.proof.verification.outcomes"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.proof.verification.success_ratio"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
             seen.get("rpp.runtime.consensus.round.duration"),
             Some(&"ms".to_string())
         );
@@ -2336,6 +2473,84 @@ mod tests {
         assert!(seen.contains("rpp.runtime.storage.header_flush.total"));
         assert!(seen.contains("rpp.runtime.storage.wal_flush.total"));
         assert!(seen.contains("rpp.runtime.storage.wal_flush.duration"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn proof_outcomes_include_circuit_labels() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("proof-outcome-metrics");
+        let metrics = RuntimeMetrics::from_meter(&meter);
+        let proof_metrics = metrics.proofs();
+
+        proof_metrics.record_verification_outcome(
+            ProofVerificationBackend::Stwo,
+            ProofVerificationKind::Transaction,
+            "transaction",
+            ProofVerificationOutcome::Ok,
+        );
+        proof_metrics.record_verification_outcome(
+            ProofVerificationBackend::RppStark,
+            ProofVerificationKind::Consensus,
+            "consensus",
+            ProofVerificationOutcome::Fail,
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut outcome_circuits = HashSet::new();
+        let mut ratio_circuits = HashSet::new();
+
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    match metric.data {
+                        opentelemetry_sdk::metrics::data::Data::Sum(sum)
+                            if metric.name == "rpp.runtime.proof.verification.outcomes" =>
+                        {
+                            for point in sum.data_points {
+                                let mut attrs = HashMap::new();
+                                for attribute in point.attributes {
+                                    attrs.insert(
+                                        attribute.key.to_string(),
+                                        attribute.value.to_string(),
+                                    );
+                                }
+                                if let Some(circuit) = attrs.get(PROOF_CIRCUIT_KEY) {
+                                    outcome_circuits.insert(circuit.clone());
+                                }
+                            }
+                        }
+                        opentelemetry_sdk::metrics::data::Data::Histogram(hist)
+                            if metric.name == "rpp.runtime.proof.verification.success_ratio" =>
+                        {
+                            for point in hist.data_points {
+                                let mut attrs = HashMap::new();
+                                for attribute in point.attributes {
+                                    attrs.insert(
+                                        attribute.key.to_string(),
+                                        attribute.value.to_string(),
+                                    );
+                                }
+                                if let Some(circuit) = attrs.get(PROOF_CIRCUIT_KEY) {
+                                    ratio_circuits.insert(circuit.clone());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        assert!(outcome_circuits.contains("transaction"));
+        assert!(outcome_circuits.contains("consensus"));
+        assert!(ratio_circuits.contains("transaction"));
+        assert!(ratio_circuits.contains("consensus"));
 
         Ok(())
     }
