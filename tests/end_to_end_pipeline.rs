@@ -1,12 +1,16 @@
 use std::collections::HashSet;
+use std::fs;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use rpp_chain::orchestration::PipelineStage;
+use serde_json::json;
 
 mod support;
 
-use support::cluster::{HarnessPipelineEvent, PipelineEventStream, ProcessTestCluster};
+use support::cluster::{
+    HarnessPipelineEvent, PipelineEventStream, ProcessNodeOrchestratorClient, ProcessTestCluster,
+};
 
 const PIPELINE_STAGE_TIMEOUT: Duration = Duration::from_secs(90);
 const EVENT_SEQUENCE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -108,7 +112,7 @@ async fn orchestrated_pipeline_finalises_transaction() {
         if stage == PipelineStage::LeaderElected {
             let restart_client = cluster.client();
             cluster.nodes_mut()[0]
-                .respawn(&restart_binary, &restart_client)
+                .respawn(&restart_binary, &restart_client, cluster.log_root())
                 .await
                 .expect("respawn primary validator");
             primary_harness
@@ -159,6 +163,10 @@ async fn orchestrated_pipeline_finalises_transaction() {
         "sender balance should reflect amount and fee",
     );
 
+    record_cold_start_artifacts(&cluster, &orchestrator_client, &submitted.hash)
+        .await
+        .expect("write cold start artifacts");
+
     cluster.shutdown().await.expect("shutdown cluster");
 }
 
@@ -208,4 +216,70 @@ async fn monitor_pipeline_events(
         missing,
         errors
     ))
+}
+
+async fn record_cold_start_artifacts(
+    cluster: &ProcessTestCluster,
+    orchestrator: &ProcessNodeOrchestratorClient,
+    hash: &str,
+) -> Result<()> {
+    let Some(log_root) = cluster.log_root() else {
+        return Ok(());
+    };
+
+    fs::create_dir_all(log_root).context("create cold start artifact directory")?;
+
+    let dashboard = orchestrator
+        .pipeline_dashboard_raw()
+        .await
+        .context("fetch pipeline dashboard snapshot")?;
+    fs::write(
+        log_root.join(format!("pipeline_dashboard_{hash}.json")),
+        dashboard,
+    )
+    .context("write pipeline dashboard snapshot")?;
+
+    let client = cluster.client();
+    let mut health = Vec::new();
+    for node in cluster.nodes() {
+        let base = format!("http://{}", node.rpc_addr);
+        let ready = format!("{base}/health/ready");
+        let live = format!("{base}/health/live");
+        let metrics = format!("{base}/metrics");
+        health.push(record_endpoint(&client, node.index, ready).await);
+        health.push(record_endpoint(&client, node.index, live).await);
+        health.push(record_endpoint(&client, node.index, metrics).await);
+    }
+
+    let health_path = log_root.join("health_checks.json");
+    fs::write(
+        &health_path,
+        serde_json::to_vec_pretty(&health).context("serialize health checks")?,
+    )
+    .with_context(|| format!("write health checks to {}", health_path.display()))?;
+
+    Ok(())
+}
+
+async fn record_endpoint(client: &reqwest::Client, node: usize, url: String) -> serde_json::Value {
+    match client.get(&url).send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            json!({
+                "node": node,
+                "endpoint": url,
+                "status": status,
+                "body": body,
+            })
+        }
+        Err(err) => json!({
+            "node": node,
+            "endpoint": url,
+            "error": err.to_string(),
+        }),
+    }
 }

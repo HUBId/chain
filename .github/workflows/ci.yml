@@ -1205,6 +1205,34 @@ PY
           name: combined-feature-lane-${{ matrix.name }}
           path: artifacts/combined/${{ matrix.name }}
 
+  rpp-stark-cold-start:
+    name: RPP-STARK cold start smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rpp-stark-cold-start
+      - name: Run cold start health and pipeline smoke
+        env:
+          RPP_PROCESS_CLUSTER_LOG_ROOT: artifacts/rpp-stark-cold-start
+          RPP_PROVER_DETERMINISTIC: 1
+          RUST_BACKTRACE: 1
+        run: |
+          set -euo pipefail
+          mkdir -p "${RPP_PROCESS_CLUSTER_LOG_ROOT}"
+          cargo build -p firewood --locked --features "branch_factor_256,io-uring"
+          cargo test -p rpp-chain --locked --features backend-rpp-stark \
+            --test end_to_end_pipeline -- orchestrated_pipeline_finalises_transaction
+      - name: Upload cold start artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpp-stark-cold-start
+          path: artifacts/rpp-stark-cold-start
+
   observability-metrics:
     name: Observability metrics (${{ matrix.name }})
     runs-on: ubuntu-latest

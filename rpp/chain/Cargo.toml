@@ -267,6 +267,11 @@ name = "integration"
 path = "../../tests/integration/mod.rs"
 
 [[test]]
+name = "end_to_end_pipeline"
+path = "../../tests/end_to_end_pipeline.rs"
+required-features = ["wallet-ui"]
+
+[[test]]
 name = "node_lifecycle"
 path = "../../tests/node_lifecycle.rs"
 
