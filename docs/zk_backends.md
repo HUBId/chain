@@ -22,6 +22,7 @@
 - CI-Absicherung: Der GitHub-Actions-Workflow `nightly-simnet` (Job `simnet`) führt den Test als Teil seiner Matrix-Läufe bei jedem nächtlichen Durchlauf aus.
 - Prüft Digest, Stage-Flags (`params`, `public`, `merkle`, `fri`, `composition`), Proof-Länge und Trace-Indizes.
 - Die Backend-Unit-Suite schreibt die Checksummen der Golden-Vector-Artefakte sowie die verifizierte Proof-Länge, Stage-Flags und Telemetrie (falls vorhanden) nach `logs/rpp_golden_vector_checksums.log` und vergleicht sie in CI gegen die Basislinie `tests/baselines/rpp_golden_vector_checksums.log`. Drift blockiert den Lauf; legitime Updates werden über `tools/update_rpp_golden_vector_baseline.sh` übernommen.
+- Die Pruning-Snapshot-Replays unter `wallet_snapshot_round_trip_*` (siehe `tests/pruning_cross_backend.rs`) hängen eine zk-Validierung an: der Default-Backend-Lauf erzeugt eine STWO-Transaktionsprobe, während der `backend-rpp-stark`-Zweig den Golden Vector verifiziert, nachdem WAL-Inhalte und Snapshots wiederhergestellt wurden. Beide Pfade laufen im CI-Job `pruning-checkpoints` mit `--features prover-stwo` bzw. `--features backend-rpp-stark`.
 
 ### Public-Inputs-Encoding
 

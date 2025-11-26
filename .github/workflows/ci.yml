@@ -1080,7 +1080,7 @@ PY
         run: |
           set -euo pipefail
           export RPP_PROVER_DETERMINISTIC=1
-          cargo test -p rpp-chain --locked --test pruning_cross_backend -- \
+          cargo test -p rpp-chain --locked --features prover-stwo --test pruning_cross_backend -- \
             pruning_checkpoint_round_trip_default_backend \
             wallet_snapshot_round_trip_default_backend
           cargo test -p rpp-chain --locked --features backend-rpp-stark --test pruning_cross_backend -- \
