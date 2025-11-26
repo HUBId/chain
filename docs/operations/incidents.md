@@ -1,7 +1,9 @@
 # Incident response runbook
 
 > **Scope:** Central runbook for consensus forks, verifier outages/failover, and pruning recovery.
-> Keep this page linked from operator, consensus, and backend docs so updates ship with feature changes.
+> Keep this page linked from operator, consensus, and backend docs so updates ship with feature changes. Pair pruning or snapshot
+> rebuilds with the [snapshot restore and wallet recovery guide](../runbooks/snapshot_restore_and_wallet_recovery.md) so state
+> verification and wallet restores follow the same checklist across rotations.
 
 ## Expectations and escalation
 
