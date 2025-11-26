@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Enforce proof-version metadata alignment in CI: the `proof-version-policy`
+  job now checks Plonky3/STWO circuit metadata against `PROOF_VERSION` and
+  requires a changelog entry whenever circuit artefacts change with a version
+  bump.【F:.github/workflows/ci.yml†L261-L282】【F:xtask/src/release.rs†L1-L247】
 - Teach `git-cliff` to enrich commits with wallet PR labels via
   `scripts/git_cliff_wallet_labels.py` so the changelog now renders dedicated
   wallet readiness sections keyed by label scopes.【F:cliff.toml†L1-L160】【F:scripts/git_cliff_wallet_labels.py†L1-L86】

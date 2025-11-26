@@ -3602,7 +3602,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  simnet               Run a predefined or ad-hoc simnet scenario\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-wallet-feature-matrix  Run rpp-wallet checks/tests across wallet feature combinations and enforce wallet feature guards\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-combined-lane   Run unit/integration suites alongside consensus, pruning, snapshot, and RPC smoke tests\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema\n  wallet-bundle        Build signed CLI/GUI bundle archives for the wallet\n  wallet-firmware      Build, sign, and verify vendor firmware bundles\n  wallet-installer     Produce platform installers that align with wallet bundles",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  simnet               Run a predefined or ad-hoc simnet scenario\n  test-firewood        Run Firewood unit tests across the branch-factor matrix\n  test-wallet-feature-matrix  Run rpp-wallet checks/tests across wallet feature combinations and enforce wallet feature guards\n  test-cli            Run chain-cli help/version smoke checks\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-combined-lane   Run unit/integration suites alongside consensus, pruning, snapshot, and RPC smoke tests\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  proof-version-guard  Verify PROOF_VERSION bumps alongside proof-affecting changes\n  proof-version-metadata  Assert circuit metadata versions match PROOF_VERSION\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  fuzz-debug           Dump or inspect deterministic Firewood fuzz fixtures\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema\n  wallet-bundle        Build signed CLI/GUI bundle archives for the wallet\n  wallet-firmware      Build, sign, and verify vendor firmware bundles\n  wallet-installer     Produce platform installers that align with wallet bundles",
     );
 }
 
@@ -5583,6 +5583,7 @@ fn main() -> Result<()> {
         "test-all" => run_full_test_matrix(),
         "proof-metadata" => generate_proof_metadata(&argv),
         "proof-version-guard" => release::proof_version_guard(&argv),
+        "proof-version-metadata" => verify_proof_version_metadata(),
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
         "plonky3-verify" => verify_plonky3_setup(),
         "report-timetoke-slo" => report_timetoke_slo(&argv),
@@ -5938,6 +5939,56 @@ fn generate_proof_metadata(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn verify_proof_version_metadata() -> Result<()> {
+    let versions = release::current_proof_versions()?;
+    let mut expected_version: Option<u64> = None;
+    for entry in &versions {
+        if let Some(existing) = expected_version {
+            if existing != entry.value {
+                bail!(
+                    "PROOF_VERSION constants disagree: {} is {} but {} is {}",
+                    entry.path,
+                    entry.value,
+                    versions[0].path,
+                    existing
+                );
+            }
+        } else {
+            expected_version = Some(entry.value);
+        }
+    }
+
+    let expected = expected_version.ok_or_else(|| anyhow!("no PROOF_VERSION constants found"))?;
+
+    let report = collect_proof_metadata()?;
+    if report.stwo.version != expected {
+        bail!(
+            "STWO verifying-key manifest declares proof_version={} but PROOF_VERSION is {}",
+            report.stwo.version,
+            expected
+        );
+    }
+
+    let plonky3_version = report
+        .plonky3
+        .proof_version
+        .ok_or_else(|| anyhow!("Plonky3 setup metadata missing metadata.proof_version entries"))?;
+    if plonky3_version != expected {
+        bail!(
+            "Plonky3 setup metadata declares proof_version={} but PROOF_VERSION is {}",
+            plonky3_version,
+            expected
+        );
+    }
+
+    println!(
+        "proof-version-metadata: PROOF_VERSION {} matches Plonky3 and STWO circuit metadata",
+        expected
+    );
+
+    Ok(())
+}
+
 fn collect_proof_metadata() -> Result<ProofMetadataReport> {
     let root = workspace_root();
     let plonky3_dir = root.join("config/plonky3/setup");
@@ -5952,6 +6003,7 @@ fn collect_proof_metadata() -> Result<ProofMetadataReport> {
 
 fn collect_plonky3_metadata(dir: &Path) -> Result<Plonky3Metadata> {
     let mut circuits = Vec::new();
+    let mut proof_version: Option<u64> = None;
     for entry in fs::read_dir(dir).with_context(|| format!("read {dir:?}"))? {
         let entry = entry?;
         if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -5959,8 +6011,35 @@ fn collect_plonky3_metadata(dir: &Path) -> Result<Plonky3Metadata> {
         }
         let contents = fs::read_to_string(entry.path())
             .with_context(|| format!("read Plonky3 setup file {}", entry.path().display()))?;
-        let doc: Plonky3ArtifactDoc = serde_json::from_str(&contents)
+        let json: JsonValue = serde_json::from_str(&contents)
             .with_context(|| format!("parse Plonky3 setup file {}", entry.path().display()))?;
+        if !(json.get("verifying_key").is_some() && json.get("proving_key").is_some()) {
+            continue;
+        }
+        let doc: Plonky3ArtifactDoc = serde_json::from_value(json)
+            .with_context(|| format!("decode Plonky3 setup file {}", entry.path().display()))?;
+        if let Some(meta) = doc.metadata.as_ref() {
+            if let Some(version) = meta.get("proof_version") {
+                let parsed = version.as_u64().ok_or_else(|| {
+                    anyhow!(
+                        "Plonky3 setup metadata proof_version must be an unsigned integer (file: {})",
+                        entry.path().display()
+                    )
+                })?;
+                if let Some(existing) = proof_version {
+                    if existing != parsed {
+                        bail!(
+                            "Plonky3 setup metadata declares conflicting proof_version values: {} vs {} (file: {})",
+                            existing,
+                            parsed,
+                            entry.path().display()
+                        );
+                    }
+                } else {
+                    proof_version = Some(parsed);
+                }
+            }
+        }
         let verifying_key = load_plonky3_artifact(dir, &doc.verifying_key)?;
         let proving_key = load_plonky3_artifact(dir, &doc.proving_key)?;
         circuits.push(Plonky3CircuitMetadata {
@@ -5972,7 +6051,10 @@ fn collect_plonky3_metadata(dir: &Path) -> Result<Plonky3Metadata> {
         });
     }
     circuits.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Plonky3Metadata { circuits })
+    Ok(Plonky3Metadata {
+        proof_version,
+        circuits,
+    })
 }
 
 fn load_plonky3_artifact(dir: &Path, artifact: &Plonky3Artifact) -> Result<Vec<u8>> {
@@ -6127,6 +6209,10 @@ fn render_markdown(report: &ProofMetadataReport) -> String {
     out.push_str("# Proof metadata summary\n\n");
 
     out.push_str("## Plonky3 circuits\n\n");
+    if let Some(version) = report.plonky3.proof_version {
+        writeln!(out, "Proof version: {version}").expect("write markdown");
+        out.push('\n');
+    }
     out.push_str("| Circuit | Verifying key (BLAKE3) | Bytes | Proving key (BLAKE3) | Bytes |\n");
     out.push_str("| --- | --- | ---: | --- | ---: |\n");
     for circuit in &report.plonky3.circuits {
@@ -6190,6 +6276,7 @@ struct ProofMetadataReport {
 
 #[derive(Debug, Serialize)]
 struct Plonky3Metadata {
+    proof_version: Option<u64>,
     circuits: Vec<Plonky3CircuitMetadata>,
 }
 

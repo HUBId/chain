@@ -187,38 +187,44 @@ Before publishing release artifacts, double-check the following guardrails:
    corresponding `PROOF_VERSION` constants are unchanged. Pass `--base <ref>` to
    align with your release branch if it diverged from `origin/main`, and bump
    the version in `vendor/rpp-stark/src/proof/types.rs` (plus any other
-   consumers) before publishing.【F:xtask/src/release.rs†L1-L208】
-4. Describe any deterministic vector refreshes under
+   consumers) before publishing. Circuit artefact changes also require a
+   changelog entry that mentions the version increase.【F:xtask/src/release.rs†L1-L217】
+4. Verify the backend metadata matches the updated proof version via
+   `cargo xtask proof-version-metadata`. The command compares the current
+   `PROOF_VERSION` constants with the STWO verifying-key manifest
+   (`prover/prover_stwo_backend/params/vk.json`) and the Plonky3 setup metadata
+   fields `metadata.proof_version`, failing if any value drifts.【F:xtask/src/main.rs†L5924-L6012】
+5. Describe any deterministic vector refreshes under
    `vendor/rpp-stark/vectors/` in the release notes. The changelog template now
    includes a dedicated **🧬 ZK Vectors** section, and `scripts/prepare_changelog.sh`
    will fail with a TODO if vector diffs are detected so you can link the
    regeneration evidence before publishing.
-5. Build the workspace via `scripts/build_release.sh` with
+6. Build the workspace via `scripts/build_release.sh` with
    `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
    (append `,simd` if required) so the manual invocation matches CI. The script
    immediately exits if any `backend-plonky3` alias or the mock prover is
    requested via flags or environment variables.【F:scripts/build_release.sh†L80-L162】
-6. Let the script run its automatic post-build verification. The bundled
+7. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
    features.【F:scripts/build_release.sh†L160-L200】【F:scripts/verify_release_features.sh†L1-L115】
-7. Produce the wallet runtime bundle via
+8. Produce the wallet runtime bundle via
    `cargo xtask wallet-bundle --target x86_64-unknown-linux-gnu --profile release --version <tag>`
    and verify both the embedded `SHA256SUMS.txt` and the cosign signature
    published alongside
    `wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json`. After extracting
    the tarball run `sha256sum -c SHA256SUMS.txt` and verify the manifest with
    `cosign verify-blob --certificate wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json.pem --signature wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json.sig wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json`.
-8. If you are experimenting with non-default builds, rerun `cargo build` with the
+9. If you are experimenting with non-default builds, rerun `cargo build` with the
    intended feature list and confirm that production profiles still refuse to
    compile when `backend-plonky3` is paired with `prod` or `validator`. The
    compile-time guard keeps the experimental stub out of production releases even
    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-9. Dry-run validator or hybrid binaries (`cargo run -p rpp-chain -- validator --dry-run` /
+10. Dry-run validator or hybrid binaries (`cargo run -p rpp-chain -- validator --dry-run` /
    `cargo run -p rpp-chain -- hybrid --dry-run`) to see the runtime guard in
    action—startup fails immediately if the STWO backend was omitted, ensuring the
    published artifacts activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
-10. Capture the Plonky3 graduation evidence bundle: archive the
+11. Capture the Plonky3 graduation evidence bundle: archive the
     `target/simnet/consensus-quorum` artefacts produced by the stress harness,
     export the Grafana dashboard JSON described in the Plonky3 runbook, and note
     the backout steps (feature guard, cache eviction, and incident checklist)
