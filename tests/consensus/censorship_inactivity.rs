@@ -495,6 +495,12 @@ fn exercise_penalty_flow_for_backend(backend: &'static str) {
         },
     });
 
+    let double_sign_triggers = state.take_slashing_triggers();
+    assert!(double_sign_triggers
+        .iter()
+        .any(|trigger| trigger.validator == victim_id
+            && trigger.reason.starts_with("consensus_double_sign")));
+
     let double_sign_commit = dummy_commit(&state, state.block_height + 1);
     double_sign_commit
         .proof
@@ -502,6 +508,11 @@ fn exercise_penalty_flow_for_backend(backend: &'static str) {
         .expect("zk verification active on double-sign");
 
     state.apply_commit(double_sign_commit);
+    let cleared_triggers = state.take_slashing_triggers();
+    assert!(
+        cleared_triggers.is_empty(),
+        "slashing alerts must clear after penalties are applied"
+    );
     let double_sign_rewards = state
         .pending_rewards
         .last()

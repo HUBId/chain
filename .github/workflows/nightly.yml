@@ -1015,6 +1015,14 @@ EOF
           set -euo pipefail
           cargo xtask test-simnet
 
+      - name: Run slashing guardrails (stwo + plonky3)
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/consensus-slashing-backends
+          cargo run --locked --no-default-features --features "$XTASK_FEATURES" --package simnet -- \
+            --scenario tools/simnet/scenarios/consensus_slashing_backends.ron \
+            --artifacts-dir target/simnet/consensus-slashing-backends
+
       - name: Analyze summaries
         run: |
           set -euo pipefail
@@ -1053,6 +1061,14 @@ EOF
         run: |
           set -euo pipefail
           cargo xtask test-simnet
+
+      - name: Run slashing guardrails (rpp-stark)
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/consensus-slashing-backends
+          cargo run --locked --no-default-features --features "$XTASK_FEATURES" --package simnet -- \
+            --scenario tools/simnet/scenarios/consensus_slashing_backends.ron \
+            --artifacts-dir target/simnet/consensus-slashing-backends
 
       - name: Package artifacts
         run: |
