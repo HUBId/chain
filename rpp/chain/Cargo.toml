@@ -260,6 +260,11 @@ path = "../../tests/wallet_rpc_limits.rs"
 required-features = ["wallet-integration"]
 
 [[test]]
+name = "upgrade_compat"
+path = "../../tests/upgrade_compat.rs"
+required-features = ["wallet-integration"]
+
+[[test]]
 name = "zsi_renewal"
 path = "../../tests/zsi_renewal.rs"
 

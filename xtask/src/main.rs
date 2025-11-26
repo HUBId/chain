@@ -599,6 +599,18 @@ fn run_integration_workflows() -> Result<()> {
     apply_feature_flags(&mut wallet_pruning);
     run_command(wallet_pruning, "wallet pruning snapshot smoke")?;
 
+    let mut upgrade = Command::new("cargo");
+    upgrade
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("upgrade_compat");
+    apply_integration_feature_flags(&mut upgrade);
+    run_command(upgrade, "upgrade compatibility workflows")?;
+
     let mut lifecycle = Command::new("cargo");
     lifecycle
         .current_dir(&root)

@@ -12,3 +12,16 @@ release notes referenced in the repository root.
 Document the outcome in the [operator checklist](../checklists/operator.md) and proceed to the
 [startup runbook](startup.md) for post-upgrade validation.
 
+## Upgrade compatibility expectations
+
+Mixed-version windows are supported only for the duration of a rollout. When staging a deploy:
+
+- Run `cargo xtask test-integration` so the `upgrade_compat` flow exercises mixed-version
+  nodes and wallets, verifies signing across proof backends, and checks mempool RPC responses for
+  backwards-compatible fields and deprecation warnings.
+- Keep legacy wallets configured to accept proof-less drafts only while the upgraded nodes are still
+  permissive; once the proof version bump lands, require proofs before lifting maintenance gates.
+- Confirm mempool telemetry still reports `min_fee_rate` and queue weights even when older nodes
+  advertise trimmed payloads; treat missing fields as a deprecation warning and schedule cleanup
+  before the next release train.
+
