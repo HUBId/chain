@@ -87,6 +87,19 @@ SDK-oriented helpers that parse the headers and clamp backoff are documented in
 [`rpp/chain-cli/SDK.md`](../../../rpp/chain-cli/SDK.md); the code samples are
 doctested so they stay aligned with the server’s token-bucket semantics.
 
+### Wallet history pagination and rate limits
+
+Wallet history endpoints (`/wallet/history` and the `history.page` JSON-RPC
+shim used by the GUI) expose cursor tokens to page through cached entries. The
+server stamps each page with `page_token`, `next_page_token`, and
+`prev_page_token` values that can be echoed back to resume pagination even if a
+previous call was throttled. Rate-limited responses still include the retry
+headers above; once the `429` window elapses, clients should reuse the prior
+token rather than restarting from the beginning. Backends (for example,
+`rpp-stark` vs `plonky3`) and reorg-aware filters may adjust which entries are
+returned, but stale tokens remain valid and simply yield an empty page if the
+underlying history was truncated.
+
 ## Snapshot and state sync RPC errors
 
 Snapshot operations expose structured error payloads. When a request fails the
