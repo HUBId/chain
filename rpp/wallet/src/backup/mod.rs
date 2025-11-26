@@ -322,7 +322,11 @@ pub(super) fn decrypt_envelope(
                 aad: &metadata_bytes,
             },
         )
-        .map_err(|_| BackupError::Encryption("backup authentication failed".into()))?;
+        .map_err(|_| {
+            BackupError::Encryption(
+                "backup authentication failed (likely incorrect passphrase)".into(),
+            )
+        })?;
 
     let mut key = key;
     key.zeroize();
@@ -591,7 +595,9 @@ mod tests {
             Zeroizing::new(b"wrong".to_vec()),
         )
         .expect_err("import should fail");
-        assert!(matches!(error, BackupError::Encryption(_)));
+        assert!(
+            matches!(error, BackupError::Encryption(message) if message.contains("passphrase"))
+        );
     }
 
     #[test]

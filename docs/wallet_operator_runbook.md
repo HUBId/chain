@@ -105,28 +105,34 @@ written under `wallet.backup.export_dir` with the configured passphrase profile
 `rpp-wallet backup restore --path <file>` and confirm checksum/passphrase
 validation occurs. Reject any restore that attempts to skip the current profile
 in production.【F:docs/wallet_phase4_advanced.md†L19-L36】
-7. **Watch-only projection** – Toggle `[wallet.watch_only].enabled = true` with
-an exported xpub and restart the daemon. Confirm RPC responses label accounts as
-`watch_only` and that attempts to sign or broadcast return the expected
-`WatchOnlyError::{SigningDisabled,BroadcastDisabled}` codes, proving that spends
-are blocked.【F:docs/wallet_phase4_advanced.md†L40-L58】【F:rpp/wallet/src/wallet/mod.rs†L59-L210】
-8. **Send/receive after watch-only disable** – Restore the hot wallet mode and
-repeat send/receive to ensure disabling watch-only clears the restrictions.
-9. **Security envelope** – Enable `[wallet.rpc.security]` (mTLS/RBAC) and
-`[wallet.security]` bindings, restart, and verify mutual TLS handshakes succeed.
-Observe the wallet log for `tls::Error` if the handshake fails; confirm RBAC
-responses align with the configured roles and that unauthorized calls emit
-`401/403` responses with audit entries in the RBAC logbook.【F:docs/wallet_phase4_advanced.md†L109-L140】【F:config/wallet.toml†L15-L37】
-10. **Backup/restore in hardened mode** – Repeat the export/restore while mTLS
-and RBAC are enabled to ensure the security middleware does not block maintenance
-flows.
-11. **Hardware signing (optional)** – When `[wallet.hw].enabled = true`, run
-`rpp-wallet hw test` to exercise the selected transport and ensure `HardwareUnavailable`
-or `HardwareDisabled` errors do not appear during normal sends.【F:config/wallet.toml†L47-L55】【F:rpp/wallet/src/wallet/mod.rs†L68-L82】
-12. **Regression validation** – Run `make wallet-regression` to execute
-`cargo xtask test-wallet-feature-matrix` across the supported feature sets and the
-wallet feature guards before shipping artifacts. Capture the test log and attach
-it to the change record.【F:Makefile†L1-L40】
+7. **Snapshot pairing** – When taking node snapshots, place the encrypted
+   wallet backup (or `wallet.backup.export_dir`) inside the same bundle and
+   record its checksum. Restores should first rehydrate the RocksDB snapshot,
+   then run `rpp-wallet backup validate --path <backup>` to surface a clear
+   "passphrase" authentication error when the wrong key is provided before the
+   keystore is written back.【F:tests/wallet_backup_recovery_e2e.rs†L68-L152】
+8. **Watch-only projection** – Toggle `[wallet.watch_only].enabled = true` with
+    an exported xpub and restart the daemon. Confirm RPC responses label accounts as
+    `watch_only` and that attempts to sign or broadcast return the expected
+    `WatchOnlyError::{SigningDisabled,BroadcastDisabled}` codes, proving that spends
+    are blocked.【F:docs/wallet_phase4_advanced.md†L40-L58】【F:rpp/wallet/src/wallet/mod.rs†L59-L210】
+9. **Send/receive after watch-only disable** – Restore the hot wallet mode and
+    repeat send/receive to ensure disabling watch-only clears the restrictions.
+10. **Security envelope** – Enable `[wallet.rpc.security]` (mTLS/RBAC) and
+    `[wallet.security]` bindings, restart, and verify mutual TLS handshakes succeed.
+    Observe the wallet log for `tls::Error` if the handshake fails; confirm RBAC
+    responses align with the configured roles and that unauthorized calls emit
+    `401/403` responses with audit entries in the RBAC logbook.【F:docs/wallet_phase4_advanced.md†L109-L140】【F:config/wallet.toml†L15-L37】
+11. **Backup/restore in hardened mode** – Repeat the export/restore while mTLS
+    and RBAC are enabled to ensure the security middleware does not block maintenance
+    flows.
+12. **Hardware signing (optional)** – When `[wallet.hw].enabled = true`, run
+    `rpp-wallet hw test` to exercise the selected transport and ensure `HardwareUnavailable`
+    or `HardwareDisabled` errors do not appear during normal sends.【F:config/wallet.toml†L47-L55】【F:rpp/wallet/src/wallet/mod.rs†L68-L82】
+13. **Regression validation** – Run `make wallet-regression` to execute
+    `cargo xtask test-wallet-feature-matrix` across the supported feature sets and the
+    wallet feature guards before shipping artifacts. Capture the test log and attach
+    it to the change record.【F:Makefile†L1-L40】
 
 ## 5. Key rotation drills
 

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -282,6 +283,28 @@ impl WalletTestFixture {
                 Arc::new(WalletActionTelemetry::new(false)),
             )
             .context("restart wallet instance")?,
+        ))
+    }
+
+    pub fn restore_wallet_from(&self, data_dir: &Path) -> Result<Arc<Wallet>> {
+        let store = Arc::new(WalletStore::open(data_dir).context("open restored wallet store")?);
+        Ok(Arc::new(
+            Wallet::new(
+                Arc::clone(&store),
+                WalletMode::Full {
+                    root_seed: seeded_seed(),
+                },
+                self.policy.clone(),
+                self.fees.clone(),
+                self.prover.clone(),
+                WalletHwConfig::default(),
+                self.zsi.clone(),
+                self.zsi_backend.clone(),
+                Arc::clone(&self.node),
+                WalletPaths::for_data_dir(data_dir),
+                Arc::new(WalletActionTelemetry::new(false)),
+            )
+            .context("restore wallet instance from snapshot")?,
         ))
     }
 
