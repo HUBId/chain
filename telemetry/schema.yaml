@@ -323,6 +323,13 @@ metrics:
       - partition
       - reason
       - result
+  - name: rpp.node.pruning.window_events_total
+    labels:
+      - shard
+      - partition
+      - reason
+      - phase
+      - result
   - name: rpp.node.pruning.failures_total
     labels:
       - shard
@@ -362,6 +369,13 @@ metrics:
       - shard
       - partition
       - reason
+  - name: rpp.node.snapshot_validator.scan_events_total
+    labels:
+      - phase
+      - result
+  - name: rpp.node.snapshot_validator.scan_duration_ms
+    labels:
+      - result
   - name: telemetry_otlp_failures_total
     labels:
       - phase

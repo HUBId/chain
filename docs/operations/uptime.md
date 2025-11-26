@@ -234,6 +234,27 @@ When drift triggers an alert:
   promotion proceeds. The job fails when staging SLOs regress and uploads the
   timestamped summary for incident follow-up.【F:.github/workflows/ci.yml†L434-L516】【F:xtask/src/main.rs†L3058-L3361】
 
+### Planning maintenance windows
+
+- **Overlay maintenance on finality.** Use the “Finality & Maintenance Windows”
+  panel in `uptime_finality_correlation.json` to overlay
+  `finality_lag_slots` with `rpp_node_pruning_window_events_total` and
+  `rpp_node_snapshot_validator_scan_events_total`. Spikes on the start/end
+  series mark pruning or snapshot validation windows so responders can confirm
+  any finality drift lines up with scheduled work.【F:docs/dashboards/uptime_finality_correlation.json†L121-L173】
+- **Watch uptime accrual during work.** The “Uptime Impact of Maintenance”
+  panel pairs `uptime_observation_age_seconds` with the same maintenance event
+  counters and `rpp_node_uptime_cycle_total{outcome="success"}` to prove
+  crediting continues while pruning or snapshot checks run. Growing observation
+  age without matching start/end events indicates telemetry or exporter
+  regressions rather than planned downtime.【F:docs/dashboards/uptime_finality_correlation.json†L174-L206】
+- **Schedule around scan cadence.** Snapshot validation emits
+  `rpp.node.snapshot_validator.scan_events_total` at every scan start/end while
+  the pruning service emits `rpp.node.pruning.window_events_total` per cycle.
+  Use the event rates to pick windows that keep finality lag below the SLA
+  budgets above; clusters running hourly scans should avoid overlapping them
+  with manual pruning to preserve uptime accrual continuity.【F:rpp/node/src/telemetry/snapshots.rs†L9-L58】【F:rpp/node/src/telemetry/pruning.rs†L9-L83】
+
 ### Reporting cadence
 
 - **CI gates:** The `alert-probes` job in CI runs the probes and fails the build

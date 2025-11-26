@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use blake2::{
     digest::{consts::U32, Digest},
@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 
 use rpp_chain::config::{NodeConfig, SnapshotChecksumAlgorithm};
 
-use crate::telemetry::snapshots::SnapshotValidatorMetrics;
+use crate::telemetry::snapshots::{ScanResult, SnapshotValidatorMetrics};
 
 #[derive(Clone, Debug)]
 pub struct SnapshotValidatorSettings {
@@ -164,8 +164,11 @@ impl SnapshotValidator {
             loop {
                 tokio::select! {
                     _ = ticker.tick() => {
+                        let started_at = Instant::now();
+                        metrics.record_scan_start();
+
                         let settings = Arc::clone(&worker_settings);
-                        match tokio::task::spawn_blocking(move || scan_once(&settings)).await {
+                        let scan_result = match tokio::task::spawn_blocking(move || scan_once(&settings)).await {
                             Ok(Ok(failures)) => {
                                 for failure in failures {
                                     metrics.record_failure(failure.kind.as_str());
@@ -178,6 +181,7 @@ impl SnapshotValidator {
                                         "snapshot chunk validation failed",
                                     );
                                 }
+                                ScanResult::Success
                             }
                             Ok(Err(ScanError::ManifestMissing)) => {
                                 debug!(
@@ -185,6 +189,7 @@ impl SnapshotValidator {
                                     manifest = %worker_settings.manifest_path.display(),
                                     "snapshot manifest not present; skipping validation",
                                 );
+                                ScanResult::Skipped
                             }
                             Ok(Err(ScanError::ChunkDirectoryMissing)) => {
                                 debug!(
@@ -192,6 +197,7 @@ impl SnapshotValidator {
                                     chunk_dir = %worker_settings.chunk_dir.display(),
                                     "snapshot chunk directory not present; skipping validation",
                                 );
+                                ScanResult::Skipped
                             }
                             Ok(Err(ScanError::VersionMismatch { expected, actual })) => {
                                 warn!(
@@ -201,6 +207,7 @@ impl SnapshotValidator {
                                     actual_version = actual,
                                     "snapshot manifest version mismatch",
                                 );
+                                ScanResult::Failure
                             }
                             Ok(Err(ScanError::ChecksumAlgorithmMismatch { expected, actual })) => {
                                 warn!(
@@ -210,6 +217,7 @@ impl SnapshotValidator {
                                     actual_algorithm = %actual.as_str(),
                                     "snapshot manifest checksum algorithm mismatch",
                                 );
+                                ScanResult::Failure
                             }
                             Ok(Err(ScanError::Decode(err))) => {
                                 warn!(
@@ -218,6 +226,7 @@ impl SnapshotValidator {
                                     error = %err,
                                     "snapshot manifest decode failed",
                                 );
+                                ScanResult::Failure
                             }
                             Ok(Err(ScanError::Io(err))) => {
                                 warn!(
@@ -226,6 +235,7 @@ impl SnapshotValidator {
                                     error = %err,
                                     "snapshot validation I/O failure",
                                 );
+                                ScanResult::Failure
                             }
                             Err(err) => {
                                 warn!(
@@ -233,10 +243,13 @@ impl SnapshotValidator {
                                     error = %err,
                                     "snapshot validator worker task failed",
                                 );
+                                ScanResult::Failure
                             }
-                        }
+                        };
+
+                        metrics.record_scan_end(scan_result, started_at.elapsed());
                     }
-                    changed = shutdown_rx                    changed = shutdown_rx.changed() => {
+                    changed = shutdown_rx.changed() => {
                         if changed.is_ok() && *shutdown_rx.borrow() {
                             break;
                         }
