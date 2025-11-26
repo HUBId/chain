@@ -1003,12 +1003,21 @@ EOF
       XTASK_NO_DEFAULT_FEATURES: "1"
       XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
       RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          label="${SIMNET_LABEL:-${XTASK_FEATURES:-default}}"
+          label=$(printf '%s' "$label" | tr ', ' '-' | tr -s '-' '-')
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
 
       - name: Execute simnet harness
         run: |
@@ -1033,15 +1042,25 @@ EOF
             target/simnet/consensus-chaos/summaries/consensus_chaos.json \
             target/simnet/snapshot-partition/summaries/snapshot_partition.json
 
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet
+
       - name: Package artifacts
         run: |
-          tar -czf simnet-artifacts.tar.gz -C target simnet
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target simnet
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-nightly
-          path: simnet-artifacts.tar.gz
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
 
   simnet-rpp-stark:
     name: Simnet harness (prod, prover-stwo, rpp-stark)
@@ -1050,12 +1069,21 @@ EOF
       XTASK_NO_DEFAULT_FEATURES: "1"
       XTASK_FEATURES: "prod,prover-stwo,backend-rpp-stark"
       RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: ""
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          label="${SIMNET_LABEL:-${XTASK_FEATURES:-default}}"
+          label=$(printf '%s' "$label" | tr ', ' '-' | tr -s '-' '-')
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
 
       - name: Execute simnet harness
         run: |
@@ -1070,15 +1098,25 @@ EOF
             --scenario tools/simnet/scenarios/consensus_slashing_backends.ron \
             --artifacts-dir target/simnet/consensus-slashing-backends
 
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet
+
       - name: Package artifacts
         run: |
-          tar -czf simnet-rpp-stark-artifacts.tar.gz -C target simnet
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target simnet
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-rpp-stark-nightly
-          path: simnet-rpp-stark-artifacts.tar.gz
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
 
   simnet-mixed-backend:
     name: Simnet mixed backend interoperability
@@ -1087,12 +1125,23 @@ EOF
       XTASK_NO_DEFAULT_FEATURES: "1"
       XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
       RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: "mixed-backend"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          label_base="${SIMNET_LABEL:-mixed-backend}"
+          features="${XTASK_FEATURES:-default}"
+          features=$(printf '%s' "$features" | tr ', ' '-' | tr -s '-' '-')
+          label="${label_base}-${features}"
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
 
       - name: Run mixed backend scenario
         run: |
@@ -1107,21 +1156,32 @@ EOF
             target/simnet/mixed-backend-interop-nightly/summaries/mixed_backend_interop.json \
             target/simnet/mixed-backend-interop-nightly/summaries/mixed_backend_interop_consensus.json
 
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet
+
       - name: Package artifacts
         run: |
-          tar -czf simnet-mixed-backend-interop.tar.gz -C target/simnet mixed-backend-interop-nightly
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target/simnet mixed-backend-interop-nightly
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-mixed-backend-interop
-          path: simnet-mixed-backend-interop.tar.gz
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
 
   simnet-regression:
     name: Simnet regression (prod, plonky3)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: "regression-prod-plonky3"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -1133,14 +1193,24 @@ EOF
           rm -rf target/simnet/regression-nightly
           cargo run -p simnet --bin regression -- \
             --artifacts-root target/simnet/regression-nightly
+
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet/regression-nightly
       - name: Package regression artifacts
         run: |
-          tar -czf simnet-regression.tar.gz -C target/simnet regression-nightly
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/simnet-${SIMNET_LABEL}.tar.gz" -C target/simnet regression-nightly
       - name: Upload regression archive
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-regression-nightly
-          path: simnet-regression.tar.gz
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
 
   simnet-uptime-soak:
     name: Simnet uptime soak (weekly)
@@ -1150,12 +1220,23 @@ EOF
       XTASK_NO_DEFAULT_FEATURES: "1"
       XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
       RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: "uptime-soak"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          features="${XTASK_FEATURES:-default}"
+          features=$(printf '%s' "$features" | tr ', ' '-' | tr -s '-' '-')
+          label_base="${SIMNET_LABEL:-uptime-soak}"
+          label="${label_base}-${features}"
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
 
       - name: Execute uptime soak scenario
         run: |
@@ -1165,15 +1246,25 @@ EOF
             --scenario tools/simnet/scenarios/uptime_soak.ron \
             --artifacts-dir target/simnet/uptime-soak-nightly
 
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet/uptime-soak-nightly
+
       - name: Package uptime soak artifacts
         run: |
-          tar -czf simnet-uptime-soak.tar.gz -C target/simnet uptime-soak-nightly
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target/simnet uptime-soak-nightly
 
       - name: Upload uptime soak results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-uptime-soak
-          path: simnet-uptime-soak.tar.gz
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
 
   snapshot-partition:
     name: Snapshot partition recovery audit
