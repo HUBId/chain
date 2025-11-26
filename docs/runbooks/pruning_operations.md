@@ -50,6 +50,10 @@ raise incidents when three consecutive scheduled runs fail.
 - `persisted pruning snapshot plan` – emitted by the runtime when a cycle
   stores the plan on disk. If the log is missing while `persisted_plan_total`
   remains zero, storage or filesystem permissions likely regressed.【F:rpp/runtime/node.rs†L3200-L3202】【F:rpp/node/src/telemetry/pruning.rs†L36-L40】
+- Cross-shard references captured in the pruning receipts must line up with the
+  canonical snapshot metadata before state sync proceeds. Validation rejects
+  dangling `shard` / `partition` links so pruning cannot strand dependencies on
+  other partitions.【F:rpp/node/src/state_sync/light_client.rs†L243-L352】【F:storage/src/snapshots/mod.rs†L11-L78】
 
 ### Pacing and backoff
 
