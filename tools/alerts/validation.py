@@ -11,59 +11,10 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
+from tools.alerts.baselines import UPTIME_BASELINES, UptimeBaselineThresholds, compute_uptime_thresholds
+from tools.alerts.settings import BLOCK_PRODUCTION_SLA, FINALITY_SLA, UPTIME_SLA
 
-@dataclass(frozen=True)
-class FinalityServiceLevel:
-    lag_warning_slots: float
-    lag_critical_slots: float
-    gap_warning_blocks: float
-    gap_critical_blocks: float
-    stall_duration_seconds: float
-
-
-FINALITY_SLA = FinalityServiceLevel(
-    lag_warning_slots=12.0,
-    lag_critical_slots=24.0,
-    gap_warning_blocks=4.0,
-    gap_critical_blocks=8.0,
-    stall_duration_seconds=600.0,
-)
-
-
-@dataclass(frozen=True)
-class UptimeServiceLevel:
-    participation_warning_ratio: float
-    participation_critical_ratio: float
-    uptime_gap_warning_seconds: float
-    uptime_gap_critical_seconds: float
-    timetoke_minimum_rate: float
-    timetoke_window_seconds: float
-
-
-UPTIME_SLA = UptimeServiceLevel(
-    participation_warning_ratio=0.97,
-    participation_critical_ratio=0.94,
-    uptime_gap_warning_seconds=900.0,
-    uptime_gap_critical_seconds=1800.0,
-    timetoke_minimum_rate=0.00025,
-    timetoke_window_seconds=900.0,
-)
-
-
-@dataclass(frozen=True)
-class BlockProductionServiceLevel:
-    warning_ratio: float
-    critical_ratio: float
-    window_seconds: float
-    duration_seconds: float
-
-
-BLOCK_PRODUCTION_SLA = BlockProductionServiceLevel(
-    warning_ratio=0.9,
-    critical_ratio=0.75,
-    window_seconds=300.0,
-    duration_seconds=600.0,
-)
+UPTIME_THRESHOLDS: UptimeBaselineThresholds = compute_uptime_thresholds(UPTIME_SLA)
 
 import socketserver
 
@@ -1173,7 +1124,10 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_epoch_delay(
-                store, "timetoke_epoch_age_seconds", 3600.0, 600.0
+                store,
+                "timetoke_epoch_age_seconds",
+                UPTIME_THRESHOLDS.epoch_warning_seconds,
+                600.0,
             ),
         ),
         AlertRule(
@@ -1187,7 +1141,10 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_epoch_delay(
-                store, "timetoke_epoch_age_seconds", 5400.0, 600.0
+                store,
+                "timetoke_epoch_age_seconds",
+                UPTIME_THRESHOLDS.epoch_critical_seconds,
+                600.0,
             ),
         ),
         AlertRule(
@@ -1201,7 +1158,7 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_uptime_participation(
-                store, UPTIME_SLA.participation_warning_ratio, 600.0
+                store, UPTIME_THRESHOLDS.participation_warning, 600.0
             ),
         ),
         AlertRule(
@@ -1215,7 +1172,7 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_uptime_participation(
-                store, UPTIME_SLA.participation_critical_ratio, 600.0
+                store, UPTIME_THRESHOLDS.participation_critical, 600.0
             ),
         ),
         AlertRule(
@@ -1229,7 +1186,10 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_uptime_gap(
-                store, "uptime_observation_age_seconds", UPTIME_SLA.uptime_gap_warning_seconds, 600.0
+                store,
+                "uptime_observation_age_seconds",
+                UPTIME_THRESHOLDS.observation_warning_seconds,
+                600.0,
             ),
         ),
         AlertRule(
@@ -1243,7 +1203,10 @@ def default_alert_rules() -> List[AlertRule]:
             ),
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts",
             evaluator=lambda store: _evaluate_uptime_gap(
-                store, "uptime_observation_age_seconds", UPTIME_SLA.uptime_gap_critical_seconds, 600.0
+                store,
+                "uptime_observation_age_seconds",
+                UPTIME_THRESHOLDS.observation_critical_seconds,
+                600.0,
             ),
         ),
         AlertRule(
@@ -1260,7 +1223,7 @@ def default_alert_rules() -> List[AlertRule]:
                 store,
                 "timetoke_accrual_hours_total",
                 UPTIME_SLA.timetoke_window_seconds,
-                UPTIME_SLA.timetoke_minimum_rate,
+                UPTIME_THRESHOLDS.timetoke_rate_per_second,
                 900.0,
             ),
         ),
@@ -1278,7 +1241,7 @@ def default_alert_rules() -> List[AlertRule]:
                 store,
                 "timetoke_accrual_hours_total",
                 UPTIME_SLA.timetoke_window_seconds,
-                UPTIME_SLA.timetoke_minimum_rate,
+                UPTIME_THRESHOLDS.timetoke_rate_per_second,
                 1800.0,
             ),
         ),
@@ -1656,6 +1619,71 @@ def build_snapshot_baseline_store() -> MetricStore:
                     (2400.0, 0.0),
                     (2700.0, 0.0),
                     (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_uptime_baseline_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_participation_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, UPTIME_BASELINES.participation_ratio),
+                    (600.0, UPTIME_BASELINES.participation_ratio - 0.001),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, UPTIME_BASELINES.observation_gap_seconds),
+                    (600.0, UPTIME_BASELINES.observation_gap_seconds + 60.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_accrual_hours_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 20.0),
+                    (
+                        UPTIME_SLA.timetoke_window_seconds,
+                        20.0
+                        + UPTIME_THRESHOLDS.timetoke_rate_per_second
+                        * UPTIME_SLA.timetoke_window_seconds,
+                    ),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_epoch_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, UPTIME_BASELINES.epoch_age_seconds),
+                    (
+                        600.0,
+                        min(
+                            UPTIME_BASELINES.epoch_age_seconds
+                            + UPTIME_BASELINES.epoch_warning_buffer / 2,
+                            UPTIME_THRESHOLDS.epoch_warning_seconds,
+                        ),
+                    ),
                 ]
             ),
         )
@@ -2438,7 +2466,11 @@ def default_validation_cases() -> List[ValidationCase]:
         ),
         ValidationCase(
             name="baseline",
-            store=_merge_stores(build_consensus_baseline_store(), build_snapshot_baseline_store()),
+            store=_merge_stores(
+                build_consensus_baseline_store(),
+                build_snapshot_baseline_store(),
+                build_uptime_baseline_store(),
+            ),
             expected_alerts=set(),
         ),
     ]
