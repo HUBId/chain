@@ -78,6 +78,19 @@ Phase‑2 acceptance and to keep operational runbooks aligned with the exported 
 4. Cross-check the collected evidence against the [Phase 2 Exit Criteria](../roadmap_implementation_plan.md#phase-2-exit-criteria-arbeitsstand)
    to ensure the recorded metrics and screenshots cover every audit requirement before sign-off.
 
+## Error log context
+
+Consensus proof verification failures include backend and time markers to speed up on-call triage:
+
+```
+consensus_timetoke=<timetoke> consensus_epoch=<epoch> consensus_slot=<slot> backend=<backend> plonky3 consensus proof verification failed: …
+```
+
+- `consensus_timetoke` – the timetoke or round recorded in the proof inputs.
+- `consensus_epoch` – epoch captured in the proof metadata.
+- `consensus_slot` – slot captured in the proof metadata.
+- `backend` – proof system identifier (for example, `plonky3`).
+
 ## Alerting template
 
 ```yaml
