@@ -18,6 +18,7 @@
 //! supported by the STWO wallet prover so downstream components can request keys
 //! and proofs for identity, state transition, pruning, recursive aggregation,
 //! uptime, consensus, and transaction checks.
+pub mod crash_reports;
 pub mod determinism;
 
 use std::fmt;

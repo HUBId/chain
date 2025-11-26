@@ -13,6 +13,9 @@ pub use io::{
     encode_tx_proof, encode_uptime_proof,
 };
 
+#[cfg(feature = "official")]
+use prover_backend_interface::crash_reports::CrashContextGuard;
+use prover_backend_interface::crash_reports::CrashReportHook;
 use prover_backend_interface::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
     ConsensusVrfPublicEntry, IdentityCircuitDef, IdentityPublicInputs, ProofBackend, ProofBytes,
@@ -43,6 +46,7 @@ use crate::vrf::VRF_PREOUTPUT_LENGTH;
 use keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
 #[cfg(feature = "official")]
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+use std::sync::OnceLock;
 
 #[cfg(feature = "official")]
 const POSEIDON_VRF_DOMAIN: &[u8] = b"chain.vrf.poseidon";
@@ -55,8 +59,20 @@ pub struct StwoBackend;
 
 impl StwoBackend {
     pub fn new() -> Self {
+        install_crash_reporter();
         Self
     }
+}
+
+#[cfg(feature = "official")]
+fn crash_guard_for(circuit: impl Into<String>) -> CrashContextGuard {
+    install_crash_reporter();
+    CrashContextGuard::enter("stwo", circuit)
+}
+
+fn install_crash_reporter() {
+    static HOOK: OnceLock<Option<CrashReportHook>> = OnceLock::new();
+    HOOK.get_or_init(|| CrashReportHook::install_from_env("prover-stwo"));
 }
 
 impl ProofBackend for StwoBackend {
@@ -71,6 +87,7 @@ impl ProofBackend for StwoBackend {
     fn keygen_tx(&self, circuit: &TxCircuitDef) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::Transaction);
         }
 
@@ -87,6 +104,7 @@ impl ProofBackend for StwoBackend {
     ) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::Identity);
         }
 
@@ -100,6 +118,7 @@ impl ProofBackend for StwoBackend {
     fn keygen_state(&self, circuit: &StateCircuitDef) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::State);
         }
 
@@ -116,6 +135,7 @@ impl ProofBackend for StwoBackend {
     ) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::Pruning);
         }
 
@@ -132,6 +152,7 @@ impl ProofBackend for StwoBackend {
     ) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::Recursive);
         }
 
@@ -148,6 +169,7 @@ impl ProofBackend for StwoBackend {
     ) -> BackendResult<(ProvingKey, VerifyingKey)> {
         #[cfg(feature = "official")]
         {
+            let _crash_guard = crash_guard_for(circuit.identifier.clone());
             return keygen_for_circuit(&circuit.identifier, SupportedCircuit::Uptime);
         }
 
@@ -162,6 +184,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::Transaction)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_tx_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -181,6 +204,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::Identity)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_identity_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -200,6 +224,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::State)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_state_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -219,6 +244,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::Pruning)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_pruning_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -242,6 +268,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::Recursive)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_recursive_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -261,6 +288,7 @@ impl ProofBackend for StwoBackend {
         #[cfg(feature = "official")]
         {
             let payload = key_payload_for(pk.as_slice(), SupportedCircuit::Uptime)?;
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let witness = decode_uptime_witness(witness)?;
             let prover = crate::official::prover::WalletProver::new(payload.parameters.clone());
             let proof = prover
@@ -284,6 +312,7 @@ impl ProofBackend for StwoBackend {
         {
             let (header, witness) = decode_consensus_witness(witness)?;
             let parameters = StarkParameters::blueprint_default();
+            let _crash_guard = crash_guard_for(header.circuit.clone());
             let prover = crate::official::prover::WalletProver::new(parameters.clone());
             let proof = prover
                 .prove_consensus_witness(witness)
@@ -313,6 +342,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Transaction)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_tx_proof(proof)?;
             let expected_fields = rebuild_tx_public_inputs(&parameters, public_inputs);
             let commitment =
@@ -346,6 +376,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Identity)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_identity_proof(proof)?;
             let expected_fields = rebuild_identity_public_inputs(&parameters, public_inputs);
             ensure_proof_integrity("identity", &parameters, &decoded, &expected_fields)?;
@@ -373,6 +404,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::State)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_state_proof(proof)?;
             let expected_fields = rebuild_state_public_inputs(&parameters, public_inputs);
             ensure_proof_integrity("state", &parameters, &decoded, &expected_fields)?;
@@ -400,6 +432,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Pruning)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_pruning_proof(proof)?;
             let expected_fields = rebuild_pruning_public_inputs(&parameters, public_inputs);
             ensure_proof_integrity("pruning", &parameters, &decoded, &expected_fields)?;
@@ -427,6 +460,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Recursive)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_recursive_proof(proof)?;
             let expected_fields = rebuild_recursive_public_inputs(&parameters, public_inputs);
             ensure_proof_integrity("recursive", &parameters, &decoded, &expected_fields)?;
@@ -454,6 +488,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Uptime)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let decoded = decode_uptime_proof(proof)?;
             let expected_fields = rebuild_uptime_public_inputs(&parameters, public_inputs);
             let commitment =
@@ -488,6 +523,7 @@ impl ProofBackend for StwoBackend {
         {
             let payload = key_payload_for(vk.as_slice(), SupportedCircuit::Consensus)?;
             let parameters = payload.parameters.clone();
+            let _crash_guard = crash_guard_for(payload.circuit.clone());
             let (header, decoded) = decode_consensus_proof(proof)?;
             if !header.circuit.eq_ignore_ascii_case(&circuit.identifier) {
                 return Err(BackendError::Failure(

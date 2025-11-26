@@ -7947,6 +7947,8 @@ dependencies = [
  "blake3",
  "hex",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.12",
 ]
 

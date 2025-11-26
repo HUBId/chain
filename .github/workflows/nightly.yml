@@ -210,6 +210,9 @@ jobs:
   zk-alert-probes:
     name: ZK backend alert probes
     runs-on: ubuntu-latest
+    env:
+      RPP_ZK_CRASH_REPORTS: "1"
+      RPP_ZK_CRASH_REPORT_DIR: logs/zk-crash-reports
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -232,10 +235,20 @@ jobs:
           cargo test -p rpp-p2p --test proof_cache_metrics -- \
             eviction_policy_is_fifo_and_hits_survive_eviction \
             eviction_hit_rate_stays_stable_under_pressure
+      - name: Upload zk crash reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-crash-reports-alert-probes
+          path: logs/zk-crash-reports/*.json
+          if-no-files-found: ignore
 
   zk-penalty-guardrails:
     name: ZK consensus penalty guardrails
     runs-on: ubuntu-latest
+    env:
+      RPP_ZK_CRASH_REPORTS: "1"
+      RPP_ZK_CRASH_REPORT_DIR: logs/zk-crash-reports
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -249,10 +262,20 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p rpp-chain --test consensus_censorship_inactivity -- zk_backends_apply_and_log_penalties
+      - name: Upload zk crash reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-crash-reports-penalty-guardrails
+          path: logs/zk-crash-reports/*.json
+          if-no-files-found: ignore
 
   zk-load-harness:
     name: ZK backend load harness
     runs-on: ubuntu-latest
+    env:
+      RPP_ZK_CRASH_REPORTS: "1"
+      RPP_ZK_CRASH_REPORT_DIR: logs/zk-crash-reports
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -264,6 +287,13 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture
+      - name: Upload zk crash reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-crash-reports-load-harness
+          path: logs/zk-crash-reports/*.json
+          if-no-files-found: ignore
 
   rpp-stark-conflict-drill:
     name: RPP-STARK conflict handling
