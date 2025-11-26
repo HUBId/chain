@@ -280,6 +280,8 @@ pub struct WalletProverConfig {
     /// Maximum witness size (in bytes) accepted from the STWO backend when configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stwo_max_witness_bytes: Option<u64>,
+    /// Concurrency reserved for consensus-critical prover jobs.
+    pub priority_slots: u32,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
     /// Optional fallback backend to route proofs to when the primary is overloaded.
@@ -307,6 +309,7 @@ impl Default for WalletProverConfig {
             timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             stwo_max_witness_bytes: None,
+            priority_slots: DEFAULT_PROVER_MAX_CONCURRENCY,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
             fallback_backend: None,
             cpu_quota_percent: DEFAULT_PROVER_CPU_QUOTA_PERCENT,
@@ -361,6 +364,12 @@ impl WalletProverConfig {
                     }
                 }
             }
+        }
+        if self.priority_slots == 0 {
+            return Err("wallet prover priority_slots must be greater than 0");
+        }
+        if self.priority_slots > self.max_concurrency {
+            return Err("wallet prover priority_slots cannot exceed max_concurrency");
         }
         Ok(())
     }
