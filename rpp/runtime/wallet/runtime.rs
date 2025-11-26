@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use axum::serve;
 use axum::Router;
 use parking_lot::Mutex;
 use tokio::net::TcpListener as TokioTcpListener;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 #[cfg(feature = "wallet_rpc_mtls")]
 use tokio::task::JoinSet;
@@ -37,7 +38,7 @@ use std::fs;
 #[cfg(feature = "wallet_rpc_mtls")]
 use std::io::BufReader;
 
-use super::sync::{SyncCheckpoint, SyncProvider};
+use super::sync::{SyncCheckpoint, SyncProvider, SyncUpdateReceiver, SyncUpdateSender};
 #[cfg(feature = "wallet_rpc_mtls")]
 use hyper::body::Incoming;
 #[cfg(feature = "wallet_rpc_mtls")]
@@ -73,9 +74,11 @@ struct WalletRuntimeState {
     shutdown_tx: watch::Sender<bool>,
     watch_task: Mutex<Option<JoinHandle<()>>>,
     sync_task: Mutex<Option<JoinHandle<()>>>,
+    sync_update_task: Mutex<Option<JoinHandle<()>>>,
     http_task: Mutex<Option<JoinHandle<()>>>,
-    checkpoint: Option<SyncCheckpoint>,
+    checkpoint: Arc<Mutex<Option<SyncCheckpoint>>>,
     attached_to_node: bool,
+    wallet_ready: Arc<AtomicBool>,
 }
 
 impl WalletRuntimeState {
@@ -106,6 +109,9 @@ impl WalletRuntimeState {
                     )));
                 }
             }
+        }
+        if let Some(handle) = self.sync_update_task.lock().take() {
+            let _ = handle.await;
         }
         if let Some(handle) = self.http_task.lock().take() {
             if let Err(err) = handle.await {
@@ -423,7 +429,7 @@ impl<W: WalletService + 'static> GenericWalletRuntimeHandle<W> {
     }
 
     pub fn sync_checkpoint(&self) -> Option<SyncCheckpoint> {
-        self.state.checkpoint.clone()
+        self.state.checkpoint.lock().clone()
     }
 
     pub async fn shutdown(&self) -> ChainResult<()> {
@@ -473,6 +479,7 @@ pub trait SyncDriver: Send + 'static {
         self: Box<Self>,
         metrics: Arc<RuntimeMetrics>,
         shutdown_rx: watch::Receiver<bool>,
+        updates_tx: SyncUpdateSender,
     ) -> ChainResult<JoinHandle<()>>;
 }
 
@@ -501,6 +508,8 @@ impl WalletRuntime {
         }
         let address = wallet.address();
         let checkpoint = sync_provider.latest_checkpoint();
+        let checkpoint_store = Arc::new(Mutex::new(checkpoint.clone()));
+        let wallet_ready = Arc::new(AtomicBool::new(false));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let metrics_clone = Arc::clone(&metrics);
         let runtime_address = address.clone();
@@ -522,12 +531,20 @@ impl WalletRuntime {
         });
         metrics.record_wallet_runtime_watch_started();
 
-        let sync_task = if let Some(driver) = sync_driver {
-            let task = driver.spawn(Arc::clone(&metrics), shutdown_rx.clone())?;
+        let (sync_task, sync_update_task) = if let Some(driver) = sync_driver {
+            let (sync_update_tx, sync_update_rx) = mpsc::unbounded_channel();
+            let update_task = spawn_sync_update_listener(
+                Arc::clone(&metrics),
+                Arc::clone(&checkpoint_store),
+                Arc::clone(&wallet_ready),
+                shutdown_rx.clone(),
+                sync_update_rx,
+            );
+            let task = driver.spawn(Arc::clone(&metrics), shutdown_rx.clone(), sync_update_tx)?;
             metrics.record_wallet_sync_driver_started();
-            Some(task)
+            (Some(task), Some(update_task))
         } else {
-            None
+            (None, None)
         };
 
         let (http_task, resolved_listen_addr) = if let Some(router) = rpc_router {
@@ -687,25 +704,76 @@ impl WalletRuntime {
             info!(%address, "wallet runtime started without checkpoint");
         }
 
-        let state = WalletRuntimeState {
+        let state = Arc::new(WalletRuntimeState {
             metrics: Arc::clone(&metrics),
             shutdown_tx,
             watch_task: Mutex::new(Some(watch_task)),
             sync_task: Mutex::new(sync_task),
+            sync_update_task: Mutex::new(sync_update_task),
             http_task: Mutex::new(http_task),
-            checkpoint,
+            checkpoint: Arc::clone(&checkpoint_store),
             attached_to_node,
-        };
+            wallet_ready: Arc::clone(&wallet_ready),
+        });
+
+        wallet_ready.store(true, Ordering::SeqCst);
 
         Ok(GenericWalletRuntimeHandle {
             wallet,
             address,
             config,
-            state: Arc::new(state),
+            state,
             #[cfg(feature = "wallet-integration")]
             embedded_node,
         })
     }
+}
+
+fn spawn_sync_update_listener(
+    metrics: Arc<RuntimeMetrics>,
+    checkpoint: Arc<Mutex<Option<SyncCheckpoint>>>,
+    wallet_ready: Arc<AtomicBool>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    mut sync_update_rx: SyncUpdateReceiver,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if *shutdown_rx.borrow() {
+                break;
+            }
+
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                maybe_update = sync_update_rx.recv() => {
+                    let Some(update) = maybe_update else {
+                        break;
+                    };
+
+                    if !wallet_ready.load(Ordering::SeqCst) {
+                        continue;
+                    }
+
+                    {
+                        let mut checkpoint_guard = checkpoint.lock();
+                        *checkpoint_guard = Some(update.checkpoint.clone());
+                    }
+
+                    metrics.record_wallet_sync_wallet_height(update.checkpoint.height);
+                    metrics.record_wallet_sync_chain_tip_height(update.chain_tip_height);
+                    metrics.record_wallet_sync_lag_blocks(
+                        update
+                            .chain_tip_height
+                            .saturating_sub(update.checkpoint.height),
+                    );
+                    metrics.record_wallet_last_successful_sync(update.applied_at);
+                }
+            }
+        }
+    })
 }
 
 fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
