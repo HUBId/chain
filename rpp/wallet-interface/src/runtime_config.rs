@@ -927,6 +927,9 @@ pub struct WalletProverSettings {
     pub max_witness_bytes: u64,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
+    /// Optional fallback backend to route proofs to when the primary is overloaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_backend: Option<WalletProverBackend>,
 }
 
 impl Default for WalletProverSettings {
@@ -939,6 +942,7 @@ impl Default for WalletProverSettings {
             timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
+            fallback_backend: None,
         }
     }
 }
@@ -1484,6 +1488,13 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
         return Err(RuntimeConfigError::InvalidConfig(
             "wallet configuration wallet.prover.allow_broadcast_without_proof must be false when proofs are required".into(),
         ));
+    }
+    if let Some(fallback) = config.fallback_backend {
+        if fallback == config.backend {
+            return Err(RuntimeConfigError::InvalidConfig(
+                "wallet configuration wallet.prover.fallback_backend must differ from the primary backend".into(),
+            ));
+        }
     }
     if !config.enabled {
         if config.require_proof {

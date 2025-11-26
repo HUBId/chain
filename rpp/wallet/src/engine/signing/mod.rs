@@ -38,6 +38,7 @@ pub struct WitnessPlan {
     witness: Option<WitnessBytes>,
     witness_bytes: usize,
     prepared_at: Instant,
+    backend: &'static str,
 }
 
 impl WitnessPlan {
@@ -46,6 +47,7 @@ impl WitnessPlan {
             witness: None,
             witness_bytes: 0,
             prepared_at: Instant::now(),
+            backend: "unknown",
         }
     }
 
@@ -55,6 +57,7 @@ impl WitnessPlan {
             witness: Some(witness),
             witness_bytes: bytes,
             prepared_at: Instant::now(),
+            backend: "unknown",
         }
     }
 
@@ -64,6 +67,7 @@ impl WitnessPlan {
             witness: Some(witness),
             witness_bytes: bytes,
             prepared_at,
+            backend: "unknown",
         }
     }
 
@@ -73,6 +77,15 @@ impl WitnessPlan {
 
     pub fn prepared_at(&self) -> Instant {
         self.prepared_at
+    }
+
+    pub fn backend(&self) -> &'static str {
+        self.backend
+    }
+
+    pub fn with_backend(mut self, backend: &'static str) -> Self {
+        self.backend = backend;
+        self
     }
 
     pub fn take_witness(&mut self) -> Option<WitnessBytes> {
@@ -86,6 +99,7 @@ impl WitnessPlan {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProveResult {
+    backend: &'static str,
     proof: Option<ProofBytes>,
     witness_bytes: usize,
     started_at: Instant,
@@ -94,12 +108,14 @@ pub struct ProveResult {
 
 impl ProveResult {
     pub fn new(
+        backend: &'static str,
         proof: Option<ProofBytes>,
         witness_bytes: usize,
         started_at: Instant,
         finished_at: Instant,
     ) -> Self {
         Self {
+            backend,
             proof,
             witness_bytes,
             started_at,
@@ -109,6 +125,10 @@ impl ProveResult {
 
     pub fn proof(&self) -> Option<&ProofBytes> {
         self.proof.as_ref()
+    }
+
+    pub fn backend(&self) -> &'static str {
+        self.backend
     }
 
     pub fn into_proof(self) -> Option<ProofBytes> {

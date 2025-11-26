@@ -33,10 +33,7 @@ impl StwoWitnessAdapter {
         let (witness_bytes, witness_len) = build_stwo_witness(draft)?;
         manager.ensure_witness_capacity("stwo", witness_len, Some(self.witness_cap))?;
         counter!("wallet.prover.stwo.witness.prepared").increment(1);
-        Ok(WitnessPlan::with_parts(
-            witness_bytes,
-            std::time::Instant::now(),
-        ))
+        Ok(WitnessPlan::with_parts(witness_bytes, std::time::Instant::now()).with_backend("stwo"))
     }
 }
 
