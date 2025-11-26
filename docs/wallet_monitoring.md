@@ -27,6 +27,16 @@ selectors to match your scrape pipeline.
 ```
 
 ```promql
+# Wallet height lags chain tip by N blocks for M minutes
+avg_over_time(rpp_runtime_wallet_sync_lag_blocks[5m]) > 20
+```
+
+```promql
+# Last successful sync older than threshold (in seconds)
+(time() - max_over_time(rpp_runtime_wallet_sync_last_success_timestamp_seconds[5m])) > 600
+```
+
+```promql
 # Broadcast rejections after policy/prover checks
 increase(rpp_runtime_wallet_broadcast_rejected{reason!="ok"}[10m]) > 3
 ```
