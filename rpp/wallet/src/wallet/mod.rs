@@ -1293,6 +1293,7 @@ impl WalletService for Wallet {
 mod tests {
     use super::*;
     use std::borrow::Cow;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1318,6 +1319,7 @@ mod tests {
     use crate::wallet::WatchOnlyError;
     use tokio::runtime::Handle;
     use tokio::task;
+    use tokio::time::sleep;
 
     struct SleepyWalletProver {
         jobs: ProverJobManager,
@@ -1496,6 +1498,85 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FlakyStage {
+        Prepare,
+        Prove,
+        Attest,
+    }
+
+    struct FlakyProver {
+        inner: InstantWalletProver,
+        attempts: Arc<AtomicUsize>,
+        fail_until: usize,
+        stage: FlakyStage,
+        backoff: Duration,
+    }
+
+    impl FlakyProver {
+        fn new(stage: FlakyStage, fail_until: usize, config: &WalletProverConfig) -> Self {
+            Self {
+                inner: InstantWalletProver::default(),
+                attempts: Arc::new(AtomicUsize::new(0)),
+                fail_until,
+                stage,
+                backoff: Duration::from_millis(config.limit_backoff_ms),
+            }
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::SeqCst)
+        }
+
+        fn maybe_fail(&self, stage: FlakyStage) -> Result<(), ProverError> {
+            if self.stage != stage {
+                return Ok(());
+            }
+
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt < self.fail_until {
+                if !self.backoff.is_zero() {
+                    std::thread::sleep(self.backoff);
+                }
+                return Err(ProverError::Busy);
+            }
+
+            Ok(())
+        }
+    }
+
+    impl WalletProver for FlakyProver {
+        fn identity(&self) -> ProverIdentity {
+            self.inner.identity()
+        }
+
+        fn prepare_witness(
+            &self,
+            ctx: &DraftProverContext<'_>,
+        ) -> Result<WitnessPlan, ProverError> {
+            self.maybe_fail(FlakyStage::Prepare)?;
+            self.inner.prepare_witness(ctx)
+        }
+
+        fn prove(
+            &self,
+            ctx: &DraftProverContext<'_>,
+            plan: WitnessPlan,
+        ) -> Result<ProveResult, ProverError> {
+            self.maybe_fail(FlakyStage::Prove)?;
+            self.inner.prove(ctx, plan)
+        }
+
+        fn attest_metadata(
+            &self,
+            ctx: &DraftProverContext<'_>,
+            result: &ProveResult,
+        ) -> Result<EngineProverMeta, ProverError> {
+            self.maybe_fail(FlakyStage::Attest)?;
+            self.inner.attest_metadata(ctx, result)
+        }
+    }
+
     #[derive(Default)]
     struct DisabledProofProver;
 
@@ -1543,6 +1624,25 @@ mod tests {
 
     fn sample_wallet_configs() -> (WalletPolicyConfig, WalletFeeConfig) {
         (WalletPolicyConfig::default(), WalletFeeConfig::default())
+    }
+
+    async fn retry_sign_and_prove(
+        wallet: &Wallet,
+        draft: &DraftTransaction,
+    ) -> Result<(ProveResult, EngineProverMeta), WalletError> {
+        let mut attempts = 0;
+        loop {
+            match wallet.sign_and_prove(draft) {
+                Ok(result) => return Ok(result),
+                Err(WalletError::ProverBusy) if attempts < wallet.prover_config.limit_retries => {
+                    attempts += 1;
+                    if wallet.prover_config.limit_backoff_ms > 0 {
+                        sleep(Duration::from_millis(wallet.prover_config.limit_backoff_ms)).await;
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     #[cfg(feature = "wallet_hw")]
@@ -1695,6 +1795,76 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WalletError::HardwareFeatureDisabled)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sign_and_prove_recovers_from_transient_busy() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 42_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+
+        let mut prover_config = WalletProverConfig::default();
+        prover_config.limit_retries = 3;
+        prover_config.limit_backoff_ms = 0;
+        let flaky_prover = Arc::new(FlakyProver::new(FlakyStage::Prove, 2, &prover_config));
+
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            flaky_prover.clone(),
+            Arc::clone(&node_client),
+        );
+        wallet.prover_config.limit_retries = prover_config.limit_retries;
+        wallet.prover_config.limit_backoff_ms = prover_config.limit_backoff_ms;
+
+        let draft = make_draft(&wallet, 18_000);
+        let (prove_result, _) = retry_sign_and_prove(&wallet, &draft)
+            .await
+            .expect("transient busy should recover");
+
+        assert_eq!(flaky_prover.attempts(), 3);
+        assert_eq!(prove_result.backend(), "instant");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sign_and_prove_stops_after_retry_budget_is_exhausted() {
+        let tempdir = tempdir().expect("tempdir");
+        let store = Arc::new(WalletStore::open(tempdir.path()).expect("store"));
+        seed_store_with_utxo(&store, 50_000);
+
+        let (policy, fees) = sample_wallet_configs();
+        let node_client: Arc<dyn NodeClient> = Arc::new(StubNodeClient::default());
+
+        let mut prover_config = WalletProverConfig::default();
+        prover_config.limit_retries = 2;
+        prover_config.limit_backoff_ms = 0;
+        let flaky_prover = Arc::new(FlakyProver::new(FlakyStage::Attest, 4, &prover_config));
+
+        let wallet = build_wallet_with_prover(
+            Arc::clone(&store),
+            policy,
+            fees,
+            flaky_prover.clone(),
+            Arc::clone(&node_client),
+        );
+        wallet.prover_config.limit_retries = prover_config.limit_retries;
+        wallet.prover_config.limit_backoff_ms = prover_config.limit_backoff_ms;
+
+        let draft = make_draft(&wallet, 22_000);
+        let err = retry_sign_and_prove(&wallet, &draft)
+            .await
+            .expect_err("retry budget should fail");
+
+        assert!(matches!(err, WalletError::ProverBusy));
+        assert_eq!(
+            flaky_prover.attempts(),
+            prover_config.limit_retries as usize + 1
+        );
+        assert!(wallet.pending_locks().expect("pending locks").is_empty());
     }
 
     #[cfg(feature = "prover-mock")]
