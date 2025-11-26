@@ -172,6 +172,18 @@
       },
       "additionalProperties": false
     },
+    "BackendSlaStatus": {
+      "type": "object",
+      "required": ["healthy"],
+      "properties": {
+        "latency_ms": {"type": ["number", "null"], "minimum": 0},
+        "latency_budget_ms": {"type": ["number", "null"], "minimum": 0},
+        "error_rate": {"type": ["number", "null"], "minimum": 0},
+        "error_budget": {"type": ["number", "null"], "minimum": 0},
+        "healthy": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
     "BackendHealthReport": {
       "type": "object",
       "required": ["verifier"],
@@ -183,7 +195,9 @@
             {"type": "null"},
             {"$ref": "#/$defs/Plonky3BackendHealth"}
           ]
-        }
+        },
+        "verifier_sla": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/BackendSlaStatus"}]},
+        "prover_sla": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/BackendSlaStatus"}]}
       },
       "additionalProperties": false
     },

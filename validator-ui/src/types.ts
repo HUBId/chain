@@ -173,9 +173,19 @@ export interface Plonky3BackendHealth {
   last_error?: Plonky3BackendError | null;
 }
 
+export interface BackendSlaStatus {
+  latency_ms?: number | null;
+  latency_budget_ms?: number | null;
+  error_rate?: number | null;
+  error_budget?: number | null;
+  healthy: boolean;
+}
+
 export interface BackendHealthReport {
   verifier: BackendVerificationMetrics;
   prover?: Plonky3BackendHealth | null;
+  verifier_sla?: BackendSlaStatus | null;
+  prover_sla?: BackendSlaStatus | null;
 }
 
 export interface NodeStatus {
