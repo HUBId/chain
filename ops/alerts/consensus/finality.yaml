@@ -10,6 +10,7 @@ groups:
           team: consensus
           sla: finality
           sla_target: max_finality_lag_slots
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Finality lag breached the 12-slot SLA budget
           description: >-
@@ -25,6 +26,7 @@ groups:
           team: consensus
           sla: finality
           sla_target: max_finality_lag_slots
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Finality lag exceeded the 24-slot SLA ceiling
           description: >-
@@ -40,6 +42,7 @@ groups:
           team: consensus
           sla: finality
           sla_target: max_finalized_height_gap_blocks
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Finalized height gap above the 4-block SLA budget
           description: >-
@@ -55,6 +58,7 @@ groups:
           team: consensus
           sla: finality
           sla_target: max_finalized_height_gap_blocks
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Finalized height gap beyond the 8-block SLA ceiling
           description: >-
@@ -73,6 +77,7 @@ groups:
         labels:
           severity: warning
           team: consensus
+          environment: "{{ $labels.environment }}"
         annotations:
           summary: Node restart correlated with finality regression
           description: >-

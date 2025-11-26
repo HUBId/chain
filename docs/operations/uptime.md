@@ -165,6 +165,19 @@ When drift triggers an alert:
   thresholds so both the Prometheus expressions and the probe fixtures share the
   same numbers, preventing drift between alerting and validation.【F:tools/alerts/validation.py†L16-L43】【F:tools/alerts/tests/test_alert_validation.py†L1-L86】
 
+### Environment-aware slicing and promotion gates
+
+- **Environment labels everywhere:** Uptime and RPC alerting rules now aggregate
+  and forward the `environment` label so pages are grouped by staging, canary,
+  or production. The Grafana correlation dashboard inherits the same label and
+  exposes an environment template to slice restarts, finality lag, block rate,
+  and RPC availability by deployment ring.【F:telemetry/prometheus/runtime-rules.yaml†L1-L75】【F:ops/alerts/consensus/liveness.yaml†L1-L45】【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:docs/dashboards/uptime_finality_correlation.json†L1-L120】
+- **Pre-promotion probes:** A dedicated `staging-slo-probes` CI job reuses the
+  staging soak orchestration to validate snapshot health, Timetoke SLOs, and
+  admission reconciliation against staging-like endpoints before a production
+  promotion proceeds. The job fails when staging SLOs regress and uploads the
+  timestamped summary for incident follow-up.【F:.github/workflows/ci.yml†L434-L516】【F:xtask/src/main.rs†L3058-L3361】
+
 ### Reporting cadence
 
 - **CI gates:** The `alert-probes` job in CI runs the probes and fails the build
