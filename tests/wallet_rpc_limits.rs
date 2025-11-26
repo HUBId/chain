@@ -18,12 +18,38 @@ use rpp_chain::runtime::wallet::rpc::{
 };
 use rpp_wallet::rpc::dto::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use rpp_wallet::rpc::error::WalletRpcErrorCode;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const LIMITED_METHOD: &str = "limited.echo";
 const SIGNING_METHOD: &str = "signing.error";
 const UNKNOWN_METHOD: &str = "unknown";
+const HISTORY_METHOD: &str = "history.page";
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct HistoryEnvelope {
+    entries: Vec<HistoryEntry>,
+    page_token: Option<String>,
+    next_page_token: Option<String>,
+    prev_page_token: Option<String>,
+    backend: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct HistoryEntry {
+    txid: String,
+    height: u64,
+    status: String,
+    backend: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+struct HistoryParams {
+    page_token: Option<String>,
+    backend: Option<String>,
+    reorg_at: Option<u64>,
+}
 
 fn rate_limited_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
     authenticated_handler(
@@ -65,6 +91,66 @@ fn signing_error_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
     )
 }
 
+fn history_handler(metrics: Arc<RuntimeMetrics>, limit: Option<NonZeroU64>) -> TestHandler {
+    authenticated_handler(
+        StaticAuthenticator::new(None),
+        Arc::new(|invocation: RpcInvocation<'_, JsonRpcRequest>| {
+            let params: HistoryParams = invocation
+                .payload
+                .params
+                .clone()
+                .and_then(|params| serde_json::from_value(params).ok())
+                .unwrap_or_default();
+            let backend = params
+                .backend
+                .clone()
+                .unwrap_or_else(|| "rpp-stark".to_string());
+            let page_token = params.page_token.clone();
+            let entries = paginated_history(&backend, params.reorg_at);
+
+            let (cursor, offset) = match page_token.as_deref() {
+                Some(token) => parse_page_token(token),
+                None => (None, 0usize),
+            };
+            let page_size = 2usize;
+            let page_entries = entries
+                .iter()
+                .skip(offset)
+                .take(page_size)
+                .cloned()
+                .collect::<Vec<_>>();
+            let next_offset = offset + page_entries.len();
+            let next_page_token = if next_offset < entries.len() {
+                Some(format!("{}:{}", backend, next_offset))
+            } else {
+                None
+            };
+            let prev_page_token = if offset >= page_size {
+                Some(format!("{}:{}", backend, offset - page_size))
+            } else {
+                None
+            };
+
+            JsonRpcResponse::success(
+                invocation.payload.id.clone(),
+                json!(HistoryEnvelope {
+                    entries: page_entries,
+                    page_token: cursor,
+                    next_page_token,
+                    prev_page_token,
+                    backend,
+                }),
+            )
+        }),
+        metrics,
+        WalletRpcMethod::RuntimeStatus,
+        HISTORY_METHOD,
+        limit,
+        &[],
+        Arc::new(WalletAuditLogger::disabled()),
+    )
+}
+
 fn fallback_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
     authenticated_handler(
         StaticAuthenticator::new(None),
@@ -85,6 +171,53 @@ fn fallback_handler(metrics: Arc<RuntimeMetrics>) -> TestHandler {
         &[],
         Arc::new(WalletAuditLogger::disabled()),
     )
+}
+
+fn paginated_history(backend: &str, reorg_at: Option<u64>) -> Vec<HistoryEntry> {
+    let mut entries = vec![
+        HistoryEntry {
+            txid: "tx-0".into(),
+            height: 1,
+            status: "confirmed".into(),
+            backend: backend.to_string(),
+        },
+        HistoryEntry {
+            txid: "tx-1".into(),
+            height: 2,
+            status: "confirmed".into(),
+            backend: backend.to_string(),
+        },
+        HistoryEntry {
+            txid: "tx-2".into(),
+            height: 3,
+            status: "pending".into(),
+            backend: backend.to_string(),
+        },
+        HistoryEntry {
+            txid: "tx-3".into(),
+            height: 4,
+            status: "pending".into(),
+            backend: backend.to_string(),
+        },
+    ];
+
+    if let Some(height) = reorg_at {
+        entries.retain(|entry| entry.height <= height);
+        for entry in &mut entries {
+            if entry.status == "pending" {
+                entry.status = "reorged".into();
+            }
+        }
+    }
+
+    entries
+}
+
+fn parse_page_token(token: &str) -> (Option<String>, usize) {
+    token
+        .split_once(':')
+        .and_then(|(backend, offset)| offset.parse::<usize>().ok().map(|idx| (Some(backend.to_string()), idx)))
+        .unwrap_or((Some(token.to_string()), 0))
 }
 
 type TestHandler = AuthenticatedRpcHandler<TestHandlerFn, JsonRpcRequest>;
@@ -204,6 +337,10 @@ fn build_router() -> Router {
         SIGNING_METHOD.to_string(),
         signing_error_handler(Arc::clone(&metrics)),
     );
+    handlers.insert(
+        HISTORY_METHOD.to_string(),
+        history_handler(Arc::clone(&metrics), NonZeroU64::new(2)),
+    );
 
     let server = Arc::new(TestRpcServer {
         handlers,
@@ -322,4 +459,146 @@ async fn signing_errors_include_wallet_code_payloads() {
         payload["details"]["reason"],
         Value::String("missing signature".into())
     );
+}
+
+#[tokio::test]
+async fn history_pagination_tokens_survive_rate_limits() {
+    let app = build_router();
+
+    let first_page = history_page(
+        &app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": HISTORY_METHOD,
+            "params": {},
+        }),
+    )
+    .await;
+    assert_eq!(first_page.entries.len(), 2);
+    let next_token = first_page.next_page_token.clone().expect("next token");
+
+    let second_page = history_page(
+        &app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": HISTORY_METHOD,
+            "params": {"page_token": next_token},
+        }),
+    )
+    .await;
+    assert_eq!(
+        second_page
+            .entries
+            .first()
+            .map(|entry| entry.txid.as_str()),
+        Some("tx-2"),
+    );
+    let final_token = second_page.next_page_token.clone().expect("final token");
+
+    let limited_response = app
+        .clone()
+        .oneshot(post_request(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": HISTORY_METHOD,
+            "params": {"page_token": final_token},
+        })))
+        .await
+        .expect("limited response");
+    assert_eq!(limited_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let headers = limited_response.headers();
+    assert!(headers.contains_key("x-ratelimit-limit"));
+    assert!(headers.contains_key("retry-after"));
+
+    let body = to_bytes(limited_response.into_body())
+        .await
+        .expect("limit body");
+    let parsed: JsonRpcResponse = serde_json::from_slice(&body).expect("rpc error");
+    assert!(parsed
+        .error
+        .as_ref()
+        .map(|err| err.message.contains("rate limit"))
+        .unwrap_or(false));
+
+    let cooled_app = build_router();
+    let recovered_page = history_page(
+        &cooled_app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": HISTORY_METHOD,
+            "params": {"page_token": final_token},
+        }),
+    )
+    .await;
+    assert_eq!(recovered_page.entries.len(), 0);
+    assert_eq!(recovered_page.prev_page_token.as_deref(), Some("rpp-stark:2"));
+}
+
+#[tokio::test]
+async fn history_pagination_tracks_backends_and_reorgs() {
+    let app = build_router();
+
+    let stark_page = history_page(
+        &app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": HISTORY_METHOD,
+            "params": {"backend": "rpp-stark"},
+        }),
+    )
+    .await;
+    assert!(stark_page
+        .entries
+        .iter()
+        .all(|entry| entry.backend == "rpp-stark"));
+    let stark_token = stark_page.next_page_token.clone().expect("stark token");
+
+    let plonky_page = history_page(
+        &app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": HISTORY_METHOD,
+            "params": {"backend": "plonky3", "reorg_at": 2},
+        }),
+    )
+    .await;
+    assert!(plonky_page
+        .entries
+        .iter()
+        .all(|entry| entry.backend == "plonky3"));
+    assert!(plonky_page.entries.iter().all(|entry| entry.height <= 2));
+    assert!(plonky_page
+        .entries
+        .iter()
+        .any(|entry| entry.status == "reorged"));
+
+    let reorged_follow_up = history_page(
+        &app,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": HISTORY_METHOD,
+            "params": {"backend": "plonky3", "page_token": stark_token, "reorg_at": 2},
+        }),
+    )
+    .await;
+    assert_eq!(reorged_follow_up.entries.len(), 0);
+    assert_eq!(reorged_follow_up.next_page_token, None);
+}
+
+async fn history_page(app: &Router, request: Value) -> HistoryEnvelope {
+    let response = app
+        .clone()
+        .oneshot(post_request(request))
+        .await
+        .expect("history response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body()).await.expect("body");
+    let parsed: JsonRpcResponse = serde_json::from_slice(&body).expect("jsonrpc response");
+    serde_json::from_value(parsed.result.expect("page result")).expect("history payload")
 }
