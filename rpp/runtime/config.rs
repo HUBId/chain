@@ -2619,6 +2619,7 @@ pub struct PruningConfig {
     pub cadence_secs: u64,
     pub retention_depth: u64,
     pub emergency_pause: bool,
+    pub pacing: PruningPacingConfig,
 }
 
 impl PruningConfig {
@@ -2633,6 +2634,7 @@ impl PruningConfig {
                 "pruning.retention_depth must be greater than 0".into(),
             ));
         }
+        self.pacing.validate()?;
         Ok(())
     }
 }
@@ -2643,6 +2645,65 @@ impl Default for PruningConfig {
             cadence_secs: DEFAULT_PRUNING_CADENCE_SECS,
             retention_depth: DEFAULT_PRUNING_RETENTION_DEPTH,
             emergency_pause: false,
+            pacing: PruningPacingConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PruningPacingConfig {
+    /// Maximum allowed average CPU usage (0.0 - 100.0) before pruning yields.
+    pub cpu_max_percent: f32,
+    /// Maximum sustained IO throughput (bytes/sec) before pruning yields.
+    pub io_max_bytes_per_sec: u64,
+    /// Total pending transaction/identity/vote entries before pruning yields.
+    pub mempool_backlog_limit: usize,
+    /// Pending uptime proofs before pruning yields to unblock timetoke crediting.
+    pub timetoke_backlog_limit: usize,
+    /// Backoff delay applied when a pacing signal fires.
+    pub backoff_secs: u64,
+}
+
+impl PruningPacingConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if !(0.0..=100.0).contains(&self.cpu_max_percent) {
+            return Err(ChainError::Config(
+                "pruning.pacing.cpu_max_percent must be between 0 and 100".into(),
+            ));
+        }
+        if self.io_max_bytes_per_sec == 0 {
+            return Err(ChainError::Config(
+                "pruning.pacing.io_max_bytes_per_sec must be greater than 0".into(),
+            ));
+        }
+        if self.mempool_backlog_limit == 0 {
+            return Err(ChainError::Config(
+                "pruning.pacing.mempool_backlog_limit must be greater than 0".into(),
+            ));
+        }
+        if self.timetoke_backlog_limit == 0 {
+            return Err(ChainError::Config(
+                "pruning.pacing.timetoke_backlog_limit must be greater than 0".into(),
+            ));
+        }
+        if self.backoff_secs == 0 {
+            return Err(ChainError::Config(
+                "pruning.pacing.backoff_secs must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for PruningPacingConfig {
+    fn default() -> Self {
+        Self {
+            cpu_max_percent: 85.0,
+            io_max_bytes_per_sec: 128 * 1024 * 1024,
+            mempool_backlog_limit: 2_000,
+            timetoke_backlog_limit: 512,
+            backoff_secs: 10,
         }
     }
 }

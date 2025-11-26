@@ -8874,6 +8874,7 @@ dependencies = [
  "sha2",
  "snapshot-verify",
  "storage-firewood",
+ "sysinfo 0.33.1",
  "tempfile",
  "thiserror 2.0.12",
  "time",
