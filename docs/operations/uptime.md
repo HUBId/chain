@@ -65,6 +65,18 @@ run to confirm alerts fire and then clear:
   `UptimeObservationGap*`, and `TimetokeAccrualStall*` alerts fire on sustained
   drops.【F:tools/alerts/validation.py†L852-L1064】【F:tools/alerts/validation.py†L1318-L1428】【F:tools/alerts/tests/test_alert_validation.py†L19-L88】
 
+### Mempool-ready probes
+
+Lightweight uptime probes now attempt to submit or observe tiny transactions
+while consensus is stalled. The synthetic store drops the
+`uptime_mempool_probe_success_ratio` to zero during the induced pause so the
+`UptimeMempoolProbeFailure` alert fires alongside finality and liveness stall
+signals, then restores the ratio to 1.0 when block production resumes to prove
+the probe clears on recovery.【F:tools/alerts/validation.py†L120-L184】【F:tools/alerts/validation.py†L1887-L1969】 Use the alert as
+a canary for client-facing impact: if it fires in production, pause bulk
+submissions, restart or drain stuck validators, and follow the mempool cleanup
+playbook before reopening traffic.【F:docs/mempool.md†L7-L74】
+
 Run the probes with the existing validation harness (`python -m pytest
 tools/alerts/tests`) whenever alert expressions change to preserve coverage.
 

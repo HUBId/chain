@@ -20,6 +20,8 @@ PROVER_QUEUE_WARNING_DEPTH = 2.0
 PROVER_LATENCY_WARNING_SECONDS = 180.0
 PROVER_QUEUE_CORRELATION_DURATION = 300.0
 PROVER_LATENCY_CORRELATION_DURATION = 600.0
+MEMPOOL_PROBE_MIN_RATIO = 0.5
+MEMPOOL_PROBE_FAILURE_DURATION = 600.0
 
 import socketserver
 
@@ -863,6 +865,35 @@ def _evaluate_rpc_availability(
     return AlertComputation(starts_at=start_ts, value=lowest_ratio, details=detail)
 
 
+def _evaluate_mempool_probe_readiness(
+    store: MetricStore, metric: str, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        if value is None:
+            evaluations.append((timestamp, False))
+            continue
+        degraded = value < threshold
+        evaluations.append((timestamp, degraded))
+        observed.append((timestamp, value))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    lowest = min((value for ts, value in observed if ts >= start_ts), default=None)
+    detail = None
+    if lowest is not None:
+        detail = f"probe success ratio={lowest:.2f}"
+    return AlertComputation(starts_at=start_ts, value=lowest, details=detail)
+
+
 def _evaluate_epoch_delay(
     store: MetricStore, metric: str, threshold: float, duration: float
 ) -> Optional[AlertComputation]:
@@ -1193,6 +1224,24 @@ def default_alert_rules() -> List[AlertRule]:
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
             evaluator=lambda store: _evaluate_rpc_availability(
                 store, threshold=0.95, window=300.0, duration=600.0
+            ),
+        ),
+        AlertRule(
+            name="UptimeMempoolProbeFailure",
+            severity="warning",
+            service="uptime",
+            summary="Uptime probe could not reach the mempool",
+            description=(
+                "Lightweight uptime probes failed to submit or observe transactions for ten minutes while "
+                "consensus was disrupted. Expect downstream traffic to stall until mempool readiness recovers; "
+                "drain or restart stuck validators before reopening submissions."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#mempool-ready-probes",
+            evaluator=lambda store: _evaluate_mempool_probe_readiness(
+                store,
+                "uptime_mempool_probe_success_ratio",
+                MEMPOOL_PROBE_MIN_RATIO,
+                MEMPOOL_PROBE_FAILURE_DURATION,
             ),
         ),
         AlertRule(
@@ -1838,6 +1887,27 @@ def build_uptime_pause_store() -> MetricStore:
             ),
         )
     )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_mempool_probe_success_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (300.0, 1.0),
+                    (600.0, 1.0),
+                    (900.0, 0.8),
+                    (1200.0, 0.4),
+                    (1500.0, 0.0),
+                    (1800.0, 0.0),
+                    (2100.0, 0.3),
+                    (2400.0, 0.7),
+                    (2700.0, 0.95),
+                    (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
     return MetricStore.from_definitions(definitions)
 
 
@@ -1857,6 +1927,27 @@ def build_uptime_recovery_store() -> MetricStore:
                     (1500.0, 2.0),
                     (1800.0, 2.0),
                     (2100.0, 1.5),
+                    (2400.0, 1.0),
+                    (2700.0, 1.0),
+                    (3000.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_mempool_probe_success_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (300.0, 1.0),
+                    (600.0, 1.0),
+                    (900.0, 1.0),
+                    (1200.0, 1.0),
+                    (1500.0, 1.0),
+                    (1800.0, 1.0),
+                    (2100.0, 1.0),
                     (2400.0, 1.0),
                     (2700.0, 1.0),
                     (3000.0, 1.0),
@@ -2542,6 +2633,7 @@ def default_validation_cases() -> List[ValidationCase]:
                 "ConsensusFinalizedHeightGapWarning",
                 "ConsensusFinalizedHeightGapCritical",
                 "ConsensusLivenessStall",
+                "UptimeMempoolProbeFailure",
             },
         ),
         ValidationCase(
