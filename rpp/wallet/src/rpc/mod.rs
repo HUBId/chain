@@ -3465,7 +3465,7 @@ mod tests {
                         multisig: None,
                     },
                     prover_result: Some(SignedDraft::new(
-                        ProveResult::new(None, 0, Instant::now(), Instant::now()),
+                        ProveResult::new("mock", None, 0, Instant::now(), Instant::now()),
                         metadata,
                     )),
                 },

@@ -214,15 +214,11 @@ fn read_cgroup_limit(path: &str) -> Option<u64> {
     trimmed.parse::<u64>().ok()
 }
 
-pub fn build_wallet_prover(
+fn build_backend(
     config: &WalletProverConfig,
+    backend: WalletProverBackend,
 ) -> Result<Arc<dyn WalletProver>, ProverError> {
-    if !config.enabled {
-        return Ok(Arc::new(DisabledWalletProver::new(
-            "wallet prover backend disabled",
-        )));
-    }
-    match config.backend {
+    match backend {
         WalletProverBackend::Mock => {
             #[cfg(feature = "prover-mock")]
             {
@@ -247,6 +243,133 @@ pub fn build_wallet_prover(
                 ))
             }
         }
+    }
+}
+
+struct FallbackWalletProver {
+    primary: Arc<dyn WalletProver>,
+    fallback: Arc<dyn WalletProver>,
+    primary_backend: &'static str,
+    fallback_backend: &'static str,
+}
+
+impl FallbackWalletProver {
+    fn new(primary: Arc<dyn WalletProver>, fallback: Arc<dyn WalletProver>) -> Self {
+        let primary_backend = primary.identity().backend;
+        let fallback_backend = fallback.identity().backend;
+        Self {
+            primary,
+            fallback,
+            primary_backend,
+            fallback_backend,
+        }
+    }
+
+    fn overload_reason(&self, error: &ProverError) -> Option<&'static str> {
+        match error {
+            ProverError::Busy => Some("busy"),
+            ProverError::Timeout(_) => Some("timeout"),
+            _ => None,
+        }
+    }
+
+    fn record_fallback(&self, stage: &'static str, reason: &'static str) {
+        record_fallback_event(self.primary_backend, self.fallback_backend, stage, reason);
+        warn!(
+            stage,
+            reason,
+            primary = self.primary_backend,
+            fallback = self.fallback_backend,
+            "wallet prover falling back to secondary backend",
+        );
+    }
+
+    fn prover_for_backend(&self, backend: &str) -> &Arc<dyn WalletProver> {
+        if backend == self.fallback_backend {
+            &self.fallback
+        } else {
+            &self.primary
+        }
+    }
+}
+
+impl WalletProver for FallbackWalletProver {
+    fn identity(&self) -> ProverIdentity {
+        ProverIdentity::new("fallback-router", false)
+    }
+
+    fn prepare_witness(&self, ctx: &DraftProverContext<'_>) -> Result<WitnessPlan, ProverError> {
+        match self.primary.prepare_witness(ctx) {
+            Ok(plan) => Ok(plan.with_backend(self.primary_backend)),
+            Err(err) => {
+                if let Some(reason) = self.overload_reason(&err) {
+                    self.record_fallback("prepare", reason);
+                    let plan = self
+                        .fallback
+                        .prepare_witness(ctx)?
+                        .with_backend(self.fallback_backend);
+                    Ok(plan)
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    fn prove(
+        &self,
+        ctx: &DraftProverContext<'_>,
+        plan: WitnessPlan,
+    ) -> Result<ProveResult, ProverError> {
+        let target_backend = plan.backend();
+        let prover = self.prover_for_backend(target_backend);
+        let result = prover.prove(ctx, plan);
+
+        match result {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                if target_backend == self.primary_backend {
+                    if let Some(reason) = self.overload_reason(&err) {
+                        self.record_fallback("prove", reason);
+                        let plan = self
+                            .fallback
+                            .prepare_witness(ctx)?
+                            .with_backend(self.fallback_backend);
+                        return self.fallback.prove(ctx, plan);
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn attest_metadata(
+        &self,
+        ctx: &DraftProverContext<'_>,
+        result: &ProveResult,
+    ) -> Result<ProverMeta, ProverError> {
+        let backend = result.backend();
+        let prover = self.prover_for_backend(backend);
+        prover.attest_metadata(ctx, result)
+    }
+}
+
+pub fn build_wallet_prover(
+    config: &WalletProverConfig,
+) -> Result<Arc<dyn WalletProver>, ProverError> {
+    if !config.enabled {
+        return Ok(Arc::new(DisabledWalletProver::new(
+            "wallet prover backend disabled",
+        )));
+    }
+    let primary = build_backend(config, config.backend)?;
+    if let Some(fallback_backend) = config.fallback_backend {
+        let mut fallback_config = config.clone();
+        fallback_config.backend = fallback_backend;
+        let fallback = build_backend(&fallback_config, fallback_backend)?;
+        Ok(Arc::new(FallbackWalletProver::new(primary, fallback)))
+    } else {
+        Ok(primary)
     }
 }
 
@@ -287,7 +410,7 @@ impl WalletProver for MockWalletProver {
 
         result
             .map(|(witness, _)| {
-                let plan = WitnessPlan::with_parts(witness, Instant::now());
+                let plan = WitnessPlan::with_parts(witness, Instant::now()).with_backend(backend);
                 record_prepare_success(backend, plan.witness_bytes());
                 plan
             })
@@ -619,6 +742,7 @@ where
             "wallet prover job completed"
         );
         Ok(ProveResult::new(
+            backend,
             Some(proof),
             witness_bytes,
             started_at,
@@ -690,6 +814,22 @@ fn record_prove_error(backend: &'static str, error: &ProverError) {
     .increment(1);
 }
 
+fn record_fallback_event(
+    primary: &'static str,
+    fallback: &'static str,
+    stage: &'static str,
+    reason: &'static str,
+) {
+    counter!(
+        "wallet.prover.fallback",
+        "primary" => primary,
+        "fallback" => fallback,
+        "stage" => stage,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 fn error_label(error: &ProverError) -> &'static str {
     match error {
         ProverError::Backend(_) => "backend",
@@ -739,6 +879,82 @@ mod tests {
             fee_rate: 1,
             fee: 1_000,
             spend_model: SpendModel::Exact { amount: 10_000 },
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum StubMode {
+        Ok,
+        Busy,
+        Timeout,
+        WitnessTooLarge,
+    }
+
+    struct StubProver {
+        backend: &'static str,
+        prepare_mode: StubMode,
+        prove_mode: StubMode,
+    }
+
+    impl StubProver {
+        fn new(backend: &'static str, prepare_mode: StubMode, prove_mode: StubMode) -> Self {
+            Self {
+                backend,
+                prepare_mode,
+                prove_mode,
+            }
+        }
+
+        fn map_mode<T>(&self, mode: StubMode, ok: impl FnOnce() -> T) -> Result<T, ProverError> {
+            match mode {
+                StubMode::Ok => Ok(ok()),
+                StubMode::Busy => Err(ProverError::Busy),
+                StubMode::Timeout => Err(ProverError::Timeout(1)),
+                StubMode::WitnessTooLarge => Err(ProverError::WitnessTooLarge {
+                    size: 1024,
+                    limit: 512,
+                }),
+            }
+        }
+    }
+
+    impl WalletProver for StubProver {
+        fn identity(&self) -> ProverIdentity {
+            ProverIdentity::new(self.backend, false)
+        }
+
+        fn prepare_witness(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+        ) -> Result<WitnessPlan, ProverError> {
+            self.map_mode(self.prepare_mode, || {
+                WitnessPlan::with_parts(WitnessBytes(vec![1, 2, 3]), Instant::now())
+                    .with_backend(self.backend)
+            })
+        }
+
+        fn prove(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            plan: WitnessPlan,
+        ) -> Result<ProveResult, ProverError> {
+            self.map_mode(self.prove_mode, || {
+                ProveResult::new(
+                    self.backend,
+                    Some(ProofBytes(vec![4, 5, 6])),
+                    plan.witness_bytes(),
+                    Instant::now(),
+                    Instant::now(),
+                )
+            })
+        }
+
+        fn attest_metadata(
+            &self,
+            _ctx: &DraftProverContext<'_>,
+            result: &ProveResult,
+        ) -> Result<ProverMeta, ProverError> {
+            Ok(attest_default(self.backend, result))
         }
     }
 
@@ -890,6 +1106,89 @@ mod tests {
             .acquire("mock")
             .expect_err("second permit should fail");
         assert!(matches!(err, ProverError::Busy));
+    }
+
+    #[test]
+    fn fallback_router_switches_on_prepare_overload_and_records_metrics() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let primary = Arc::new(StubProver::new("primary", StubMode::Busy, StubMode::Ok));
+        let fallback = Arc::new(StubProver::new("secondary", StubMode::Ok, StubMode::Ok));
+        let router = FallbackWalletProver::new(primary, fallback);
+        let draft = sample_draft();
+        let ctx = DraftProverContext::new(&draft);
+
+        let plan = router.prepare_witness(&ctx).expect("fallback plan");
+        assert_eq!(plan.backend(), "secondary");
+
+        let result = router.prove(&ctx, plan).expect("fallback proof");
+        assert_eq!(result.backend(), "secondary");
+        let meta = router
+            .attest_metadata(&ctx, &result)
+            .expect("fallback metadata");
+        assert_eq!(meta.backend, "secondary");
+
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.fallback{fallback=secondary,primary=primary,reason=busy,stage=prepare}",
+            ),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn fallback_router_switches_on_prove_overload() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let primary = Arc::new(StubProver::new("primary", StubMode::Ok, StubMode::Busy));
+        let fallback = Arc::new(StubProver::new("secondary", StubMode::Ok, StubMode::Ok));
+        let router = FallbackWalletProver::new(primary, fallback);
+        let draft = sample_draft();
+        let ctx = DraftProverContext::new(&draft);
+
+        let plan = router.prepare_witness(&ctx).expect("primary plan");
+        assert_eq!(plan.backend(), "primary");
+
+        let result = router.prove(&ctx, plan).expect("fallback proof");
+        assert_eq!(result.backend(), "secondary");
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.fallback{fallback=secondary,primary=primary,reason=busy,stage=prove}",
+            ),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn fallback_router_preserves_size_gates() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let primary = Arc::new(StubProver::new(
+            "primary",
+            StubMode::WitnessTooLarge,
+            StubMode::Ok,
+        ));
+        let fallback = Arc::new(StubProver::new("secondary", StubMode::Ok, StubMode::Ok));
+        let router = FallbackWalletProver::new(primary, fallback);
+        let draft = sample_draft();
+        let ctx = DraftProverContext::new(&draft);
+
+        let err = router
+            .prepare_witness(&ctx)
+            .expect_err("size gate should fail before fallback");
+        assert!(matches!(err, ProverError::WitnessTooLarge { .. }));
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.fallback{fallback=secondary,primary=primary,reason=busy,stage=prepare}",
+            ),
+            None,
+        );
     }
 
     #[test]

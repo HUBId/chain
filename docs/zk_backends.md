@@ -61,6 +61,13 @@
   geprüft.【F:tests/zk_load.rs†L1-L204】
 - Nightly-CI führt die Suite automatisch im Job `zk-load-harness` aus, damit Größe- und Parallelitäts-Grenzen regressionssicher
   bleiben.【F:.github/workflows/nightly.yml†L168-L201】
+- Wallet-Prover-Failover: Setze optional `wallet.prover.fallback_backend = "mock"` (oder einen anderen aktivierten Backendnamen)
+  in der Wallet-Konfiguration, um Überlastungen des Primärbackends transparent auf einen sekundären Pfad umzulenken. Fallbacks
+  werden nur bei Überlast-Signalen (`busy`, `timeout`) aktiviert und lassen Witness-Size-Grenzen unangetastet; Telemetrie
+  (`wallet.prover.fallback{primary=…,fallback=…,stage=…,reason=…}`) und Warn-Logs markieren jeden Umschaltvorgang. Die neuen
+  Fallback-Tests unter `rpp/wallet/src/engine/signing/prover.rs` simulieren Überlast auf `prepare`- und `prove`-Pfaden und
+  verifizieren, dass die Sekundär-Backends greifen, während Size-Gates weiter enforced bleiben
+  (`cargo test -p rpp-wallet --features prover-mock fallback_router_ -- --nocapture`).【F:rpp/wallet/src/engine/signing/prover.rs†L996-L1060】
 - Die Drill `zk-penalty-guardrails` lässt sowohl RPP-STARK- als auch STWO-Backends eine verpasste Slot- und Double-Sign-Sequenz
   durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
   Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden

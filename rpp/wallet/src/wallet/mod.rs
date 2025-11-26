@@ -1350,6 +1350,7 @@ mod tests {
             _ctx: &DraftProverContext<'_>,
             plan: WitnessPlan,
         ) -> Result<ProveResult, ProverError> {
+            let backend = self.identity().backend;
             let permit = self.jobs.acquire()?;
             let handle = Handle::try_current().map_err(|err| {
                 ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
@@ -1381,6 +1382,7 @@ mod tests {
                     .await?;
                 let finished_at = Instant::now();
                 Ok(ProveResult::new(
+                    backend,
                     None,
                     witness_bytes,
                     started_at,
@@ -1465,7 +1467,13 @@ mod tests {
             plan: WitnessPlan,
         ) -> Result<ProveResult, ProverError> {
             let now = Instant::now();
-            Ok(ProveResult::new(None, plan.witness_bytes(), now, now))
+            Ok(ProveResult::new(
+                self.identity().backend,
+                None,
+                plan.witness_bytes(),
+                now,
+                now,
+            ))
         }
 
         fn attest_metadata(

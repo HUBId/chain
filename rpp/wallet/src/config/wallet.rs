@@ -282,6 +282,9 @@ pub struct WalletProverConfig {
     pub stwo_max_witness_bytes: Option<u64>,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
+    /// Optional fallback backend to route proofs to when the primary is overloaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_backend: Option<WalletProverBackend>,
     /// CPU quota for prover tasks expressed as a percentage of available cores (0 disables enforcement).
     pub cpu_quota_percent: u64,
     /// Memory ceiling for prover tasks in bytes; when 0 the runtime attempts to infer the active cgroup limit.
@@ -305,6 +308,7 @@ impl Default for WalletProverConfig {
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             stwo_max_witness_bytes: None,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
+            fallback_backend: None,
             cpu_quota_percent: DEFAULT_PROVER_CPU_QUOTA_PERCENT,
             memory_quota_bytes: DEFAULT_PROVER_MEMORY_QUOTA_BYTES,
             limit_backoff_ms: DEFAULT_PROVER_LIMIT_BACKOFF_MS,
@@ -334,6 +338,27 @@ impl WalletProverConfig {
             WalletProverBackend::Stwo => {
                 if !cfg!(feature = "prover-stwo") {
                     return Err("STWO prover requested but the `prover-stwo` feature is disabled");
+                }
+            }
+        }
+        if let Some(fallback) = self.fallback_backend {
+            if fallback == self.backend {
+                return Err("wallet prover fallback backend must differ from the primary backend");
+            }
+            match fallback {
+                WalletProverBackend::Mock => {
+                    if !cfg!(feature = "prover-mock") {
+                        return Err(
+                            "fallback prover requires `prover-mock` but the feature is disabled",
+                        );
+                    }
+                }
+                WalletProverBackend::Stwo => {
+                    if !cfg!(feature = "prover-stwo") {
+                        return Err(
+                            "fallback prover requires `prover-stwo` but the feature is disabled",
+                        );
+                    }
                 }
             }
         }
