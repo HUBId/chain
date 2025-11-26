@@ -21,6 +21,8 @@ pub struct PruningMetrics {
     stored_proofs: Histogram<u64>,
     retention_depth: Histogram<u64>,
     pause_transitions: Counter<u64>,
+    pacing_decisions: Counter<u64>,
+    pacing_delay_ms: Histogram<f64>,
     shard_label: KeyValue,
     partition_label: KeyValue,
 }
@@ -85,6 +87,16 @@ impl PruningMetrics {
             .with_description("Transitions of the pruning service pause state")
             .with_unit("1")
             .build();
+        let pacing_decisions = meter
+            .u64_counter("rpp.node.pruning.pacing_total")
+            .with_description("Count of pruning pacing decisions grouped by reason and action")
+            .with_unit("1")
+            .build();
+        let pacing_delay_ms = meter
+            .f64_histogram("rpp.node.pruning.pacing_delay_ms")
+            .with_description("Backoff applied by pruning pacing in milliseconds")
+            .with_unit("ms")
+            .build();
 
         let shard_label = KeyValue::new(
             "shard",
@@ -106,6 +118,8 @@ impl PruningMetrics {
             stored_proofs,
             retention_depth,
             pause_transitions,
+            pacing_decisions,
+            pacing_delay_ms,
             shard_label,
             partition_label,
         }
@@ -152,7 +166,9 @@ impl PruningMetrics {
             let estimate_ms = status
                 .estimated_time_remaining_ms
                 .map(|ms| ms as f64)
-                .or_else(|| compute_time_remaining_ms(processed, status.missing_heights.len(), duration));
+                .or_else(|| {
+                    compute_time_remaining_ms(processed, status.missing_heights.len(), duration)
+                });
 
             if let Some(estimate_ms) = estimate_ms {
                 let estimate_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);
@@ -179,6 +195,33 @@ impl PruningMetrics {
         self.pause_transitions.add(1, &attrs);
     }
 
+    pub fn record_pacing(
+        &self,
+        reason: PacingReason,
+        action: PacingAction,
+        observed: Option<f64>,
+        limit: Option<f64>,
+        delay: Option<Duration>,
+    ) {
+        let mut attrs = self.with_base_labels([
+            KeyValue::new("reason", reason.as_str()),
+            KeyValue::new("action", action.as_str()),
+        ]);
+        if let Some(observed) = observed {
+            attrs.push(KeyValue::new("observed", observed.to_string()));
+        }
+        if let Some(limit) = limit {
+            attrs.push(KeyValue::new("limit", limit.to_string()));
+        }
+
+        if let Some(delay) = delay {
+            self.pacing_delay_ms
+                .record(delay.as_secs_f64() * 1_000.0, &attrs);
+        }
+
+        self.pacing_decisions.add(1, &attrs);
+    }
+
     fn base_labels(&self) -> Vec<KeyValue> {
         vec![self.shard_label.clone(), self.partition_label.clone()]
     }
@@ -201,6 +244,40 @@ impl CycleReason {
         match self {
             CycleReason::Manual => "manual",
             CycleReason::Scheduled => "scheduled",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PacingReason {
+    Cpu,
+    Io,
+    Mempool,
+    Timetoke,
+}
+
+impl PacingReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PacingReason::Cpu => "cpu",
+            PacingReason::Io => "io",
+            PacingReason::Mempool => "mempool",
+            PacingReason::Timetoke => "timetoke",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PacingAction {
+    Yield,
+    Resume,
+}
+
+impl PacingAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PacingAction::Yield => "yield",
+            PacingAction::Resume => "resume",
         }
     }
 }

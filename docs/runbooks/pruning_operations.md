@@ -33,6 +33,8 @@ before applying overrides.
 | `rpp.node.pruning.stored_proofs` | Histogram | `shard`, `partition` | Validate that pruning proofs continue to sync to storage.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/runtime/node.rs†L3200-L3207】 |
 | `rpp.node.pruning.retention_depth` | Histogram | `shard`, `partition` | Confirm override depth applied during incidents.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L399】 |
 | `rpp.node.pruning.pause_transitions` | Counter | `shard`, `partition`, `state` | Alert when the service is paused longer than the agreed maintenance window.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L366】 |
+| `rpp.node.pruning.pacing_total` | Counter | `shard`, `partition`, `reason`, `action`, `observed`, `limit` | Confirms whether pruning is yielding to CPU/IO pressure, mempool backlog, or timetoke credit queues and when it resumes.【F:rpp/node/src/telemetry/pruning.rs†L69-L140】【F:rpp/node/src/services/pruning.rs†L390-L456】 |
+| `rpp.node.pruning.pacing_delay_ms` | Histogram | `shard`, `partition`, `reason`, `action` | Shows the backoff duration applied when pruning defers due to load.【F:rpp/node/src/telemetry/pruning.rs†L25-L124】【F:rpp/node/src/services/pruning.rs†L390-L456】 |
 
 Dashboards should plot the histograms as time-series (e.g. last sample) or
 aggregated percentiles. Combine `cycle_total` with failure-specific alerts to
@@ -48,6 +50,20 @@ raise incidents when three consecutive scheduled runs fail.
 - `persisted pruning snapshot plan` – emitted by the runtime when a cycle
   stores the plan on disk. If the log is missing while `persisted_plan_total`
   remains zero, storage or filesystem permissions likely regressed.【F:rpp/runtime/node.rs†L3200-L3202】【F:rpp/node/src/telemetry/pruning.rs†L36-L40】
+
+### Pacing and backoff
+
+- The pruning worker now throttles when CPU or disk IO exceed the pacing
+  thresholds, when the combined mempool backlog (transactions, identities, and
+  votes) exceeds the configured limit, or when uptime/timetoke proof queues grow
+  past `timetoke_backlog_limit`. Each yield/resume is recorded in
+  `rpp.node.pruning.pacing_total` and the backoff duration lands in
+  `pacing_delay_ms`.【F:rpp/node/src/services/pruning.rs†L80-L205】【F:rpp/node/src/telemetry/pruning.rs†L105-L180】
+- Tune pacing in `pruning.pacing.*` (CPU percent, IO bytes/sec, mempool and
+  timetoke backlog limits, and `backoff_secs`). Lower limits protect block
+  production and uptime credits; raising them speeds up pruning during quiet
+  periods. Changes take effect without restarting the node when applied via the
+  config reload path.【F:rpp/runtime/config.rs†L2618-L2665】【F:rpp/node/src/services/pruning.rs†L330-L420】
 
 ## 4. Verify pruning checkpoints
 

@@ -48,6 +48,7 @@ opentelemetry-otlp = { version = "=0.30.0", features = ["grpc-tonic", "reqwest-c
 opentelemetry_sdk = "=0.30.0"
 tracing-opentelemetry = "=0.23.0"
 tonic = { version = "0.11", default-features = false, features = ["transport"] }
+sysinfo = { version = "0.33", features = ["multithread"] }
 rpp-chain = { path = "../chain", default-features = false, features = [
     # Keep the clap plumbing compiled so the chain-cli binary is available
     # even when production builds disable the default feature set.
