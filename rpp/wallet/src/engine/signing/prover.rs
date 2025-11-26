@@ -1,6 +1,7 @@
 use std::convert::TryFrom;
+use std::fs;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::wallet::{WalletProverBackend, WalletProverConfig};
@@ -14,6 +15,7 @@ use metrics::{counter, gauge, histogram};
 use prover_backend_interface::{
     Blake2sHasher, ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader,
 };
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::runtime::Handle;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
@@ -32,6 +34,185 @@ use prover_stwo_backend::backend::StwoBackend;
 const MOCK_CIRCUIT_ID: &str = "wallet.tx";
 #[cfg(feature = "prover-stwo")]
 const STWO_CIRCUIT_ID: &str = "transaction";
+
+#[derive(Clone, Debug, Default)]
+struct ResourceUsage {
+    cpu_percent: f32,
+    memory_bytes: u64,
+    memory_limit_bytes: Option<u64>,
+}
+
+trait ResourceProbe: Send + Sync {
+    fn sample(&self) -> ResourceUsage;
+}
+
+#[derive(Default)]
+struct SysinfoProbe {
+    system: Mutex<System>,
+}
+
+impl SysinfoProbe {
+    fn refresh_limits(&self) -> ResourceUsage {
+        let mut guard = self.system.lock().expect("sysinfo mutex poisoned");
+        guard.refresh_specifics(
+            RefreshKind::new()
+                .with_cpu(CpuRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::new().with_ram().with_swap()),
+        );
+        // sysinfo reports memory usage in KiB; normalize to bytes for limit comparisons.
+        let memory_bytes = guard.used_memory() * 1024;
+        let cpu_percent = guard.global_cpu_info().cpu_usage();
+        ResourceUsage {
+            cpu_percent,
+            memory_bytes,
+            memory_limit_bytes: detect_cgroup_memory_limit(),
+        }
+    }
+}
+
+impl ResourceProbe for SysinfoProbe {
+    fn sample(&self) -> ResourceUsage {
+        self.refresh_limits()
+    }
+}
+
+struct ResourceLimiter {
+    cpu_limit_percent: Option<f32>,
+    memory_limit_bytes: Option<u64>,
+    warn_ratio: f32,
+    backoff: Duration,
+    retries: u16,
+    probe: Arc<dyn ResourceProbe>,
+}
+
+impl ResourceLimiter {
+    fn new(config: &WalletProverConfig, probe: Arc<dyn ResourceProbe>) -> Self {
+        let warn_ratio = (config.limit_warn_percent as f32) / 100.0;
+        Self {
+            cpu_limit_percent: if config.cpu_quota_percent == 0 {
+                None
+            } else {
+                Some(config.cpu_quota_percent as f32)
+            },
+            memory_limit_bytes: if config.memory_quota_bytes == 0 {
+                None
+            } else {
+                Some(config.memory_quota_bytes)
+            },
+            warn_ratio,
+            backoff: config.limit_backoff(),
+            retries: config.limit_retries,
+            probe,
+        }
+    }
+
+    fn throttle_if_needed(&self, backend: &'static str) -> Result<Option<Duration>, ProverError> {
+        if self.cpu_limit_percent.is_none() && self.memory_limit_bytes.is_none() {
+            return Ok(None);
+        }
+
+        let mut attempts: u16 = 0;
+        loop {
+            let usage = self.probe.sample();
+            let memory_limit = self.active_memory_limit(&usage);
+
+            let mut should_throttle = false;
+            let mut warn_only = false;
+
+            if let Some(limit) = self.cpu_limit_percent {
+                if usage.cpu_percent >= limit {
+                    should_throttle = true;
+                } else if usage.cpu_percent >= limit * self.warn_ratio {
+                    warn_only = true;
+                }
+            }
+
+            if let Some(limit_bytes) = memory_limit {
+                if usage.memory_bytes >= limit_bytes {
+                    should_throttle = true;
+                } else if usage.memory_bytes >= (limit_bytes as f32 * self.warn_ratio) as u64 {
+                    warn_only = true;
+                }
+            }
+
+            if should_throttle {
+                attempts = attempts.saturating_add(1);
+                counter!(
+                    "wallet.prover.resource.throttled",
+                    "backend" => backend,
+                    "limit" => self.describe_limits(memory_limit)
+                )
+                .increment(1);
+                warn!(
+                    backend,
+                    cpu_percent = usage.cpu_percent,
+                    memory_bytes = usage.memory_bytes,
+                    memory_limit_bytes = memory_limit,
+                    attempts,
+                    "wallet prover throttling due to resource limit"
+                );
+                if attempts > self.retries {
+                    return Err(ProverError::Busy);
+                }
+                std::thread::sleep(self.backoff);
+                continue;
+            }
+
+            if warn_only {
+                counter!(
+                    "wallet.prover.resource.warning",
+                    "backend" => backend,
+                    "limit" => self.describe_limits(memory_limit)
+                )
+                .increment(1);
+                warn!(
+                    backend,
+                    cpu_percent = usage.cpu_percent,
+                    memory_bytes = usage.memory_bytes,
+                    memory_limit_bytes = memory_limit,
+                    "wallet prover nearing resource limits"
+                );
+            }
+
+            let delay = if warn_only { Some(self.backoff) } else { None };
+            return Ok(delay);
+        }
+    }
+
+    fn active_memory_limit(&self, usage: &ResourceUsage) -> Option<u64> {
+        match (self.memory_limit_bytes, usage.memory_limit_bytes) {
+            (Some(configured), Some(cgroup)) => Some(configured.min(cgroup)),
+            (Some(configured), None) => Some(configured),
+            (None, Some(cgroup)) => Some(cgroup),
+            (None, None) => None,
+        }
+    }
+
+    fn describe_limits(&self, memory_limit: Option<u64>) -> String {
+        let cpu = self
+            .cpu_limit_percent
+            .map(|v| format!("cpu:{v:.0}%"))
+            .unwrap_or_else(|| "cpu:none".to_string());
+        let memory = memory_limit
+            .map(|bytes| format!("mem:{}", bytes))
+            .unwrap_or_else(|| "mem:none".to_string());
+        format!("{cpu},{memory}")
+    }
+}
+
+fn detect_cgroup_memory_limit() -> Option<u64> {
+    read_cgroup_limit("/sys/fs/cgroup/memory.max")
+        .or_else(|| read_cgroup_limit("/sys/fs/cgroup/memory.limit_in_bytes"))
+}
+
+fn read_cgroup_limit(path: &str) -> Option<u64> {
+    let contents = fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.eq_ignore_ascii_case("max") {
+        return None;
+    }
+    trimmed.parse::<u64>().ok()
+}
 
 pub fn build_wallet_prover(
     config: &WalletProverConfig,
@@ -271,10 +452,16 @@ pub(crate) struct ProverJobManager {
     semaphore: Option<Arc<Semaphore>>,
     timeout: Option<Duration>,
     witness_limit: u64,
+    limiter: ResourceLimiter,
 }
 
 impl ProverJobManager {
     pub(crate) fn new(config: &WalletProverConfig) -> Self {
+        let probe = Arc::new(SysinfoProbe::default());
+        Self::with_probe(config, probe)
+    }
+
+    fn with_probe(config: &WalletProverConfig, probe: Arc<dyn ResourceProbe>) -> Self {
         let semaphore = if config.max_concurrency == 0 {
             None
         } else {
@@ -286,10 +473,12 @@ impl ProverJobManager {
         } else {
             Some(Duration::from_secs(config.timeout_secs))
         };
+        let limiter = ResourceLimiter::new(config, probe);
         Self {
             semaphore,
             timeout,
             witness_limit: config.max_witness_bytes,
+            limiter,
         }
     }
 
@@ -314,6 +503,9 @@ impl ProverJobManager {
     }
 
     fn acquire(&self, backend: &'static str) -> Result<ProverJobPermit, ProverError> {
+        if let Some(delay) = self.limiter.throttle_if_needed(backend)? {
+            std::thread::sleep(delay);
+        }
         let permit = if let Some(semaphore) = &self.semaphore {
             Some(
                 semaphore
@@ -617,6 +809,75 @@ mod tests {
         });
 
         assert!(matches!(result, Err(ProverError::Cancelled)));
+    }
+
+    #[test]
+    fn resource_limiter_warns_and_recovers() {
+        let mut config = WalletProverConfig::default();
+        config.cpu_quota_percent = 90;
+        config.limit_warn_percent = 80;
+        config.limit_retries = 2;
+        config.limit_backoff_ms = 0;
+        let probe = Arc::new(MockProbe::new(vec![
+            usage_sample(85.0, 50, Some(100)),
+            usage_sample(30.0, 20, Some(100)),
+        ]));
+        let manager = ProverJobManager::with_probe(&config, probe);
+
+        let permit = manager.acquire("mock").expect("permit");
+        drop(permit);
+    }
+
+    #[test]
+    fn resource_limiter_returns_busy_after_retries() {
+        let mut config = WalletProverConfig::default();
+        config.cpu_quota_percent = 50;
+        config.memory_quota_bytes = 32;
+        config.limit_retries = 1;
+        config.limit_backoff_ms = 0;
+        let probe = Arc::new(MockProbe::new(vec![
+            usage_sample(75.0, 64, Some(32)),
+            usage_sample(70.0, 64, Some(32)),
+        ]));
+        let manager = ProverJobManager::with_probe(&config, probe);
+
+        let result = manager.acquire("mock");
+        assert!(matches!(result, Err(ProverError::Busy)));
+    }
+
+    fn usage_sample(
+        cpu_percent: f32,
+        memory_bytes: u64,
+        memory_limit_bytes: Option<u64>,
+    ) -> ResourceUsage {
+        ResourceUsage {
+            cpu_percent,
+            memory_bytes,
+            memory_limit_bytes,
+        }
+    }
+
+    struct MockProbe {
+        samples: Mutex<Vec<ResourceUsage>>,
+    }
+
+    impl MockProbe {
+        fn new(samples: Vec<ResourceUsage>) -> Self {
+            Self {
+                samples: Mutex::new(samples),
+            }
+        }
+    }
+
+    impl ResourceProbe for MockProbe {
+        fn sample(&self) -> ResourceUsage {
+            let mut guard = self.samples.lock().expect("samples poisoned");
+            if guard.len() > 1 {
+                guard.remove(0)
+            } else {
+                guard.first().cloned().unwrap_or_default()
+            }
+        }
     }
 
     #[test]

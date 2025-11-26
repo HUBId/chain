@@ -9059,6 +9059,7 @@ dependencies = [
  "sha2",
  "signal-hook",
  "storage-firewood",
+ "sysinfo 0.33.1",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
