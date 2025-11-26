@@ -461,6 +461,31 @@ PY
           name: alert-probes
           path: artifacts/alert-probes
 
+  uptime-baseline-guard:
+    name: Uptime/timetoke baseline drift check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install baseline check dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/alerts/requirements.txt
+
+      - name: Compare metrics to buffered baselines
+        run: |
+          set -euo pipefail
+          python tools/alerts/check_baseline_metrics.py \
+            --metrics-log tools/alerts/fixtures/uptime_timetoke.prom \
+            --environment staging
+
   staging-slo-probes:
     name: Staging SLO probes
     runs-on: ubuntu-latest

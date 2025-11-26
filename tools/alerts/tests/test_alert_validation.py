@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from tools.alerts.baselines import UPTIME_BASELINES, compute_uptime_thresholds
+from tools.alerts.settings import BLOCK_PRODUCTION_SLA, FINALITY_SLA, UPTIME_SLA
 from tools.alerts.validation import (
     AlertValidationError,
     AlertValidationAggregateError,
     AlertValidator,
     AlertWebhookServer,
-    BLOCK_PRODUCTION_SLA,
-    FINALITY_SLA,
     RecordedWebhookClient,
     ValidationCase,
     default_alert_rules,
@@ -185,3 +185,33 @@ def test_block_production_alerts_match_sla_thresholds() -> None:
         f"< {BLOCK_PRODUCTION_SLA.critical_ratio}"
         in expressions["ConsensusBlockProductionLagCritical"]
     )
+
+
+def test_uptime_alerts_follow_baseline_buffers() -> None:
+    thresholds = compute_uptime_thresholds(UPTIME_SLA)
+    with open("ops/alerts/uptime/reputation.yaml", "r", encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle)
+
+    expressions = {
+        rule["alert"]: rule["expr"]
+        for group in manifest.get("groups", [])
+        for rule in group.get("rules", [])
+        if "alert" in rule
+    }
+
+    warning_expr = expressions["UptimeParticipationDropWarning"]
+    assert f"{UPTIME_BASELINES.participation_warning_buffer}" in warning_expr
+    assert f">= {thresholds.participation_warning}" not in warning_expr
+    assert str(UPTIME_SLA.participation_warning_ratio) in warning_expr
+
+    observation_expr = expressions["UptimeObservationGapWarning"]
+    assert str(int(UPTIME_BASELINES.observation_warning_buffer)) in observation_expr
+    assert str(int(thresholds.observation_warning_seconds)) in observation_expr
+
+    epoch_expr = expressions["TimetokeEpochDelayWarning"]
+    assert str(int(UPTIME_BASELINES.epoch_warning_buffer)) in epoch_expr
+    assert str(int(thresholds.epoch_warning_seconds)) in epoch_expr
+
+    accrual_expr = expressions["TimetokeAccrualStallWarning"]
+    assert str(UPTIME_BASELINES.timetoke_rate_buffer) in accrual_expr
+    assert f"{thresholds.timetoke_rate_per_second:.5f}" in accrual_expr

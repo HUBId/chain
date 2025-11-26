@@ -198,3 +198,28 @@ JSON summary as `alert-probes/alert_probe_results.json` plus an `exit_code.txt`
 capturing probe failures. The nightly drill mirrors the CI job and preserves
 artifacts even when probes fail, making it easier to debug missed-slot or block
 stall regressions.【F:.github/workflows/ci.yml†L393-L425】【F:.github/workflows/nightly.yml†L1-L87】【F:tools/alerts/validate_alerts.py†L16-L87】【F:tools/alerts/validate_alerts.py†L89-L131】
+
+### Historical baselines and buffers
+
+Uptime and timetoke alerts now key off rolling 30-day baselines with explicit
+buffers instead of fixed thresholds. Recording rules track the median
+participation ratio (`uptime:participation_ratio:30d_p50`), 90th percentile
+observation gap and epoch age, and median timetoke accrual rate. Alert
+expressions clamp against those baselines with warning/critical buffers (2.3%
+and 5.3% participation drops, +600s/+1500s observation gaps, +1800s/+3600s
+epoch age, and a 0.0003 hours/s timetoke rate guard) while preserving the SLA
+floors.【F:telemetry/prometheus/runtime-rules.yaml†L58-L196】【F:ops/alerts/uptime/reputation.yaml†L1-L151】
+
+The new `uptime-baseline-guard` CI and nightly jobs run
+`tools/alerts/check_baseline_metrics.py` against a Prometheus text dump to keep
+the buffered thresholds honest. They default to the committed staging snapshot
+(`tools/alerts/fixtures/uptime_timetoke.prom`) but accept fresh exports via the
+`--metrics-log` flag so operators can compare production captures before
+promotions.【F:tools/alerts/check_baseline_metrics.py†L1-L149】【F:.github/workflows/ci.yml†L459-L489】【F:.github/workflows/nightly.yml†L66-L99】
+
+Update cadence: refresh `tools/alerts/fixtures/uptime_timetoke.prom` every
+Monday after the nightly soak by exporting the latest staging metrics with
+timestamps (e.g. `curl -sf $PROM_URL/api/v1/export -d 'match[]={__name__=~"uptime.*|timetoke.*"}' > metrics.prom`). Then run
+`python tools/alerts/check_baseline_metrics.py --metrics-log metrics.prom` to
+confirm the buffers still hold before committing the refreshed snapshot so the
+CI and nightly guards track recent behavior.【F:tools/alerts/fixtures/uptime_timetoke.prom†L1-L16】

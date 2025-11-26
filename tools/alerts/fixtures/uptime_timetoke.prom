@@ -1,0 +1,19 @@
+# HELP uptime_participation_ratio Ratio of validators submitting uptime proofs
+# TYPE uptime_participation_ratio gauge
+uptime_participation_ratio{environment="staging"} 0.993 1700000000
+uptime_participation_ratio{environment="staging"} 0.992 1700000900
+
+# HELP uptime_observation_age_seconds Age of the most recent uptime proof observation
+# TYPE uptime_observation_age_seconds gauge
+uptime_observation_age_seconds{environment="staging"} 260 1700000000
+uptime_observation_age_seconds{environment="staging"} 310 1700000900
+
+# HELP timetoke_epoch_age_seconds Age of the current timetoke epoch
+# TYPE timetoke_epoch_age_seconds gauge
+timetoke_epoch_age_seconds{environment="staging"} 1900 1700000000
+timetoke_epoch_age_seconds{environment="staging"} 2200 1700000900
+
+# HELP timetoke_accrual_hours_total Total timetoke credit accrued in hours
+# TYPE timetoke_accrual_hours_total counter
+timetoke_accrual_hours_total{environment="staging"} 120.0 1700000000
+timetoke_accrual_hours_total{environment="staging"} 120.495 1700000900
