@@ -247,48 +247,70 @@ metrics:
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
     alternate_labels:
       - - proof_backend
         - proof_kind
+        - proof_circuit
         - stage
   - name: rpp_stark_payload_bytes
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
     alternate_labels:
       - - proof_backend
         - proof_kind
+        - proof_circuit
         - stage
   - name: rpp_stark_proof_total_bytes
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
     alternate_labels:
       - - proof_backend
         - proof_kind
+        - proof_circuit
         - stage
   - name: rpp_stark_public_inputs_bytes
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
     alternate_labels:
       - - proof_backend
         - proof_kind
+        - proof_circuit
         - stage
   - name: rpp_stark_stage_checks_total
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
       - result
       - stage
   - name: rpp_stark_verify_duration_seconds
     labels:
       - proof_backend
       - proof_kind
+      - proof_circuit
     alternate_labels:
       - - proof_backend
         - proof_kind
+        - proof_circuit
         - stage
+  - name: rpp.runtime.proof.verification.outcomes
+    labels:
+      - proof_backend
+      - proof_kind
+      - proof_circuit
+      - result
+  - name: rpp.runtime.proof.verification.success_ratio
+    labels:
+      - proof_backend
+      - proof_kind
+      - proof_circuit
   - name: rpp.node.pruning.cycle_duration_ms
     labels:
       - shard

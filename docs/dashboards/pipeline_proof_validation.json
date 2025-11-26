@@ -79,6 +79,28 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Verification Success Ratio by Circuit",
+      "description": "Success fraction per backend and circuit, highlighting regressions in specific proof paths.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (proof_backend,proof_circuit)(rate(rpp_runtime_proof_verification_outcomes_total{result=\"ok\"}[5m])) / sum by (proof_backend,proof_circuit)(rate(rpp_runtime_proof_verification_outcomes_total[5m]))",
+          "legendFormat": "{{proof_backend}} {{proof_circuit}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      }
     }
   ]
 }
