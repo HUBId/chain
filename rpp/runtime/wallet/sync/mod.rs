@@ -1,5 +1,8 @@
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::time::SystemTime;
+
+use tokio::sync::mpsc;
 
 /// Deterministic representation of a synchronization checkpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,3 +67,31 @@ impl SyncProvider for DeterministicSync {
         Some(self.compute_checkpoint())
     }
 }
+
+/// Notification emitted by the sync driver when a checkpoint is applied.
+#[derive(Clone, Debug)]
+pub struct SyncUpdate {
+    /// Newly applied checkpoint.
+    pub checkpoint: SyncCheckpoint,
+    /// Observed chain tip height when the checkpoint was applied.
+    pub chain_tip_height: u64,
+    /// Timestamp corresponding to a successful sync.
+    pub applied_at: SystemTime,
+}
+
+impl SyncUpdate {
+    /// Convenience constructor using the current time as the application timestamp.
+    pub fn new(checkpoint: SyncCheckpoint, chain_tip_height: u64) -> Self {
+        Self {
+            checkpoint,
+            chain_tip_height,
+            applied_at: SystemTime::now(),
+        }
+    }
+}
+
+/// Channel used by sync drivers to publish updates to the runtime.
+pub type SyncUpdateSender = mpsc::UnboundedSender<SyncUpdate>;
+
+/// Channel used by the runtime to receive sync driver updates.
+pub type SyncUpdateReceiver = mpsc::UnboundedReceiver<SyncUpdate>;

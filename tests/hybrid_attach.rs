@@ -56,6 +56,7 @@ impl SyncDriver for RecordingSyncDriver {
         self: Box<Self>,
         _metrics: Arc<RuntimeMetrics>,
         mut shutdown_rx: watch::Receiver<bool>,
+        _updates_tx: rpp_chain::runtime::wallet::sync::SyncUpdateSender,
     ) -> ChainResult<tokio::task::JoinHandle<()>> {
         let RecordingSyncDriver {
             started,

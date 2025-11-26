@@ -13,4 +13,7 @@ pub use runtime::{
     GenericWalletRuntimeHandle, NodeAttachment, NodeConnector, SyncDriver, WalletRuntime,
     WalletRuntimeConfig, WalletRuntimeHandle, WalletService,
 };
-pub use sync::{DeterministicSync, SyncCheckpoint, SyncProvider};
+pub use sync::{
+    DeterministicSync, SyncCheckpoint, SyncProvider, SyncUpdate, SyncUpdateReceiver,
+    SyncUpdateSender,
+};
