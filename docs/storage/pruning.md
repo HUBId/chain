@@ -16,12 +16,13 @@ select the newest valid checkpoint by inspecting the metadata.
 ## Running the cross-backend drill locally
 
 ```shell
-# Default backend
-cargo test -p rpp-chain --locked --test pruning_cross_backend -- pruning_checkpoint_round_trip_default_backend
+# Default backend (includes STWO proof replay)
+cargo test -p rpp-chain --locked --features prover-stwo --test pruning_cross_backend -- \
+  pruning_checkpoint_round_trip_default_backend wallet_snapshot_round_trip_default_backend
 
-# RPP-STARK backend
+# RPP-STARK backend (replays golden vector verification)
 cargo test -p rpp-chain --locked --features backend-rpp-stark --test pruning_cross_backend \
-  -- pruning_checkpoint_round_trip_rpp_stark_backend
+  -- pruning_checkpoint_round_trip_rpp_stark_backend wallet_snapshot_round_trip_rpp_stark_backend
 ```
 
 The scenarios:
@@ -39,6 +40,10 @@ The scenarios:
    inject a partial record to mimic a crash, and replay the intact entries.
 7. Restart the node, rehydrate the mempool from the recovered WAL contents, and
    confirm the checkpoint still lines up with the reconstructed tip height.
+8. After replay, verify zk proofs against deterministic inputs: the default
+   backend synthesizes and verifies a STWO transaction proof, while the
+   `backend-rpp-stark` lane replays the bundled golden vector to ensure
+   verifier state stays aligned with snapshot contents.
 
 ## Signals to watch
 
@@ -49,6 +54,9 @@ The scenarios:
   for the finalized head must validate via `ValidatedPruningEnvelope`.
 * WAL replay should resurrect the queued transactions so the mempool count after
   restart equals the recovered WAL length.
+* The STWO and RPP-STARK verifiers must accept their respective reference
+  proofs after snapshot replay, proving that pruning did not desync witness
+  inputs across backends.
 
 These steps now run in the integration matrix (default and `backend-rpp-stark`)
 so regressions in pruning, proof verification, or WAL handling are surfaced

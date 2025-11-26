@@ -17,11 +17,30 @@ use tempfile::TempDir;
 mod mempool_helpers;
 mod support;
 
+#[cfg(feature = "backend-rpp-stark")]
+#[path = "rpp_vectors.rs"]
+mod rpp_vectors;
+
 use mempool_helpers::{
     backend_for_index, enabled_backends, sample_node_config, sample_transaction_bundle,
 };
 use support::{
     collect_state_sync_artifacts, install_pruned_chain, make_dummy_block, InMemoryPayloadProvider,
+};
+
+#[cfg(feature = "prover-stwo")]
+use {
+    ed25519_dalek::{Signature, SigningKey, VerifyingKey},
+    prover_stwo_backend::official::{
+        params::StarkParameters, prover::WalletProver as StwoWalletProver, verifier::NodeVerifier,
+    },
+    prover_stwo_backend::reputation::Tier,
+    prover_stwo_backend::types::{
+        Account as StwoAccount, ChainProof, SignedTransaction, Stake,
+        Transaction as StwoTransaction, TransactionWitness,
+    },
+    prover_stwo_backend::ReputationWeights,
+    rand::{rngs::StdRng, SeedableRng},
 };
 
 fn prepare_config(base: &TempDir, use_rpp_stark: bool) -> NodeConfig {
@@ -458,6 +477,14 @@ fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
         recovered.len(),
         "restored mempool should replay snapshot WAL entries",
     );
+
+    if use_rpp_stark {
+        #[cfg(feature = "backend-rpp-stark")]
+        verify_snapshot_replay_with_rpp_vector();
+    } else {
+        #[cfg(feature = "prover-stwo")]
+        verify_snapshot_replay_with_stwo_transaction();
+    }
 }
 
 #[test]
@@ -469,4 +496,77 @@ fn wallet_snapshot_round_trip_default_backend() {
 #[test]
 fn wallet_snapshot_round_trip_rpp_stark_backend() {
     run_wallet_snapshot_round_trip(true);
+}
+
+#[cfg(feature = "prover-stwo")]
+fn verify_snapshot_replay_with_stwo_transaction() {
+    let parameters = StarkParameters::blueprint_default();
+    let prover = StwoWalletProver::new(parameters.clone());
+    let verifier = NodeVerifier::with_parameters(parameters);
+
+    let mut rng = StdRng::seed_from_u64(2024);
+    let signing: SigningKey = SigningKey::generate(&mut rng);
+    let verifying: VerifyingKey = signing.verifying_key();
+
+    let payload = StwoTransaction {
+        from: format!("{:064x}", 1),
+        to: format!("{:064x}", 2),
+        amount: 50,
+        fee: 1,
+        nonce: 1,
+        memo: None,
+        timestamp: 1,
+    };
+
+    let signature: Signature = signing.sign(&payload.canonical_bytes());
+    let signed_tx = SignedTransaction::new(payload.clone(), signature, &verifying);
+
+    let mut sender = StwoAccount::new(payload.from.clone(), 10_000, Stake::default());
+    sender.nonce = 0;
+    let receiver = StwoAccount::new(payload.to.clone(), 0, Stake::default());
+
+    let witness = TransactionWitness {
+        signed_tx,
+        sender_account: sender,
+        receiver_account: Some(receiver),
+        required_tier: Tier::Tl0,
+        reputation_weights: ReputationWeights::default(),
+    };
+
+    let proof = prover
+        .prove_transaction_witness(witness)
+        .expect("generate stwo transaction proof after snapshot replay");
+    verifier
+        .verify_transaction(&ChainProof::Stwo(proof))
+        .expect("verify stwo proof after snapshot replay");
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn verify_snapshot_replay_with_rpp_vector() {
+    use rpp_chain::zk::rpp_verifier::RppStarkVerifier;
+    use rpp_stark::backend::params_limit_to_node_bytes;
+    use rpp_stark::params::deserialize_params;
+
+    use rpp_vectors::{load_bytes, log_vector_checksums, log_vector_report};
+
+    log_vector_checksums().expect("log vector checksums after snapshot replay");
+
+    let params = load_bytes("params.bin").expect("load rpp params vector");
+    let public_inputs = load_bytes("public_inputs.bin").expect("load rpp public inputs vector");
+    let proof = load_bytes("proof.bin").expect("load rpp proof vector");
+
+    let stark_params = deserialize_params(&params).expect("deserialize rpp params");
+    let node_limit =
+        params_limit_to_node_bytes(&stark_params).expect("map params to node byte limit");
+
+    let verifier = RppStarkVerifier::new();
+    let report = verifier
+        .verify(&params, &public_inputs, &proof, node_limit)
+        .expect("verify rpp vector after snapshot replay");
+
+    assert!(
+        report.is_verified(),
+        "golden vector must verify after replay"
+    );
+    log_vector_report(&report).expect("log rpp vector verification report after replay");
 }
