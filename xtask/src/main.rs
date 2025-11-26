@@ -668,6 +668,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             description: "Delay leaders, drop gossip, and isolate validators to validate consensus recovery alerts",
         },
         SimnetPreset {
+            slug: "mixed-backend-interop",
+            scenario_path: "tools/simnet/scenarios/mixed_backend_interop.ron",
+            description: "Validate mixed prover/verifier backends across consensus, mempool, and finality",
+        },
+        SimnetPreset {
             slug: "partition",
             scenario_path: "tools/simnet/scenarios/snapshot_partition.ron",
             description: "Partition validators while exercising snapshot recovery",
