@@ -1,0 +1,31 @@
+{
+  "name": "leader-rotation-prover-load",
+  "description": "Rapid leader rotation with prover saturation to ensure slot coverage and finality stability",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info,simnet=info,rpp_chain::proofs=debug,rpp_runtime::telemetry=debug",
+    "SIMNET_BACKEND_ATTRIBUTION": "stark,plonky3"
+  },
+  "resources": {
+    "cpus": 16,
+    "memory_gb": 32
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/leader_rotation_prover_load.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/leader_rotation_prover_load.json"
+  },
+  "consensus": {
+    "runs": 96,
+    "validators": 20,
+    "witness_commitments": 160,
+    "security_bits": 128,
+    "use_gpu": false,
+    "seed": 8844,
+    "tamper": { "vrf": true, "quorum_roots": true, "every_n": 6 },
+    "summary_path": "summaries/leader_rotation_prover_load_consensus.json",
+    "csv_path": "summaries/leader_rotation_prover_load_consensus.csv"
+  }
+}

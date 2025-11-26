@@ -1,0 +1,70 @@
+[sim]
+seed = 4421
+duration_ms = 78000
+
+[topology]
+type = "small_world"
+n = 30
+k = 7
+rewire_p = 0.21
+
+[regions]
+assignments = [
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+  "A", "B", "C", "A", "B", "C",
+]
+
+[links]
+default = { delay_ms = 30, jitter_ms = 8, loss = 0.01 }
+A-B = { delay_ms = 80, jitter_ms = 18, loss = 0.02 }
+B-C = { delay_ms = 90, jitter_ms = 22, loss = 0.025 }
+A-C = { delay_ms = 110, jitter_ms = 26, loss = 0.03 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 12, jitter_ms = 6 }
+untrusted = { extra_delay_ms = 32, jitter_ms = 12 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.08 }
+
+[traffic.tx.payload]
+min_bytes = 720
+max_bytes = 6144
+
+[[traffic.tx.phases]]
+name = "rotation-warmup"
+duration_ms = 12000
+model = "poisson"
+lambda_per_sec = 26.0
+
+[[traffic.tx.phases]]
+name = "prover-saturation"
+duration_ms = 36000
+model = "on_off_bursty"
+on_lambda_per_sec = 58.0
+on_duration_ms = 4800
+off_duration_ms = 900
+
+[[traffic.tx.phases]]
+name = "finality-catchup"
+duration_ms = 30000
+model = "poisson"
+lambda_per_sec = 34.0
+
+[faults.partition]
+start_ms = 18000
+duration_ms = 6000
+group_a = "A"
+group_b = "C"
+
+[faults.churn]
+start_ms = 24000
+rate_per_min = 32.0
+restart_after_ms = 4200
+
+[metrics]
+json = "target/simnet/leader-rotation-prover-load/summaries/leader_rotation_prover_load.json"
+csv = "target/simnet/leader-rotation-prover-load/summaries/leader_rotation_prover_load.csv"

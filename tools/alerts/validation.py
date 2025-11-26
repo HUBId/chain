@@ -1199,6 +1199,34 @@ def default_alert_rules() -> List[AlertRule]:
             ),
         ),
         AlertRule(
+            name="ConsensusMissedSlotsWarning",
+            severity="warning",
+            service="consensus",
+            summary="Proposers are missing scheduled slots",
+            description=(
+                "Scheduled slots exceeded produced blocks by more than two slots for at least ten minutes. "
+                "Inspect per-slot prover latency and timetoke replay health before the deficit widens."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#missed-slots-under-prover-load",
+            evaluator=lambda store: _evaluate_epoch_delay(
+                store, "consensus:missed_slots:5m", 2.0, 600.0
+            ),
+        ),
+        AlertRule(
+            name="ConsensusMissedSlotsCritical",
+            severity="critical",
+            service="consensus",
+            summary="Slot misses threaten finality",
+            description=(
+                "Scheduled slots exceeded produced blocks by more than four slots for five minutes. Quarantine slow leaders "
+                "and drain prover queues until slot coverage recovers."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#missed-slots-under-prover-load",
+            evaluator=lambda store: _evaluate_epoch_delay(
+                store, "consensus:missed_slots:5m", 4.0, 300.0
+            ),
+        ),
+        AlertRule(
             name="RpcAvailabilityDegradedWarning",
             severity="warning",
             service="rpc",
@@ -1908,6 +1936,44 @@ def build_uptime_pause_store() -> MetricStore:
             ),
         )
     )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus:missed_slots:5m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (120.0, 5.0),
+                    (240.0, 5.0),
+                    (360.0, 5.0),
+                    (480.0, 5.0),
+                    (600.0, 5.0),
+                    (720.0, 5.0),
+                    (840.0, 5.0),
+                    (960.0, 4.5),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus:missed_slots:5m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (120.0, 5.0),
+                    (240.0, 5.0),
+                    (360.0, 5.0),
+                    (480.0, 5.0),
+                    (600.0, 5.0),
+                    (720.0, 5.0),
+                    (840.0, 5.0),
+                    (960.0, 4.5),
+                ]
+            ),
+        )
+    )
     return MetricStore.from_definitions(definitions)
 
 
@@ -2160,6 +2226,63 @@ def build_missed_slot_store() -> MetricStore:
                     (720.0, 8.5),
                     (840.0, 3.5),
                     (960.0, 1.5),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus_block_schedule_slots_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (120.0, 12.0),
+                    (240.0, 24.0),
+                    (360.0, 36.0),
+                    (480.0, 48.0),
+                    (600.0, 64.0),
+                    (720.0, 80.0),
+                    (840.0, 96.0),
+                    (960.0, 112.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10_000.0),
+                    (120.0, 10_006.0),
+                    (240.0, 10_012.0),
+                    (360.0, 10_016.0),
+                    (480.0, 10_018.0),
+                    (600.0, 10_020.0),
+                    (720.0, 10_022.0),
+                    (840.0, 10_026.0),
+                    (960.0, 10_030.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="consensus:missed_slots:5m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.0),
+                    (120.0, 5.0),
+                    (240.0, 5.0),
+                    (360.0, 5.0),
+                    (480.0, 5.0),
+                    (600.0, 5.0),
+                    (720.0, 5.0),
+                    (840.0, 5.0),
+                    (960.0, 4.5),
                 ]
             ),
         )
@@ -2634,6 +2757,8 @@ def default_validation_cases() -> List[ValidationCase]:
                 "ConsensusFinalizedHeightGapCritical",
                 "ConsensusLivenessStall",
                 "UptimeMempoolProbeFailure",
+                "ConsensusMissedSlotsWarning",
+                "ConsensusMissedSlotsCritical",
             },
         ),
         ValidationCase(
@@ -2666,6 +2791,10 @@ def default_validation_cases() -> List[ValidationCase]:
                 "ConsensusFinalityLagCritical",
                 "ConsensusFinalizedHeightGapWarning",
                 "ConsensusFinalizedHeightGapCritical",
+                "ConsensusMissedSlotsWarning",
+                "ConsensusMissedSlotsCritical",
+                "ConsensusBlockProductionLagWarning",
+                "ConsensusBlockProductionLagCritical",
             },
         ),
         ValidationCase(
