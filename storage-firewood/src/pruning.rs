@@ -19,10 +19,19 @@ struct SnapshotRecord {
     state_commitment: TaggedDigest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrossShardReference {
+    pub shard: String,
+    pub partition: String,
+    pub block_height: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistedPrunerSnapshot {
     block_height: u64,
     state_commitment: Hash,
+    #[serde(default)]
+    cross_references: Vec<CrossShardReference>,
 }
 
 impl PersistedPrunerSnapshot {
@@ -32,6 +41,14 @@ impl PersistedPrunerSnapshot {
 
     pub fn state_commitment(&self) -> Hash {
         self.state_commitment
+    }
+
+    pub fn cross_references(&self) -> &[CrossShardReference] {
+        &self.cross_references
+    }
+
+    pub fn cross_references_mut(&mut self) -> &mut Vec<CrossShardReference> {
+        &mut self.cross_references
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,8 +18,8 @@ use rpp_p2p::{
     PipelineError,
 };
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
-use storage::snapshots::{known_snapshot_sets, SnapshotSet};
-use storage_firewood::pruning::{PersistedPrunerSnapshot, PersistedPrunerState};
+use storage::snapshots::{known_snapshot_sets, CrossShardLink, SnapshotSet};
+use storage_firewood::pruning::{CrossShardReference, PersistedPrunerSnapshot, PersistedPrunerState};
 use thiserror::Error;
 use tracing::info;
 use uuid::Uuid;
@@ -276,8 +276,11 @@ fn validate_snapshot_metadata(
 
     let mut recorded: HashMap<u64, &PersistedPrunerSnapshot> =
         HashMap::with_capacity(persisted.snapshots.len());
+    let mut recorded_references: HashMap<u64, Vec<CrossShardReference>> =
+        HashMap::with_capacity(persisted.snapshots.len());
     for snapshot in &persisted.snapshots {
         recorded.insert(snapshot.block_height(), snapshot);
+        recorded_references.insert(snapshot.block_height(), snapshot.cross_references().to_vec());
     }
 
     for snapshot in dataset.snapshots {
@@ -307,11 +310,27 @@ fn validate_snapshot_metadata(
                 snapshot.block_height
             ))));
         }
+
+        let recorded_links = recorded_references
+            .remove(&snapshot.block_height)
+            .unwrap_or_default();
+        validate_cross_shard_links(
+            snapshot.block_height,
+            snapshot.cross_shard_links,
+            recorded_links,
+            builder,
+        )?;
     }
 
     if !recorded.is_empty() {
         return Err(builder.fail(VerificationErrorKind::Metadata(
             "unexpected pruning receipts recorded for unknown heights".to_string(),
+        )));
+    }
+
+    if !recorded_references.is_empty() {
+        return Err(builder.fail(VerificationErrorKind::Metadata(
+            "unexpected cross-shard references recorded for unknown heights".to_string(),
         )));
     }
 
@@ -357,6 +376,34 @@ fn validate_snapshot_metadata(
         dataset_label: dataset.label.to_string(),
         snapshot_count: dataset.snapshots.len(),
     });
+
+    Ok(())
+}
+
+fn validate_cross_shard_links(
+    snapshot_height: u64,
+    expected: &[CrossShardLink],
+    recorded: Vec<CrossShardReference>,
+    builder: &mut ReportBuilder,
+) -> Result<(), VerificationError> {
+    let mut recorded_set: HashSet<(String, String, u64)> =
+        recorded.into_iter().map(|link| (link.shard, link.partition, link.block_height)).collect();
+    for link in expected {
+        let needle = (link.shard.to_string(), link.partition.to_string(), link.block_height);
+        if !recorded_set.remove(&needle) {
+            return Err(builder.fail(VerificationErrorKind::Metadata(format!(
+                "missing cross-shard reference {}:{} at {} for snapshot {}",
+                link.shard, link.partition, link.block_height, snapshot_height
+            ))));
+        }
+    }
+
+    if !recorded_set.is_empty() {
+        return Err(builder.fail(VerificationErrorKind::Metadata(format!(
+            "unexpected cross-shard references recorded for snapshot {}",
+            snapshot_height
+        ))));
+    }
 
     Ok(())
 }

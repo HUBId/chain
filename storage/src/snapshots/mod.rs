@@ -20,6 +20,19 @@ pub struct SnapshotEntry {
     pub state_commitment: [u8; DIGEST_LENGTH],
     /// Hex-encoded checksum of the persisted pruning proof artifacts.
     pub proof_checksum: &'static str,
+    /// Cross-shard or cross-partition references captured alongside the snapshot.
+    pub cross_shard_links: &'static [CrossShardLink],
+}
+
+/// Metadata describing a cross-shard or cross-partition reference retained after pruning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrossShardLink {
+    /// Logical shard identifier advertised by the pruning job.
+    pub shard: &'static str,
+    /// Partition label recorded for the linked shard.
+    pub partition: &'static str,
+    /// Snapshot height on the linked shard.
+    pub block_height: u64,
 }
 
 /// Collection of snapshots that share schema and parameter digests.
@@ -50,6 +63,11 @@ const DEVNET_SNAPSHOTS: &[SnapshotEntry] = &[
             86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
         ],
         proof_checksum: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        cross_shard_links: &[CrossShardLink {
+            shard: "archive-a",
+            partition: "partition-0",
+            block_height: 4_096,
+        }],
     },
     SnapshotEntry {
         block_height: 8_192,
@@ -59,6 +77,11 @@ const DEVNET_SNAPSHOTS: &[SnapshotEntry] = &[
             114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
         ],
         proof_checksum: "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
+        cross_shard_links: &[CrossShardLink {
+            shard: "archive-b",
+            partition: "partition-2",
+            block_height: 12_288,
+        }],
     },
 ];
 
