@@ -99,6 +99,17 @@ When either alert fires:
 3. **Validate clearance.** Ensure the lag drops below the warning thresholds
    and block height resumes increasing; the missed-slot recovery drill in the
    alert probes records that alerts clear once metrics return to baseline.【F:tools/alerts/validation.py†L1424-L1485】【F:tools/alerts/tests/test_alert_validation.py†L15-L61】
+4. **Confirm zk penalties.** When zk verification is enabled, tail the
+   `consensus` log target for `applied slashing penalty` entries with
+   `backend` and `evidence` fields to confirm the missed proposer was
+   penalised and the alert stream identifies the active backend. The nightly
+   `zk-penalty-guardrails` probe replays this path across RPP-STARK and STWO,
+   verifying both the slashing record and the log context.【F:rpp/consensus/src/state.rs†L110-L140】【F:tests/consensus/censorship_inactivity.rs†L222-L306】【F:.github/workflows/nightly.yml†L208-L224】
+5. **Escalate double-signs.** If the alert surface also reports a
+   double-sign, follow the zk backend incident steps to ensure the validator
+   is fenced before proof verification continues on the same backend. Confirm
+   the log stream records a `double_sign` penalty and that follow-up blocks
+   clear the alert once the validator is evicted or rotated out.【F:tests/consensus/censorship_inactivity.rs†L272-L306】
 
 ## Validation drills
 

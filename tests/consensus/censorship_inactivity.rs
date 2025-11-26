@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[path = "common.rs"]
@@ -6,7 +7,7 @@ mod common;
 
 use common::{align_poseidon_last_block_header, digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
-use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceType};
+use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceRecord, EvidenceType};
 use rpp_consensus::messages::{
     compute_consensus_bindings, Block, BlockId, Commit, ConsensusCertificate, ConsensusProof,
     ConsensusProofMetadata, PreVote,
@@ -19,6 +20,64 @@ use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use serde_json::json;
+use tracing_test::traced_test;
+
+struct TrackingBackend {
+    name: &'static str,
+    verification_called: Arc<AtomicBool>,
+}
+
+impl TrackingBackend {
+    fn new(name: &'static str) -> (Arc<Self>, Arc<AtomicBool>) {
+        let verification_called = Arc::new(AtomicBool::new(false));
+        (
+            Arc::new(Self {
+                name,
+                verification_called: verification_called.clone(),
+            }),
+            verification_called,
+        )
+    }
+}
+
+impl ProofBackend for TrackingBackend {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        circuit: &ConsensusCircuitDef,
+        _public_inputs: &ConsensusPublicInputs,
+    ) -> BackendResult<()> {
+        self.verification_called.store(true, Ordering::SeqCst);
+        if vk.as_slice().is_empty() || proof.as_slice().is_empty() {
+            return Err(BackendError::Failure("empty consensus artifacts".into()));
+        }
+        if circuit.identifier.trim().is_empty() {
+            return Err(BackendError::Failure("empty circuit identifier".into()));
+        }
+        Ok(())
+    }
+
+    fn prove_consensus(
+        &self,
+        witness: &prover_backend_interface::WitnessBytes,
+    ) -> BackendResult<(ProofBytes, VerifyingKey, ConsensusCircuitDef)> {
+        let digest = blake3::hash(witness.as_slice());
+        let identifier = format!("tracking.consensus.{}", digest.to_hex());
+        let circuit = ConsensusCircuitDef::new(identifier.clone());
+        let header = prover_backend_interface::ProofHeader::new(
+            prover_backend_interface::ProofSystemKind::Mock,
+            identifier.clone(),
+        );
+        let proof = ProofBytes::encode(&header, witness.as_slice())?;
+        let verifying_key = VerifyingKey(identifier.into_bytes());
+        Ok((proof, verifying_key, circuit))
+    }
+}
 
 fn sample_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
     metadata_fixture(
@@ -118,6 +177,20 @@ fn build_state(
     proof_threshold: u64,
     inactivity_threshold: u64,
 ) -> ConsensusState {
+    build_state_with_backend(
+        vote_threshold,
+        proof_threshold,
+        inactivity_threshold,
+        consensus_backend(),
+    )
+}
+
+fn build_state_with_backend(
+    vote_threshold: u64,
+    proof_threshold: u64,
+    inactivity_threshold: u64,
+    backend: Arc<dyn ProofBackend>,
+) -> ConsensusState {
     let vrf_outputs = vec![
         sample_vrf_output("validator-a", 1, 4, 1.0, 10),
         sample_vrf_output("validator-b", 2, 3, 0.8, 8),
@@ -127,7 +200,7 @@ fn build_state(
         .with_witness_params(4, 3, 2)
         .with_participation_thresholds(vote_threshold, proof_threshold, inactivity_threshold);
     let genesis = GenesisConfig::new(0, vrf_outputs, ledger, "root".into(), config);
-    ConsensusState::new(genesis, consensus_backend()).expect("consensus state")
+    ConsensusState::new(genesis, backend).expect("consensus state")
 }
 
 fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
@@ -336,4 +409,109 @@ fn proof_censorship_detection_flags_leader() {
     let triggers = state.take_slashing_triggers();
     assert!(triggers.iter().any(|trigger| trigger.validator == leader_id
         && trigger.reason.starts_with("consensus_censorship_proof")));
+}
+
+#[traced_test]
+fn zk_backends_apply_and_log_penalties() {
+    for backend in ["rpp-stark", "stwo"] {
+        exercise_penalty_flow_for_backend(backend);
+    }
+}
+
+fn exercise_penalty_flow_for_backend(backend: &'static str) {
+    let (backend, verification_flag) = TrackingBackend::new(backend);
+    let backend: Arc<dyn ProofBackend> = backend;
+    let mut state = build_state_with_backend(1, 1, 2, backend.clone());
+
+    let leader_id = state
+        .current_leader
+        .as_ref()
+        .expect("leader")
+        .id
+        .clone();
+    let victim_id = state
+        .validator_set
+        .validators
+        .iter()
+        .find(|validator| validator.id != leader_id)
+        .expect("secondary validator")
+        .id
+        .clone();
+
+    // Round 0: nobody participates, forcing a missed-slot penalty for the leader.
+    state.next_round();
+
+    let missed_slot = state
+        .pending_evidence
+        .iter()
+        .find(|record| {
+            record.accused == leader_id
+                && matches!(
+                    record.evidence,
+                    EvidenceType::Censorship {
+                        stage: CensorshipStage::Prevote,
+                        ..
+                    }
+                )
+        })
+        .expect("leader missed-slot evidence");
+    assert_eq!(missed_slot.evidence.kind(), EvidenceKind::Censorship);
+
+    let triggers = state.take_slashing_triggers();
+    assert!(triggers.iter().any(|trigger| {
+        trigger.validator == leader_id && trigger.reason.starts_with("consensus_censorship")
+    }));
+
+    let missed_slot_commit = dummy_commit(&state, state.block_height + 1);
+    missed_slot_commit
+        .proof
+        .verify(backend.as_ref())
+        .expect("zk verification active");
+    assert!(
+        verification_flag.load(Ordering::SeqCst),
+        "backend must verify consensus proof"
+    );
+
+    state.apply_commit(missed_slot_commit);
+    let missed_slot_reward = state
+        .pending_rewards
+        .last()
+        .expect("reward snapshot after missed slot");
+    let missed_slot_penalty = missed_slot_reward
+        .penalties
+        .get(&leader_id)
+        .copied()
+        .unwrap_or_default();
+    assert!(missed_slot_penalty > 0, "missed slot penalty must be applied");
+    assert!(logs_contain("applied slashing penalty"));
+    assert!(logs_contain(&format!("backend={backend}")));
+
+    // Round 1: record explicit double-sign evidence for the secondary validator.
+    state.record_evidence(EvidenceRecord {
+        reporter: leader_id.clone(),
+        accused: victim_id.clone(),
+        evidence: EvidenceType::DoubleSign {
+            height: state.block_height,
+        },
+    });
+
+    let double_sign_commit = dummy_commit(&state, state.block_height + 1);
+    double_sign_commit
+        .proof
+        .verify(backend.as_ref())
+        .expect("zk verification active on double-sign");
+
+    state.apply_commit(double_sign_commit);
+    let double_sign_rewards = state
+        .pending_rewards
+        .last()
+        .expect("reward snapshot after double sign");
+    let double_sign_penalty = double_sign_rewards
+        .penalties
+        .get(&victim_id)
+        .copied()
+        .unwrap_or_default();
+    assert!(double_sign_penalty > 0, "double-sign penalty must be applied");
+    assert!(logs_contain("evidence=double_sign"));
+    assert!(logs_contain(&format!("backend={backend}")));
 }

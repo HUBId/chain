@@ -26,7 +26,7 @@ use crate::validator::{
     ValidatorSet,
 };
 use crate::{ConsensusError, ConsensusResult};
-use tracing::warn;
+use tracing::{info, warn};
 
 static MESSAGE_SENDER: OnceLock<Mutex<Option<UnboundedSender<ConsensusMessage>>>> = OnceLock::new();
 
@@ -1134,26 +1134,66 @@ impl ConsensusState {
             EvidenceType::DoubleSign { .. } => {
                 let penalty = self.config.false_proof_penalty.saturating_mul(2);
                 if penalty > 0 {
+                    info!(
+                        target: "consensus",
+                        backend = self.proof_backend.name(),
+                        validator = %record.accused,
+                        penalty,
+                        evidence = "double_sign",
+                        "applied slashing penalty"
+                    );
                     slash(&record.accused, penalty, self);
                 }
             }
             EvidenceType::FalseProof { .. } => {
                 if self.config.false_proof_penalty > 0 {
+                    info!(
+                        target: "consensus",
+                        backend = self.proof_backend.name(),
+                        validator = %record.accused,
+                        penalty = self.config.false_proof_penalty,
+                        evidence = "false_proof",
+                        "applied slashing penalty"
+                    );
                     slash(&record.accused, self.config.false_proof_penalty, self);
                 }
             }
             EvidenceType::VoteWithholding { .. } => {
                 if self.config.censorship_penalty > 0 {
+                    info!(
+                        target: "consensus",
+                        backend = self.proof_backend.name(),
+                        validator = %record.accused,
+                        penalty = self.config.censorship_penalty,
+                        evidence = "vote_withholding",
+                        "applied slashing penalty"
+                    );
                     slash(&record.accused, self.config.censorship_penalty, self);
                 }
             }
             EvidenceType::Censorship { .. } => {
                 if self.config.censorship_penalty > 0 {
+                    info!(
+                        target: "consensus",
+                        backend = self.proof_backend.name(),
+                        validator = %record.accused,
+                        penalty = self.config.censorship_penalty,
+                        evidence = "censorship",
+                        "applied slashing penalty"
+                    );
                     slash(&record.accused, self.config.censorship_penalty, self);
                 }
             }
             EvidenceType::Inactivity { .. } => {
                 if self.config.inactivity_penalty > 0 {
+                    info!(
+                        target: "consensus",
+                        backend = self.proof_backend.name(),
+                        validator = %record.accused,
+                        penalty = self.config.inactivity_penalty,
+                        evidence = "inactivity",
+                        "applied slashing penalty"
+                    );
                     slash(&record.accused, self.config.inactivity_penalty, self);
                 }
             }

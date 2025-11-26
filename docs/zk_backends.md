@@ -61,6 +61,10 @@
   geprüft.【F:tests/zk_load.rs†L1-L204】
 - Nightly-CI führt die Suite automatisch im Job `zk-load-harness` aus, damit Größe- und Parallelitäts-Grenzen regressionssicher
   bleiben.【F:.github/workflows/nightly.yml†L168-L201】
+- Die Drill `zk-penalty-guardrails` lässt sowohl RPP-STARK- als auch STWO-Backends eine verpasste Slot- und Double-Sign-Sequenz
+  durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
+  Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden
+  Incident-Schritten zur Backend-Isolation.【F:tests/consensus/censorship_inactivity.rs†L222-L306】【F:.github/workflows/nightly.yml†L208-L224】
 
 ### Size-Gate-Mapping
 
