@@ -69,6 +69,14 @@ well as the dedicated runtime entry points (`node`, `wallet`, `hybrid`, and
 `validator`). SBOMs, SHA256 manifests, cosign signatures, and provenance
 attestations are published alongside the release assets.
 
+Before the platform builds begin, the release workflow now runs the
+uptime/timetoke alert probes (`python -m pytest tools/alerts/tests` and
+`python tools/alerts/validate_alerts.py`) and uploads the JSON results under the
+`alert-probes` artifact. Any failing probe blocks the release unless a
+`workflow_dispatch` override provides both `uptime_probe_exception_approver` and
+`uptime_probe_exception_reason`, which are recorded in the logs as the required
+exception sign-off.【F:.github/workflows/release.yml†L18-L32】【F:.github/workflows/release.yml†L103-L157】
+
 ### Support tier annotations
 
 - Always create the canonical `vMAJOR.MINOR.PATCH` tag first so the workflow can
@@ -180,7 +188,11 @@ Before publishing release artifacts, double-check the following guardrails:
    Plonky3 prover backends reject tampered VRF and quorum inputs. The release
    workflow aborts with a dedicated error if these negative tests fail so local
    runs should be clean before tagging.【F:.github/workflows/release.yml†L92-L103】
-3. Run `cargo xtask proof-version-guard --base origin/main` whenever proof
+3. Confirm the uptime/timetoke alert probes pass. The release workflow uploads
+   the probe summary as `alert-probes` and fails when alerts fire; reruns with a
+   manual override must specify the approver and reason in the
+   `workflow_dispatch` inputs to document the exception.【F:.github/workflows/release.yml†L18-L32】【F:.github/workflows/release.yml†L103-L157】
+4. Run `cargo xtask proof-version-guard --base origin/main` whenever proof
    adapters, vectors, or verifier logic changed in this release. The guard
    walks the `rpp/zk/`, `rpp/proofs/`, `prover/`, and `vendor/rpp-stark/`
    directories (including golden vectors and tests) and fails if the
@@ -189,46 +201,46 @@ Before publishing release artifacts, double-check the following guardrails:
    the version in `vendor/rpp-stark/src/proof/types.rs` (plus any other
    consumers) before publishing. Circuit artefact changes also require a
    changelog entry that mentions the version increase.【F:xtask/src/release.rs†L1-L217】
-4. Verify the backend metadata matches the updated proof version via
+5. Verify the backend metadata matches the updated proof version via
    `cargo xtask proof-version-metadata`. The command compares the current
    `PROOF_VERSION` constants with the STWO verifying-key manifest
    (`prover/prover_stwo_backend/params/vk.json`) and the Plonky3 setup metadata
    fields `metadata.proof_version`, failing if any value drifts.【F:xtask/src/main.rs†L5924-L6012】
-5. Describe any deterministic vector refreshes under
+6. Describe any deterministic vector refreshes under
    `vendor/rpp-stark/vectors/` in the release notes. The changelog template now
    includes a dedicated **🧬 ZK Vectors** section, and `scripts/prepare_changelog.sh`
    will fail with a TODO if vector diffs are detected so you can link the
    regeneration evidence before publishing.
-6. Build the workspace via `scripts/build_release.sh` with
+7. Build the workspace via `scripts/build_release.sh` with
    `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
    (append `,simd` if required) so the manual invocation matches CI. The script
    immediately exits if any `backend-plonky3` alias or the mock prover is
    requested via flags or environment variables.【F:scripts/build_release.sh†L80-L162】
-7. Let the script run its automatic post-build verification. The bundled
+8. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
    features.【F:scripts/build_release.sh†L160-L200】【F:scripts/verify_release_features.sh†L1-L115】
-8. Produce the wallet runtime bundle via
+9. Produce the wallet runtime bundle via
    `cargo xtask wallet-bundle --target x86_64-unknown-linux-gnu --profile release --version <tag>`
    and verify both the embedded `SHA256SUMS.txt` and the cosign signature
    published alongside
    `wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json`. After extracting
    the tarball run `sha256sum -c SHA256SUMS.txt` and verify the manifest with
    `cosign verify-blob --certificate wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json.pem --signature wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json.sig wallet-bundle-<tag>-x86_64-unknown-linux-gnu-manifest.json`.
-9. If you are experimenting with non-default builds, rerun `cargo build` with the
-   intended feature list and confirm that production profiles still refuse to
-   compile when `backend-plonky3` is paired with `prod` or `validator`. The
-   compile-time guard keeps the experimental stub out of production releases even
-   before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-10. Dry-run validator or hybrid binaries (`cargo run -p rpp-chain -- validator --dry-run` /
-   `cargo run -p rpp-chain -- hybrid --dry-run`) to see the runtime guard in
-   action—startup fails immediately if the STWO backend was omitted, ensuring the
-   published artifacts activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
-11. Capture the Plonky3 graduation evidence bundle: archive the
-    `target/simnet/consensus-quorum` artefacts produced by the stress harness,
-    export the Grafana dashboard JSON described in the Plonky3 runbook, and note
-    the backout steps (feature guard, cache eviction, and incident checklist)
-   referenced in the runbook/test plan so rollbacks remain auditable.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】【F:docs/testing/plonky3_experimental_testplan.md†L1-L160】
+10. If you are experimenting with non-default builds, rerun `cargo build` with the
+    intended feature list and confirm that production profiles still refuse to
+    compile when `backend-plonky3` is paired with `prod` or `validator`. The
+    compile-time guard keeps the experimental stub out of production releases even
+    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
+11. Dry-run validator or hybrid binaries (`cargo run -p rpp-chain -- validator --dry-run` /
+     `cargo run -p rpp-chain -- hybrid --dry-run`) to see the runtime guard in
+     action—startup fails immediately if the STWO backend was omitted, ensuring the
+     published artifacts activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
+12. Capture the Plonky3 graduation evidence bundle: archive the
+     `target/simnet/consensus-quorum` artefacts produced by the stress harness,
+     export the Grafana dashboard JSON described in the Plonky3 runbook, and note
+     the backout steps (feature guard, cache eviction, and incident checklist)
+    referenced in the runbook/test plan so rollbacks remain auditable.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】【F:docs/testing/plonky3_experimental_testplan.md†L1-L160】
 
 ### Verifying wallet bundles
 

@@ -9,6 +9,12 @@ on:
       version:
         description: 'SemVer tag to build (e.g. v1.2.3)'
         required: false
+      uptime_probe_exception_approver:
+        description: 'Required approver if uptime/timetoke probes are overridden after failures'
+        required: false
+      uptime_probe_exception_reason:
+        description: 'Required rationale (ticket/link) when overriding failed uptime/timetoke probes'
+        required: false
 
 permissions:
   contents: write
@@ -119,6 +125,60 @@ EOF
           if ! cargo xtask test-consensus-manipulation; then
             echo "::error::Consensus manipulation negative tests failed. Ensure both STWO and Plonky3 backends reject manipulated VRF/quorum values." >&2
             exit 1
+          fi
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install alert probe dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/alerts/requirements.txt
+      - name: Run uptime/timetoke alert probes
+        id: uptime_alert_probes
+        continue-on-error: true
+        env:
+          ALERT_PROBE_ARTIFACT_DIR: artifacts/alert-probes
+        run: |
+          set -euo pipefail
+          mkdir -p "$ALERT_PROBE_ARTIFACT_DIR"
+          status=0
+          set +e
+          python -m pytest tools/alerts/tests
+          status=$((status | $?))
+          python tools/alerts/validate_alerts.py --artifacts "$ALERT_PROBE_ARTIFACT_DIR"
+          status=$((status | $?))
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "$status" > "$ALERT_PROBE_ARTIFACT_DIR/exit_code.txt"
+          exit "$status"
+      - name: Upload alert probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alert-probes
+          path: artifacts/alert-probes
+      - name: Enforce uptime/timetoke gate
+        if: always()
+        shell: bash
+        env:
+          PROBE_EXIT_CODE: ${{ steps.uptime_alert_probes.outputs.exit_code || '0' }}
+          PROBE_EXCEPTION_APPROVER: ${{ github.event.inputs.uptime_probe_exception_approver || '' }}
+          PROBE_EXCEPTION_REASON: ${{ github.event.inputs.uptime_probe_exception_reason || '' }}
+        run: |
+          set -euo pipefail
+          exit_code="${PROBE_EXIT_CODE:-0}"
+          approver="${PROBE_EXCEPTION_APPROVER:-}"
+          reason="${PROBE_EXCEPTION_REASON:-}"
+          if [[ "$exit_code" != "0" ]]; then
+            if [[ -z "$approver" || -z "$reason" ]]; then
+              echo "::error::Uptime/timetoke alert probes failed (exit code $exit_code). Provide workflow_dispatch inputs for approver and reason to override with sign-off."
+              exit 1
+            fi
+            echo "::warning::Uptime/timetoke alert probes failed but release override supplied by $approver: $reason"
+          else
+            echo "Uptime/timetoke alert probes passed."
           fi
       - name: Prepare release notes
         run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md

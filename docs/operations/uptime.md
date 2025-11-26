@@ -186,6 +186,19 @@ When drift triggers an alert:
   SLA breaches alongside uptime soak artifacts, keeping trend data available for
   the ops review.【F:.github/workflows/nightly.yml†L1-L87】
 
+### Release gate and exception handling
+
+- **Release enforcement:** The release workflow now installs the alert probe
+  dependencies, runs the uptime/timetoke validation suite, and uploads the JSON
+  artifacts under `alert-probes` so release approvers can audit which alerts
+  fired. A failed probe halts the release unless a workflow_dispatch override
+  records both an approver and rationale via the `uptime_probe_exception_*`
+  inputs, which are echoed in the logs for sign-off traceability.【F:.github/workflows/release.yml†L18-L32】【F:.github/workflows/release.yml†L103-L157】
+- **CI parity:** The same pytest + `tools/alerts/validate_alerts.py` sequence
+  runs in CI’s `alert-probes` job, keeping the release gate green by detecting
+  regressions before tags are cut and ensuring artifact formats stay consistent
+  between CI and release uploads.【F:.github/workflows/ci.yml†L419-L458】【F:.github/workflows/release.yml†L118-L151】
+
 To run the probes locally and capture artifacts:
 
 ```bash
