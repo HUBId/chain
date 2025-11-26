@@ -826,6 +826,14 @@ struct HealthSubsystemStatus {
     wallet_signer_ready: bool,
     wallet_connected: bool,
     wallet_key_cache_ready: bool,
+    #[serde(default)]
+    wallet_synced_height: Option<u64>,
+    #[serde(default)]
+    wallet_chain_tip: Option<u64>,
+    #[serde(default)]
+    wallet_sync_lag: Option<u64>,
+    #[serde(default)]
+    wallet_last_sync_timestamp: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

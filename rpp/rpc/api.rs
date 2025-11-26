@@ -707,22 +707,49 @@ impl ApiContext {
             self.state_sync_server.is_some() || self.snapshot_runtime.is_some();
 
         #[cfg(feature = "wallet-integration")]
-        let (wallet_signer_ready, wallet_connected, wallet_key_cache_ready) =
+        let (
+            wallet_signer_ready,
+            wallet_connected,
+            wallet_key_cache_ready,
+            wallet_synced_height,
+            wallet_chain_tip,
+            wallet_sync_lag,
+            wallet_last_sync_timestamp,
+        ) =
             if mode.includes_wallet() {
                 if let Some(wallet) = self.wallet.as_ref() {
                     let signer_ready = !wallet.is_watch_only();
                     let connected = wallet.node_runtime_running();
                     let key_cache_ready = wallet.keystore_path().exists();
-                    (signer_ready, connected, key_cache_ready)
+                    let (synced_height, chain_tip, last_sync_timestamp) = (None, None, None);
+                    let sync_lag = synced_height.zip(chain_tip).map(|(synced, tip)| tip.saturating_sub(synced));
+
+                    (
+                        signer_ready,
+                        connected,
+                        key_cache_ready,
+                        synced_height,
+                        chain_tip,
+                        sync_lag,
+                        last_sync_timestamp,
+                    )
                 } else {
-                    (false, false, false)
+                    (false, false, false, None, None, None, None)
                 }
             } else {
-                (true, true, true)
+                (true, true, true, None, None, None, None)
             };
 
         #[cfg(not(feature = "wallet-integration"))]
-        let (wallet_signer_ready, wallet_connected, wallet_key_cache_ready) = (true, true, true);
+        let (
+            wallet_signer_ready,
+            wallet_connected,
+            wallet_key_cache_ready,
+            wallet_synced_height,
+            wallet_chain_tip,
+            wallet_sync_lag,
+            wallet_last_sync_timestamp,
+        ) = (true, true, true, None, None, None, None);
 
         HealthSubsystemStatus {
             zk_ready,
@@ -731,6 +758,10 @@ impl ApiContext {
             wallet_signer_ready,
             wallet_connected,
             wallet_key_cache_ready,
+            wallet_synced_height,
+            wallet_chain_tip,
+            wallet_sync_lag,
+            wallet_last_sync_timestamp,
         }
     }
 
@@ -1089,6 +1120,14 @@ struct HealthSubsystemStatus {
     wallet_signer_ready: bool,
     wallet_connected: bool,
     wallet_key_cache_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_synced_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_chain_tip: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_sync_lag: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_last_sync_timestamp: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -4389,6 +4428,10 @@ mod health_tests {
                 wallet_signer_ready: true,
                 wallet_connected: true,
                 wallet_key_cache_ready: true,
+                wallet_synced_height: None,
+                wallet_chain_tip: None,
+                wallet_sync_lag: None,
+                wallet_last_sync_timestamp: None,
             });
 
         let (status, Json(response)) = health_ready(State(context)).await;
@@ -4412,6 +4455,10 @@ mod health_tests {
                 wallet_signer_ready: true,
                 wallet_connected: true,
                 wallet_key_cache_ready: true,
+                wallet_synced_height: None,
+                wallet_chain_tip: None,
+                wallet_sync_lag: None,
+                wallet_last_sync_timestamp: None,
             });
 
         let (status, Json(response)) = health_ready(State(context)).await;
@@ -4435,6 +4482,10 @@ mod health_tests {
                 wallet_signer_ready: false,
                 wallet_connected: false,
                 wallet_key_cache_ready: false,
+                wallet_synced_height: None,
+                wallet_chain_tip: None,
+                wallet_sync_lag: None,
+                wallet_last_sync_timestamp: None,
             });
 
         let (status, Json(response)) = health_ready(State(context)).await;

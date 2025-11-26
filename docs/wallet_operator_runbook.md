@@ -161,8 +161,11 @@ longer list of RPC/CLI error codes, health checks, and diagnostic commands.
 **Health probes** – `/health/ready` now includes wallet-specific booleans:
 `wallet_signer_ready` (watch-only or signer failures), `wallet_connected`
 (runtime attached to a node), and `wallet_key_cache_ready` (keystore present).
-Alert on any `false` response and correlate with watcher logs or keystore
-mounts before restarting the runtime.
+When those three values are all `true`, the payload also exposes
+`wallet_synced_height`, `wallet_chain_tip`, `wallet_sync_lag`, and
+`wallet_last_sync_timestamp` so operators can confirm the daemon is caught up
+and quantify drift before accepting traffic. Alert on any `false` response and
+correlate with watcher logs or keystore mounts before restarting the runtime.
 
 **Log locations** – When running via `scripts/run_wallet_mode.sh`, STDOUT/ERR is
 the primary log stream. Override `RPP_WALLET_LOG_LEVEL` or pass
