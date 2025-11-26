@@ -15,6 +15,10 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   API.【F:tests/mempool/spam_recovery.rs†L63-L88】
 * `/status/node` exposes the aggregate pending transaction count, allowing dashboards to track the
   backlog as spam ebbs and flows.【F:tests/mempool/spam_recovery.rs†L41-L47】【F:tests/mempool/spam_recovery.rs†L110-L118】
+* Uptime-ready probes now submit tiny transactions (or observe mempool readiness) during consensus
+  stalls and drop `uptime_mempool_probe_success_ratio` to flag client-facing impact. The signal clears
+  once consensus resumes and probes succeed again, providing a canary that the mempool is healthy
+  before reopening traffic.【F:tools/alerts/validation.py†L120-L184】【F:tools/alerts/validation.py†L1887-L1969】【F:docs/operations/uptime.md†L37-L49】
 * Subscribe to the internal `WitnessProofs` gossip channel to confirm that successful submissions
   emit events containing the transaction hash and fee, which is useful when correlating accepted
   transactions with rate limit tuning.【F:tests/mempool/spam_recovery.rs†L31-L40】【F:tests/mempool/spam_recovery.rs†L96-L105】
