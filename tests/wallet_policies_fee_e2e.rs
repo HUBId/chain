@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use common::wallet::{wait_for, wait_for_status, WalletTestBuilder};
-use rpp_wallet::engine::fees::{FeeCongestionLevel, FeeEstimateSource, FeeError};
+use rpp_wallet::engine::fees::{FeeCongestionLevel, FeeError, FeeEstimateSource};
 use rpp_wallet::engine::EngineError;
 use rpp_wallet::indexer::scanner::SyncMode;
 use rpp_wallet::node_client::{BlockFeeSummary, MempoolInfo, NodeClientError, NodeRejectionHint};
@@ -184,9 +184,7 @@ async fn wallet_respects_fee_hints_and_policy_limits() -> Result<()> {
         .create_draft(recipient, spend_amount, Some(override_rate))
         .context("create override draft")?;
     assert_eq!(retry.fee_rate, override_rate);
-    let (_, retry_meta) = wallet
-        .sign_and_prove(&retry)
-        .context("sign retry draft")?;
+    let (_, retry_meta) = wallet.sign_and_prove(&retry).context("sign retry draft")?;
     assert_eq!(retry_meta.backend, meta.backend);
     wallet
         .broadcast(&retry)
@@ -274,13 +272,19 @@ async fn fee_estimates_scale_with_mempool_load_and_failures() -> Result<()> {
     let base_draft = wallet
         .create_draft(recipient.clone(), 50_000, None)
         .context("draft with light mempool load")?;
-    assert_eq!(base_draft.fee_rate, 4, "low congestion should keep base rate");
+    assert_eq!(
+        base_draft.fee_rate, 4,
+        "low congestion should keep base rate"
+    );
 
     let base_quote = wallet
         .latest_fee_quote()
         .expect("fee quote cached after base draft");
     match base_quote.source() {
-        FeeEstimateSource::Node { congestion, samples } => {
+        FeeEstimateSource::Node {
+            congestion,
+            samples,
+        } => {
             assert_eq!(*samples, 2);
             assert_eq!(*congestion, FeeCongestionLevel::Low);
         }
@@ -320,13 +324,19 @@ async fn fee_estimates_scale_with_mempool_load_and_failures() -> Result<()> {
     let surge_draft = wallet
         .create_draft(recipient.clone(), 60_000, None)
         .context("draft under high mempool load")?;
-    assert_eq!(surge_draft.fee_rate, 70, "high congestion should cap at max hint");
+    assert_eq!(
+        surge_draft.fee_rate, 70,
+        "high congestion should cap at max hint"
+    );
 
     let surge_quote = wallet
         .latest_fee_quote()
         .expect("fee quote cached after surge draft");
     match surge_quote.source() {
-        FeeEstimateSource::Node { congestion, samples } => {
+        FeeEstimateSource::Node {
+            congestion,
+            samples,
+        } => {
             assert_eq!(*samples, 3);
             assert_eq!(*congestion, FeeCongestionLevel::High);
         }
@@ -349,8 +359,7 @@ async fn fee_estimates_scale_with_mempool_load_and_failures() -> Result<()> {
         WalletError::Engine(EngineError::Fee(FeeError::Node(_)))
     ));
 
-    sync
-        .shutdown()
+    sync.shutdown()
         .await
         .context("shutdown wallet sync coordinator")?;
 

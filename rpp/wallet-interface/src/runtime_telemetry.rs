@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Wallet actions instrumented by runtime telemetry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -61,6 +62,44 @@ pub enum WalletActionResult {
     Error,
 }
 
+/// Signing mode exercised by the wallet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum WalletSignMode {
+    /// Online signing that runs proving and submission against the node.
+    Online,
+    /// Offline signing flows (e.g. hardware devices).
+    Offline,
+}
+
+impl WalletSignMode {
+    /// Return the string label used for telemetry dimensions.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WalletSignMode::Online => "online",
+            WalletSignMode::Offline => "offline",
+        }
+    }
+}
+
+/// Account category used while signing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum WalletAccountType {
+    /// Hot accounts backed by the local keystore.
+    Hot,
+    /// Accounts bound to external/hardware signers.
+    Hardware,
+}
+
+impl WalletAccountType {
+    /// Return the string label used for telemetry dimensions.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WalletAccountType::Hot => "hot",
+            WalletAccountType::Hardware => "hardware",
+        }
+    }
+}
+
 /// Runtime metrics hooks exposed to wallet-facing RPC handlers.
 pub trait RuntimeMetrics: Send + Sync {
     /// Record a wallet action outcome.
@@ -74,6 +113,25 @@ pub trait RuntimeMetrics: Send + Sync {
 
     /// Record a prover failure grouped by backend and error code.
     fn record_wallet_prover_failure(&self, backend: &str, code: &str);
+
+    /// Record signing latency grouped by mode, account type, backend, and outcome.
+    fn record_wallet_sign_latency(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        duration: Duration,
+        success: bool,
+    );
+
+    /// Increment signing failures grouped by mode, account type, backend, and error code.
+    fn record_wallet_sign_failure(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        code: &str,
+    );
 }
 
 /// No-op telemetry handle used when runtime metrics are unavailable.
@@ -88,6 +146,25 @@ impl RuntimeMetrics for NoopRuntimeMetrics {
     fn record_wallet_prover_witness_bytes(&self, _backend: &str, _bytes: u64) {}
 
     fn record_wallet_prover_failure(&self, _backend: &str, _code: &str) {}
+
+    fn record_wallet_sign_latency(
+        &self,
+        _mode: WalletSignMode,
+        _account_type: WalletAccountType,
+        _backend: &str,
+        _duration: Duration,
+        _success: bool,
+    ) {
+    }
+
+    fn record_wallet_sign_failure(
+        &self,
+        _mode: WalletSignMode,
+        _account_type: WalletAccountType,
+        _backend: &str,
+        _code: &str,
+    ) {
+    }
 }
 
 /// Shared handle type used by wallet RPC components.

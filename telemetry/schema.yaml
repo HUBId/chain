@@ -223,6 +223,18 @@ metrics:
     labels:
       - backend
       - code
+  - name: rpp.runtime.wallet.sign.latency_ms
+    labels:
+      - mode
+      - account_type
+      - backend
+      - result
+  - name: rpp.runtime.wallet.sign.failures
+    labels:
+      - mode
+      - account_type
+      - backend
+      - code
   - name: rpp.runtime.wallet.sync.wallet_height
     labels: []
   - name: rpp.runtime.wallet.sync.chain_tip_height

@@ -152,7 +152,9 @@ impl PruningMetrics {
             let estimate_ms = status
                 .estimated_time_remaining_ms
                 .map(|ms| ms as f64)
-                .or_else(|| compute_time_remaining_ms(processed, status.missing_heights.len(), duration));
+                .or_else(|| {
+                    compute_time_remaining_ms(processed, status.missing_heights.len(), duration)
+                });
 
             if let Some(estimate_ms) = estimate_ms {
                 let estimate_attrs = self.with_base_labels([KeyValue::new("reason", reason_attr)]);

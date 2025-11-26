@@ -14,9 +14,9 @@
       "title": "Pipeline Wallet Intake",
       "output": "docs/dashboards/pipeline_wallet_intake.json",
       "min_schema": 39,
-      "version": 1,
-      "version_tag": "v2024-09-25",
-      "sha256": "f7584db9b3540cbb0434f42f4cb6696853edf64c72ae85c6c1bafbcb81abb2f6"
+      "version": 2,
+      "version_tag": "v2024-11-05",
+      "sha256": "fd44edd32bc8d5cab1d8490259b94c242dc7e75e25243901916728efd9dd4f50"
     },
     {
       "uid": "pipeline-proof-validation",

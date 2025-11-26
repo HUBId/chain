@@ -71,6 +71,66 @@
           "placement": "bottom"
         }
       }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Signer latency (p95)",
+      "description": "Online/offline signing latency grouped by mode and account type.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, mode, account_type) (rate(rpp_runtime_wallet_sign_latency_ms_bucket[5m])))",
+          "legendFormat": "{{mode}}/{{account_type}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Signer failure rate", 
+      "description": "Signing failure rate by backend, mode, and account type.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (mode, account_type, backend) (rate(rpp_runtime_wallet_sign_failures_total[5m]))",
+          "legendFormat": "{{mode}}/{{account_type}}/{{backend}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
     }
   ]
 }

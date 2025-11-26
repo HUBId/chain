@@ -418,7 +418,12 @@ async fn run_worker(
 
                 node.update_pruning_status(status.clone());
 
-                metrics.record_cycle(cycle_reason, CycleOutcome::Success, elapsed, status.as_ref());
+                metrics.record_cycle(
+                    cycle_reason,
+                    CycleOutcome::Success,
+                    elapsed,
+                    status.as_ref(),
+                );
             }
             Err(err) => {
                 let error_label = classify_pruning_error(&err);

@@ -19,7 +19,9 @@ use parking_lot::Mutex;
 use super::exporter::{ExporterBuildOutcome, TelemetryExporterBuilder};
 use crate::config::TelemetryConfig;
 use rpp_wallet_interface::runtime_telemetry::RuntimeMetrics as WalletRuntimeMetrics;
-pub use rpp_wallet_interface::runtime_telemetry::{WalletAction, WalletActionResult};
+pub use rpp_wallet_interface::runtime_telemetry::{
+    WalletAccountType, WalletAction, WalletActionResult, WalletSignMode,
+};
 
 const METER_NAME: &str = "rpp-runtime";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
@@ -89,6 +91,10 @@ pub struct RuntimeMetrics {
     wallet_prover_backend_total: Counter<u64>,
     #[cfg(feature = "wallet-integration")]
     wallet_prover_failures: Counter<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sign_latency: Histogram<f64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sign_failures: Counter<u64>,
     #[cfg(feature = "wallet-integration")]
     wallet_rescan_duration: Histogram<f64>,
     #[cfg(feature = "wallet-integration")]
@@ -202,6 +208,20 @@ impl RuntimeMetrics {
             wallet_prover_failures: meter
                 .u64_counter("rpp.runtime.wallet.prover.failures")
                 .with_description("Total wallet prover failures grouped by error code")
+                .with_unit("1")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sign_latency: meter
+                .f64_histogram("rpp.runtime.wallet.sign.latency_ms")
+                .with_description(
+                    "Latency of wallet signing operations grouped by mode and account type",
+                )
+                .with_unit("ms")
+                .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sign_failures: meter
+                .u64_counter("rpp.runtime.wallet.sign.failures")
+                .with_description("Total wallet signing failures grouped by mode and error code")
                 .with_unit("1")
                 .build(),
             #[cfg(feature = "wallet-integration")]
@@ -544,6 +564,67 @@ impl RuntimeMetrics {
     #[allow(unused_variables)]
     pub fn record_wallet_prover_failure(&self, _backend: &str, _code: &str) {}
 
+    /// Record wallet signing latency grouped by mode, account type, backend, and result.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_sign_latency(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        duration: Duration,
+        success: bool,
+    ) {
+        let attributes = [
+            KeyValue::new("mode", mode.as_str().to_string()),
+            KeyValue::new("account_type", account_type.as_str().to_string()),
+            KeyValue::new("backend", backend.to_string()),
+            KeyValue::new("result", if success { "ok" } else { "err" }),
+        ];
+        self.wallet_sign_latency
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_sign_latency(
+        &self,
+        _mode: WalletSignMode,
+        _account_type: WalletAccountType,
+        _backend: &str,
+        _duration: Duration,
+        _success: bool,
+    ) {
+    }
+
+    /// Record wallet signing failures grouped by mode, account type, backend, and code.
+    #[cfg(feature = "wallet-integration")]
+    pub fn record_wallet_sign_failure(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        code: &str,
+    ) {
+        let attributes = [
+            KeyValue::new("mode", mode.as_str().to_string()),
+            KeyValue::new("account_type", account_type.as_str().to_string()),
+            KeyValue::new("backend", backend.to_string()),
+            KeyValue::new("code", code.to_string()),
+        ];
+        self.wallet_sign_failures.add(1, &attributes);
+    }
+
+    #[cfg(not(feature = "wallet-integration"))]
+    #[allow(unused_variables)]
+    pub fn record_wallet_sign_failure(
+        &self,
+        _mode: WalletSignMode,
+        _account_type: WalletAccountType,
+        _backend: &str,
+        _code: &str,
+    ) {
+    }
+
     /// Record the time taken to schedule a wallet rescan along with its outcome.
     #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_rescan_duration(&self, scheduled: bool, duration: Duration) {
@@ -883,6 +964,34 @@ impl WalletRuntimeMetrics for RuntimeMetrics {
 
     fn record_wallet_prover_failure(&self, backend: &str, code: &str) {
         RuntimeMetrics::record_wallet_prover_failure(self, backend, code);
+    }
+
+    fn record_wallet_sign_latency(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        duration: Duration,
+        success: bool,
+    ) {
+        RuntimeMetrics::record_wallet_sign_latency(
+            self,
+            mode,
+            account_type,
+            backend,
+            duration,
+            success,
+        );
+    }
+
+    fn record_wallet_sign_failure(
+        &self,
+        mode: WalletSignMode,
+        account_type: WalletAccountType,
+        backend: &str,
+        code: &str,
+    ) {
+        RuntimeMetrics::record_wallet_sign_failure(self, mode, account_type, backend, code);
     }
 }
 
@@ -1997,6 +2106,19 @@ mod tests {
         metrics.record_wallet_prover_witness_bytes("mock", 1024);
         metrics.record_wallet_prover_backend("mock", true);
         metrics.record_wallet_prover_failure("mock", "PROVER_INTERNAL");
+        metrics.record_wallet_sign_latency(
+            WalletSignMode::Online,
+            WalletAccountType::Hot,
+            "mock",
+            Duration::from_millis(28),
+            true,
+        );
+        metrics.record_wallet_sign_failure(
+            WalletSignMode::Offline,
+            WalletAccountType::Hardware,
+            "ledger",
+            "HW_REJECTED",
+        );
         metrics.record_wallet_rescan_duration(true, Duration::from_millis(23));
         metrics.record_wallet_broadcast_rejected("NODE_REJECTED");
         metrics.record_wal_flush_duration(WalFlushOutcome::Success, Duration::from_millis(30));
@@ -2087,6 +2209,14 @@ mod tests {
         );
         assert_eq!(
             seen.get("rpp.runtime.wallet.prover.failures"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.sign.latency_ms"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.wallet.sign.failures"),
             Some(&"1".to_string())
         );
         assert_eq!(

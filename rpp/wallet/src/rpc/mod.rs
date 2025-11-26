@@ -87,7 +87,8 @@ use crate::wallet::{
 #[cfg(feature = "wallet_zsi")]
 use crate::wallet::{ZsiBinding, ZsiProofRequest, ZsiVerifyRequest};
 use rpp_wallet_interface::runtime_telemetry::{
-    noop_runtime_metrics, RuntimeMetricsHandle, WalletAction, WalletActionResult,
+    noop_runtime_metrics, RuntimeMetricsHandle, WalletAccountType, WalletAction,
+    WalletActionResult, WalletSignMode,
 };
 use tracing::info;
 use zeroize::Zeroizing;
@@ -833,10 +834,27 @@ impl WalletRpcRouter {
 
     #[cfg(feature = "wallet_hw")]
     fn hw_sign(&self, params: HardwareSignParams) -> Result<Value, RouterError> {
+        let sign_mode = WalletSignMode::Offline;
+        let account_type = WalletAccountType::Hardware;
+        let backend = params.fingerprint.as_str();
+        let started = Instant::now();
         let payload = match hex_decode(&params.payload) {
             Ok(payload) => payload,
             Err(err) => {
                 self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Error);
+                self.metrics.record_wallet_sign_latency(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    started.elapsed(),
+                    false,
+                );
+                self.metrics.record_wallet_sign_failure(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    WalletRpcErrorCode::InvalidParams.as_str().as_ref(),
+                );
                 return Err(RouterError::InvalidParams(format!(
                     "invalid payload hex: {err}"
                 )));
@@ -847,6 +865,13 @@ impl WalletRpcRouter {
         match self.wallet_call(self.wallet.hardware_sign(request)) {
             Ok(signature) => {
                 self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Success);
+                self.metrics.record_wallet_sign_latency(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    started.elapsed(),
+                    true,
+                );
                 to_value(HardwareSignResponse {
                     fingerprint: signature.fingerprint,
                     signature: hex_encode(signature.signature),
@@ -856,6 +881,22 @@ impl WalletRpcRouter {
             }
             Err(error) => {
                 self.record_action(WalletTelemetryAction::HwSign, TelemetryOutcome::Error);
+                let duration = started.elapsed();
+                self.metrics.record_wallet_sign_latency(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    duration,
+                    false,
+                );
+                if let Some(code) = error.telemetry_code() {
+                    self.metrics.record_wallet_sign_failure(
+                        sign_mode,
+                        account_type,
+                        backend,
+                        code.as_str().as_ref(),
+                    );
+                }
                 Err(error)
             }
         }
@@ -1487,17 +1528,34 @@ impl WalletRpcRouter {
             .get_mut(&draft_id)
             .ok_or_else(|| RouterError::MissingDraft(draft_id.clone()))?;
         let backend = self.wallet.prover_identity().backend;
+        let sign_mode = WalletSignMode::Online;
+        let account_type = WalletAccountType::Hot;
         let started = Instant::now();
         let (output, meta) = match self.wallet.sign_and_prove(&state.draft) {
             Ok(value) => value,
             Err(error) => {
                 let duration = started.elapsed();
                 let code = wallet_error_code(&error);
+                self.metrics.record_wallet_sign_latency(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    duration,
+                    false,
+                );
+                self.metrics.record_wallet_sign_failure(
+                    sign_mode,
+                    account_type,
+                    backend,
+                    code.as_str(),
+                );
                 self.record_prover_failure(backend, duration, code);
                 return Err(RouterError::Wallet(error));
             }
         };
         let duration = started.elapsed();
+        self.metrics
+            .record_wallet_sign_latency(sign_mode, account_type, backend, duration, true);
         let proof_required = self.wallet.prover_config().require_proof;
         let proof_present = output.proof().is_some();
         self.record_prover_success(backend, duration, meta.witness_bytes as u64, proof_present);
@@ -2662,6 +2720,7 @@ mod tests {
     use crate::runtime::lifecycle::{EmbeddedNodeCommand, EmbeddedNodeLifecycle};
     use crate::wallet::WalletError;
     use rpp_wallet_interface::runtime_config::WalletNodeRuntimeConfig;
+    use rpp_wallet_interface::runtime_telemetry::RuntimeMetrics as WalletRuntimeMetrics;
     use serde_json::json;
     use std::borrow::Cow;
     use std::collections::HashMap;
@@ -2670,8 +2729,56 @@ mod tests {
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
-    fn router_fixture(
+    #[derive(Default)]
+    struct RecordingRuntimeMetrics {
+        sign_latencies: Mutex<Vec<(WalletSignMode, WalletAccountType, String, bool)>>,
+        sign_failures: Mutex<Vec<(WalletSignMode, WalletAccountType, String, String)>>,
+    }
+
+    impl WalletRuntimeMetrics for RecordingRuntimeMetrics {
+        fn record_wallet_action(&self, _action: WalletAction, _outcome: WalletActionResult) {}
+
+        fn record_wallet_prover_backend(&self, _backend: &str, _success: bool) {}
+
+        fn record_wallet_prover_witness_bytes(&self, _backend: &str, _bytes: u64) {}
+
+        fn record_wallet_prover_failure(&self, _backend: &str, _code: &str) {}
+
+        fn record_wallet_sign_latency(
+            &self,
+            mode: WalletSignMode,
+            account_type: WalletAccountType,
+            backend: &str,
+            _duration: Duration,
+            success: bool,
+        ) {
+            self.sign_latencies.lock().expect("sign latencies").push((
+                mode,
+                account_type,
+                backend.to_string(),
+                success,
+            ));
+        }
+
+        fn record_wallet_sign_failure(
+            &self,
+            mode: WalletSignMode,
+            account_type: WalletAccountType,
+            backend: &str,
+            code: &str,
+        ) {
+            self.sign_failures.lock().expect("sign failures").push((
+                mode,
+                account_type,
+                backend.to_string(),
+                code.to_string(),
+            ));
+        }
+    }
+
+    fn router_fixture_with_metrics(
         sync: Option<Arc<dyn SyncHandle>>,
+        metrics: RuntimeMetricsHandle,
     ) -> (WalletRpcRouter, Arc<WalletStore>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
@@ -2694,12 +2801,17 @@ mod tests {
             Arc::clone(&telemetry),
         )
         .expect("wallet");
-        let metrics = noop_runtime_metrics();
         (
             WalletRpcRouter::new(Arc::new(wallet), sync, metrics, None),
             store,
             dir,
         )
+    }
+
+    fn router_fixture(
+        sync: Option<Arc<dyn SyncHandle>>,
+    ) -> (WalletRpcRouter, Arc<WalletStore>, tempfile::TempDir) {
+        router_fixture_with_metrics(sync, noop_runtime_metrics())
     }
 
     fn seed_store_with_utxo(store: &Arc<WalletStore>, value: u128) {
@@ -2721,8 +2833,43 @@ mod tests {
         router
     }
 
+    #[test]
+    fn sign_draft_records_signing_metrics_under_load() {
+        let metrics = Arc::new(RecordingRuntimeMetrics::default());
+        let handle: RuntimeMetricsHandle = metrics.clone();
+        let (router, store, _dir) = router_fixture_with_metrics(None, handle);
+        seed_store_with_utxo(&store, 200_000);
+
+        for idx in 0..5 {
+            let bundle = router
+                .wallet
+                .create_draft(format!("wallet.recipient.{idx}"), 20_000, None)
+                .expect("draft created");
+            let draft_id = router.store_draft(bundle).expect("draft id");
+            router.sign_draft(draft_id).expect("signed draft");
+        }
+
+        let latencies = metrics.sign_latencies.lock().expect("latencies");
+        assert!(latencies.len() >= 5);
+        let backend = &latencies[0].2;
+        assert!(latencies.iter().all(|entry| {
+            entry.0 == WalletSignMode::Online
+                && entry.1 == WalletAccountType::Hot
+                && &entry.2 == backend
+                && entry.3
+        }));
+        assert!(metrics.sign_failures.lock().expect("failures").is_empty());
+    }
+
     #[cfg(feature = "wallet_hw")]
     fn hardware_router() -> (WalletRpcRouter, MockHardwareSigner, tempfile::TempDir) {
+        hardware_router_with_metrics(noop_runtime_metrics())
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    fn hardware_router_with_metrics(
+        metrics: RuntimeMetricsHandle,
+    ) -> (WalletRpcRouter, MockHardwareSigner, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let store = Arc::new(WalletStore::open(dir.path()).expect("store"));
         let keystore = dir.path().join("keystore.toml");
@@ -2754,12 +2901,62 @@ mod tests {
         wallet
             .configure_hardware_signer(Some(Arc::new(signer.clone())))
             .expect("configure signer");
-        let metrics = noop_runtime_metrics();
         (
             WalletRpcRouter::new(Arc::new(wallet), None, metrics, None),
             signer,
             dir,
         )
+    }
+
+    #[cfg(feature = "wallet_hw")]
+    #[test]
+    fn hw_sign_records_latency_and_failures() {
+        let metrics = Arc::new(RecordingRuntimeMetrics::default());
+        let handle: RuntimeMetricsHandle = metrics.clone();
+        let (router, signer, _dir) = hardware_router_with_metrics(handle);
+
+        for index in 0..3 {
+            signer.push_sign_response(Ok(HardwareSignature::new(
+                "deadbeef",
+                DerivationPath::new(0, false, index),
+                [0x11u8; 64],
+                [0x22u8; 33],
+            )));
+            let request = HardwareSignParams {
+                fingerprint: "deadbeef".into(),
+                path: DerivationPathDto {
+                    account: 0,
+                    change: false,
+                    index,
+                },
+                payload: hex_encode([0xAAu8; 32]),
+            };
+            router.hw_sign(request).expect("signed via hardware");
+        }
+
+        signer.push_sign_response(Err(HardwareSignerError::rejected("user cancelled")));
+        let failure_request = HardwareSignParams {
+            fingerprint: "deadbeef".into(),
+            path: DerivationPathDto {
+                account: 0,
+                change: false,
+                index: 3,
+            },
+            payload: hex_encode([0xBBu8; 16]),
+        };
+        let _ = router
+            .hw_sign(failure_request)
+            .expect_err("rejection propagated");
+
+        let latencies = metrics.sign_latencies.lock().expect("latencies");
+        assert_eq!(latencies.len(), 4);
+        assert!(latencies.iter().all(|entry| {
+            entry.0 == WalletSignMode::Offline && entry.1 == WalletAccountType::Hardware
+        }));
+        let failures = metrics.sign_failures.lock().expect("failures");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].2, "deadbeef");
+        assert_eq!(failures[0].3, "HW_REJECTED");
     }
 
     fn build_watch_only_router() -> WalletRpcRouter {
