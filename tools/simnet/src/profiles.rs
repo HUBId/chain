@@ -20,6 +20,8 @@ pub enum SimnetProfile {
     ReorgStark,
     #[value(alias = "canary-rolling", alias = "canary_rolling")]
     CanaryRolling,
+    #[value(alias = "leader-rotation", alias = "leader_rotation")]
+    LeaderRotationProverLoad,
 }
 
 impl SimnetProfile {
@@ -33,6 +35,7 @@ impl SimnetProfile {
             SimnetProfile::SmallWorld,
             SimnetProfile::ReorgStark,
             SimnetProfile::CanaryRolling,
+            SimnetProfile::LeaderRotationProverLoad,
         ]
     }
 
@@ -46,6 +49,7 @@ impl SimnetProfile {
             SimnetProfile::SmallWorld => "small-world",
             SimnetProfile::ReorgStark => "reorg-stark",
             SimnetProfile::CanaryRolling => "canary-rolling",
+            SimnetProfile::LeaderRotationProverLoad => "leader-rotation-prover-load",
         }
     }
 
@@ -59,6 +63,8 @@ impl SimnetProfile {
             SimnetProfile::SmallWorld => "tools/simnet/scenarios/small_world_smoke.ron",
             SimnetProfile::ReorgStark => "tools/simnet/scenarios/consensus_reorg_stark.ron",
             SimnetProfile::CanaryRolling => "tools/simnet/scenarios/canary_rolling_restart.ron",
+            SimnetProfile::LeaderRotationProverLoad =>
+                "tools/simnet/scenarios/leader_rotation_prover_load.ron",
         })
     }
 }
@@ -119,6 +125,11 @@ mod tests {
                 SimnetProfile::CanaryRolling,
                 "tools/simnet/scenarios/canary_rolling_restart.ron",
                 "canary-rolling",
+            ),
+            (
+                SimnetProfile::LeaderRotationProverLoad,
+                "tools/simnet/scenarios/leader_rotation_prover_load.ron",
+                "leader-rotation-prover-load",
             ),
         ];
 

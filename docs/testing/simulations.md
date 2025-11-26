@@ -124,6 +124,7 @@ Nachvollziehbarkeit herstellen können.【F:scripts/analyze_simnet.py†L120-L20
 | [`snapshot_rebuild.ron`](../../tools/simnet/scenarios/snapshot_rebuild.ron) | Repliziert Partition-Restarts und Snapshot-Neuaufbau via Light-Client-Sync. | State Sync (`#state-sync`)|
 | [`gossip_backpressure.ron`](../../tools/simnet/scenarios/gossip_backpressure.ron) | Wallet-Tracker-Backpressure und Admission-Control im Gossip-Netzwerk. | Networking (`#p2p`)|
 | [`snapshot_partition.ron`](../../tools/simnet/scenarios/snapshot_partition.ron) | Snapshot-Streaming unter Latenz/Packet-Loss mit Resume- und Retry-Metriken. | State Sync (`#state-sync`)|
+| [`leader_rotation_prover_load.ron`](../../tools/simnet/scenarios/leader_rotation_prover_load.ron) | Rapid leader rotation with prover saturation to validate slot coverage, per-slot proving latency, and timetoke replay compliance. | Consensus/Proofs (`#consensus-ztk`)|
 
 Die Owner-Channels sind im internen Slack verankert; bei Ausreißern oder neuen
 Szenarioanforderungen bitte direkt dort eskalieren.
@@ -141,6 +142,7 @@ Szenarioanforderungen bitte direkt dort eskalieren.
   Prover/Verifier, `tamper_vrf`/`tamper_quorum` zählen erwartete Ablehnungen.
   Unerwartete Akzeptanzen (`unexpected_accepts > 0`) gelten als Blocker und
   lösen einen roten Status in Nightly aus.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L120-L200】
+* **Leader rotation under prover load:** `leader_rotation_prover_load` verfolgt schnelle Leader-Wechsel bei gleichzeitigem Prover-Stress. Erwartet werden lückenlose Slot-Abdeckung (keine steigenden `consensus:missed_slots:5m`-Werte), fortschreitende Finalität sowie p95 Konsensus-Prover-Latenzen <5 s pro Slot. Die CSV-Zusammenfassung `leader_rotation_prover_load_consensus.csv` erleichtert das Ablesen der Slot-Latenzen, während `scripts/analyze_simnet.py` den Lauf als fehlerhaft markiert, falls Slots verpasst oder Tamper-Ablehnungen ausbleiben.【F:tools/simnet/scenarios/leader_rotation_prover_load.ron†L1-L24】【F:scenarios/leader_rotation_prover_load.toml†L1-L78】【F:scripts/analyze_simnet.py†L120-L200】
 
 ## CI- und Nightly-Integration
 
@@ -153,7 +155,11 @@ Szenarioanforderungen bitte direkt dort eskalieren.
 * **Nightly (`.github/workflows/nightly.yml`):** Neben dem bestehenden
   `simnet`-Smoke-Test läuft der Job `simnet-regression`, der das Regressionstool
   täglich um 01:30 UTC mit Produktionsflaggen anstößt und die Ergebnisse als Tarball
-  archiviert.【F:.github/workflows/nightly.yml†L1-L120】 Beide Workflows schlagen fehl,
+  archiviert.【F:.github/workflows/nightly.yml†L1-L120】 Der neue Job
+  `simnet-leader-rotation` startet
+  [`leader_rotation_prover_load.ron`](../../tools/simnet/scenarios/leader_rotation_prover_load.ron)
+  mit Produktions-Prover-Flags, wertet die JSON-/CSV-Metriken aus und veröffentlicht
+  ein Artefakt für Operator:innen.【F:.github/workflows/nightly.yml†L1179-L1218】 Beide Workflows schlagen fehl,
   sobald ein Einzelszenario unerwartet scheitert.
 * **Snapshot-Partition-Drill:** Der Nightly-Job `snapshot-partition` ruft das
   Szenario [`snapshot_partition.ron`](../../tools/simnet/scenarios/snapshot_partition.ron)

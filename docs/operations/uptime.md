@@ -65,6 +65,25 @@ run to confirm alerts fire and then clear:
   `UptimeObservationGap*`, and `TimetokeAccrualStall*` alerts fire on sustained
   drops.【F:tools/alerts/validation.py†L852-L1064】【F:tools/alerts/validation.py†L1318-L1428】【F:tools/alerts/tests/test_alert_validation.py†L19-L88】
 
+## Missed slots under prover load
+
+Nightly simnet now injects rapid leader rotation while saturating the prover to
+surface slot coverage regressions early. The liveness rules expose a derived
+`consensus:missed_slots:5m` series to make the gap between scheduled slots and
+produced blocks explicit. When the warning/critical pages trip:
+
+1. Correlate `consensus:missed_slots:5m` with `consensus:block_production_ratio:5m`
+   and `finality_lag_slots` to confirm the deficit is widespread rather than tied
+   to a single partition.
+2. Inspect per-slot proving latency via `rpp.runtime.proof.generation.duration`
+   filtered to `proof_kind="consensus"`; sustained p95 > 5s across slots signals
+   queue exhaustion.
+3. Verify timetoke replay stays healthy (`timetoke_replay_success_total` vs
+   `timetoke_replay_failure_total`) so proposer rotation continues to meet reward
+   SLOs while load is high.
+4. Quarantine the noisiest leaders, drain prover queues, and resume rotation
+   once the missed slot counter trends back below two over a 10m window.
+
 ### Mempool-ready probes
 
 Lightweight uptime probes now attempt to submit or observe tiny transactions
