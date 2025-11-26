@@ -1,0 +1,31 @@
+{
+  "name": "mixed-backend-interop",
+  "description": "Mesh mixed prover/verifier backends to validate finality, mempool coherence, and proof interoperability",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info,simnet=info,rpp_chain::proofs=debug,rpp_chain::mempool=debug",
+    "SIMNET_BACKEND_ATTRIBUTION": "plonky3,stark,groth16"
+  },
+  "resources": {
+    "cpus": 12,
+    "memory_gb": 24
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/mixed_backend_interop.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/mixed_backend_interop.json"
+  },
+  "consensus": {
+    "runs": 72,
+    "validators": 24,
+    "witness_commitments": 144,
+    "security_bits": 128,
+    "use_gpu": false,
+    "seed": 202511,
+    "tamper": { "vrf": true, "quorum_roots": true, "every_n": 8 },
+    "summary_path": "summaries/mixed_backend_interop_consensus.json",
+    "csv_path": "summaries/mixed_backend_interop_consensus.csv"
+  }
+}

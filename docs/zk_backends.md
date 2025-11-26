@@ -7,6 +7,21 @@
 > [RPP vendor refresh procedure](./operations/rpp_vendor_update.md),
 > [Incident response runbook](./operations/incidents.md)
 
+## Backend-Interoperabilität im Simnet
+
+- Das Simnet-Profil `mixed-backend-interop` kombiniert STWO-, Plonky3- und
+  Groth16-Labelsets in einer Small-World-Topologie, erzwingt Finalitäts- und
+  Mempool-Kohärenz trotz Partition, Churn und byzantinischem Spam und schreibt
+  JSON/CSV-Summaries mit Backend-Attribution (`SIMNET_BACKEND_ATTRIBUTION`).【F:scenarios/mixed_backend_interop.toml†L1-L78】【F:tools/simnet/scenarios/mixed_backend_interop.ron†L1-L32】
+- Nightly-CI führt das Profil im Job `simnet-mixed-backend` mit dem
+  Produktions-Prover und aktivierter Plonky3-Verifier-Implementierung aus,
+  bündelt Logs/Summaries unter
+  `target/simnet/mixed-backend-interop-nightly/` und lädt das Archiv als
+  `simnet-mixed-backend-interop` hoch.【F:.github/workflows/nightly.yml†L120-L155】
+- GPU-Proving und Multi-Prover-Failover sind im Profil bewusst deaktiviert; für
+  GPU/L2-Skalierungsfragen gelten weiterhin die separaten `zk-load-harness`-
+  und `uptime`-Drills.
+
 ## rpp-stark (stable)
 
 ### Aktivierung

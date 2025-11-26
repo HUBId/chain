@@ -1,0 +1,79 @@
+[sim]
+seed = 7771
+# Mixed-backend mesh to exercise consensus/finality and mempool coherence
+# across verifier/prover combinations
+duration_ms = 72000
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.17
+
+[regions]
+assignments = [
+  "STWO", "STWO", "STWO", "STWO", "STWO", "STWO",
+  "PLONKY3", "PLONKY3", "PLONKY3", "PLONKY3", "PLONKY3", "PLONKY3",
+  "GROTH16", "GROTH16", "GROTH16", "GROTH16", "GROTH16", "GROTH16",
+  "MIXED", "MIXED", "MIXED", "MIXED", "MIXED", "MIXED",
+]
+
+[links]
+default = { delay_ms = 28, jitter_ms = 7, loss = 0.006 }
+STWO-PLONKY3 = { delay_ms = 34, jitter_ms = 9, loss = 0.009 }
+STWO-GROTH16 = { delay_ms = 44, jitter_ms = 11, loss = 0.012 }
+PLONKY3-GROTH16 = { delay_ms = 52, jitter_ms = 14, loss = 0.016 }
+MIXED-STWO = { delay_ms = 30, jitter_ms = 8, loss = 0.008 }
+MIXED-PLONKY3 = { delay_ms = 38, jitter_ms = 10, loss = 0.011 }
+MIXED-GROTH16 = { delay_ms = 48, jitter_ms = 12, loss = 0.014 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 10, jitter_ms = 4 }
+untrusted = { extra_delay_ms = 26, jitter_ms = 10 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.1 }
+
+[traffic.tx.payload]
+min_bytes = 640
+max_bytes = 4096
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 12000
+model = "poisson"
+lambda_per_sec = 22.0
+
+[[traffic.tx.phases]]
+name = "interop-burst"
+duration_ms = 28000
+model = "on_off_bursty"
+on_lambda_per_sec = 44.0
+on_duration_ms = 3600
+off_duration_ms = 900
+
+[[traffic.tx.phases]]
+name = "finality-drain"
+duration_ms = 32000
+model = "poisson"
+lambda_per_sec = 16.0
+
+[faults.partition]
+start_ms = 18000
+duration_ms = 9000
+group_a = "STWO"
+group_b = "GROTH16"
+
+[faults.churn]
+start_ms = 36000
+rate_per_min = 18.0
+restart_after_ms = 2600
+
+[faults.byzantine]
+start_ms = 42000
+spam_factor = 2
+publishers = [1, 7, 13]
+
+[metrics]
+json = "target/simnet/mixed-backend-interop/summaries/mixed_backend_interop.json"
+csv = "target/simnet/mixed-backend-interop/summaries/mixed_backend_interop.csv"

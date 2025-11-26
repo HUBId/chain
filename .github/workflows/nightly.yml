@@ -1064,6 +1064,43 @@ EOF
           name: simnet-rpp-stark-nightly
           path: simnet-rpp-stark-artifacts.tar.gz
 
+  simnet-mixed-backend:
+    name: Simnet mixed backend interoperability
+    runs-on: ubuntu-latest
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run mixed backend scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/mixed-backend-interop-nightly
+          cargo xtask simnet --profile mixed-backend-interop --artifacts-dir target/simnet/mixed-backend-interop-nightly
+
+      - name: Analyze mixed backend summaries
+        run: |
+          set -euo pipefail
+          python3 scripts/analyze_simnet.py \
+            target/simnet/mixed-backend-interop-nightly/summaries/mixed_backend_interop.json \
+            target/simnet/mixed-backend-interop-nightly/summaries/mixed_backend_interop_consensus.json
+
+      - name: Package artifacts
+        run: |
+          tar -czf simnet-mixed-backend-interop.tar.gz -C target/simnet mixed-backend-interop-nightly
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-mixed-backend-interop
+          path: simnet-mixed-backend-interop.tar.gz
+
   simnet-regression:
     name: Simnet regression (prod, plonky3)
     runs-on: ubuntu-latest

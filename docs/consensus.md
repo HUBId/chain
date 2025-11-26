@@ -185,3 +185,17 @@ tip height stalls), capture `rpp-node` logs with `rpp.consensus` and
 slashing_events`, and rerun the simnet scenario with `--keep-alive` to inspect
 the intermediate proof bundles before engaging the incident runbook.
 
+## Mixed-backend finality and mempool coherence
+
+The `mixed-backend-interop` simnet profile blends STWO-, Plonky3-, Groth16-,
+and hybrid-labelled validators on a small-world mesh to ensure finality and
+mempool coherence stay aligned while consensus proofs flow across backend
+boundaries. Traffic ramps through bursty and steady phases, injects a
+STWO/Groth16 partition, and replays churn/Byzantine spam so resume latency and
+duplicate suppression are reflected in the summaries. The RON wrapper enables
+`SIMNET_BACKEND_ATTRIBUTION` logging alongside detailed consensus CSV summaries,
+helping post-mortems tie failures to specific backend mixes.【F:scenarios/mixed_backend_interop.toml†L1-L78】【F:tools/simnet/scenarios/mixed_backend_interop.ron†L1-L32】 Nightly CI runs the
+profile via the dedicated `simnet-mixed-backend` job, uploads the annotated
+summaries under `target/simnet/mixed-backend-interop-nightly/`, and keeps the
+artifacts available for regression triage.【F:.github/workflows/nightly.yml†L120-L155】
+
