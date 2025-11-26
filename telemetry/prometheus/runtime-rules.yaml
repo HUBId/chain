@@ -199,6 +199,23 @@ groups:
             node joins and that gossiped observations reach the reputation manager.
         runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#alerts
 
+  - name: wallet-prover-health
+    interval: 30s
+    rules:
+      - record: wallet:prover_queue_depth:max:10m
+        expr: max_over_time(wallet_prover_queue_depth[10m])
+        labels:
+          component: wallet
+
+      - record: wallet:prover_job_latency:p95_seconds:10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(rpp_runtime_wallet_prover_job_duration_ms_bucket[10m])) by (le, backend, environment)
+          ) / 1000
+        labels:
+          component: wallet
+
       - alert: UptimeObservationGapCritical
         expr: |
           max_over_time(uptime_observation_age_seconds[5m])
