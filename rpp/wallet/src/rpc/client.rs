@@ -24,7 +24,7 @@ use super::dto::{
     SecurityCertificateUploadResponse, SecurityMtlsUpdateParams, SecurityRemoveParams,
     SecuritySnapshotResponse, SetCosignersParams, SetCosignersResponse, SetMultisigScopeParams,
     SetMultisigScopeResponse, SetPolicyParams, SetPolicyResponse, SignTxParams, SignTxResponse,
-    SyncStatusResponse, TelemetryCountersResponse, UpdateAddressMetadataParams,
+    SyncLagResponse, SyncStatusResponse, TelemetryCountersResponse, UpdateAddressMetadataParams,
     UpdateAddressMetadataResponse, WatchOnlyEnableParams, WatchOnlyStatusResponse, ZsiBindResponse,
     ZsiDeleteParams, ZsiDeleteResponse, ZsiListResponse, ZsiProofParams, ZsiProveResponse,
     ZsiVerifyParams, ZsiVerifyResponse, JSONRPC_VERSION,
@@ -532,6 +532,11 @@ impl WalletRpcClient {
     /// Fetches the latest sync status snapshot.
     pub async fn sync_status(&self) -> Result<SyncStatusResponse, WalletRpcClientError> {
         self.call("sync_status", Option::<Value>::None).await
+    }
+
+    /// Returns lag information for the wallet and tracked addresses.
+    pub async fn sync_lag(&self) -> Result<SyncLagResponse, WalletRpcClientError> {
+        self.call("sync.lag", Option::<Value>::None).await
     }
 
     /// Schedules a wallet rescan using the provided parameters.

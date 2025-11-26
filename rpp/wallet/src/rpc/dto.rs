@@ -131,6 +131,7 @@ impl From<&AddressEntry> for AddressMetadataDto {
             label: entry.label.clone(),
             note: entry.note.clone(),
             first_seen_height: entry.first_seen_height,
+            last_synced_height: entry.last_synced_height,
         }
     }
 }
@@ -275,6 +276,7 @@ mod tests {
             label: Some("primary".to_string()),
             note: Some("note".to_string()),
             first_seen_height: Some(5),
+            last_synced_height: Some(12),
         };
         roundtrip(&dto);
     }
@@ -289,6 +291,7 @@ mod tests {
             label: None,
             note: None,
             first_seen_height: None,
+            last_synced_height: None,
         };
         let response = ListAddressesResponse {
             addresses: vec![dto],
@@ -505,6 +508,7 @@ mod tests {
             latest_height: Some(12),
             current_height: Some(8),
             target_height: Some(12),
+            lag_blocks: Some(4),
             scanned_scripthashes: Some(4),
             discovered_transactions: Some(2),
             pending_ranges: vec![(10, 12)],

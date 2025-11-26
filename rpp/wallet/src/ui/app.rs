@@ -974,6 +974,7 @@ mod tests {
             latest_height: Some(42),
             current_height: None,
             target_height: None,
+            lag_blocks: None,
             scanned_scripthashes: None,
             discovered_transactions: None,
             pending_ranges: Vec::new(),
