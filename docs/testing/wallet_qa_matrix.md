@@ -19,7 +19,7 @@ The wallet nightly workflow (`.github/workflows/wallet-nightly.yml`) exercises a
 | --- | --- | --- |
 | Backup export/import fidelity | `tests/wallet_backup_recovery_e2e.rs` | `wallet-e2e` (Linux + macOS) |
 | Watch-only ledger synchronization | `tests/wallet_watch_only_e2e.rs` | `wallet-e2e` (Linux + Windows) |
-| Policy and fee recovery | `tests/wallet_policies_fee_e2e.rs` | `wallet-e2e` (Linux full feature row) |
+| Policy and fee recovery (including mempool-driven fee scaling and estimation failures) | `tests/wallet_policies_fee_e2e.rs` | `wallet-e2e` (Linux full feature row) |
 | RBAC + mutual TLS flows | `tests/wallet_rbac_mtls_e2e.rs` | `wallet-e2e` (Linux full feature row) |
 | Pending lock durability | `tests/wallet_pending_locks_e2e.rs` | `wallet-e2e` (Linux watch row) + `wallet-quarantine` |
 | Workflow snapshot regression | `tests/wallet_workflow_snapshot.rs` | `wallet-e2e` (Windows) + `wallet-quarantine` |

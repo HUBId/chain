@@ -419,6 +419,7 @@ struct NodeState {
     submissions: Vec<SubmittedDraft>,
     raw_submissions: Vec<Vec<u8>>,
     next_error: Option<NodeClientError>,
+    fee_estimate_error: Option<NodeClientError>,
     fee_estimate: u64,
     mempool_info: MempoolInfo,
     recent_blocks: Vec<BlockFeeSummary>,
@@ -437,6 +438,7 @@ impl MockNodeClient {
                 submissions: Vec::new(),
                 raw_submissions: Vec::new(),
                 next_error: None,
+                fee_estimate_error: None,
                 fee_estimate: default_fee,
                 mempool_info: MempoolInfo {
                     tx_count: 0,
@@ -484,6 +486,11 @@ impl MockNodeClient {
     pub fn fail_next_submission(&self, error: NodeClientError) {
         let mut state = self.state.lock().unwrap();
         state.next_error = Some(error);
+    }
+
+    pub fn fail_fee_estimates(&self, error: NodeClientError) {
+        let mut state = self.state.lock().unwrap();
+        state.fee_estimate_error = Some(error);
     }
 
     pub fn submission_count(&self) -> usize {
@@ -538,12 +545,18 @@ impl NodeClient for MockNodeClient {
     }
 
     fn mempool_info(&self) -> NodeClientResult<MempoolInfo> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.fee_estimate_error.take() {
+            return Err(error);
+        }
         Ok(state.mempool_info.clone())
     }
 
     fn recent_blocks(&self, limit: usize) -> NodeClientResult<Vec<BlockFeeSummary>> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = state.fee_estimate_error.take() {
+            return Err(error);
+        }
         Ok(state.recent_blocks.iter().take(limit).cloned().collect())
     }
 }

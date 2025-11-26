@@ -250,6 +250,11 @@ path = "../../tests/wallet_e2e/main.rs"
 required-features = ["wallet-integration"]
 
 [[test]]
+name = "wallet_policies_fee_e2e"
+path = "../../tests/wallet_policies_fee_e2e.rs"
+required-features = ["wallet-integration"]
+
+[[test]]
 name = "wallet_rpc_limits"
 path = "../../tests/wallet_rpc_limits.rs"
 required-features = ["wallet-integration"]
