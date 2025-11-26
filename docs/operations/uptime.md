@@ -47,6 +47,12 @@ run to confirm alerts fire and then clear:
   `process_start_time_seconds`) that coincides with widening finality lag and
   finalized height gaps to assert the new `ConsensusRestartFinalityCorrelation`
   rule fires alongside the standard warning alerts.【F:tools/alerts/validation.py†L882-L955】【F:ops/alerts/consensus/finality.yaml†L35-L52】
+- **Prover backlog correlation** – models a rising prover queue depth and p95
+  latency while finality lag and uptime observation age cross their warning
+  thresholds so `FinalityProverBacklogCorrelation` and
+  `UptimeProverLatencyCorrelation` trip with the base warnings. Use the probe to
+  confirm prover saturation is visible in dashboards before promoting new
+  releases.【F:tools/alerts/validation.py†L915-L1006】【F:ops/alerts/uptime/prover.yaml†L1-L33】
 - **RPC availability** – issues steady `/health/live` calls where the success
   ratio drops below 99% for more than five minutes (and below 95% for ten),
   proving `RpcAvailabilityDegraded*` alerts trip while consensus liveness still
@@ -106,6 +112,25 @@ When the soak or production telemetry raises uptime/finality alerts:
   consider redirecting client traffic while consensus continues to make
   progress. Use the uptime/finality dashboard panel to confirm the API outage is
   isolated from consensus liveness and finality graphs.【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:tools/alerts/validation.py†L128-L223】【F:docs/dashboards/uptime_finality_correlation.json†L1-L93】
+
+### Prover backlog correlation
+
+- **When alerts fire.** `FinalityProverBacklogCorrelation` pages when
+  `finality_lag_slots` sits above the 12-slot SLA at the same time a prover
+  backend’s queue depth exceeds two jobs. `UptimeProverLatencyCorrelation`
+  complements it by pairing the uptime observation age warning threshold with
+  prover p95 latency above three minutes, confirming reputation accrual delays
+  stem from prover saturation.【F:ops/alerts/uptime/prover.yaml†L1-L33】
+- **How to read dashboards.** The updated uptime/finality correlation dashboard
+  overlays finality lag with prover queue depth and plots uptime observation age
+  against prover p95 latency. Use those panels to confirm whether lag or uptime
+  stalls move in lockstep with prover backlogs before restarting validators or
+  draining traffic.【F:docs/dashboards/uptime_finality_correlation.json†L1-L129】
+- **Triage steps.** Inspect prover pool utilization, widen prover capacity
+  limits, or pause new workload until the queue depth falls below two jobs and
+  p95 latency returns under three minutes. Once finality lag and uptime
+  observation age normalize, close out correlated alerts and re-enable pending
+  deploys.【F:tools/alerts/validation.py†L915-L1006】【F:ops/alerts/uptime/prover.yaml†L1-L33】
 
 ## Alert definitions and probe usage
 

@@ -1,0 +1,42 @@
+groups:
+  - name: uptime-prover-correlation
+    interval: 30s
+    rules:
+      - alert: FinalityProverBacklogCorrelation
+        expr: |
+          max_over_time(finality_lag_slots[5m]) > 12
+            and on(environment) group_left(backend)
+              wallet:prover_queue_depth:max:10m > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: uptime
+          environment: "{{ $labels.environment }}"
+          backend: "{{ $labels.backend }}"
+        annotations:
+          summary: Finality lag correlated with prover backlog
+          description: >-
+            Finality lag has remained above the 12-slot budget while prover queue depth for
+            backend {{ $labels.backend }} stayed above two jobs. Inspect prover saturation and
+            clear the backlog before promoting releases or restarting validators.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#prover-backlog-correlation
+
+      - alert: UptimeProverLatencyCorrelation
+        expr: |
+          max_over_time(uptime_observation_age_seconds[5m])
+            > clamp_min(uptime:observation_gap_seconds:30d_p90 + 600, 900)
+            and on(environment) group_left(backend)
+              wallet:prover_job_latency:p95_seconds:10m > 180
+        for: 10m
+        labels:
+          severity: warning
+          team: uptime
+          environment: "{{ $labels.environment }}"
+          backend: "{{ $labels.backend }}"
+        annotations:
+          summary: Uptime proofs delayed while prover latency elevated
+          description: >-
+            The latest uptime proofs are aging beyond the warning buffer while prover p95 latency
+            for backend {{ $labels.backend }} exceeds three minutes. Expect reputation accrual to
+            stall until prover capacity recovers or the queue drains.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#prover-backlog-correlation

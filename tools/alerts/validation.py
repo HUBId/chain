@@ -16,6 +16,11 @@ from tools.alerts.settings import BLOCK_PRODUCTION_SLA, FINALITY_SLA, UPTIME_SLA
 
 UPTIME_THRESHOLDS: UptimeBaselineThresholds = compute_uptime_thresholds(UPTIME_SLA)
 
+PROVER_QUEUE_WARNING_DEPTH = 2.0
+PROVER_LATENCY_WARNING_SECONDS = 180.0
+PROVER_QUEUE_CORRELATION_DURATION = 300.0
+PROVER_LATENCY_CORRELATION_DURATION = 600.0
+
 import socketserver
 
 
@@ -691,6 +696,45 @@ def _evaluate_restart_finality_correlation(
     return AlertComputation(starts_at=start_ts, value=peak, details=detail)
 
 
+def _evaluate_metric_correlation(
+    store: MetricStore,
+    primary_metric: str,
+    primary_threshold: float,
+    secondary_metric: str,
+    secondary_threshold: float,
+    duration: float,
+) -> Optional[AlertComputation]:
+    primary = store.series(primary_metric)
+    secondary = store.series(secondary_metric)
+
+    if primary is None or secondary is None:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in sorted(store.all_timestamps()):
+        primary_value = primary.value_at(timestamp)
+        secondary_value = secondary.value_at(timestamp)
+        correlated = (
+            primary_value is not None
+            and primary_value > primary_threshold
+            and secondary_value is not None
+            and secondary_value > secondary_threshold
+        )
+        evaluations.append((timestamp, correlated))
+        if correlated:
+            values = [value for value in (primary_value, secondary_value) if value is not None]
+            if values:
+                observed.append((timestamp, max(values)))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    return AlertComputation(starts_at=start_ts, value=peak)
+
+
 def _evaluate_block_height_stall(
     store: MetricStore, metric: str, window: float, duration: float
 ) -> Optional[AlertComputation]:
@@ -1035,6 +1079,44 @@ def default_alert_rules() -> List[AlertRule]:
                 gap_threshold=FINALITY_SLA.gap_warning_blocks,
                 restart_window=900.0,
                 duration=300.0,
+            ),
+        ),
+        AlertRule(
+            name="FinalityProverBacklogCorrelation",
+            severity="warning",
+            service="uptime",
+            summary="Finality lag correlated with prover backlog",
+            description=(
+                "Finality lag stayed above the warning budget while prover queue depth remained elevated. Drain the prover "
+                "backlog or expand capacity before the next deployment window."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#prover-backlog-correlation",
+            evaluator=lambda store: _evaluate_metric_correlation(
+                store,
+                "finality_lag_slots",
+                FINALITY_SLA.lag_warning_slots,
+                "wallet:prover_queue_depth:max:10m",
+                PROVER_QUEUE_WARNING_DEPTH,
+                PROVER_QUEUE_CORRELATION_DURATION,
+            ),
+        ),
+        AlertRule(
+            name="UptimeProverLatencyCorrelation",
+            severity="warning",
+            service="uptime",
+            summary="Uptime proofs delayed while prover latency elevated",
+            description=(
+                "Uptime observation age breached the warning buffer while prover p95 latency stayed above three minutes. "
+                "Expect timetoke accrual to stall until prover capacity recovers."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#prover-backlog-correlation",
+            evaluator=lambda store: _evaluate_metric_correlation(
+                store,
+                "uptime_observation_age_seconds",
+                UPTIME_THRESHOLDS.observation_warning_seconds,
+                "wallet:prover_job_latency:p95_seconds:10m",
+                PROVER_LATENCY_WARNING_SECONDS,
+                PROVER_LATENCY_CORRELATION_DURATION,
             ),
         ),
         AlertRule(
@@ -2223,6 +2305,96 @@ def build_rpc_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_prover_backlog_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 6.0),
+                    (300.0, 8.0),
+                    (600.0, 10.0),
+                    (900.0, 14.0),
+                    (1200.0, 15.0),
+                    (1500.0, 13.0),
+                    (1800.0, 9.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="wallet:prover_queue_depth:max:10m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.5),
+                    (300.0, 1.2),
+                    (600.0, 2.1),
+                    (900.0, 3.5),
+                    (1200.0, 3.2),
+                    (1500.0, 3.0),
+                    (1800.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 200.0),
+                    (300.0, 400.0),
+                    (600.0, 750.0),
+                    (900.0, 980.0),
+                    (1200.0, 1020.0),
+                    (1500.0, 980.0),
+                    (1800.0, 500.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="wallet:prover_job_latency:p95_seconds:10m",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 60.0),
+                    (300.0, 120.0),
+                    (600.0, 150.0),
+                    (900.0, 210.0),
+                    (1200.0, 240.0),
+                    (1500.0, 230.0),
+                    (1800.0, 140.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10_000.0),
+                    (300.0, 10_030.0),
+                    (600.0, 10_060.0),
+                    (900.0, 10_080.0),
+                    (1200.0, 10_110.0),
+                    (1500.0, 10_140.0),
+                    (1800.0, 10_170.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_restart_finality_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -2441,6 +2613,16 @@ def default_validation_cases() -> List[ValidationCase]:
             name="rpc-availability-recovery",
             store=build_rpc_recovery_store(),
             expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="prover-backlog-correlation",
+            store=build_prover_backlog_store(),
+            expected_alerts={
+                "ConsensusFinalityLagWarning",
+                "FinalityProverBacklogCorrelation",
+                "UptimeObservationGapWarning",
+                "UptimeProverLatencyCorrelation",
+            },
         ),
         ValidationCase(
             name="restart-finality-correlation",

@@ -10,6 +10,8 @@ from tools.alerts.validation import (
     AlertValidationAggregateError,
     AlertValidator,
     AlertWebhookServer,
+    PROVER_LATENCY_WARNING_SECONDS,
+    PROVER_QUEUE_WARNING_DEPTH,
     RecordedWebhookClient,
     ValidationCase,
     default_alert_rules,
@@ -27,7 +29,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 18
+    assert len(results) == 19
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -45,6 +47,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "block-schedule-recovery",
         "rpc-availability-outage",
         "rpc-availability-recovery",
+        "prover-backlog-correlation",
         "restart-finality-correlation",
         "timetoke-epoch-delay",
         "timetoke-epoch-recovery",
@@ -215,3 +218,25 @@ def test_uptime_alerts_follow_baseline_buffers() -> None:
     accrual_expr = expressions["TimetokeAccrualStallWarning"]
     assert str(UPTIME_BASELINES.timetoke_rate_buffer) in accrual_expr
     assert f"{thresholds.timetoke_rate_per_second:.5f}" in accrual_expr
+
+
+def test_prover_correlation_alert_thresholds() -> None:
+    thresholds = compute_uptime_thresholds(UPTIME_SLA)
+    with open("ops/alerts/uptime/prover.yaml", "r", encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle)
+
+    expressions = {
+        rule["alert"]: rule["expr"]
+        for group in manifest.get("groups", [])
+        for rule in group.get("rules", [])
+        if "alert" in rule
+    }
+
+    backlog_expr = expressions["FinalityProverBacklogCorrelation"]
+    assert f"> {int(FINALITY_SLA.lag_warning_slots)}" in backlog_expr
+    assert f"> {int(PROVER_QUEUE_WARNING_DEPTH)}" in backlog_expr
+    assert "wallet:prover_queue_depth:max:10m" in backlog_expr
+
+    latency_expr = expressions["UptimeProverLatencyCorrelation"]
+    assert str(int(thresholds.observation_warning_seconds)) in latency_expr
+    assert f"> {int(PROVER_LATENCY_WARNING_SECONDS)}" in latency_expr
