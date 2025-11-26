@@ -71,11 +71,13 @@ impl AddressManager {
         kind: AddressKind,
         index: u32,
         first_seen_height: Option<u64>,
+        synced_height: u64,
     ) -> Result<(), AddressError> {
         let mut metadata = self
             .store
             .get_address_metadata(kind, index)?
             .unwrap_or_default();
+        let was_used = metadata.used;
         metadata.used = true;
         if let Some(height) = first_seen_height {
             metadata.first_seen_height = match metadata.first_seen_height {
@@ -84,14 +86,51 @@ impl AddressManager {
             };
         }
 
+        metadata.last_synced_height = Some(
+            metadata
+                .last_synced_height
+                .map(|current| current.max(synced_height))
+                .unwrap_or(synced_height),
+        );
+
         let mut batch = self.store.batch()?;
-        let key = match kind {
-            AddressKind::External => META_EXTERNAL_UNUSED,
-            AddressKind::Internal => META_INTERNAL_UNUSED,
-        };
-        let unused = self.load_counter(key)?;
-        let updated = unused.saturating_sub(1);
-        batch.put_meta(key, &updated.to_be_bytes());
+        if !was_used {
+            let key = match kind {
+                AddressKind::External => META_EXTERNAL_UNUSED,
+                AddressKind::Internal => META_INTERNAL_UNUSED,
+            };
+            let unused = self.load_counter(key)?;
+            let updated = unused.saturating_sub(1);
+            batch.put_meta(key, &updated.to_be_bytes());
+        }
+        batch.put_address_metadata(kind, index, &metadata)?;
+        batch.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_address_synced(
+        &self,
+        kind: AddressKind,
+        index: u32,
+        synced_height: u64,
+    ) -> Result<(), AddressError> {
+        let mut metadata = self
+            .store
+            .get_address_metadata(kind, index)?
+            .unwrap_or_default();
+        let existing = metadata.last_synced_height;
+        metadata.last_synced_height = Some(
+            existing
+                .map(|current| current.max(synced_height))
+                .unwrap_or(synced_height),
+        );
+
+        // Avoid writes if nothing changed.
+        if existing == metadata.last_synced_height && metadata.used {
+            return Ok(());
+        }
+
+        let mut batch = self.store.batch()?;
         batch.put_address_metadata(kind, index, &metadata)?;
         batch.commit()?;
         Ok(())

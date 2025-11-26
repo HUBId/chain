@@ -266,6 +266,13 @@ impl WalletScanner {
                     kind,
                     address.index,
                     Some(first_seen_height),
+                    latest_height,
+                )?;
+            } else {
+                self.engine.address_manager().mark_address_synced(
+                    kind,
+                    address.index,
+                    latest_height,
                 )?;
             }
         }

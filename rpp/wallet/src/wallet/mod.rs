@@ -223,6 +223,7 @@ pub struct AddressEntry {
     pub label: Option<String>,
     pub note: Option<String>,
     pub first_seen_height: Option<u64>,
+    pub last_synced_height: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -478,6 +479,7 @@ impl Wallet {
                     label: metadata.label,
                     note: metadata.note,
                     first_seen_height: metadata.first_seen_height,
+                    last_synced_height: metadata.last_synced_height,
                 });
             }
         }
@@ -554,6 +556,7 @@ impl Wallet {
             label: metadata.label,
             note: metadata.note,
             first_seen_height: metadata.first_seen_height,
+            last_synced_height: metadata.last_synced_height,
         }))
     }
 

@@ -29,9 +29,9 @@ use dto::{
     ReleasePendingLocksResponse, RescanAbortResponse, RescanParams, RescanResponse,
     RescanStatusResponse, SetAddressLabelParams, SetAddressLabelResponse, SetPolicyParams,
     SetPolicyResponse, SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto,
-    SyncModeDto, SyncStatusParams, SyncStatusResponse, TelemetryCounterDto,
-    TelemetryCountersResponse, TransactionEntryDto, UtxoDto, WatchOnlyEnableParams,
-    WatchOnlyStatusResponse, JSONRPC_VERSION,
+    SyncLagAddressDto, SyncLagResponse, SyncModeDto, SyncStatusParams, SyncStatusResponse,
+    TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto, UtxoDto,
+    WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -57,8 +57,8 @@ use crate::backup::{
 #[cfg(feature = "wallet_zsi")]
 use crate::db::StoredZsiArtifact;
 use crate::db::{
-    PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta as StoredProverMeta, TxCacheEntry,
-    UtxoRecord,
+    AddressKind, PendingLock, PendingLockMetadata, PolicySnapshot, ProverMeta as StoredProverMeta,
+    TxCacheEntry, UtxoRecord,
 };
 use crate::engine::signing::{ProveResult, ProverMeta};
 use crate::engine::{
@@ -665,6 +665,10 @@ impl WalletRpcRouter {
                 parse_params::<SyncStatusParams>(params)?;
                 self.respond_sync_status()
             }
+            "sync.lag" => {
+                parse_params::<EmptyParams>(params)?;
+                self.respond_sync_lag()
+            }
             "rescan" => {
                 let params: RescanParams = parse_params(params)?;
                 self.handle_rescan(params)
@@ -1168,6 +1172,7 @@ impl WalletRpcRouter {
             latest_height,
             current_height,
             target_height,
+            lag_blocks,
             scanned_scripthashes,
             discovered_transactions,
             pending_ranges,
@@ -1185,6 +1190,7 @@ impl WalletRpcRouter {
                 Some(status.latest_height),
                 Some(status.current_height),
                 Some(status.target_height),
+                Some(status.target_height.saturating_sub(status.current_height)),
                 Some(status.scanned_scripthashes),
                 Some(status.discovered_transactions),
                 status.pending_ranges.clone(),
@@ -1208,6 +1214,7 @@ impl WalletRpcRouter {
                 None,
                 None,
                 None,
+                None,
                 Vec::new(),
                 None,
                 None,
@@ -1222,6 +1229,7 @@ impl WalletRpcRouter {
             latest_height,
             current_height,
             target_height,
+            lag_blocks,
             scanned_scripthashes,
             discovered_transactions,
             pending_ranges,
@@ -1230,6 +1238,47 @@ impl WalletRpcRouter {
             last_error,
             node_issue,
             hints,
+        };
+        to_value(response)
+    }
+
+    fn respond_sync_lag(&self) -> Result<Value, RouterError> {
+        let sync = self.sync.as_ref().ok_or(RouterError::SyncUnavailable)?;
+        let status = sync.latest_status().ok_or(RouterError::SyncUnavailable)?;
+        let target_height = status.target_height;
+        let account_lag_blocks = target_height.saturating_sub(status.current_height);
+        let store = self.wallet.store();
+
+        let mut addresses = Vec::new();
+        for kind in [AddressKind::External, AddressKind::Internal] {
+            let entries = store.iter_addresses(kind).map_err(|error| {
+                RouterError::Wallet(WalletError::Engine(EngineError::Store(error)))
+            })?;
+            for (index, address) in entries {
+                let metadata = store
+                    .get_address_metadata(kind, index)
+                    .map_err(|error| {
+                        RouterError::Wallet(WalletError::Engine(EngineError::Store(error)))
+                    })?
+                    .unwrap_or_default();
+                let last_synced_height = metadata.last_synced_height;
+                let lag_blocks = target_height.saturating_sub(last_synced_height.unwrap_or(0));
+                addresses.push(SyncLagAddressDto {
+                    address,
+                    change: matches!(kind, AddressKind::Internal),
+                    index,
+                    last_synced_height,
+                    lag_blocks: Some(lag_blocks),
+                });
+            }
+        }
+
+        addresses.sort_by(|a, b| b.index.cmp(&a.index).then(a.change.cmp(&b.change)));
+
+        let response = SyncLagResponse {
+            target_height: Some(target_height),
+            account_lag_blocks: Some(account_lag_blocks),
+            addresses,
         };
         to_value(response)
     }
@@ -2615,6 +2664,7 @@ mod tests {
     use rpp_wallet_interface::runtime_config::WalletNodeRuntimeConfig;
     use serde_json::json;
     use std::borrow::Cow;
+    use std::collections::HashMap;
     use std::net::TcpListener;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -3280,6 +3330,125 @@ mod tests {
         assert_eq!(data["code"], json!("RESCAN_IN_PROGRESS"));
         assert_eq!(data["details"]["requested"], json!(8));
         assert_eq!(data["details"]["pending_from"], json!(6));
+    }
+
+    #[test]
+    fn sync_lag_surfaces_address_backlog() {
+        let status = SyncStatus {
+            latest_height: 120,
+            current_height: 90,
+            target_height: 120,
+            mode: SyncMode::Resume { from_height: 80 },
+            scanned_scripthashes: 0,
+            discovered_transactions: 0,
+            pending_ranges: vec![(90, 120)],
+            checkpoints: SyncCheckpoints {
+                resume_height: Some(90),
+                ..SyncCheckpoints::default()
+            },
+            hints: Vec::new(),
+            node_issue: None,
+        };
+        let sync = Arc::new(StubSync {
+            status: Some(status),
+            syncing: false,
+        });
+        let (router, _store, _dir) = router_fixture(Some(sync));
+
+        let engine = router.wallet.engine_handle();
+        let external = engine
+            .address_manager()
+            .next_external_address()
+            .expect("external address");
+        let internal = engine
+            .address_manager()
+            .next_internal_address()
+            .expect("internal address");
+
+        engine
+            .address_manager()
+            .mark_address_synced(AddressKind::External, external.path.index, 80)
+            .expect("sync external address");
+        engine
+            .address_manager()
+            .mark_address_used(AddressKind::Internal, internal.path.index, Some(70), 85)
+            .expect("mark internal used");
+
+        let response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "sync.lag".to_string(),
+            params: Some(json!({})),
+        });
+
+        assert!(response.error.is_none());
+        let payload: SyncLagResponse =
+            serde_json::from_value(response.result.expect("lag payload")).expect("lag response");
+        assert_eq!(payload.account_lag_blocks, Some(30));
+
+        let mut by_address: HashMap<String, SyncLagAddressDto> = payload
+            .addresses
+            .into_iter()
+            .map(|entry| (entry.address.clone(), entry))
+            .collect();
+
+        let external_entry = by_address.remove(&external.address).expect("external lag");
+        assert_eq!(external_entry.last_synced_height, Some(80));
+        assert_eq!(external_entry.lag_blocks, Some(40));
+
+        let internal_entry = by_address.remove(&internal.address).expect("internal lag");
+        assert_eq!(internal_entry.last_synced_height, Some(85));
+        assert_eq!(internal_entry.lag_blocks, Some(35));
+    }
+
+    #[test]
+    fn sync_lag_resets_after_recovery() {
+        let status = SyncStatus {
+            latest_height: 150,
+            current_height: 150,
+            target_height: 150,
+            mode: SyncMode::Resume { from_height: 140 },
+            scanned_scripthashes: 0,
+            discovered_transactions: 0,
+            pending_ranges: Vec::new(),
+            checkpoints: SyncCheckpoints {
+                resume_height: Some(150),
+                ..SyncCheckpoints::default()
+            },
+            hints: Vec::new(),
+            node_issue: None,
+        };
+        let sync = Arc::new(StubSync {
+            status: Some(status),
+            syncing: false,
+        });
+        let (router, _store, _dir) = router_fixture(Some(sync));
+
+        let engine = router.wallet.engine_handle();
+        let external = engine
+            .address_manager()
+            .next_external_address()
+            .expect("external address");
+        engine
+            .address_manager()
+            .mark_address_synced(AddressKind::External, external.path.index, 150)
+            .expect("sync external address");
+
+        let response = router.handle(JsonRpcRequest {
+            jsonrpc: Some(JSONRPC_VERSION.to_string()),
+            id: Some(json!(1)),
+            method: "sync.lag".to_string(),
+            params: Some(json!({})),
+        });
+
+        assert!(response.error.is_none());
+        let payload: SyncLagResponse =
+            serde_json::from_value(response.result.expect("lag payload")).expect("lag response");
+        assert_eq!(payload.account_lag_blocks, Some(0));
+        assert!(payload
+            .addresses
+            .iter()
+            .all(|entry| entry.lag_blocks == Some(0)));
     }
 
     #[test]

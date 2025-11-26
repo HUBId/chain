@@ -26,6 +26,39 @@ code review and future feature flags.
 * When consolidating UTXOs for validator-grade tiers (TL5), plan sweeps so they
   stay within the unlimited tier before promoting funds to lower tiers.
 
+## Monitoring sync lag
+
+The wallet RPCs now surface explicit lag counters so operators can alert on
+stale indexers before users notice missing balances:
+
+* `sync_status` includes a `lag_blocks` field that reports how many blocks the
+  wallet is behind the current indexer tip.
+* `sync.lag` returns `account_lag_blocks` plus per-address entries (including
+  `last_synced_height` and `lag_blocks`) so you can pinpoint which addresses are
+  delayed.
+
+Example request/response using `curl`:
+
+```bash
+curl -s https://wallet.local/rpc \
+  -d '{"jsonrpc":"2.0","id":1,"method":"sync.lag","params":{}}'
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{
+  "target_height":120,
+  "account_lag_blocks":30,
+  "addresses":[
+    {"address":"...","change":false,"index":0,"last_synced_height":80,"lag_blocks":40}
+  ]
+}}
+```
+
+SDKs expose the same endpoint via `WalletRpcClient::sync_lag`, and
+`list_addresses` now returns a `last_synced_height` hint you can stash in your
+monitoring dashboards. Alert on large `account_lag_blocks` values and on any
+address `lag_blocks` that remain non-zero after a successful catch-up.
+
 ## Pruning validation for wallet indices
 
 Wallet balance and nonce indices must survive pruning snapshots so wallet proofs

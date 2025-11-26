@@ -177,6 +177,8 @@ pub struct AddressMetadataDto {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_seen_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_synced_height: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1470,6 +1472,9 @@ pub struct SyncStatusResponse {
     /// Target height for the current scan.
     pub target_height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Calculated lag between the target and current height in blocks.
+    pub lag_blocks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// Number of script hashes processed so far.
     pub scanned_scripthashes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1528,6 +1533,29 @@ pub struct SyncCheckpointDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Timestamp of the last targeted rescan.
     pub last_targeted_rescan_ts: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Lag snapshot for a tracked address.
+pub struct SyncLagAddressDto {
+    pub address: String,
+    pub change: bool,
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_synced_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lag_blocks: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Lag summary for the wallet and its addresses.
+pub struct SyncLagResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_lag_blocks: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<SyncLagAddressDto>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1682,6 +1710,7 @@ mod tests {
             latest_height: Some(10),
             current_height: Some(3),
             target_height: Some(10),
+            lag_blocks: Some(7),
             scanned_scripthashes: Some(5),
             discovered_transactions: Some(1),
             pending_ranges: vec![(0, 1)],
@@ -1699,6 +1728,19 @@ mod tests {
             hints: vec!["hint".into()],
         };
         roundtrip(&sync);
+
+        let lag = SyncLagResponse {
+            target_height: Some(120),
+            account_lag_blocks: Some(12),
+            addresses: vec![SyncLagAddressDto {
+                address: "wallet1".into(),
+                change: false,
+                index: 0,
+                last_synced_height: Some(100),
+                lag_blocks: Some(20),
+            }],
+        };
+        roundtrip(&lag);
     }
 
     #[test]

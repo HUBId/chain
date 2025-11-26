@@ -301,6 +301,8 @@ pub struct AddressMetadata {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_seen_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_synced_height: Option<u64>,
 }
 
 pub fn encode_address(address: &Address) -> Result<Vec<u8>, CodecError> {
