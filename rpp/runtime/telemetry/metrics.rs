@@ -14,6 +14,7 @@ use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
+use parking_lot::Mutex;
 
 use super::exporter::{ExporterBuildOutcome, TelemetryExporterBuilder};
 use crate::config::TelemetryConfig;
@@ -104,6 +105,8 @@ pub struct RuntimeMetrics {
     wallet_sync_lag_blocks: Histogram<u64>,
     #[cfg(feature = "wallet-integration")]
     wallet_last_successful_sync_timestamp: Histogram<u64>,
+    #[cfg(feature = "wallet-integration")]
+    wallet_sync_progress: Arc<Mutex<WalletSyncSnapshot>>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
     rpc_rate_limit_total: RpcClassCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
@@ -133,6 +136,15 @@ pub struct RuntimeMetrics {
     state_sync_stream_backpressure: Counter<u64>,
     state_sync_active_streams: Histogram<u64>,
     state_sync_stream_last_chunk_age: Histogram<f64>,
+}
+
+#[cfg(feature = "wallet-integration")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WalletSyncSnapshot {
+    pub wallet_height: Option<u64>,
+    pub chain_tip_height: Option<u64>,
+    pub lag_blocks: Option<u64>,
+    pub last_success_timestamp: Option<u64>,
 }
 
 impl RuntimeMetrics {
@@ -240,6 +252,8 @@ impl RuntimeMetrics {
                 .with_description("Unix timestamp of the last successful wallet sync")
                 .with_unit("s")
                 .build(),
+            #[cfg(feature = "wallet-integration")]
+            wallet_sync_progress: Arc::new(Mutex::new(WalletSyncSnapshot::default())),
             rpc_request_latency: RpcHistogram::new(
                 meter
                     .f64_histogram("rpp.runtime.rpc.request.latency")
@@ -593,6 +607,7 @@ impl RuntimeMetrics {
     #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_sync_wallet_height(&self, height: u64) {
         self.wallet_sync_wallet_height.record(height, &[]);
+        self.wallet_sync_progress.lock().wallet_height = Some(height);
     }
 
     #[cfg(not(feature = "wallet-integration"))]
@@ -602,6 +617,7 @@ impl RuntimeMetrics {
     #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_sync_chain_tip_height(&self, height: u64) {
         self.wallet_sync_chain_tip_height.record(height, &[]);
+        self.wallet_sync_progress.lock().chain_tip_height = Some(height);
     }
 
     #[cfg(not(feature = "wallet-integration"))]
@@ -611,6 +627,7 @@ impl RuntimeMetrics {
     #[cfg(feature = "wallet-integration")]
     pub fn record_wallet_sync_lag_blocks(&self, lag_blocks: u64) {
         self.wallet_sync_lag_blocks.record(lag_blocks, &[]);
+        self.wallet_sync_progress.lock().lag_blocks = Some(lag_blocks);
     }
 
     #[cfg(not(feature = "wallet-integration"))]
@@ -624,6 +641,12 @@ impl RuntimeMetrics {
         };
         self.wallet_last_successful_sync_timestamp
             .record(duration.as_secs(), &[]);
+        self.wallet_sync_progress.lock().last_success_timestamp = Some(duration.as_secs());
+    }
+
+    #[cfg(feature = "wallet-integration")]
+    pub fn wallet_sync_snapshot(&self) -> WalletSyncSnapshot {
+        self.wallet_sync_progress.lock().clone()
     }
 
     #[cfg(not(feature = "wallet-integration"))]

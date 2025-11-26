@@ -798,6 +798,172 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
+#[cfg(all(test, feature = "wallet-integration"))]
+mod tests {
+    use super::*;
+    use crate::runtime::telemetry::metrics::WalletSyncSnapshot;
+    use crate::runtime::wallet::sync::{DeterministicSync, SyncProvider, SyncUpdate};
+    use axum::extract::State;
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::time::Duration as TokioDuration;
+
+    use crate::rpc::api::{health_ready, ApiContext, HealthSubsystemStatus};
+
+    #[derive(Clone)]
+    struct TestWallet {
+        address: String,
+    }
+
+    impl WalletService for TestWallet {
+        fn address(&self) -> String {
+            self.address.clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestSyncDriver {
+        update: SyncUpdate,
+    }
+
+    impl SyncDriver for TestSyncDriver {
+        fn spawn(
+            self: Box<Self>,
+            _metrics: Arc<RuntimeMetrics>,
+            mut shutdown_rx: watch::Receiver<bool>,
+            updates_tx: SyncUpdateSender,
+        ) -> ChainResult<JoinHandle<()>> {
+            let update = self.update.clone();
+            Ok(tokio::spawn(async move {
+                let _ = updates_tx.send(update);
+                wait_for_shutdown(shutdown_rx).await;
+            }))
+        }
+    }
+
+    fn test_metrics() -> Arc<RuntimeMetrics> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("wallet-runtime-test");
+        Arc::new(RuntimeMetrics::from_meter_for_testing(&meter))
+    }
+
+    fn test_runtime_config() -> WalletRuntimeConfig {
+        WalletRuntimeConfig::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+    }
+
+    #[tokio::test]
+    async fn runtime_records_sync_progress_in_metrics_snapshot() {
+        let metrics = test_metrics();
+        let sync_provider: Box<dyn SyncProvider> =
+            Box::new(DeterministicSync::new("metrics").with_height(7));
+        let checkpoint = sync_provider
+            .latest_checkpoint()
+            .expect("checkpoint available");
+        let update = SyncUpdate::new(checkpoint.clone(), 10);
+
+        let runtime = WalletRuntime::start(
+            Arc::new(TestWallet {
+                address: "test-wallet".to_string(),
+            }),
+            test_runtime_config(),
+            Arc::clone(&metrics),
+            sync_provider,
+            Some(Box::new(TestSyncDriver {
+                update: update.clone(),
+            })),
+            None,
+            None,
+        )
+        .expect("runtime starts");
+
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        assert_eq!(runtime.sync_checkpoint(), Some(checkpoint));
+
+        let snapshot = metrics.wallet_sync_snapshot();
+        assert_eq!(
+            snapshot,
+            WalletSyncSnapshot {
+                wallet_height: Some(update.checkpoint.height),
+                chain_tip_height: Some(update.chain_tip_height),
+                lag_blocks: Some(update.chain_tip_height - update.checkpoint.height),
+                last_success_timestamp: snapshot.last_success_timestamp,
+            }
+        );
+        assert!(snapshot.last_success_timestamp.is_some());
+
+        runtime.shutdown().await.expect("runtime shutdown");
+    }
+
+    #[tokio::test]
+    async fn readiness_response_surfaces_wallet_sync_metrics() {
+        let metrics = test_metrics();
+        let sync_provider: Box<dyn SyncProvider> =
+            Box::new(DeterministicSync::new("health").with_height(3));
+        let checkpoint = sync_provider
+            .latest_checkpoint()
+            .expect("checkpoint available");
+        let update = SyncUpdate::new(checkpoint.clone(), 6);
+
+        let runtime = WalletRuntime::start(
+            Arc::new(TestWallet {
+                address: "health-wallet".to_string(),
+            }),
+            test_runtime_config(),
+            Arc::clone(&metrics),
+            sync_provider,
+            Some(Box::new(TestSyncDriver {
+                update: update.clone(),
+            })),
+            None,
+            None,
+        )
+        .expect("runtime starts");
+
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        let snapshot = metrics.wallet_sync_snapshot();
+        let subsystem_status = HealthSubsystemStatus {
+            zk_ready: true,
+            pruning_available: true,
+            snapshots_available: true,
+            wallet_signer_ready: true,
+            wallet_connected: true,
+            wallet_key_cache_ready: true,
+            wallet_synced_height: snapshot.wallet_height,
+            wallet_chain_tip: snapshot.chain_tip_height,
+            wallet_sync_lag: snapshot.lag_blocks,
+            wallet_last_sync_timestamp: snapshot.last_success_timestamp,
+        };
+
+        let mode = Arc::new(parking_lot::RwLock::new(crate::runtime::RuntimeMode::Node));
+        let context = ApiContext::new(
+            Arc::clone(&mode),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            false,
+        )
+        .with_metrics(metrics)
+        .with_test_node_ready(true)
+        .with_test_subsystem_status(subsystem_status.clone());
+
+        let (status, axum::Json(response)) = health_ready(State(context)).await;
+
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(response.subsystems, subsystem_status);
+        assert!(response.subsystems.wallet_last_sync_timestamp.is_some());
+
+        runtime.shutdown().await.expect("runtime shutdown");
+    }
+}
+
 #[cfg(feature = "wallet_rpc_mtls")]
 fn build_wallet_tls_acceptor(
     settings: &WalletRpcSecurityRuntimeConfig,
