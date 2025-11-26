@@ -84,6 +84,7 @@ arboard = { version = "3.4", optional = true }
 qrcode = { version = "0.13", optional = true }
 metrics = { workspace = true }
 tempfile = "3.10"
+sysinfo = "0.33"
 
 [dev-dependencies]
 opentelemetry = "=0.30.0"

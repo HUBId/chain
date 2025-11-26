@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 const DEFAULT_GAP_LIMIT: u32 = 20;
 const DEFAULT_MIN_CONFIRMATIONS: u32 = 1;
@@ -16,6 +16,11 @@ const DEFAULT_FEE_CACHE_TTL_SECS: u64 = 30;
 const DEFAULT_PROVER_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_PROVER_MAX_WITNESS_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_PROVER_MAX_CONCURRENCY: u32 = 1;
+const DEFAULT_PROVER_CPU_QUOTA_PERCENT: u64 = 90;
+const DEFAULT_PROVER_MEMORY_QUOTA_BYTES: u64 = 0;
+const DEFAULT_PROVER_LIMIT_BACKOFF_MS: u64 = 50;
+const DEFAULT_PROVER_LIMIT_WARN_PERCENT: u64 = 80;
+const DEFAULT_PROVER_LIMIT_RETRIES: u16 = 5;
 const DEFAULT_GUI_POLL_INTERVAL_MS: u64 = 5_000;
 const MIN_GUI_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_GUI_MAX_HISTORY_ROWS: u32 = 20;
@@ -277,6 +282,16 @@ pub struct WalletProverConfig {
     pub stwo_max_witness_bytes: Option<u64>,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
+    /// CPU quota for prover tasks expressed as a percentage of available cores (0 disables enforcement).
+    pub cpu_quota_percent: u64,
+    /// Memory ceiling for prover tasks in bytes; when 0 the runtime attempts to infer the active cgroup limit.
+    pub memory_quota_bytes: u64,
+    /// Backoff between limit checks when throttling resource-heavy prover tasks (milliseconds).
+    pub limit_backoff_ms: u64,
+    /// Warning threshold (percentage of the active limit) that triggers metrics before throttling kicks in.
+    pub limit_warn_percent: u64,
+    /// Maximum number of backoff retries before the prover returns Busy.
+    pub limit_retries: u16,
 }
 
 impl Default for WalletProverConfig {
@@ -290,6 +305,11 @@ impl Default for WalletProverConfig {
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
             stwo_max_witness_bytes: None,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
+            cpu_quota_percent: DEFAULT_PROVER_CPU_QUOTA_PERCENT,
+            memory_quota_bytes: DEFAULT_PROVER_MEMORY_QUOTA_BYTES,
+            limit_backoff_ms: DEFAULT_PROVER_LIMIT_BACKOFF_MS,
+            limit_warn_percent: DEFAULT_PROVER_LIMIT_WARN_PERCENT,
+            limit_retries: DEFAULT_PROVER_LIMIT_RETRIES,
         }
     }
 }
@@ -323,6 +343,10 @@ impl WalletProverConfig {
     pub fn max_stwo_witness_bytes(&self) -> u64 {
         self.stwo_max_witness_bytes
             .unwrap_or(self.max_witness_bytes)
+    }
+
+    pub fn limit_backoff(&self) -> Duration {
+        Duration::from_millis(self.limit_backoff_ms)
     }
 }
 
@@ -518,6 +542,23 @@ mod tests {
             config.prover.max_concurrency,
             DEFAULT_PROVER_MAX_CONCURRENCY
         );
+        assert_eq!(
+            config.prover.cpu_quota_percent,
+            DEFAULT_PROVER_CPU_QUOTA_PERCENT
+        );
+        assert_eq!(
+            config.prover.memory_quota_bytes,
+            DEFAULT_PROVER_MEMORY_QUOTA_BYTES
+        );
+        assert_eq!(
+            config.prover.limit_backoff_ms,
+            DEFAULT_PROVER_LIMIT_BACKOFF_MS
+        );
+        assert_eq!(
+            config.prover.limit_warn_percent,
+            DEFAULT_PROVER_LIMIT_WARN_PERCENT
+        );
+        assert_eq!(config.prover.limit_retries, DEFAULT_PROVER_LIMIT_RETRIES);
         assert!(!config.multisig.enabled);
         assert!(!config.zsi.enabled);
         assert!(config.zsi.backend.is_none());
@@ -569,7 +610,13 @@ mod tests {
                 allow_broadcast_without_proof: false,
                 timeout_secs: 420,
                 max_witness_bytes: 8 * 1024 * 1024,
+                stwo_max_witness_bytes: None,
                 max_concurrency: 4,
+                cpu_quota_percent: 75,
+                memory_quota_bytes: 128 * 1024 * 1024,
+                limit_backoff_ms: 25,
+                limit_warn_percent: 70,
+                limit_retries: 3,
             },
             multisig: WalletMultisigConfig { enabled: true },
             zsi: WalletZsiConfig {
@@ -618,6 +665,11 @@ mod tests {
         assert_eq!(restored.prover.timeout_secs, 420);
         assert_eq!(restored.prover.max_witness_bytes, 8 * 1024 * 1024);
         assert_eq!(restored.prover.max_concurrency, 4);
+        assert_eq!(restored.prover.cpu_quota_percent, 75);
+        assert_eq!(restored.prover.memory_quota_bytes, 128 * 1024 * 1024);
+        assert_eq!(restored.prover.limit_backoff_ms, 25);
+        assert_eq!(restored.prover.limit_warn_percent, 70);
+        assert_eq!(restored.prover.limit_retries, 3);
         assert!(restored.zsi.enabled);
         assert_eq!(restored.zsi.backend.as_deref(), Some("stwo"));
         assert_eq!(restored.gui.poll_interval_ms, 2_000);

@@ -112,6 +112,17 @@ Operator-Workflow:
   Messwerten aus `tools/simnet/scenarios/consensus_quorum_stress.ron` und sind in
   `performance/consensus_proofs.md` dokumentiert.
 
+Die Wallet-Prover-Worker respektieren konfigurierbare Ressourcen-Limits, bevor
+neue STWO- oder Plonky3-Jobs gestartet werden. Setze `wallet.prover.cpu_quota_percent`
+auf den maximal zulässigen Gesamt-CPU-Anteil (0 deaktiviert die Schranke) und
+`wallet.prover.memory_quota_bytes` auf den Arbeitsspeicherdeckel in Bytes; bei
+`0` wird der aktive cgroup-Memory-Wert als Obergrenze genutzt. Warn- und
+Throttle-Verhalten werden über `wallet.prover.limit_warn_percent`,
+`wallet.prover.limit_backoff_ms` und `wallet.prover.limit_retries` gesteuert.
+Überschreitungen erzeugen `wallet.prover.resource.warning`- bzw.
+`wallet.prover.resource.throttled`-Metriken (Label `backend`), wodurch Alerting
+auf drohende Engpässe reagieren kann, bevor Jobs mit `Busy` geblockt werden.
+
 Das Nightly-Szenario `consensus-quorum-stress` treibt den Prover mit hoher
 Validator- und Witness-Last sowie absichtlich manipulierten VRF-/Quorum-Daten
 an. `scripts/analyze_simnet.py` wertet die JSON-Summary aus, bricht bei
