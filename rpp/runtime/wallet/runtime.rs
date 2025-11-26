@@ -802,9 +802,10 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
 mod tests {
     use super::*;
     use crate::runtime::telemetry::metrics::WalletSyncSnapshot;
-    use crate::runtime::wallet::sync::{DeterministicSync, SyncProvider, SyncUpdate};
+    use crate::runtime::wallet::sync::{DeterministicSync, SyncCheckpoint, SyncProvider, SyncUpdate};
     use axum::extract::State;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use std::time::Duration as StdDuration;
     use std::net::{IpAddr, Ipv4Addr};
     use tokio::time::Duration as TokioDuration;
 
@@ -841,12 +842,65 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct ScheduledUpdate {
+        update: SyncUpdate,
+        delay: TokioDuration,
+    }
+
+    impl ScheduledUpdate {
+        fn after(update: SyncUpdate, delay: TokioDuration) -> Self {
+            Self { update, delay }
+        }
+    }
+
+    struct ScriptedSyncDriver {
+        updates: Vec<ScheduledUpdate>,
+    }
+
+    impl ScriptedSyncDriver {
+        fn new(updates: Vec<ScheduledUpdate>) -> Self {
+            Self { updates }
+        }
+    }
+
+    impl SyncDriver for ScriptedSyncDriver {
+        fn spawn(
+            self: Box<Self>,
+            _metrics: Arc<RuntimeMetrics>,
+            mut shutdown_rx: watch::Receiver<bool>,
+            updates_tx: SyncUpdateSender,
+        ) -> ChainResult<JoinHandle<()>> {
+            Ok(tokio::spawn(async move {
+                for scheduled in self.updates {
+                    tokio::select! {
+                        _ = tokio::time::sleep(scheduled.delay) => {
+                            let _ = updates_tx.send(scheduled.update.clone());
+                        }
+                        _ = shutdown_rx.changed() => {
+                            return;
+                        }
+                    }
+                }
+
+                wait_for_shutdown(shutdown_rx).await;
+            }))
+        }
+    }
+
     fn test_metrics() -> Arc<RuntimeMetrics> {
         let exporter = InMemoryMetricExporter::default();
         let reader = PeriodicReader::builder(exporter).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
         let meter = provider.meter("wallet-runtime-test");
         Arc::new(RuntimeMetrics::from_meter_for_testing(&meter))
+    }
+
+    fn checkpoint(namespace: &str, height: u64) -> SyncCheckpoint {
+        DeterministicSync::new(namespace)
+            .with_height(height)
+            .latest_checkpoint()
+            .expect("checkpoint available")
     }
 
     fn test_runtime_config() -> WalletRuntimeConfig {
@@ -893,6 +947,70 @@ mod tests {
             }
         );
         assert!(snapshot.last_success_timestamp.is_some());
+
+        runtime.shutdown().await.expect("runtime shutdown");
+    }
+
+    #[tokio::test]
+    async fn wallet_sync_metrics_track_lagged_checkpoints() {
+        let metrics = test_metrics();
+        let namespace = "lagged-checkpoints";
+
+        let sync_provider: Box<dyn SyncProvider> =
+            Box::new(DeterministicSync::new(namespace).with_height(100));
+        let initial_checkpoint = sync_provider
+            .latest_checkpoint()
+            .expect("checkpoint available");
+
+        let lagged_update = SyncUpdate {
+            checkpoint: initial_checkpoint.clone(),
+            chain_tip_height: 120,
+            applied_at: SystemTime::UNIX_EPOCH + StdDuration::from_secs(1_000),
+        };
+
+        let catch_up_update = SyncUpdate {
+            checkpoint: checkpoint(namespace, 118),
+            chain_tip_height: 120,
+            applied_at: SystemTime::UNIX_EPOCH + StdDuration::from_secs(1_010),
+        };
+
+        let runtime = WalletRuntime::start(
+            Arc::new(TestWallet {
+                address: "lagged-wallet".to_string(),
+            }),
+            test_runtime_config(),
+            Arc::clone(&metrics),
+            sync_provider,
+            Some(Box::new(ScriptedSyncDriver::new(vec![
+                ScheduledUpdate::after(lagged_update.clone(), TokioDuration::from_millis(10)),
+                ScheduledUpdate::after(catch_up_update.clone(), TokioDuration::from_millis(60)),
+            ]))),
+            None,
+            None,
+        )
+        .expect("runtime starts");
+
+        tokio::time::sleep(TokioDuration::from_millis(30)).await;
+
+        let lag_snapshot = metrics.wallet_sync_snapshot();
+        assert_eq!(lag_snapshot.wallet_height, Some(lagged_update.checkpoint.height));
+        assert_eq!(lag_snapshot.chain_tip_height, Some(lagged_update.chain_tip_height));
+        assert_eq!(lag_snapshot.lag_blocks, Some(20));
+        assert_eq!(lag_snapshot.last_success_timestamp, Some(1_000));
+
+        tokio::time::sleep(TokioDuration::from_millis(80)).await;
+
+        let recovered_snapshot = metrics.wallet_sync_snapshot();
+        assert_eq!(
+            recovered_snapshot.wallet_height,
+            Some(catch_up_update.checkpoint.height)
+        );
+        assert_eq!(
+            recovered_snapshot.chain_tip_height,
+            Some(catch_up_update.chain_tip_height)
+        );
+        assert_eq!(recovered_snapshot.lag_blocks, Some(2));
+        assert_eq!(recovered_snapshot.last_success_timestamp, Some(1_010));
 
         runtime.shutdown().await.expect("runtime shutdown");
     }
