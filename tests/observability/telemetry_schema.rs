@@ -14,7 +14,9 @@ use rpp_runtime::runtime::telemetry::metrics::{
     WalletRpcMethod,
 };
 use rpp_runtime::RuntimeMetrics;
-use rpp_wallet_interface::runtime_telemetry::{WalletAction, WalletActionResult};
+use rpp_wallet_interface::runtime_telemetry::{
+    WalletAccountType, WalletAction, WalletActionResult, WalletSignMode,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +55,19 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     metrics.record_wallet_prover_witness_bytes("mock", 2048);
     metrics.record_wallet_prover_backend("mock", true);
     metrics.record_wallet_prover_failure("mock", "PROVER_INTERNAL");
+    metrics.record_wallet_sign_latency(
+        WalletSignMode::Online,
+        WalletAccountType::Hot,
+        "mock",
+        Duration::from_millis(29),
+        true,
+    );
+    metrics.record_wallet_sign_failure(
+        WalletSignMode::Offline,
+        WalletAccountType::Hardware,
+        "ledger",
+        "HW_REJECTED",
+    );
     metrics.record_wal_flush_duration(WalFlushOutcome::Retried, Duration::from_millis(13));
     metrics.record_wal_flush_bytes(WalFlushOutcome::Retried, 8192);
     metrics.increment_wal_flushes(WalFlushOutcome::Retried);

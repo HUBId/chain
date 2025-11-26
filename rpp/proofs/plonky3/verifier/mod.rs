@@ -23,8 +23,12 @@ struct ConsensusLogContext {
 impl ConsensusLogContext {
     fn from_public_inputs(value: &Value) -> Self {
         let witness = value.get("witness");
-        let epoch = witness.and_then(|node| node.get("epoch")).and_then(Value::as_u64);
-        let slot = witness.and_then(|node| node.get("slot")).and_then(Value::as_u64);
+        let epoch = witness
+            .and_then(|node| node.get("epoch"))
+            .and_then(Value::as_u64);
+        let slot = witness
+            .and_then(|node| node.get("slot"))
+            .and_then(Value::as_u64);
         let timetoke = witness
             .and_then(|node| {
                 node.get("timetoke")

@@ -802,11 +802,13 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
 mod tests {
     use super::*;
     use crate::runtime::telemetry::metrics::WalletSyncSnapshot;
-    use crate::runtime::wallet::sync::{DeterministicSync, SyncCheckpoint, SyncProvider, SyncUpdate};
+    use crate::runtime::wallet::sync::{
+        DeterministicSync, SyncCheckpoint, SyncProvider, SyncUpdate,
+    };
     use axum::extract::State;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
-    use std::time::Duration as StdDuration;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration as StdDuration;
     use tokio::time::Duration as TokioDuration;
 
     use crate::rpc::api::{health_ready, ApiContext, HealthSubsystemStatus};
@@ -993,8 +995,14 @@ mod tests {
         tokio::time::sleep(TokioDuration::from_millis(30)).await;
 
         let lag_snapshot = metrics.wallet_sync_snapshot();
-        assert_eq!(lag_snapshot.wallet_height, Some(lagged_update.checkpoint.height));
-        assert_eq!(lag_snapshot.chain_tip_height, Some(lagged_update.chain_tip_height));
+        assert_eq!(
+            lag_snapshot.wallet_height,
+            Some(lagged_update.checkpoint.height)
+        );
+        assert_eq!(
+            lag_snapshot.chain_tip_height,
+            Some(lagged_update.chain_tip_height)
+        );
         assert_eq!(lag_snapshot.lag_blocks, Some(20));
         assert_eq!(lag_snapshot.last_success_timestamp, Some(1_000));
 

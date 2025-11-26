@@ -1,0 +1,42 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: wallet-signer
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: wallet-signer
+      rules:
+        - alert: WalletSignLatencyHigh
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, mode, account_type) (
+                rate(rpp_runtime_wallet_sign_latency_ms_bucket{mode="online"}[5m])
+              )
+            ) > 3000
+          for: 5m
+          labels:
+            severity: warning
+            service: wallet
+          annotations:
+            summary: Wallet online signing p95 latency above 3s
+            description: |
+              Online signing latencies exceeded 3 seconds for five minutes. Inspect prover
+              saturation, backend availability, and node connectivity before re-enabling
+              submissions. Pair the alert with the Pipeline Wallet Intake dashboard panels
+              for signer latency and failure rate.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/wallet_monitoring.md#signer-latency-and-failures
+        - alert: WalletSignFailureBurst
+          expr: sum by (mode, account_type) (increase(rpp_runtime_wallet_sign_failures_total[5m])) > 3
+          labels:
+            severity: page
+            service: wallet
+          annotations:
+            summary: Wallet signing failures spiked above baseline
+            description: |
+              More than three signing attempts failed within five minutes. Capture the backend,
+              account type, and error labels from the metric, verify hardware signer status, and
+              follow the wallet signer runbook before retrying transactions.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/wallet_monitoring.md#signer-latency-and-failures

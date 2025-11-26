@@ -13,6 +13,7 @@ RBAC, GUI workflows, hardware signing, etc.) remain observable.
 | **Chain height, lag, and last sync success** | `rpp.runtime.wallet.sync.height`, `rpp.runtime.wallet.sync.lag_blocks`, `rpp.runtime.wallet.sync.last_success_timestamp_seconds` | Wallet Intake dashboards surface the live height (`wallet_synced_height`), chain tip (`wallet_chain_tip`), and calculated lag (`wallet_sync_lag`) from readiness probes next to the Prometheus metrics so responders can compare probes vs. scrapes in one view.【F:docs/performance_dashboards.json†L1-L26】 | Fire a **lag alert** when average lag stays above 20 blocks for >5 m or when `time() - last_success` exceeds 10 m. When triggered, verify whether the probe height matches Prometheus and inspect gossip reachability before restarting—treat probe-metric divergence as a telemetry issue, not a crash. |
 | **Fee estimator latency & congestion** | `rpp.runtime.wallet.fee.estimate.latency_ms`, `rpp.runtime.wallet.action.total{action="wallet.fee"…}` | Pipeline Proof Validation dashboard overlays fee quote timing with mempool load so reviewers can compare estimators with chain data.【F:rpp/runtime/telemetry/metrics.rs†L69-L176】【F:docs/performance_dashboards.json†L9-L19】 | Threshold when p95 latency exceeds 3 s for 5 m or when error-labelled fee actions spike over baseline. |
 | **Prover runtimes** | `rpp.runtime.wallet.prover.job.duration_ms`, `rpp.runtime.wallet.broadcast.rejected{reason="prover"}` | Proof Validation dashboard highlights job durations per backend and correlates with rejection reasons to spot ZK bottlenecks.【F:rpp/runtime/telemetry/metrics.rs†L69-L164】【F:docs/performance_dashboards.json†L12-L22】 | Alert when p99 job duration doubles past the documented timeout (default 300 s from `wallet.prover.timeout_secs`) twice within 30 m or when broadcast denials with `reason="witness"` increase consecutively.【F:config/wallet.toml†L142-L152】 |
+| **Signer latency & failures** | `rpp.runtime.wallet.sign.latency_ms{mode,account_type,backend,result}`, `rpp.runtime.wallet.sign.failures{mode,account_type,backend,code}` | Pipeline Wallet Intake panels “Signer latency (p95)” and “Signer failure rate” break down online vs. offline signing paths.【F:docs/dashboards/pipeline_wallet_intake.json†L1-L120】 | Warn when p95 online signing latency stays above 3 s for 5 m and page when signing failures exceed 3 in 5 m; alert rules live in `docs/observability/alerts/wallet_signer.yaml`. |
 | **Backup / watch-only / hardware action counters** | `rpp.runtime.wallet.action.total` (OpenTelemetry) and CLI/UI counters (`cli.action.events`, `ui.send.steps`, `ui.rescan.triggered`, etc.).【F:rpp/runtime/telemetry/metrics.rs†L69-L164】【F:rpp/wallet/src/telemetry/mod.rs†L1-L62】【F:rpp/wallet/src/ui/telemetry.rs†L52-L173】 | Wallet Intake dashboard adds panels for backup/export attempts so ops can see backup cadence next to sync states.【F:docs/performance_dashboards.json†L9-L15】 | Alert when error-labelled counters (e.g., `backup.export.err`, `watch_only.enable.err`) increase more than twice within 30 m or when CLI counters expose repeated hardware fallbacks (`operation="hw.sign", outcome="err"`). |
 | **RBAC & audit denials** | `rpp.runtime.wallet.action.total` with `result="error"`, RPC latency spikes, plus rotating audit logs under `wallet/audit`.【F:rpp/runtime/telemetry/metrics.rs†L69-L164】【F:rpp/runtime/wallet/rpc/audit.rs†L1-L82】 | Observability + security dashboards overlay audit volume, RBAC denials, and latency so on-call staff can pair errors with log segments.【F:docs/performance_dashboards.json†L1-L26】 | Alert when RBAC-denied actions exceed 5/min or when audit append warnings appear without matching telemetry (indicates disk or retention failure). |
 
@@ -56,6 +57,22 @@ increase(rpp_runtime_wallet_action_total{result="error", action=~"security.*|wal
 Combine alert definitions with existing dashboard annotations so incidents link
 back to the correct panels in Grafana (`pipeline-wallet-intake`,
 `pipeline-proof-validation`, etc.).【F:docs/performance_dashboards.json†L1-L26】
+
+## Signer latency and failures
+
+The `wallet_signer` alert manifest covers spikes in signing latency and failures
+for both online and offline paths. The Pipeline Wallet Intake dashboard now
+includes signer panels that surface the `mode`, `account_type`, and `backend`
+labels so responders can quickly see whether a hot account or hardware signer
+is slowing down.【F:docs/observability/alerts/wallet_signer.yaml†L1-L40】【F:docs/dashboards/pipeline_wallet_intake.json†L1-L120】
+
+When alerts fire:
+
+1. Check the signer latency panel for the affected mode and backend.
+2. Inspect the failure panel to grab the error code (e.g., `HW_REJECTED` vs.
+   `PROVER_TIMEOUT`) and backend identity.
+3. For hardware accounts, confirm the device is reachable and unlocked; for hot
+   accounts, review prover saturation and node connectivity before retrying.
 
 ## Log correlation and incident triage
 

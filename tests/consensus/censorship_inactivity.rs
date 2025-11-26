@@ -13,8 +13,8 @@ use rpp_consensus::messages::{
     ConsensusProofMetadata, PreVote,
 };
 use rpp_consensus::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ConsensusVrfPublicEntry,
-    ProofBackend, ProofBytes, VerifyingKey,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPublicEntry, ProofBackend, ProofBytes, VerifyingKey,
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};
@@ -423,12 +423,7 @@ fn exercise_penalty_flow_for_backend(backend: &'static str) {
     let backend: Arc<dyn ProofBackend> = backend;
     let mut state = build_state_with_backend(1, 1, 2, backend.clone());
 
-    let leader_id = state
-        .current_leader
-        .as_ref()
-        .expect("leader")
-        .id
-        .clone();
+    let leader_id = state.current_leader.as_ref().expect("leader").id.clone();
     let victim_id = state
         .validator_set
         .validators
@@ -482,7 +477,10 @@ fn exercise_penalty_flow_for_backend(backend: &'static str) {
         .get(&leader_id)
         .copied()
         .unwrap_or_default();
-    assert!(missed_slot_penalty > 0, "missed slot penalty must be applied");
+    assert!(
+        missed_slot_penalty > 0,
+        "missed slot penalty must be applied"
+    );
     assert!(logs_contain("applied slashing penalty"));
     assert!(logs_contain(&format!("backend={backend}")));
 
@@ -522,7 +520,10 @@ fn exercise_penalty_flow_for_backend(backend: &'static str) {
         .get(&victim_id)
         .copied()
         .unwrap_or_default();
-    assert!(double_sign_penalty > 0, "double-sign penalty must be applied");
+    assert!(
+        double_sign_penalty > 0,
+        "double-sign penalty must be applied"
+    );
     assert!(logs_contain("evidence=double_sign"));
     assert!(logs_contain(&format!("backend={backend}")));
 }
