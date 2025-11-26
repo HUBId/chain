@@ -13,6 +13,34 @@ use super::crypto::{self, map_backend_error};
 use super::proof::Plonky3Proof;
 use plonky3_backend::validate_consensus_public_inputs;
 
+#[derive(Default)]
+struct ConsensusLogContext {
+    timetoke: Option<u64>,
+    epoch: Option<u64>,
+    slot: Option<u64>,
+}
+
+impl ConsensusLogContext {
+    fn from_public_inputs(value: &Value) -> Self {
+        let witness = value.get("witness");
+        let epoch = witness.and_then(|node| node.get("epoch")).and_then(Value::as_u64);
+        let slot = witness.and_then(|node| node.get("slot")).and_then(Value::as_u64);
+        let timetoke = witness
+            .and_then(|node| {
+                node.get("timetoke")
+                    .or_else(|| node.get("timetoke_hours"))
+                    .or_else(|| node.get("round"))
+            })
+            .and_then(Value::as_u64);
+
+        Self {
+            timetoke,
+            epoch,
+            slot,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Plonky3Verifier;
 
@@ -86,8 +114,15 @@ impl Plonky3Verifier {
         }
 
         if expected == "consensus" {
+            let context = ConsensusLogContext::from_public_inputs(&parsed.public_inputs);
             if let Err(err) = validate_consensus_public_inputs(&parsed.public_inputs) {
-                error!("plonky3 consensus proof verification failed: invalid public inputs: {err}");
+                error!(
+                    consensus_timetoke = ?context.timetoke,
+                    consensus_epoch = ?context.epoch,
+                    consensus_slot = ?context.slot,
+                    backend = "plonky3",
+                    "plonky3 consensus proof verification failed: invalid public inputs: {err}"
+                );
                 return Err(map_backend_error(err, |detail| {
                     format!("invalid consensus public inputs: {detail}")
                 }));
@@ -95,7 +130,18 @@ impl Plonky3Verifier {
         }
 
         if let Err(err) = crypto::verify_proof(&parsed) {
-            error!("plonky3 {expected} proof verification failed: {err}");
+            let context = if expected == "consensus" {
+                ConsensusLogContext::from_public_inputs(&parsed.public_inputs)
+            } else {
+                ConsensusLogContext::default()
+            };
+            error!(
+                consensus_timetoke = ?context.timetoke,
+                consensus_epoch = ?context.epoch,
+                consensus_slot = ?context.slot,
+                backend = "plonky3",
+                "plonky3 {expected} proof verification failed: {err}"
+            );
             return Err(err);
         }
 
@@ -203,6 +249,100 @@ impl Plonky3Verifier {
         commitments.push(pruning.commitment.clone());
         let recursive = Self::decode_proof(&bundle.recursive_proof, "recursive")?;
         Self::check_recursive_inputs(&recursive, &commitments, expected_previous_commitment)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine;
+    use serde_json::json;
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    fn consensus_proof_value() -> Value {
+        let hex_digest = "00".repeat(32);
+        let proof = json!({
+            "circuit": "consensus",
+            "commitment": hex_digest,
+            "public_inputs": {
+                "witness": {
+                    "block_hash": hex_digest,
+                    "round": 3,
+                    "epoch": 7,
+                    "slot": 9,
+                    "leader_proposal": hex_digest,
+                    "quorum_threshold": 1,
+                    "pre_votes": [],
+                    "pre_commits": [],
+                    "commit_votes": [],
+                    "quorum_bitmap_root": hex_digest,
+                    "quorum_signature_root": hex_digest,
+                    "vrf_entries": [],
+                    "witness_commitments": [],
+                    "reputation_roots": []
+                },
+                "bindings": {
+                    "vrf_outputs": hex_digest,
+                    "vrf_proofs": hex_digest,
+                    "witness_commitments": hex_digest,
+                    "reputation_roots": hex_digest,
+                    "quorum_bitmap": hex_digest,
+                    "quorum_signature": hex_digest
+                },
+                "vrf_entries": [],
+                "block_height": 1
+            },
+            "payload": {
+                "stark_proof": BASE64_STANDARD.encode(""),
+                "auxiliary_payloads": [],
+                "metadata": {
+                    "trace_commitment": hex_digest,
+                    "quotient_commitment": hex_digest,
+                    "random_commitment": null,
+                    "fri_commitments": [hex_digest],
+                    "canonical_public_inputs": BASE64_STANDARD.encode(""),
+                    "transcript": {
+                        "degree_bits": 0,
+                        "trace_length_bits": 0,
+                        "alpha": [],
+                        "betas": [],
+                        "omegas": []
+                    },
+                    "hash_format": "poseidon_merkle_cap",
+                    "security_bits": 0,
+                    "derived_security_bits": 0,
+                    "use_gpu": false
+                }
+            }
+        });
+
+        proof
+    }
+
+    #[test]
+    fn consensus_logs_include_context() {
+        let proof_value = consensus_proof_value();
+        let proof = ChainProof::Plonky3(proof_value);
+
+        let buffer = std::sync::Mutex::new(Vec::new());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(buffer.clone().make_writer())
+            .with_ansi(false)
+            .finish();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let _ = Plonky3Verifier::decode_proof(&proof, "consensus");
+
+        let bytes = buffer.into_inner().expect("lock log buffer");
+        let logs = String::from_utf8(bytes).expect("utf8 logs");
+
+        assert!(logs.contains("consensus_epoch=Some(7)"));
+        assert!(logs.contains("consensus_slot=Some(9)"));
+        assert!(logs.contains("consensus_timetoke=Some(3)"));
+        assert!(logs.contains("backend=plonky3"));
     }
 }
 
