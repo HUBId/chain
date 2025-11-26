@@ -37,6 +37,8 @@ metrics.workspace = true
 metrics-util = { workspace = true, optional = true }
 rand.workspace = true
 rand_distr.workspace = true
+storage-firewood = { path = "../storage-firewood" }
+tempfile.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 serde = { version = "=1.0.225", features = ["derive"] }
@@ -61,6 +63,8 @@ tikv-jemallocator = "=0.6.1"
 [features]
 default = ["prometheus"]
 logger = ["firewood/logger"]
+branch_factor_256 = ["firewood/branch_factor_256", "firewood-storage/branch_factor_256"]
+io-uring = ["firewood-storage/io-uring"]
 prometheus = [
      "dep:metrics-exporter-prometheus",
      "dep:metrics-util",

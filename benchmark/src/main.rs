@@ -139,6 +139,8 @@ impl From<ArgCacheReadStrategy> for CacheReadStrategy {
 
 mod baseline;
 mod create;
+mod pruning;
+mod pruning_baseline;
 mod single;
 mod smoke;
 mod tenkrandom;
@@ -151,6 +153,9 @@ enum TestName {
 
     /// Quick smoke benchmark optimized for CI runtimes
     Smoke,
+
+    /// Lightweight pruning benchmark that runs a fixed workload across backends
+    Pruning,
 
     /// Insert batches of random keys
     TenKRandom,
@@ -256,6 +261,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         TestName::Smoke => {
             let runner = smoke::Smoke;
+            runner.run(&db, &args)?;
+        }
+        TestName::Pruning => {
+            let runner = pruning::Pruning;
             runner.run(&db, &args)?;
         }
         TestName::TenKRandom => {

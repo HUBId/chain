@@ -2964,6 +2964,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "storage-firewood",
+ "tempfile",
  "tikv-jemallocator",
  "tokio",
  "tracing",

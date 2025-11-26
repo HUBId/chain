@@ -21,6 +21,8 @@ There are currently three different benchmarks, as follows:
 1. `tenkrandom` which does transactions of size 10k, 5k updates, 2.5k inserts, and 2.5k deletes
 2. `zipf` which uses a zipf distribution across the database to perform updates
 3. `single` which only updates a single row (row 1) repeatedly in a tiny transaction
+4. `pruning` which replays a fixed set of key/value writes to measure pruning
+   throughput and latency across storage backends and branch factors
 
 There is also a `create` benchmark which creates the database to begin with. The defaults will create
 a 10M row database. If you want a larger one, increase the number of batches.
@@ -158,6 +160,20 @@ the second phase, use:
 
 ```sh
     nohup time cargo run --profile maxperf --bin benchmark -- -n 10000 zipf
+```
+
+To validate pruning performance across the supported storage backends and
+branch factors, run the pruning benchmark in the four permutations (standard vs
+io-uring, branch factor 16 vs 256). Metrics are written to the path in
+`FIREWOOD_PRUNING_OUTPUT` (default `pruning-metrics.json`) and compared against
+`benchmark/baselines/pruning.json`. Override `FIREWOOD_PRUNING_BASELINE` to use a
+local baseline file when refreshing expectations.
+
+```sh
+cargo +nightly run -p firewood-benchmark -- pruning
+cargo +nightly run -p firewood-benchmark --features io-uring -- pruning
+cargo +nightly run -p firewood-benchmark --features branch_factor_256 -- pruning
+cargo +nightly run -p firewood-benchmark --features "io-uring branch_factor_256" -- pruning
 ```
 
 If you're looking for detailed logging, there are some command line options to enable it. For example, to enable debug logging for the single benchmark, you can use the following:
