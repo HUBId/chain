@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use blake3::hash;
@@ -14,6 +14,7 @@ use crate::types::{
     AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, SignedTransaction,
     UptimeClaim,
 };
+use prover_backend_interface::crash_reports::{CrashContextGuard, CrashReportHook};
 use rpp_p2p::{ProofCacheMetrics, ProofCacheMetricsSnapshot};
 use rpp_pruning::Envelope;
 
@@ -561,6 +562,16 @@ fn proof_system_label(system: ProofSystemKind) -> &'static str {
     }
 }
 
+fn install_zk_crash_reports() -> &'static Option<CrashReportHook> {
+    static HOOK: OnceLock<Option<CrashReportHook>> = OnceLock::new();
+    HOOK.get_or_init(|| CrashReportHook::install_from_env("verifier"))
+}
+
+fn crash_context_guard(system: ProofSystemKind, operation: &'static str) -> CrashContextGuard {
+    install_zk_crash_reports();
+    CrashContextGuard::enter(proof_system_label(system), operation)
+}
+
 /// Maintains verifier instances for all supported proof backends and provides
 /// ergonomic dispatch helpers for consumers that only work with the unified
 /// [`ChainProof`] abstraction.
@@ -1027,6 +1038,7 @@ impl ProofVerifierRegistry {
     {
         let verifier = self.proof_verifier(proof)?;
         let system = verifier.system();
+        let _crash_guard = crash_context_guard(system, operation);
         let fingerprint = proof_fingerprint(proof);
         let bypass = matches!(system, ProofSystemKind::Stwo) && self.stwo.is_bypass();
         let span = info_span!(
@@ -1065,6 +1077,7 @@ impl ProofVerifierRegistry {
     where
         F: FnOnce() -> ChainResult<T>,
     {
+        let _crash_guard = crash_context_guard(system, operation);
         let bypass = matches!(system, ProofSystemKind::Stwo) && self.stwo.is_bypass();
         if bypass {
             warn!(

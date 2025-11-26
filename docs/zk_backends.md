@@ -119,6 +119,12 @@
         - source_labels: [__address__]
           target_label: instance
   ```
+
+### Crash-Reports & RCA-Schritte
+
+- Prover- und Verifier-Prozesse installieren einen Panic-Hook, sobald `RPP_ZK_CRASH_REPORTS=true` gesetzt ist. Die Reports landen standardmäßig unter `logs/zk-crash-reports/*.json`; `RPP_ZK_CRASH_REPORT_DIR` überschreibt das Zielverzeichnis.【F:rpp/zk/backend-interface/src/crash_reports.rs†L14-L118】【F:.github/workflows/nightly.yml†L210-L273】
+- Jeder Report enthält Prozessrolle, Backend, Circuit, Panic-Message, Location und einen forcierten Backtrace, sodass Operator:innen auch bei abrupten Abbrüchen den Auslöser nachschlagen können. Der aktuelle Circuit-Kontext wird pro Proving- bzw. Verifier-Aufruf gesetzt.【F:prover/prover_stwo_backend/src/backend.rs†L21-L117】【F:rpp/proofs/proof_system/mod.rs†L1018-L1082】
+- CI lädt die JSON-Reports automatisch als Artefakt in den ZK-Nightly-Jobs (`zk-alert-probes`, `zk-penalty-guardrails`, `zk-load-harness`). Bei Prod-Incidents den Hook per Env-Flag aktivieren, den betroffenen Circuit aus dem Report abgleichen, die Backtrace-Fragmente gegen die Pipeline-Logs mappen und bei Bedarf die zugehörigen Witness-/Param-Artefakte erneut verifizieren, bevor der Prozess neu gestartet wird.【F:.github/workflows/nightly.yml†L210-L273】
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
 
