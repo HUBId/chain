@@ -88,7 +88,7 @@ output, log excerpts, and screenshots (for GUI flows) to satisfy audit trails.
 the GUI or CLI respects `[wallet.gui].auto_lock_secs` (default 300 s).【F:config/wallet.toml†L61-L74】
 2. **Sync and chain head verification** – Observe the sync task until
 `wallet_sync_status` reports the target height. Confirm `wallet.engine.birthday_height`
-when restoring from older seeds to avoid missing historical deposits.【F:docs/wallet_phase4_advanced.md†L55-L57】
+when restoring from older seeds to avoid missing historical deposits. If synced height stalls or lags the chain tip by >20 blocks, jump to the lag investigation workflow in §6 before retrying a restart.【F:docs/wallet_phase4_advanced.md†L55-L57】
 3. **Receive funds** – Derive a new external address via `rpp-wallet address new`
 or GUI equivalent, send a regtest transfer, and watch Electrs indexers produce a
 new digest with proof/VRF metadata. Use the tracker scenario as a reference for
@@ -153,10 +153,13 @@ it to the change record.【F:Makefile†L1-L40】
 | `WatchOnlyError::SigningDisabled` or `WatchOnlyError::BroadcastDisabled` when attempting to send | Watch-only mode still active or the daemon failed to reload after toggling config | Disable watch-only, restart the runtime, and confirm the lock screen clears before retrying.【F:rpp/wallet/src/wallet/mod.rs†L59-L210】 |
 | `WalletError::HardwareFeatureDisabled` / `HardwareUnavailable` | Binary lacks `wallet_hw` or `[wallet.hw].enabled` remains false | Rebuild with `--features wallet_hw` and enable the config scope once devices are connected.【F:rpp/wallet/src/wallet/mod.rs†L68-L82】【F:config/wallet.toml†L47-L55】 |
 | TLS handshake failures in logs | CA chain, certificate paths, or RBAC bindings mismatched | Inspect the wallet log (`RPP_WALLET_LOG_LEVEL=debug`) and re-stage certificates per the Phase 4 RPC security section.【F:docs/wallet_phase4_advanced.md†L109-L140】【F:scripts/run_wallet_mode.sh†L12-L47】 |
+| Wallet height is >20 blocks behind chain tip or last sync success >10 m ago | Gossip endpoints unreachable, stalled tracker, or telemetry/probe mismatch | Compare `/health/ready` heights against Grafana’s `rpp.runtime.wallet.sync.*` panels (see `wallet_monitoring.md`). If both show lag, test gossip endpoints and node reachability, then trigger a controlled restart. If probes show current height but metrics lag, treat as scrape/OTLP drift and re-scrape before restarting. |
 | Sync stalls / `RouterError::Sync` codes | Node gossip endpoints unreachable or birthday height mis-set | Verify `[node].gossip_endpoints` connectivity and adjust `wallet.engine.birthday_height` before rescanning.【F:config/wallet.toml†L107-L143】【F:docs/wallet_phase4_advanced.md†L55-L57】 |
 
 Reference the [wallet troubleshooting catalog](troubleshooting/wallet.md) for a
 longer list of RPC/CLI error codes, health checks, and diagnostic commands.
+
+Lag alerts raised from `wallet_monitoring.md` should always run through the health-probe workflow below so responders can distinguish real catch-up issues from telemetry drift before recycling the process.
 
 **Health probes** – `/health/ready` now includes wallet-specific booleans:
 `wallet_signer_ready` (watch-only or signer failures), `wallet_connected`
@@ -164,8 +167,13 @@ longer list of RPC/CLI error codes, health checks, and diagnostic commands.
 When those three values are all `true`, the payload also exposes
 `wallet_synced_height`, `wallet_chain_tip`, `wallet_sync_lag`, and
 `wallet_last_sync_timestamp` so operators can confirm the daemon is caught up
-and quantify drift before accepting traffic. Alert on any `false` response and
-correlate with watcher logs or keystore mounts before restarting the runtime.
+and quantify drift before accepting traffic. Use the probes as the first step of
+the lag workflow:
+
+1. Compare `wallet_synced_height` vs. `wallet_chain_tip` and the reported `wallet_sync_lag`; treat >20 blocks for >5 m as actionable lag.
+2. Check `wallet_last_sync_timestamp`; if older than 10 m and `wallet_connected=false`, test gossip endpoints and node RPC reachability before restarting.
+3. Cross-check Grafana’s `rpp.runtime.wallet.sync.*` panels; if probes show current height but metrics lag, re-run scrapes/OTLP exporters before restarting the wallet.
+4. After connectivity is restored, restart the runtime once, monitor the lag panel for a descending trend, and only escalate to a rescan when lag increases or plateaus for two consecutive intervals.
 
 **Log locations** – When running via `scripts/run_wallet_mode.sh`, STDOUT/ERR is
 the primary log stream. Override `RPP_WALLET_LOG_LEVEL` or pass
