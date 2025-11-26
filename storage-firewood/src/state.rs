@@ -221,6 +221,11 @@ impl FirewoodState {
             self.options.sync_policy == SyncPolicy::Always,
         )?;
 
+        {
+            let mut kv = self.kv.lock();
+            kv.gc_wal()?;
+        }
+
         Ok((root, proof))
     }
 

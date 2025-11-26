@@ -61,11 +61,17 @@ The pruning runbooks document how to adjust cadence, inspect receipts, and
 monitor the status stream, rounding out the operational story for the automated
 worker.【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/pruning_operations.md†L1-L120】
 
-## WAL sizing and sync policy guidance
+## WAL sizing, retention, and sync policy guidance
 
-Firewood retains the three most recent commit boundaries in the WAL, trimming
-older sequences after every fsync to keep the log bounded even on long-running
-validators.【F:storage-firewood/src/kv.rs†L26-L45】【F:storage-firewood/src/kv.rs†L236-L248】
+Firewood retains the three most recent commit boundaries in the WAL and only
+garbage-collects older sequences after pruning checkpoints succeed. The pruning
+pipeline persists manifests and proofs first; once those writes return
+successfully, the runtime trims the WAL back to the earliest retained commit so
+recoveries replay a complete transaction window without risking partial
+truncation.【F:storage-firewood/src/state.rs†L60-L120】【F:storage-firewood/src/kv.rs†L24-L54】【F:storage-firewood/src/kv.rs†L234-L266】
+If checkpoint persistence fails, WAL GC is skipped and the full history remains
+available for post-mortem replay.
+
 Each append is flushed immediately and the `FileWal::sync` path issues
 `sync_data` calls so committed transactions survive power loss.【F:storage-firewood/src/wal.rs†L100-L129】
 Operators therefore size the WAL by multiplying the expected per-block write

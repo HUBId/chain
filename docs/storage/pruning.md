@@ -45,6 +45,12 @@ The scenarios:
    `backend-rpp-stark` lane replays the bundled golden vector to ensure
    verifier state stays aligned with snapshot contents.
 
+WAL cleanup rides along with the checkpoint workflow: once pruning manifests
+and proofs persist successfully, the runtime trims the WAL back to the oldest
+retained commit boundary. If any persistence step fails, GC is skipped so
+operators can replay the full WAL when debugging snapshot issues, and rerunning
+the snapshot job replays the GC hook after the checkpoint lands.【F:storage-firewood/src/state.rs†L60-L120】【F:storage-firewood/src/kv.rs†L234-L266】
+
 ## Signals to watch
 
 * The pruning plan tip height/hash/state-root should match the finalized head
