@@ -243,6 +243,100 @@
       ],
       "title": "Uptime Observation Gap & Prover Latency",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Overlays finality lag with pruning and snapshot maintenance markers so operators can line up regressions with start/end events.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "max_over_time(finality_lag_slots{environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} finality lag (slots)",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(rpp_node_pruning_window_events_total{phase=\"start\",environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} pruning start",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(rpp_node_pruning_window_events_total{phase=\"end\",environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} pruning end",
+          "refId": "C"
+        },
+        {
+          "expr": "increase(rpp_node_snapshot_validator_scan_events_total{phase=\"start\",environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} snapshot validation start",
+          "refId": "D"
+        },
+        {
+          "expr": "increase(rpp_node_snapshot_validator_scan_events_total{phase=\"end\",environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} snapshot validation end",
+          "refId": "E"
+        }
+      ],
+      "title": "Finality & Maintenance Windows",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tracks uptime observation age alongside pruning and snapshot windows to confirm maintenance does not stall crediting.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "max_over_time(uptime_observation_age_seconds{environment=~\"$environment\"}[5m])",
+          "legendFormat": "{{environment}} uptime observation age",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(rpp_node_pruning_window_events_total{phase=\"start\",environment=~\"$environment\"}[10m])",
+          "legendFormat": "{{environment}} pruning window start",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(rpp_node_snapshot_validator_scan_events_total{phase=\"start\",environment=~\"$environment\"}[10m])",
+          "legendFormat": "{{environment}} snapshot validation start",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(rpp_node_uptime_cycle_total{environment=~\"$environment\",outcome=\"success\"}[15m])",
+          "legendFormat": "{{environment}} uptime success rate",
+          "refId": "D"
+        }
+      ],
+      "title": "Uptime Impact of Maintenance",
+      "type": "timeseries"
     }
   ]
 }

@@ -637,6 +637,7 @@ async fn run_worker(
 
         let cycle_reason: CycleReason = reason.into();
         let started_at = Instant::now();
+        metrics.record_window_start(cycle_reason);
         match run_pruning_cycle(&node, chunk_size, retention_depth) {
             Ok(mut status) => {
                 let elapsed = started_at.elapsed();
@@ -657,6 +658,7 @@ async fn run_worker(
                     elapsed,
                     status.as_ref(),
                 );
+                metrics.record_window_end(cycle_reason, CycleOutcome::Success);
             }
             Err(err) => {
                 let error_label = classify_pruning_error(&err);
@@ -667,6 +669,7 @@ async fn run_worker(
                     None,
                 );
                 metrics.record_failure(cycle_reason, error_label);
+                metrics.record_window_end(cycle_reason, CycleOutcome::Failure);
                 warn!(?err, error = error_label, "pruning cycle failed");
             }
         }

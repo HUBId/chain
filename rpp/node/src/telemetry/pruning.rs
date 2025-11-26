@@ -13,6 +13,7 @@ static METRICS: OnceLock<PruningMetrics> = OnceLock::new();
 pub struct PruningMetrics {
     cycle_duration_ms: Histogram<f64>,
     cycle_total: Counter<u64>,
+    window_events: Counter<u64>,
     keys_processed: Histogram<u64>,
     time_remaining_ms: Histogram<f64>,
     failures_total: Counter<u64>,
@@ -41,6 +42,13 @@ impl PruningMetrics {
         let cycle_total = meter
             .u64_counter("rpp.node.pruning.cycle_total")
             .with_description("Total pruning cycle executions grouped by trigger reason and result")
+            .with_unit("1")
+            .build();
+        let window_events = meter
+            .u64_counter("rpp.node.pruning.window_events_total")
+            .with_description(
+                "Maintenance window events for pruning cycles grouped by phase and result",
+            )
             .with_unit("1")
             .build();
         let keys_processed = meter
@@ -110,6 +118,7 @@ impl PruningMetrics {
         Self {
             cycle_duration_ms,
             cycle_total,
+            window_events,
             keys_processed,
             time_remaining_ms,
             failures_total,
@@ -175,6 +184,24 @@ impl PruningMetrics {
                 self.time_remaining_ms.record(estimate_ms, &estimate_attrs);
             }
         }
+    }
+
+    pub fn record_window_start(&self, reason: CycleReason) {
+        let attrs = self.with_base_labels([
+            KeyValue::new("reason", reason.as_str()),
+            KeyValue::new("phase", "start"),
+            KeyValue::new("result", "pending"),
+        ]);
+        self.window_events.add(1, &attrs);
+    }
+
+    pub fn record_window_end(&self, reason: CycleReason, outcome: CycleOutcome) {
+        let attrs = self.with_base_labels([
+            KeyValue::new("reason", reason.as_str()),
+            KeyValue::new("phase", "end"),
+            KeyValue::new("result", outcome.as_str()),
+        ]);
+        self.window_events.add(1, &attrs);
     }
 
     pub fn record_failure(&self, reason: CycleReason, error: &'static str) {
