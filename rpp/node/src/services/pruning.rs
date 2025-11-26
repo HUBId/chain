@@ -404,14 +404,21 @@ async fn run_worker(
 
         let cycle_reason: CycleReason = reason.into();
         let started_at = Instant::now();
-        match run_pruning_cycle(&node, chunk_size, retention_depth, &status_tx) {
-            Ok(status) => {
-                metrics.record_cycle(
-                    cycle_reason,
-                    CycleOutcome::Success,
-                    started_at.elapsed(),
-                    status.as_ref(),
-                );
+        match run_pruning_cycle(&node, chunk_size, retention_depth) {
+            Ok(mut status) => {
+                let elapsed = started_at.elapsed();
+                if let Some(job_status) = status.as_mut() {
+                    job_status.estimated_time_remaining_ms =
+                        job_status.estimate_time_remaining_ms(elapsed);
+                }
+
+                if let Err(err) = status_tx.send(status.clone()) {
+                    debug!(?err, "pruning status watchers dropped");
+                }
+
+                node.update_pruning_status(status.clone());
+
+                metrics.record_cycle(cycle_reason, CycleOutcome::Success, elapsed, status.as_ref());
             }
             Err(err) => {
                 let error_label = classify_pruning_error(&err);
@@ -434,11 +441,6 @@ fn run_pruning_cycle(
     node: &NodeHandle,
     chunk_size: usize,
     retention_depth: u64,
-    status_tx: &watch::Sender<Option<PruningJobStatus>>,
 ) -> Result<Option<PruningJobStatus>, rpp_chain::errors::ChainError> {
-    let status = node.run_pruning_cycle(chunk_size, retention_depth)?;
-    if let Err(err) = status_tx.send(status.clone()) {
-        debug!(?err, "pruning status watchers dropped");
-    }
-    Ok(status)
+    node.run_pruning_cycle(chunk_size, retention_depth)
 }

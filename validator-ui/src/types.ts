@@ -151,6 +151,7 @@ export interface PruningJobStatus {
   persisted_path?: string | null;
   stored_proofs: number[];
   last_updated: number;
+  estimated_time_remaining_ms?: number | null;
 }
 
 export interface BackendVerificationMetrics {

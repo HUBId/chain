@@ -1215,6 +1215,28 @@ async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary
     })
 }
 
+fn format_pruning_eta(eta_ms: Option<u64>) -> String {
+    match eta_ms {
+        Some(ms) => {
+            let total_seconds = ms / 1_000;
+            let hours = total_seconds / 3_600;
+            let minutes = (total_seconds % 3_600) / 60;
+            let seconds = total_seconds % 60;
+
+            if hours > 0 {
+                format!("{}h {}m {}s", hours, minutes, seconds)
+            } else if minutes > 0 {
+                format!("{}m {}s", minutes, seconds)
+            } else if seconds > 0 {
+                format!("{}s", seconds)
+            } else {
+                "<1s".to_string()
+            }
+        }
+        None => "calculating".to_string(),
+    }
+}
+
 fn render_health_summary(summary: &HealthSummary) {
     println!("Overall: {:?}", summary.overall);
     if let Some(ready) = summary.readiness.as_ref() {
@@ -1262,9 +1284,10 @@ fn render_health_summary(summary: &HealthSummary) {
 
     if let Some(pruning) = summary.pruning.as_ref() {
         println!(
-            "Pruning: pending_missing_heights={} stored_proofs={}",
+            "Pruning: pending_missing_heights={} stored_proofs={} eta={}",
             pruning.missing_heights.len(),
-            pruning.stored_proofs.len()
+            pruning.stored_proofs.len(),
+            format_pruning_eta(pruning.estimated_time_remaining_ms)
         );
     } else {
         println!("Pruning: no active job reported");

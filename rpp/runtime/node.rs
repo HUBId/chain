@@ -724,6 +724,30 @@ pub struct PruningJobStatus {
     pub persisted_path: Option<String>,
     pub stored_proofs: Vec<u64>,
     pub last_updated: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_time_remaining_ms: Option<u64>,
+}
+
+impl PruningJobStatus {
+    pub fn estimate_time_remaining_ms(&self, cycle_duration: Duration) -> Option<u64> {
+        let processed = self.stored_proofs.len() as u64;
+        let remaining = self
+            .missing_heights
+            .len()
+            .saturating_sub(self.stored_proofs.len()) as u64;
+
+        if processed == 0 || remaining == 0 {
+            return None;
+        }
+
+        let per_key_ms = cycle_duration.as_secs_f64() * 1_000.0 / processed as f64;
+        let estimate = per_key_ms * remaining as f64;
+        if estimate.is_finite() && estimate.is_sign_positive() {
+            Some(estimate.round() as u64)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4435,6 +4459,10 @@ impl NodeHandle {
         self.inner.pruning_job_status()
     }
 
+    pub fn update_pruning_status(&self, status: Option<PruningJobStatus>) {
+        self.inner.update_pruning_status(status);
+    }
+
     pub fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {
         self.inner.state_sync_plan(chunk_size)
     }
@@ -5771,6 +5799,7 @@ impl NodeInner {
             persisted_path: persisted_path.map(|path| path.to_string_lossy().to_string()),
             stored_proofs,
             last_updated,
+            estimated_time_remaining_ms: None,
         };
         if let Some(path) = status.persisted_path.as_ref() {
             info!(?path, "persisted pruning snapshot plan");
@@ -5792,6 +5821,11 @@ impl NodeInner {
 
     fn pruning_job_status(&self) -> Option<PruningJobStatus> {
         self.pruning_status.read().clone()
+    }
+
+    fn update_pruning_status(&self, status: Option<PruningJobStatus>) {
+        let mut slot = self.pruning_status.write();
+        *slot = status;
     }
 
     fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {

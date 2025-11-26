@@ -92,6 +92,12 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    estimated time exceeds the cadence window or `failures_total` increments with
    `error="storage"`, escalate using the stalled/slow alerts documented in the
    observability guide.【F:rpp/node/src/telemetry/pruning.rs†L31-L97】
+   The ETA reported in CLI health checks and `time_remaining_ms` comes from the
+   most recent pruning cycle: the worker divides the last cycle duration by the
+   number of proofs written to determine per-key throughput, multiplies that
+   pace by the remaining backlog (`missing_heights - stored_proofs`), and drops
+   the estimate when no proofs were produced so dashboards do not render stale
+   values.【F:rpp/node/src/services/pruning.rs†L135-L191】【F:rpp/runtime/node.rs†L720-L789】【F:rpp/node/src/telemetry/pruning.rs†L102-L180】
 
 ## 5. Post-change verification
 
