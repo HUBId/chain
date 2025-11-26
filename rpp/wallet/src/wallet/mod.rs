@@ -14,7 +14,7 @@ use crate::db::{
 };
 use crate::engine::signing::{
     build_wallet_prover, DraftProverContext, ProveResult, ProverError as EngineProverError,
-    ProverIdentity, ProverMeta as EngineProverMeta, WalletProver, WitnessPlan,
+    ProverIdentity, ProverMeta as EngineProverMeta, ProverPriority, WalletProver, WitnessPlan,
 };
 use crate::engine::{
     DerivationPath, DraftBundle, DraftTransaction, EngineError, FeeQuote, SpendModel,
@@ -1354,7 +1354,9 @@ mod tests {
             plan: WitnessPlan,
         ) -> Result<ProveResult, ProverError> {
             let backend = self.identity().backend;
-            let permit = self.jobs.acquire()?;
+            let permit = self
+                .jobs
+                .acquire(backend, ProverPriority::ConsensusCritical)?;
             let handle = Handle::try_current().map_err(|err| {
                 ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
             })?;

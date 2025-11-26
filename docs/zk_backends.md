@@ -84,6 +84,7 @@
   Fallback-Tests unter `rpp/wallet/src/engine/signing/prover.rs` simulieren Überlast auf `prepare`- und `prove`-Pfaden und
   verifizieren, dass die Sekundär-Backends greifen, während Size-Gates weiter enforced bleiben
   (`cargo test -p rpp-wallet --features prover-mock fallback_router_ -- --nocapture`).【F:rpp/wallet/src/engine/signing/prover.rs†L996-L1060】
+- Prover-Queue-Prioritäten: `wallet.prover.priority_slots` reserviert einen Anteil der `max_concurrency`-Permits für konsenskritische Jobs; Hintergrundproving wird verworfen, sobald diese Reserven benötigt werden. Die Queue-Metriken `wallet.prover.queue.{enqueued,pending,dropped}` und `wallet.prover.queue.backpressure` tragen das Label `{backend,class}` (z. B. `class="consensus"`) und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die neuen Lasttests im Prover-Modul decken die Reservierung und Backpressure-Signale ab und verhindern Regressionen im Prioritätsmodell (`cargo test -p rpp-wallet background_jobs_respect_reserved_capacity -- --nocapture`).【F:rpp/wallet/src/config/wallet.rs†L267-L380】【F:rpp/wallet/src/engine/signing/prover.rs†L574-L1520】
 - Die Drill `zk-penalty-guardrails` lässt sowohl RPP-STARK- als auch STWO-Backends eine verpasste Slot- und Double-Sign-Sequenz
    durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
    Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden

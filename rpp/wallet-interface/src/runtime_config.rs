@@ -925,6 +925,8 @@ pub struct WalletProverSettings {
     pub timeout_secs: u64,
     /// Maximum witness size (in bytes) accepted from prover backends.
     pub max_witness_bytes: u64,
+    /// Concurrency reserved for consensus-critical prover jobs.
+    pub priority_slots: u32,
     /// Upper bound on concurrent prover jobs executed by the runtime.
     pub max_concurrency: u32,
     /// Optional fallback backend to route proofs to when the primary is overloaded.
@@ -941,6 +943,7 @@ impl Default for WalletProverSettings {
             allow_broadcast_without_proof: false,
             timeout_secs: DEFAULT_PROVER_TIMEOUT_SECS,
             max_witness_bytes: DEFAULT_PROVER_MAX_WITNESS_BYTES,
+            priority_slots: DEFAULT_PROVER_MAX_CONCURRENCY,
             max_concurrency: DEFAULT_PROVER_MAX_CONCURRENCY,
             fallback_backend: None,
         }
@@ -1482,6 +1485,17 @@ fn validate_wallet_prover(config: &WalletProverSettings) -> RuntimeConfigResult<
     if config.max_concurrency == 0 {
         return Err(RuntimeConfigError::InvalidConfig(
             "wallet configuration wallet.prover.max_concurrency must be greater than 0".into(),
+        ));
+    }
+    if config.priority_slots == 0 {
+        return Err(RuntimeConfigError::InvalidConfig(
+            "wallet configuration wallet.prover.priority_slots must be greater than 0".into(),
+        ));
+    }
+    if config.priority_slots > config.max_concurrency {
+        return Err(RuntimeConfigError::InvalidConfig(
+            "wallet configuration wallet.prover.priority_slots cannot exceed max_concurrency"
+                .into(),
         ));
     }
     if config.require_proof && config.allow_broadcast_without_proof {
