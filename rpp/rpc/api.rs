@@ -79,8 +79,8 @@ use crate::orchestration::{
     PipelineTelemetrySummary,
 };
 use crate::proof_system::{
-    BackendVerificationMetrics, BackendVerificationOutcome, BackendVerificationSnapshot,
-    VerifierMetricsSnapshot,
+    verifier_sla_status, BackendSlaStatus, BackendVerificationMetrics, BackendVerificationOutcome,
+    BackendVerificationSnapshot, VerifierMetricsSnapshot,
 };
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
@@ -441,6 +441,8 @@ pub struct ApiContext {
     test_subsystem_status: Option<HealthSubsystemStatus>,
     #[cfg(test)]
     test_node_ready: Option<bool>,
+    #[cfg(test)]
+    test_backend_metrics: Option<VerifierMetricsSnapshot>,
 }
 
 impl ApiContext {
@@ -519,6 +521,8 @@ impl ApiContext {
             test_subsystem_status: None,
             #[cfg(test)]
             test_node_ready: None,
+            #[cfg(test)]
+            test_backend_metrics: None,
         }
     }
 
@@ -686,6 +690,10 @@ impl ApiContext {
     }
 
     fn backend_status(&self) -> Option<HealthBackendStatus> {
+        #[cfg(test)]
+        if let Some(snapshot) = self.test_backend_metrics.clone() {
+            return Some(health_backend_status(snapshot));
+        }
         self.node_for_mode()
             .map(|node| health_backend_status(node.verifier_metrics()))
     }
@@ -715,30 +723,31 @@ impl ApiContext {
             wallet_chain_tip,
             wallet_sync_lag,
             wallet_last_sync_timestamp,
-        ) =
-            if mode.includes_wallet() {
-                if let Some(wallet) = self.wallet.as_ref() {
-                    let signer_ready = !wallet.is_watch_only();
-                    let connected = wallet.node_runtime_running();
-                    let key_cache_ready = wallet.keystore_path().exists();
-                    let (synced_height, chain_tip, last_sync_timestamp) = (None, None, None);
-                    let sync_lag = synced_height.zip(chain_tip).map(|(synced, tip)| tip.saturating_sub(synced));
+        ) = if mode.includes_wallet() {
+            if let Some(wallet) = self.wallet.as_ref() {
+                let signer_ready = !wallet.is_watch_only();
+                let connected = wallet.node_runtime_running();
+                let key_cache_ready = wallet.keystore_path().exists();
+                let (synced_height, chain_tip, last_sync_timestamp) = (None, None, None);
+                let sync_lag = synced_height
+                    .zip(chain_tip)
+                    .map(|(synced, tip)| tip.saturating_sub(synced));
 
-                    (
-                        signer_ready,
-                        connected,
-                        key_cache_ready,
-                        synced_height,
-                        chain_tip,
-                        sync_lag,
-                        last_sync_timestamp,
-                    )
-                } else {
-                    (false, false, false, None, None, None, None)
-                }
+                (
+                    signer_ready,
+                    connected,
+                    key_cache_ready,
+                    synced_height,
+                    chain_tip,
+                    sync_lag,
+                    last_sync_timestamp,
+                )
             } else {
-                (true, true, true, None, None, None, None)
-            };
+                (false, false, false, None, None, None, None)
+            }
+        } else {
+            (true, true, true, None, None, None, None)
+        };
 
         #[cfg(not(feature = "wallet-integration"))]
         let (
@@ -814,6 +823,12 @@ impl ApiContext {
     #[cfg(test)]
     pub fn with_test_subsystem_status(mut self, status: HealthSubsystemStatus) -> Self {
         self.test_subsystem_status = Some(status);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_test_backend_metrics(mut self, snapshot: VerifierMetricsSnapshot) -> Self {
+        self.test_backend_metrics = Some(snapshot);
         self
     }
 
@@ -1110,6 +1125,8 @@ struct HealthBackendStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_verification: Option<BackendVerificationSnapshot>,
     cache: ProofCacheMetricsSnapshot,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sla: BTreeMap<String, BackendSlaStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -2706,11 +2723,21 @@ async fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
 
 async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
     let mode = state.current_mode();
+    let backend_status = state.backend_status();
+    let status = if backend_status
+        .as_ref()
+        .map(|status| status.sla.values().any(|sla| !sla.healthy))
+        .unwrap_or(false)
+    {
+        "degraded"
+    } else {
+        "ok"
+    };
     Json(HealthResponse {
-        status: "ok",
+        status,
         address: health_address(&state),
         role: mode.as_str(),
-        backend: state.backend_status(),
+        backend: backend_status,
         snapshot_breaker: state.snapshot_breaker_status(),
         subsystems: state.subsystem_status(),
     })
@@ -2749,10 +2776,16 @@ fn health_backend_status(snapshot: VerifierMetricsSnapshot) -> HealthBackendStat
         .map(|last| last.backend.clone())
         .or_else(|| snapshot.per_backend.keys().next().cloned());
 
+    let mut sla = BTreeMap::new();
+    for (backend, metrics) in snapshot.per_backend.iter() {
+        sla.insert(backend.clone(), verifier_sla_status(metrics));
+    }
+
     HealthBackendStatus {
         active_backend,
         last_verification: snapshot.last,
         cache: snapshot.cache,
+        sla,
     }
 }
 
@@ -4520,6 +4553,7 @@ mod health_tests {
         assert_eq!(status.active_backend.as_deref(), Some("rpp-stark"));
         assert_eq!(status.last_verification.as_ref(), snapshot.last.as_ref());
         assert_eq!(status.cache, snapshot.cache);
+        assert!(status.sla.contains_key("rpp-stark"));
     }
 
     #[test]
@@ -4534,6 +4568,76 @@ mod health_tests {
         assert!(status.active_backend.is_none());
         assert!(status.last_verification.is_none());
         assert_eq!(status.cache, ProofCacheMetricsSnapshot::default());
+        assert!(status.sla.is_empty());
+    }
+
+    #[tokio::test]
+    async fn health_degrades_when_sla_is_breached() {
+        let mode = Arc::new(RwLock::new(RuntimeMode::Validator));
+        let mut per_backend = BTreeMap::new();
+        per_backend.insert(
+            "rpp-stark".to_string(),
+            BackendVerificationMetrics {
+                accepted: 1,
+                rejected: 1,
+                bypassed: 0,
+                total_duration_ms: 20_000,
+            },
+        );
+        let snapshot = VerifierMetricsSnapshot {
+            per_backend,
+            cache: ProofCacheMetricsSnapshot::default(),
+            last: None,
+        };
+
+        let Json(response) = health(State(
+            ApiContext::new(mode, None, None, None, None, false, None, None, false)
+                .with_test_backend_metrics(snapshot),
+        ))
+        .await;
+
+        assert_eq!(response.status, "degraded");
+        let backend = response.backend.expect("backend status missing");
+        let sla = backend
+            .sla
+            .get("rpp-stark")
+            .expect("missing sla entry for rpp-stark");
+        assert!(!sla.healthy);
+        assert!(sla.error_rate.unwrap_or_default() > sla.error_budget.unwrap_or(1.0));
+    }
+
+    #[tokio::test]
+    async fn health_remains_ok_when_sla_is_met() {
+        let mode = Arc::new(RwLock::new(RuntimeMode::Validator));
+        let mut per_backend = BTreeMap::new();
+        per_backend.insert(
+            "rpp-stark".to_string(),
+            BackendVerificationMetrics {
+                accepted: 10,
+                rejected: 0,
+                bypassed: 0,
+                total_duration_ms: 10_000,
+            },
+        );
+        let snapshot = VerifierMetricsSnapshot {
+            per_backend,
+            cache: ProofCacheMetricsSnapshot::default(),
+            last: None,
+        };
+
+        let Json(response) = health(State(
+            ApiContext::new(mode, None, None, None, None, false, None, None, false)
+                .with_test_backend_metrics(snapshot),
+        ))
+        .await;
+
+        assert_eq!(response.status, "ok");
+        let backend = response.backend.expect("backend status missing");
+        let sla = backend
+            .sla
+            .get("rpp-stark")
+            .expect("missing sla entry for rpp-stark");
+        assert!(sla.healthy);
     }
 }
 

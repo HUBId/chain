@@ -125,7 +125,10 @@ Operationally, mirror the same guardrails:
 - Query `/status/node` before and after a restart to verify that
   `backend_health` contains at least one active prover entry and that epochs and
   block heights never decrease. Any decrease indicates stale snapshots or a
-  failed consensus recovery.
+  failed consensus recovery. The same payload now embeds backend SLA snapshots
+  (latency and error-rate) under `backend_health.<name>.verifier_sla` and
+  `backend_health.<name>.prover_sla`, mirroring the `/health` response used by
+  orchestrators.【F:rpp/runtime/node.rs†L289-L310】【F:rpp/rpc/api.rs†L1088-L1110】
 - Check the timetoke counters for validators in `/status/node` and `/ledger`
   outputs; hours should be monotonic across restarts, matching the test
   assertions. A drop requires manual replay of uptime proofs.
@@ -137,6 +140,47 @@ Operationally, mirror the same guardrails:
   should rapidly drain to zero as the mempool rehydrates and workflows
   re-execute. Stuck queues suggest mempool persistence corruption and should
   trigger a crash dump and rollback.
+
+## Health integration for orchestrators and Kubernetes
+
+- `/health` keeps returning HTTP 200 for monitoring stacks but now flips the
+  `status` field to `degraded` whenever any prover or verifier backend breaches
+  its SLA (latency above 8s on average or error rates above 2% for verifiers;
+  prover failures above 5%). Kubernetes liveness probes should continue to
+  treat the endpoint as available while alerting systems and orchestrators can
+  key off the `status` string to surface warnings without hard-restarting pods.
+  The per-backend SLA map is exposed under `backend.sla` for automation to
+  pinpoint which backend is failing.【F:rpp/proofs/proof_system/mod.rs†L332-L360】【F:rpp/rpc/api.rs†L2706-L2720】
+- `/health/ready` remains tied to readiness (e.g., pruning availability,
+  snapshot services, and wallet connectivity) and does not treat SLA breaches as
+  fatal. Pods should continue using the ready endpoint for traffic gating while
+  relying on `/health` for SLA visibility.【F:rpp/rpc/api.rs†L2769-L2799】
+- Orchestrators that flip backends during deployments can poll `/status/node`
+  and `/health` before and after the change, ensuring the active backend shows
+  a healthy SLA entry and that the prover error-rate budget is not exceeded.
+  Automate rollback when `backend.sla[active].healthy` is `false` for more than
+  a few consecutive checks.
+
+## Responding to SLA degradations
+
+When `/health` reports `status: degraded`, operators should:
+
+1. Inspect `backend_health` for the affected backend and whether latency or
+   error budget triggered the breach. Verifier SLA failures often surface as
+   rising rejection counts, while prover SLA regressions show increased
+   `failed_proofs` against the 5% budget.【F:rpp/runtime/node.rs†L7113-L7146】
+2. Cross-check backend logs for circuit-level errors and correlate with the
+   metrics driving the SLA breach. For verifier latency spikes, verify that
+   proof cache hit ratios remain healthy in the accompanying `cache` snapshot
+   and consider raising cache capacity before restarting nodes.【F:rpp/rpc/api.rs†L1097-L1110】
+3. If the degraded backend is optional (e.g., a secondary prover), mark it as
+   drained in the orchestrator and trigger a backend flip or restart so traffic
+   flows to the healthy backend. Capture `/health` and `/status/node` payloads
+   before and after the change for incident records.
+4. After mitigation, keep polling `/health` until the `status` field returns to
+   `ok` and the affected backend’s SLA entry reports `healthy: true`. Escalate to
+   the cryptography team if error rates remain above budget after retries or
+   cache tuning.
 
 ## Networking safeguards for on-call rotations
 

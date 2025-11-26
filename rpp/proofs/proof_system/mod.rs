@@ -349,6 +349,45 @@ pub struct BackendVerificationMetrics {
     pub total_duration_ms: u64,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct BackendSlaStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_budget_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_budget: Option<f64>,
+    pub healthy: bool,
+}
+
+impl BackendSlaStatus {
+    pub fn new(
+        latency_ms: Option<f64>,
+        error_rate: Option<f64>,
+        latency_budget_ms: Option<f64>,
+        error_budget: Option<f64>,
+    ) -> Self {
+        let latency_ok = match (latency_ms, latency_budget_ms) {
+            (Some(value), Some(budget)) => value <= budget,
+            _ => true,
+        };
+        let error_ok = match (error_rate, error_budget) {
+            (Some(value), Some(budget)) => value <= budget,
+            _ => true,
+        };
+
+        Self {
+            latency_ms,
+            latency_budget_ms,
+            error_rate,
+            error_budget,
+            healthy: latency_ok && error_ok,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub enum BackendVerificationOutcome {
     Accepted,
@@ -369,6 +408,30 @@ pub struct VerifierMetricsSnapshot {
     pub cache: ProofCacheMetricsSnapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last: Option<BackendVerificationSnapshot>,
+}
+
+const VERIFIER_LATENCY_SLA_MS: f64 = 8_000.0;
+const VERIFIER_ERROR_RATE_BUDGET: f64 = 0.02;
+
+pub fn verifier_sla_status(metrics: &BackendVerificationMetrics) -> BackendSlaStatus {
+    let attempts = metrics.accepted.saturating_add(metrics.rejected) as f64;
+    let latency_ms = if attempts > 0.0 {
+        Some(metrics.total_duration_ms as f64 / attempts)
+    } else {
+        None
+    };
+    let error_rate = if attempts > 0.0 {
+        Some(metrics.rejected as f64 / attempts)
+    } else {
+        None
+    };
+
+    BackendSlaStatus::new(
+        latency_ms,
+        error_rate,
+        Some(VERIFIER_LATENCY_SLA_MS),
+        Some(VERIFIER_ERROR_RATE_BUDGET),
+    )
 }
 
 impl Default for VerifierMetricsSnapshot {
@@ -1046,6 +1109,50 @@ mod tests {
         fn names(&self) -> Vec<String> {
             self.spans.lock().expect("record spans").clone()
         }
+    }
+
+    #[test]
+    fn verifier_sla_detects_breaches() {
+        let metrics = BackendVerificationMetrics {
+            accepted: 1,
+            rejected: 1,
+            bypassed: 0,
+            total_duration_ms: 10_000,
+        };
+
+        let sla = verifier_sla_status(&metrics);
+
+        assert!(!sla.healthy);
+        assert!(sla
+            .latency_ms
+            .zip(sla.latency_budget_ms)
+            .map(|(latency, budget)| latency > budget)
+            .unwrap_or(false));
+        assert!(sla
+            .error_rate
+            .zip(sla.error_budget)
+            .map(|(rate, budget)| rate > budget)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn verifier_sla_is_healthy_within_budget() {
+        let metrics = BackendVerificationMetrics {
+            accepted: 10,
+            rejected: 0,
+            bypassed: 0,
+            total_duration_ms: 5_000,
+        };
+
+        let sla = verifier_sla_status(&metrics);
+
+        assert!(sla.healthy);
+        assert_eq!(sla.error_rate, Some(0.0));
+        assert!(sla
+            .latency_ms
+            .zip(sla.latency_budget_ms)
+            .map(|(latency, budget)| latency <= budget)
+            .unwrap_or(false));
     }
 
     impl<S> Layer<S> for RecordingLayer

@@ -85,7 +85,8 @@ use crate::proof_backend::{
     WitnessHeader,
 };
 use crate::proof_system::{
-    BackendVerificationMetrics, ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot,
+    verifier_sla_status, BackendSlaStatus, BackendVerificationMetrics, ProofProver,
+    ProofVerifierRegistry, VerifierMetricsSnapshot,
 };
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
@@ -296,11 +297,31 @@ struct BackendProverHealthSnapshot;
 #[cfg(feature = "backend-plonky3")]
 type BackendProverHealthSnapshot = Plonky3BackendHealth;
 
+const PROVER_ERROR_RATE_BUDGET: f64 = 0.05;
+
+#[cfg(feature = "backend-plonky3")]
+fn plonky3_prover_sla(snapshot: &Plonky3BackendHealth) -> BackendSlaStatus {
+    let attempts = snapshot
+        .proofs_generated
+        .saturating_add(snapshot.failed_proofs) as f64;
+    let error_rate = if attempts > 0.0 {
+        Some(snapshot.failed_proofs as f64 / attempts)
+    } else {
+        None
+    };
+
+    BackendSlaStatus::new(None, error_rate, None, Some(PROVER_ERROR_RATE_BUDGET))
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct BackendHealthReport {
     pub verifier: BackendVerificationMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prover: Option<BackendProverHealthSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verifier_sla: Option<BackendSlaStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prover_sla: Option<BackendSlaStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -7114,10 +7135,12 @@ impl NodeInner {
         let mut backend_health = BTreeMap::new();
         for (backend, metrics) in verifier_metrics.per_backend {
             backend_health.insert(
-                backend,
+                backend.clone(),
                 BackendHealthReport {
+                    verifier_sla: Some(verifier_sla_status(&metrics)),
                     verifier: metrics,
                     prover: None,
+                    prover_sla: None,
                 },
             );
         }
@@ -7128,8 +7151,12 @@ impl NodeInner {
                 .or_insert_with(|| BackendHealthReport {
                     verifier: BackendVerificationMetrics::default(),
                     prover: None,
+                    verifier_sla: Some(verifier_sla_status(&BackendVerificationMetrics::default())),
+                    prover_sla: None,
                 });
-            entry.prover = Some(plonky3_prover_telemetry());
+            let prover_health = plonky3_prover_telemetry();
+            entry.prover_sla = Some(plonky3_prover_sla(&prover_health));
+            entry.prover = Some(prover_health);
         }
         Ok(NodeStatus {
             address: self.address.clone(),
