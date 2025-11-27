@@ -19,6 +19,14 @@ The RON wrapper points at `scenarios/uptime_soak.toml`, pins CPU/RAM guidance,
 and writes JSON/CSV summaries under the `summaries/` directory for dashboards or
 postmortems.【F:tools/simnet/scenarios/uptime_soak.ron†L1-L18】【F:scenarios/uptime_soak.toml†L1-L83】
 
+Propagation probes accompany the soak: every 30 seconds the harness publishes
+marker blocks and transactions from both trusted and untrusted peers and
+records per-class p95 latency. The analyzer fails the run when any class lacks
+samples or when overall, trusted, untrusted, or per-probe p95 exceeds the
+500 ms ceiling, and it emits `propagation_alert.json` (tagged via
+`SIM_BACKEND_LABEL` when set) in the artifacts bundle so slow meshes are visible
+without waiting for dashboard refreshes.【F:rpp/sim/src/harness.rs†L302-L355】【F:scripts/analyze_simnet.py†L450-L511】
+
 ## Alert probes
 
 Alert validation now includes uptime and finality-focused probes in addition to

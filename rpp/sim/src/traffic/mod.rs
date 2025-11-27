@@ -7,6 +7,8 @@ use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::metrics::PropagationProbeKind;
+
 pub use onoff_bursty::OnOffBursty;
 pub use poisson::PoissonTraffic;
 pub use zipf::{PublisherSelector, PublisherSelectorBuilder};
@@ -126,6 +128,31 @@ impl PayloadGenerator {
 
     pub fn next_payload(&mut self, message_counter: u64) -> Vec<u8> {
         let base = format!("{{\"message\":{message_counter}}}").into_bytes();
+        let base_len = base.len();
+        let target_len = if self.min_bytes == self.max_bytes {
+            self.min_bytes.max(base_len)
+        } else {
+            self.rng
+                .gen_range(self.min_bytes..=self.max_bytes)
+                .max(base_len)
+        };
+
+        let mut payload = base;
+        if payload.len() < target_len {
+            let original_len = payload.len();
+            payload.resize(target_len, 0);
+            self.rng.fill(&mut payload[original_len..]);
+        }
+
+        payload
+    }
+
+    pub fn probe_payload(&mut self, probe_kind: PropagationProbeKind, sequence: u64) -> Vec<u8> {
+        let base = format!(
+            "{{\"probe\":\"{}\",\"sequence\":{sequence}}}",
+            probe_kind.as_str()
+        )
+        .into_bytes();
         let base_len = base.len();
         let target_len = if self.min_bytes == self.max_bytes {
             self.min_bytes.max(base_len)

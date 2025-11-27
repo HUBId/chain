@@ -7,8 +7,9 @@ use rpp_p2p::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{
-    calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, PeerTrafficRecord,
-    RecoveryMetrics, ReplayGuardDrops, ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics,
+    calculate_percentiles, propagation_by_peer_class, propagation_by_probe_kind, BandwidthMetrics,
+    GossipBackpressureMetrics, PeerTrafficRecord, PropagationProbeKind, RecoveryMetrics,
+    ReplayGuardDrops, ReplayGuardMetrics, ReplayWindowFill, ResourceUsageMetrics,
     SimulationSummary,
 };
 use rpp_p2p::peerstore::peer_class::PeerClass;
@@ -20,6 +21,7 @@ pub enum SimEvent {
         message_id: String,
         payload_bytes: usize,
         timestamp: Instant,
+        probe_kind: Option<PropagationProbeKind>,
     },
     Receive {
         peer_id: PeerId,
@@ -87,8 +89,10 @@ pub struct SlowPeerRecord {
 
 pub struct Collector {
     start: Instant,
-    publications: HashMap<String, Instant>,
+    publications: HashMap<String, PublicationMeta>,
     latencies_ms: Vec<f64>,
+    latencies_by_peer_class: HashMap<String, Vec<f64>>,
+    latencies_by_probe_kind: HashMap<PropagationProbeKind, Vec<f64>>,
     total_publishes: usize,
     total_receives: usize,
     duplicates: usize,
@@ -117,6 +121,8 @@ impl Collector {
             start,
             publications: HashMap::new(),
             latencies_ms: Vec::new(),
+            latencies_by_peer_class: HashMap::new(),
+            latencies_by_probe_kind: HashMap::new(),
             total_publishes: 0,
             total_receives: 0,
             duplicates: 0,
@@ -147,9 +153,16 @@ impl Collector {
                 message_id,
                 payload_bytes,
                 timestamp,
+                probe_kind,
             } => {
                 self.total_publishes += 1;
-                self.publications.insert(message_id, timestamp);
+                self.publications.insert(
+                    message_id,
+                    PublicationMeta {
+                        timestamp,
+                        probe_kind,
+                    },
+                );
                 self.record_outbound(&peer_id, payload_bytes);
                 tracing::trace!(target = "rpp::sim::metrics", %peer_id, "publish recorded");
             }
@@ -186,9 +199,22 @@ impl Collector {
                         }
                     }
                 }
-                if let Some(published_at) = self.publications.get(&message_id) {
-                    let delta = timestamp.duration_since(*published_at).as_secs_f64() * 1_000.0;
+                if let Some(published) = self.publications.get(&message_id) {
+                    let delta =
+                        timestamp.duration_since(published.timestamp).as_secs_f64() * 1_000.0;
                     self.latencies_ms.push(delta);
+                    let class_bucket = self
+                        .latencies_by_peer_class
+                        .entry(peer_class_label(peer_class).to_string())
+                        .or_default();
+                    class_bucket.push(delta);
+
+                    if let Some(kind) = published.probe_kind {
+                        self.latencies_by_probe_kind
+                            .entry(kind)
+                            .or_default()
+                            .push(delta);
+                    }
                 }
                 if let Some(partition_end) = self.pending_partition_end.take() {
                     let resume_latency =
@@ -268,10 +294,19 @@ impl Collector {
         self.resource_usage = Some(usage);
     }
 
-    pub fn finalize(mut self) -> SimulationSummary {
+    pub fn finalize(mut self, backend_label: Option<String>) -> SimulationSummary {
         self.latencies_ms
             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        for values in self.latencies_by_peer_class.values_mut() {
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        }
+        for values in self.latencies_by_probe_kind.values_mut() {
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        }
         let propagation = calculate_percentiles(&self.latencies_ms);
+        let propagation_by_peer_class = propagation_by_peer_class(&self.latencies_by_peer_class);
+        let propagation_probes =
+            propagation_by_probe_kind(&self.latencies_by_probe_kind, backend_label.clone());
         let recovery = if !self.resume_latencies_ms.is_empty() || self.chunk_retries > 0 {
             let max_resume_latency =
                 self.resume_latencies_ms
@@ -373,6 +408,8 @@ impl Collector {
             chunk_retries: self.chunk_retries,
             replay_guard,
             propagation,
+            propagation_by_peer_class,
+            propagation_probes,
             mesh_changes: self.mesh_changes,
             faults: self.faults,
             recovery,
@@ -381,6 +418,7 @@ impl Collector {
             peer_traffic,
             slow_peer_records: self.slow_peer_records,
             resource_usage: self.resource_usage,
+            backend: backend_label,
             comparison: None,
         }
     }
@@ -404,6 +442,12 @@ impl Collector {
         let entry = self.traffic_entry(peer_id);
         entry.bytes_in = entry.bytes_in.saturating_add(payload_bytes as u64);
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PublicationMeta {
+    timestamp: Instant,
+    probe_kind: Option<PropagationProbeKind>,
 }
 
 #[derive(Debug, Default)]

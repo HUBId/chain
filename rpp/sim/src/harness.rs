@@ -17,7 +17,8 @@ use tracing::info;
 
 use crate::faults::PartitionFault;
 use crate::metrics::{
-    exporters, Collector, FaultEvent, ResourceUsageMetrics, SimEvent, SimulationSummary,
+    exporters, Collector, FaultEvent, PropagationProbeKind, ResourceUsageMetrics, SimEvent,
+    SimulationSummary,
 };
 use crate::multiprocess;
 use crate::node_adapter::{classify_peer_id, spawn_node, Node, NodeHandle};
@@ -64,6 +65,10 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
 
     let topic = IdentTopic::new("/rpp/sim/tx");
     let node_count = scenario.topology.n;
+    let backend_label = std::env::var("SIM_BACKEND_LABEL")
+        .ok()
+        .or_else(|| scenario.sim.mode.clone())
+        .unwrap_or_else(|| "inprocess".to_string());
 
     info!(
         target = "rpp::sim::harness",
@@ -298,8 +303,25 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     let total_duration = Duration::from_millis(scenario.sim.duration_ms);
     let mut elapsed = Duration::ZERO;
     let mut message_counter: u64 = 0;
+    let mut probe_sequence: u64 = 0;
+    let mut next_probe_at = Duration::ZERO;
+    let probe_interval = Duration::from_secs(30);
 
     while elapsed < total_duration {
+        while elapsed >= next_probe_at && next_probe_at <= total_duration {
+            emit_propagation_probes(
+                &handles,
+                &peer_classes,
+                &mut payload_generator,
+                &mut probe_sequence,
+            )
+            .await?;
+            next_probe_at = next_probe_at.saturating_add(probe_interval);
+            if probe_interval.is_zero() {
+                break;
+            }
+        }
+
         let step = match traffic.next_step() {
             Some(step) => step,
             None => {
@@ -389,7 +411,7 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     if let Some(resource_usage) = capture_resource_usage(collector_start, end_time) {
         collector.record_resource_usage(resource_usage);
     }
-    let summary = collector.finalize();
+    let summary = collector.finalize(Some(backend_label.clone()));
 
     for traffic in &summary.peer_traffic {
         info!(
@@ -527,6 +549,36 @@ async fn disconnect_links(handles: &[NodeHandle], annotated: &[AnnotatedLink]) -
         let _ = task.await;
     }
     Ok(())
+}
+
+async fn emit_propagation_probes(
+    handles: &[NodeHandle],
+    peer_classes: &[PeerClass],
+    payload_generator: &mut PayloadGenerator,
+    probe_sequence: &mut u64,
+) -> Result<()> {
+    for class in [PeerClass::Trusted, PeerClass::Untrusted] {
+        let Some(publisher_idx) = pick_peer_by_class(peer_classes, class) else {
+            continue;
+        };
+
+        for kind in [
+            PropagationProbeKind::Block,
+            PropagationProbeKind::Transaction,
+        ] {
+            *probe_sequence = probe_sequence.saturating_add(1);
+            let payload = payload_generator.probe_payload(kind, *probe_sequence);
+            handles[publisher_idx]
+                .publish_probe(payload.clone(), kind)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn pick_peer_by_class(peer_classes: &[PeerClass], class: PeerClass) -> Option<usize> {
+    peer_classes.iter().position(|entry| *entry == class)
 }
 
 fn jittered_delay(
