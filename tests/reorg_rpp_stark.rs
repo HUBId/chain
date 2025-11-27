@@ -4,6 +4,7 @@
     feature = "wallet-ui"
 ))]
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
@@ -289,6 +290,62 @@ async fn reorgs_require_rpp_stark_proofs_and_recover() -> Result<()> {
             "chain should advance after recovery",
         );
 
+        let ordering_workflows = vec![
+            workflows
+                .transaction_bundle(primary.address.clone(), 1_500, 95, None)
+                .context("build high-fee workflow after reorg recovery")?,
+            workflows
+                .transaction_bundle(primary.address.clone(), 1_500, 55, None)
+                .context("build low-fee workflow after reorg recovery")?,
+        ];
+
+        for workflow in &ordering_workflows {
+            primary
+                .orchestrator
+                .submit_transaction(workflow.clone())
+                .await
+                .with_context(|| format!("submit ordering workflow {}", workflow.tx_hash))?;
+        }
+
+        let mut expected_order = ordering_workflows
+            .iter()
+            .map(|workflow| (workflow.tx_hash.clone(), workflow.fee, workflow.nonce))
+            .collect::<Vec<_>>();
+        expected_order.sort_by(|lhs, rhs| {
+            rhs.1
+                .cmp(&lhs.1)
+                .then(lhs.2.cmp(&rhs.2))
+        });
+        let expected_hashes: Vec<_> = expected_order
+            .iter()
+            .map(|(hash, _, _)| hash.clone())
+            .collect();
+
+        for workflow in &ordering_workflows {
+            for stage in stage_sequence {
+                primary
+                    .orchestrator
+                    .wait_for_stage(&workflow.tx_hash, stage, NETWORK_TIMEOUT)
+                    .await
+                    .with_context(|| format!("wait for ordering stage {stage:?} for {}", workflow.tx_hash))?;
+            }
+        }
+
+        let ordering_block = wait_for_block_with_hashes(primary, recovered_tip.header.height, &expected_hashes)
+            .await
+            .context("block containing post-reorg ordering workflows")?;
+        let observed: Vec<_> = ordering_block
+            .transactions
+            .iter()
+            .map(|tx| hex::encode(tx.hash()))
+            .filter(|hash| expected_hashes.contains(hash))
+            .collect();
+
+        ensure!(
+            observed == expected_hashes,
+            "post-reorg block should respect fee-first ordering: observed={observed:?} expected={expected_hashes:?}",
+        );
+
         Ok(())
     }
     .await;
@@ -338,6 +395,41 @@ async fn wait_for_height(
         {
             if block.header.height >= target_height {
                 return Ok(block);
+            }
+        }
+        sleep(POLL_INTERVAL).await;
+        attempts += 1;
+    }
+}
+
+async fn wait_for_block_with_hashes(
+    node: &support::cluster::TestClusterNode,
+    min_height: u64,
+    expected_hashes: &[String],
+) -> Result<Block> {
+    let mut attempts = 0usize;
+    let expected: HashSet<_> = expected_hashes.iter().cloned().collect();
+    loop {
+        if attempts >= MAX_BLOCK_ATTEMPTS {
+            return Err(anyhow!(
+                "timed out waiting for block containing {:?}",
+                expected_hashes
+            ));
+        }
+        if let Some(block) = node
+            .node_handle
+            .latest_block()
+            .context("fetch latest block while waiting for ordering block")?
+        {
+            if block.header.height > min_height {
+                let seen: Vec<String> = block
+                    .transactions
+                    .iter()
+                    .map(|tx| hex::encode(tx.hash()))
+                    .collect();
+                if expected.iter().all(|hash| seen.contains(hash)) {
+                    return Ok(block);
+                }
             }
         }
         sleep(POLL_INTERVAL).await;
