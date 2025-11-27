@@ -72,6 +72,7 @@ prefer_auth_identity = true
 
 [network.tls]
 # Enable mTLS for the RPC gateway and restrict to TLS 1.3 ciphers.
+# RPC and /p2p/snapshots endpoints reject plain HTTP when TLS is enabled.
 enabled = true
 certificate = "/etc/rpp/tls/node.crt"
 private_key = "/etc/rpp/tls/node.key"
