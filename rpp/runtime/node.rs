@@ -117,8 +117,8 @@ use crate::stwo::proof::ProofPayload;
 #[cfg(feature = "prover-stwo")]
 use crate::stwo::prover::WalletProver;
 use crate::sync::{
-    invariants::enforce_block_invariants, PayloadProvider, ReconstructionEngine,
-    ReconstructionPlan, StateSyncPlan,
+    invariants::enforce_block_invariants, CheckpointSignatureConfig, PayloadProvider,
+    ReconstructionEngine, ReconstructionPlan, StateSyncPlan,
 };
 use crate::types::serde_pruning_proof;
 use crate::types::{
@@ -1656,6 +1656,7 @@ pub(crate) struct NodeInner {
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
     timetoke_snapshot_signing_key: SnapshotSigningKey,
+    pruning_checkpoint_signatures: CheckpointSignatureConfig,
     p2p_identity: Arc<NodeIdentity>,
     address: Address,
     storage: Storage,
@@ -2865,6 +2866,18 @@ impl Node {
         let vrf_keypair = config.load_or_generate_vrf_keypair()?;
         let timetoke_snapshot_signing_key =
             config.load_or_generate_timetoke_snapshot_signing_key()?;
+        let pruning_signing_key = config.pruning.checkpoint_signatures.load_signing_key()?;
+        let pruning_verifying_key = config.pruning.checkpoint_signatures.verifying_key()?;
+        let pruning_checkpoint_signatures = CheckpointSignatureConfig {
+            signing_key: pruning_signing_key.clone(),
+            verifying_key: pruning_verifying_key.or_else(|| {
+                pruning_signing_key
+                    .as_ref()
+                    .map(|key| key.signing_key.verifying_key())
+            }),
+            expected_version: config.pruning.checkpoint_signatures.signature_version,
+            require_signatures: config.pruning.checkpoint_signatures.require_signatures,
+        };
         let p2p_identity = Arc::new(
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
@@ -3044,6 +3057,7 @@ impl Node {
             keypair,
             vrf_keypair,
             timetoke_snapshot_signing_key,
+            pruning_checkpoint_signatures,
             p2p_identity,
             address,
             storage,
@@ -5770,7 +5784,8 @@ impl NodeInner {
         let engine = ReconstructionEngine::with_snapshot_dir(
             self.storage.clone(),
             self.config.snapshot_dir.clone(),
-        );
+        )
+        .with_checkpoint_signatures(self.pruning_checkpoint_signatures.clone());
         let plan = engine.plan_from_height(start_height)?;
         if let Some(path) = engine.persist_plan(&plan)? {
             info!(?path, "persisted reconstruction plan snapshot");
@@ -5789,7 +5804,8 @@ impl NodeInner {
         let engine = ReconstructionEngine::with_snapshot_dir(
             self.storage.clone(),
             self.config.snapshot_dir.clone(),
-        );
+        )
+        .with_checkpoint_signatures(self.pruning_checkpoint_signatures.clone());
         let mut state_sync_plan = engine.state_sync_plan(chunk_size)?;
         let mut reconstruction_plan = engine.full_plan()?;
         let retention_floor = if retention_depth == 0 {

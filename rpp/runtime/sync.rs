@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose, Engine as _};
+use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 use futures::Stream;
 use hex;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::reputation::Tier;
 
+use crate::config::SnapshotSigningKey;
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "backend-plonky3")]
@@ -918,6 +920,115 @@ pub struct PruningCheckpoint {
     pub metadata: PruningCheckpointMetadata,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CheckpointSignatureConfig {
+    pub signing_key: Option<SnapshotSigningKey>,
+    pub verifying_key: Option<VerifyingKey>,
+    pub expected_version: u32,
+    pub require_signatures: bool,
+}
+
+impl CheckpointSignatureConfig {
+    fn is_verification_enabled(&self) -> bool {
+        self.verifying_key.is_some() || self.require_signatures
+    }
+
+    fn sign_checkpoint(&self, payload: &[u8], checkpoint_path: &Path) -> ChainResult<()> {
+        let Some(signing_key) = self.signing_key.as_ref() else {
+            if self.require_signatures {
+                return Err(ChainError::Config(
+                    "pruning checkpoint signatures required but signing key missing".into(),
+                ));
+            }
+            return Ok(());
+        };
+
+        let signature_path = checkpoint_signature_path(checkpoint_path)?;
+        let signature = signing_key.signing_key.sign(payload);
+        let encoded = general_purpose::STANDARD.encode(signature.to_bytes());
+        let versioned = format!("{}:{encoded}", signing_key.version);
+
+        let mut tmp_path = signature_path.clone();
+        tmp_path.set_extension("partial");
+        fs::write(&tmp_path, versioned)?;
+        fs::rename(&tmp_path, &signature_path)?;
+        Ok(())
+    }
+
+    fn verify_checkpoint(&self, payload: &[u8], checkpoint_path: &Path) -> ChainResult<()> {
+        let Some(verifying_key) = self.verifying_key.as_ref() else {
+            if self.require_signatures {
+                return Err(ChainError::Config(
+                    "pruning checkpoint signatures required but verifying key missing".into(),
+                ));
+            }
+            return Ok(());
+        };
+
+        let signature_path = checkpoint_signature_path(checkpoint_path)?;
+        if !signature_path.exists() {
+            return Err(ChainError::Config(format!(
+                "pruning checkpoint signature missing at {}",
+                signature_path.display()
+            )));
+        }
+
+        let encoded = fs::read_to_string(&signature_path)?;
+        let (version, signature) = parse_checkpoint_signature(&encoded, &signature_path)?;
+        if version != self.expected_version {
+            return Err(ChainError::Config(format!(
+                "pruning checkpoint signature version {version} rejected; expected {} at {}",
+                self.expected_version,
+                signature_path.display()
+            )));
+        }
+
+        verifying_key.verify(payload, &signature).map_err(|err| {
+            ChainError::Config(format!(
+                "pruning checkpoint signature verification failed at {}: {err}",
+                signature_path.display()
+            ))
+        })
+    }
+}
+
+fn checkpoint_signature_path(checkpoint_path: &Path) -> ChainResult<PathBuf> {
+    let mut signature_path = checkpoint_path
+        .file_name()
+        .ok_or_else(|| ChainError::Config("pruning checkpoint path missing filename".into()))?
+        .to_os_string();
+    signature_path.push(".sig");
+    let mut path = checkpoint_path.to_path_buf();
+    path.set_file_name(signature_path);
+    Ok(path)
+}
+
+fn parse_checkpoint_signature(raw: &str, signature_path: &Path) -> ChainResult<(u32, Signature)> {
+    let trimmed = raw.trim();
+    let (version_str, encoded_signature) = trimmed.split_once(':').unwrap_or(("0", trimmed));
+    let version = version_str.parse::<u32>().map_err(|err| {
+        ChainError::Config(format!(
+            "invalid pruning checkpoint signature version at {}: {err}",
+            signature_path.display()
+        ))
+    })?;
+    let signature_bytes = general_purpose::STANDARD
+        .decode(encoded_signature)
+        .map_err(|err| {
+            ChainError::Config(format!(
+                "invalid pruning checkpoint signature encoding at {}: {err}",
+                signature_path.display()
+            ))
+        })?;
+    let signature = Signature::from_bytes(&signature_bytes).map_err(|err| {
+        ChainError::Config(format!(
+            "invalid pruning checkpoint signature bytes at {}: {err}",
+            signature_path.display()
+        ))
+    })?;
+    Ok((version, signature))
+}
+
 impl ReconstructionPlan {
     pub fn is_fully_hydrated(&self) -> bool {
         self.requests.is_empty()
@@ -932,6 +1043,7 @@ impl ReconstructionPlan {
 pub struct ReconstructionEngine {
     storage: Storage,
     snapshot_dir: Option<PathBuf>,
+    checkpoint_signatures: CheckpointSignatureConfig,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1060,6 +1172,7 @@ impl ReconstructionEngine {
         Self {
             storage,
             snapshot_dir: None,
+            checkpoint_signatures: CheckpointSignatureConfig::default(),
         }
     }
 
@@ -1067,7 +1180,13 @@ impl ReconstructionEngine {
         Self {
             storage,
             snapshot_dir: Some(snapshot_dir),
+            checkpoint_signatures: CheckpointSignatureConfig::default(),
         }
+    }
+
+    pub fn with_checkpoint_signatures(mut self, signatures: CheckpointSignatureConfig) -> Self {
+        self.checkpoint_signatures = signatures;
+        self
     }
 
     pub fn plan_from_height(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
@@ -1434,6 +1553,8 @@ impl ReconstructionEngine {
         file.write_all(&encoded)?;
         file.sync_all()?;
         fs::rename(&tmp_path, &path)?;
+        self.checkpoint_signatures
+            .sign_checkpoint(&encoded, &path)?;
         Ok(path)
     }
 
@@ -1469,6 +1590,14 @@ impl ReconstructionEngine {
                     continue;
                 }
             };
+
+            if let Err(err) = self.checkpoint_signatures.verify_checkpoint(&bytes, &path) {
+                warn!(?path, ?err, "failed to verify pruning checkpoint signature");
+                if self.checkpoint_signatures.is_verification_enabled() {
+                    return Err(err);
+                }
+                continue;
+            }
 
             let checkpoint: PruningCheckpoint = match serde_json::from_slice(&bytes) {
                 Ok(checkpoint) => checkpoint,
