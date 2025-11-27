@@ -1,0 +1,89 @@
+# Production Malachite consensus blueprint used by the hardened validator templates.
+# Copy this alongside your runtime template so NodeConfig can resolve it automatically.
+# Adjust witness counts and epoch lengths only when you have a finalized validator roster
+# and rollout plan; the values below match the defaults shipped in the binary.
+
+config_version = "1.0.0"
+
+[validator]
+# Witness pool for each round; raise cautiously to avoid starving proof workers.
+witness_count = 16
+# Epoch duration for validator rotation (seconds).
+epoch_duration_secs = 86400
+# Per-round timeout (milliseconds) used by consensus and proof dispatchers.
+round_timeout_ms = 6000
+# Maximum number of extensions before the round is force-reset.
+max_round_extensions = 3
+
+[validator.vrf.threshold]
+# Keep the VRF curve aligned with the node and validator templates so selection
+# math matches the compiled binary.
+curve = "linear:v0.6-b0.2"
+# Target validator count for the epoch selection.
+target_validator_count = 100
+
+[reputation]
+# Decay window and emission intervals mirror the shipping defaults so score
+# calculations stay stable across clusters.
+decay_interval_secs = 86400
+decay_factor = 0.05
+snapshot_interval_secs = 600
+max_snapshot_age_secs = 3600
+
+[reputation.tier_thresholds]
+tier2_min_uptime_hours = 24
+tier3_min_consensus_success = 10
+tier4_min_consensus_success = 100
+tier5_min_score = 0.75
+
+[reputation.weights]
+validation = 0.4
+uptime = 0.2
+consensus = 0.2
+peer_feedback = 0.15
+decay = 0.05
+
+[reputation.timetoke]
+minimum_window_secs = 3600
+accrual_cap_hours = 720
+decay_interval_secs = 86400
+decay_step_hours = 1
+sync_interval_secs = 600
+
+[rewards]
+base_block_reward = 100000000
+leader_bonus_pct = 0.15
+witness_reward_pct = 0.25
+double_sign_penalty = 50000000
+fake_proof_penalty = 50000000
+inactivity_penalty = 25000000
+
+[rewards.treasury_accounts]
+validator = "treasury-validator"
+witness = "treasury-witness"
+fee_pool = "treasury-fees"
+
+[rewards.witness_pool_weights]
+treasury = 0.7
+fees = 0.3
+
+[proof]
+# Increase aggregation fanout and cache TTLs only after profiling with the
+# production backend to avoid oversized batches.
+proof_batch_size = 96
+proof_cache_ttl_secs = 900
+max_recursive_depth = 5
+
+[network]
+# Gossip shaping tuned for production meshes; align rate limits with the node
+# template so on-host metrics reflect the same quotas.
+gossip_fanout = 12
+max_channel_buffer = 2048
+rate_limit_per_channel = 192
+witness_proof_buffer = 256
+witness_meta_buffer = 128
+witness_proof_rate_limit = 128
+witness_meta_rate_limit = 64
+witness_rate_interval_ms = 250
+max_block_size_bytes = 2097152
+max_votes_per_round = 800

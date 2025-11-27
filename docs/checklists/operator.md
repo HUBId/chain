@@ -7,6 +7,10 @@ and the [runbooks](../runbooks/startup.md). Update it after each deployment.
 
 - [ ] Execute `cargo run -p rpp-chain -- <mode> --dry-run` to ensure configuration files resolve and port conflicts are
       reported before launch.【F:rpp/node/src/lib.rs†L258-L359】
+- [ ] Start from `config/examples/production/validator-stwo-tls.toml` or
+      `validator-plonky3-tls.toml` plus the co-located `malachite.toml` so TLS,
+      pruning pacing, gossip limits, and zk-backend cache sizes match the
+      production defaults before you layer environment-specific overrides.【F:config/examples/production/validator-stwo-tls.toml†L1-L178】【F:config/examples/production/validator-plonky3-tls.toml†L1-L172】【F:config/examples/production/malachite.toml†L1-L76】
 - [ ] When bootstrapping with the stock templates, prefer `scripts/run_node_mode.sh`, `scripts/run_wallet_mode.sh`, or `scripts/run_hybrid_mode.sh`; they wait for `/health/live` and `/health/ready` to return 200 and surface exit codes 0/2/3/4 for automation. Configure readiness headers with `RPP_NODE_RPC_AUTH_TOKEN` / `RPP_NODE_HEALTH_HEADERS`, or the wallet-specific `RPP_WALLET_RPC_AUTH_TOKEN` / `RPP_WALLET_HEALTH_HEADERS`, when the RPC gateway enforces authentication.【F:scripts/run_node_mode.sh†L10-L64】【F:scripts/run_wallet_mode.sh†L10-L70】【F:scripts/run_hybrid_mode.sh†L21-L77】【F:rpp/node/src/main.rs†L18-L24】
 - [ ] Verify configuration versions and schema validations succeed (no `config_version` or limit
       errors in the output).【F:rpp/runtime/config.rs†L979-L1054】【F:rpp/runtime/config.rs†L185-L210】

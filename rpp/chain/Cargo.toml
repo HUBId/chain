@@ -355,5 +355,9 @@ path = "../rpc/tests/admission.rs"
 name = "rpc_snapshots"
 path = "../../tests/rpc_snapshots/mod.rs"
 
+[[test]]
+name = "config_templates"
+path = "../../tests/config_templates.rs"
+
 [lints]
 workspace = true
