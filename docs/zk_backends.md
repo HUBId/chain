@@ -22,6 +22,28 @@
   GPU/L2-Skalierungsfragen gelten weiterhin die separaten `zk-load-harness`-
   und `uptime`-Drills.
 
+## Beschleunigte Prover-Läufe
+
+- Der Nightly-Workflow enthält einen optionalen Accelerator-Lauf
+  (`prover-accelerator`), der die Plonky3-GPU-Features mit
+  `PLONKY3_GPU_DISABLE=0` ausführt und Laufzeitmetriken im Step-Summary sowie
+  das Log als Artefakt `prover-accelerator-log` ablegt.
+- Läufer ohne dedizierte Hardware werden automatisch erkannt: schlägt sowohl
+  `nvidia-smi -L` als auch `rocminfo` fehl, markiert die Pipeline den Schritt als
+  „skipped“ und lässt die übrigen Nightly-Jobs normal weiterlaufen. Das Summary
+  dokumentiert die Auslassung explizit, damit Operator:innen fehlende GPU-
+  Kapazität sofort sehen.【F:.github/workflows/nightly.yml†L951-L1020】
+- Lokale Reproduktion: baue die Tests mit `cargo test -p plonky3-backend
+  --no-default-features --features plonky3-gpu -- --nocapture` und stelle sicher,
+  dass eine GPU über `nvidia-smi -L` oder `rocminfo` sichtbar ist. Setze
+  `PLONKY3_GPU_DISABLE=1`, falls der Fallback auf CPU-Pfade geprüft werden soll;
+  die Tests schlagen dann deterministisch fehl, wenn der GPU-Code fälschlich
+  weiter genutzt würde.【F:prover/plonky3_backend/README.md†L6-L19】【F:prover/plonky3_backend/src/gpu.rs†L3-L78】
+- Performance-Erwartung: Das Nightly-Log enthält die gemessene Laufzeit in
+  Sekunden, sodass Abweichungen zwischen GPU-Typen oder Treiber-Versionen
+  sichtbar werden. Hinterlegte Dashboards sollten dieselben Artefakte
+  referenzieren, wenn GPU-Kapazität in Clustern bereitgestellt wird.
+
 ## rpp-stark (stable)
 
 ### Aktivierung
