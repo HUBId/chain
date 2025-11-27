@@ -15,7 +15,12 @@ p2p_key_path = "/etc/rpp/keys/p2p.toml"
 vrf_key_path = "/etc/rpp/keys/vrf.toml"
 
 [secrets]
-backend = "filesystem"
+backend = "hsm"
+
+[secrets.hsm]
+library_path = "/usr/lib/libpkcs11.so"
+slot = 0
+key_id = "validator-key"
 
 snapshot_dir = "/var/lib/rpp/node/snapshots"
 proof_cache_dir = "/var/lib/rpp/node/proofs"

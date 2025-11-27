@@ -18,7 +18,12 @@ p2p_key_path = "./keys/p2p.toml"
 vrf_key_path = "./keys/vrf.toml"
 
 [secrets]
-backend = "filesystem"
+backend = "hsm"
+
+[secrets.hsm]
+library_path = "/usr/lib/libpkcs11.so"
+slot = 0
+key_id = "validator-key"
 
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"

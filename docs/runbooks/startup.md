@@ -53,3 +53,15 @@ Once the runtime is healthy, continue with the [observability runbook](observabi
 telemetry and dashboards. Use the [pipeline telemetry dashboards](../observability/pipeline.md) to
 confirm wallet, proof, consensus, and storage phases recover after remediation.
 
+## Secure keystore defaults
+
+- Run `python3 scripts/ci/lint_secure_keystores.py` before cutovers to ensure
+  production templates pin `secrets.backend` to `hsm`/`vault` and include an
+  HSM `library_path` plus `key_id`. The lint fails fast when a template still
+  references filesystem paths so operators catch the drift before rollout.
+- If the lint fails on a production branch, update the relevant
+  `config/examples/production/*.toml` file with the provisioned PKCS#11 library
+  path, slot, and identifier, then rerun the script until it passes. For local
+  development only, set `ALLOW_INSECURE_KEY_STORAGE=1` to bypass the check while
+  keeping the production defaults intact.【F:scripts/ci/lint_secure_keystores.py†L1-L88】
+
