@@ -21,6 +21,11 @@ before applying overrides.
 3. **Track cadence overrides.** Retention and pause updates flow through the
    command channel. Each change emits a telemetry sample so dashboards should
    show the new retention depth or pause state before the next scheduled run.【F:rpp/node/src/services/pruning.rs†L356-L399】【F:rpp/node/src/telemetry/pruning.rs†L25-L116】
+4. **Cancel cleanly when needed.** Use the validator CLI (`rpp-node validator snapshot cancel-pruning --config <cfg>`) or
+   POST `/snapshots/cancel` to stop the current cycle without corrupting stored
+   proofs. The handler returns a receipt, increments `rpp.node.pruning.cancellations_total`,
+   and marks the cycle as `result="cancelled"` so a later run can resume from the
+   persisted plan.【F:rpp/chain-cli/src/lib.rs†L255-L265】【F:rpp/rpc/src/routes/state.rs†L1-L26】【F:rpp/node/src/services/pruning.rs†L321-L370】【F:rpp/node/src/telemetry/pruning.rs†L25-L124】
 
 ## 2. Metrics reference
 
@@ -33,6 +38,7 @@ before applying overrides.
 | `rpp.node.pruning.stored_proofs` | Histogram | `shard`, `partition` | Validate that pruning proofs continue to sync to storage.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/runtime/node.rs†L3200-L3207】 |
 | `rpp.node.pruning.retention_depth` | Histogram | `shard`, `partition` | Confirm override depth applied during incidents.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L399】 |
 | `rpp.node.pruning.pause_transitions` | Counter | `shard`, `partition`, `state` | Alert when the service is paused longer than the agreed maintenance window.【F:rpp/node/src/telemetry/pruning.rs†L63-L117】【F:rpp/node/src/services/pruning.rs†L356-L366】 |
+| `rpp.node.pruning.cancellations_total` | Counter | `shard`, `partition` | Track operator-issued cancellations to correlate with `cycle_total{result="cancelled"}` before scheduling a resume run.【F:rpp/node/src/telemetry/pruning.rs†L25-L116】【F:rpp/node/src/services/pruning.rs†L321-L370】 |
 | `rpp.node.pruning.pacing_total` | Counter | `shard`, `partition`, `reason`, `action`, `observed`, `limit` | Confirms whether pruning is yielding to CPU/IO pressure, mempool backlog, or timetoke credit queues and when it resumes.【F:rpp/node/src/telemetry/pruning.rs†L69-L140】【F:rpp/node/src/services/pruning.rs†L390-L456】 |
 | `rpp.node.pruning.pacing_delay_ms` | Histogram | `shard`, `partition`, `reason`, `action` | Shows the backoff duration applied when pruning defers due to load.【F:rpp/node/src/telemetry/pruning.rs†L25-L124】【F:rpp/node/src/services/pruning.rs†L390-L456】 |
 

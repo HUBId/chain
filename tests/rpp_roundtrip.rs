@@ -80,10 +80,11 @@ fn rpp_pruning_roundtrip_preserves_commitments() {
         );
     }
 
-    let status = handle
+    let summary = handle
         .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle")
-        .expect("pruning status");
+        .expect("pruning cycle");
+    let status = summary.status.expect("pruning status");
+    assert!(!summary.cancelled, "unexpected cancellation");
     let persisted_path = status
         .persisted_path
         .as_deref()

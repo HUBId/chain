@@ -65,10 +65,11 @@ fn pruning_proof_size_regression_guard() {
 
     let mut previous_total: Option<usize> = None;
     for cycle in 0..3 {
-        let status = handle
+        let summary = handle
             .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
-            .expect("pruning cycle")
-            .expect("pruning status");
+            .expect("pruning cycle");
+        let status = summary.status.expect("pruning status");
+        assert!(!summary.cancelled, "unexpected cancellation");
         assert!(
             !status.missing_heights.is_empty(),
             "cycle {cycle} should report pruned heights",

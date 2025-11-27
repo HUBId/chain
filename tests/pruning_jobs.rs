@@ -40,10 +40,11 @@ fn pruning_plan_without_pending_blocks() {
     let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
 
-    let status = handle
+    let summary = handle
         .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("cycle")
-        .expect("status");
+        .expect("cycle");
+    let status = summary.status.expect("status");
+    assert!(!summary.cancelled, "unexpected cancellation");
 
     assert!(
         status.missing_heights.is_empty(),
@@ -92,10 +93,11 @@ fn rebuild_succeeds_after_prune() {
         .prune_block_payload(genesis.header.height)
         .expect("prune payload");
 
-    let status = handle
+    let summary = handle
         .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("cycle")
-        .expect("status");
+        .expect("cycle");
+    let status = summary.status.expect("status");
+    assert!(!summary.cancelled, "unexpected cancellation");
     assert!(status.missing_heights.contains(&genesis.header.height));
     let persisted = storage
         .load_pruning_proof(genesis.header.height)
@@ -121,10 +123,10 @@ async fn gossip_emits_pruning_status() {
     let handle = node.handle();
     let mut receiver = node.subscribe_witness_gossip(GossipTopic::Snapshots);
 
-    handle
+    let summary = handle
         .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("cycle")
-        .expect("status");
+        .expect("cycle");
+    assert!(!summary.cancelled, "unexpected cancellation");
 
     let bytes = timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -133,4 +135,36 @@ async fn gossip_emits_pruning_status() {
     let status: PruningJobStatus = serde_json::from_slice(&bytes).expect("decode status");
     assert!(status.plan.tip.height >= status.plan.snapshot.height);
     assert!(status.last_updated > 0);
+}
+
+#[test]
+fn pruning_cancellation_preserves_progress() {
+    let (config, _temp) = prepare_config();
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let chain = build_chain(&handle, 3);
+    install_pruned_chain(&storage, &chain).expect("install pruned chain");
+
+    handle.request_pruning_cancellation();
+    let cancelled = handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("cancelled cycle");
+    assert!(cancelled.cancelled, "cycle should report cancellation");
+    let cancelled_status = cancelled.status.expect("cancelled status");
+    assert!(
+        cancelled_status.persisted_path.is_some(),
+        "cancelled cycle should still persist a plan",
+    );
+
+    let resumed = handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("resumed cycle");
+    let resumed_status = resumed.status.expect("resumed status");
+    assert!(!resumed.cancelled, "second cycle should complete");
+    assert!(
+        resumed_status.stored_proofs.len() >= cancelled_status.stored_proofs.len(),
+        "resumed cycle should not regress stored proofs",
+    );
 }

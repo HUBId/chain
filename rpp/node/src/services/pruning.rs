@@ -14,12 +14,16 @@ use tracing::{debug, info, warn};
 use rpp_chain::api::{PruningServiceApi, PruningServiceError};
 use rpp_chain::config::{NodeConfig, PruningPacingConfig};
 use rpp_chain::errors::{ChainError, ChainResult};
-use rpp_chain::node::{NodeHandle, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_chain::node::{
+    NodeHandle, PruningCycleSummary, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK,
+};
 
 use crate::telemetry::pruning::{
     CycleOutcome, CycleReason, PacingAction, PacingReason, PruningMetrics,
 };
-use rpp_chain::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
+use rpp_chain::storage::pruner::receipt::{
+    SnapshotCancelReceipt, SnapshotRebuildReceipt, SnapshotTriggerReceipt,
+};
 
 const COMMAND_QUEUE_DEPTH: usize = 8;
 
@@ -91,6 +95,7 @@ struct PruningState {
     cadence: RwLock<Duration>,
     retention_depth: RwLock<u64>,
     paused: AtomicBool,
+    cancel_requested: AtomicBool,
 }
 
 enum Command {
@@ -98,6 +103,7 @@ enum Command {
     UpdateCadence(Duration),
     UpdateRetention(u64),
     SetPaused(bool),
+    Cancel,
 }
 
 struct PruningPacer {
@@ -323,6 +329,7 @@ impl PruningService {
             cadence: RwLock::new(settings.cadence),
             retention_depth: RwLock::new(settings.retention_depth),
             paused: AtomicBool::new(settings.paused),
+            cancel_requested: AtomicBool::new(false),
         });
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_DEPTH);
         let (status_tx, status_rx) = watch::channel(None);
@@ -476,6 +483,19 @@ impl PruningServiceHandle {
         self.inner.state.paused.store(paused, Ordering::SeqCst);
         Ok(())
     }
+
+    pub async fn cancel_job(&self) -> Result<(), PruningCommandError> {
+        self.inner
+            .commands
+            .send(Command::Cancel)
+            .await
+            .map_err(|_| PruningCommandError::ServiceUnavailable)?;
+        self.inner
+            .state
+            .cancel_requested
+            .store(true, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 impl PruningServiceApi for PruningServiceHandle {
@@ -510,6 +530,22 @@ impl PruningServiceApi for PruningServiceHandle {
             Ok(SnapshotTriggerReceipt::accepted())
         })
     }
+
+    fn cancel_pruning(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotCancelReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let handle = self.clone();
+        Box::pin(async move {
+            handle.cancel_job().await.map_err(map_pruning_error)?;
+            Ok(SnapshotCancelReceipt::accepted())
+        })
+    }
 }
 
 fn map_pruning_error(error: PruningCommandError) -> PruningServiceError {
@@ -540,6 +576,7 @@ async fn run_worker(
     let mut pacer = PruningPacer::new(pacing);
     let mut pacing_reason: Option<PacingReason> = None;
     let mut pacing_wait: Option<Pin<Box<time::Sleep>>> = None;
+    let mut running_cycle = false;
 
     loop {
         let run_reason = if let Some(reason) = next_run.take() {
@@ -575,6 +612,17 @@ async fn run_worker(
                             if !paused {
                                 selected = Some(RunReason::Manual);
                             }
+                        }
+                        Some(Command::Cancel) => {
+                            state.cancel_requested.store(true, Ordering::SeqCst);
+                            node.request_pruning_cancellation();
+                            let metrics = PruningMetrics::global();
+                            metrics.record_cancellation_request();
+                            info!(
+                                target = "pruning",
+                                running = running_cycle,
+                                "pruning cancellation requested"
+                            );
                         }
                         None => break,
                     }
@@ -638,27 +686,33 @@ async fn run_worker(
         let cycle_reason: CycleReason = reason.into();
         let started_at = Instant::now();
         metrics.record_window_start(cycle_reason);
+        running_cycle = true;
         match run_pruning_cycle(&node, chunk_size, retention_depth) {
-            Ok(mut status) => {
+            Ok(mut summary) => {
                 let elapsed = started_at.elapsed();
-                if let Some(job_status) = status.as_mut() {
+                if let Some(job_status) = summary.status.as_mut() {
                     job_status.estimated_time_remaining_ms =
                         job_status.estimate_time_remaining_ms(elapsed);
                 }
 
-                if let Err(err) = status_tx.send(status.clone()) {
+                if let Err(err) = status_tx.send(summary.status.clone()) {
                     debug!(?err, "pruning status watchers dropped");
                 }
 
-                node.update_pruning_status(status.clone());
+                node.update_pruning_status(summary.status.clone());
 
-                metrics.record_cycle(
-                    cycle_reason,
-                    CycleOutcome::Success,
-                    elapsed,
-                    status.as_ref(),
-                );
-                metrics.record_window_end(cycle_reason, CycleOutcome::Success);
+                let outcome = if summary.cancelled {
+                    CycleOutcome::Cancelled
+                } else {
+                    CycleOutcome::Success
+                };
+
+                metrics.record_cycle(cycle_reason, outcome, elapsed, summary.status.as_ref());
+                metrics.record_window_end(cycle_reason, outcome);
+
+                if summary.cancelled {
+                    info!(target = "pruning", "pruning cycle cancelled");
+                }
             }
             Err(err) => {
                 let error_label = classify_pruning_error(&err);
@@ -673,6 +727,8 @@ async fn run_worker(
                 warn!(?err, error = error_label, "pruning cycle failed");
             }
         }
+        state.cancel_requested.store(false, Ordering::SeqCst);
+        running_cycle = false;
     }
 
     debug!("pruning worker exiting");
@@ -682,7 +738,7 @@ fn run_pruning_cycle(
     node: &NodeHandle,
     chunk_size: usize,
     retention_depth: u64,
-) -> Result<Option<PruningJobStatus>, rpp_chain::errors::ChainError> {
+) -> Result<PruningCycleSummary, rpp_chain::errors::ChainError> {
     node.run_pruning_cycle(chunk_size, retention_depth)
 }
 

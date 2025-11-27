@@ -24,7 +24,12 @@ fn cross_reference_map(
 ) -> HashMap<u64, Vec<CrossShardReference>> {
     receipts
         .iter()
-        .map(|snapshot| (snapshot.block_height(), snapshot.cross_references().to_vec()))
+        .map(|snapshot| {
+            (
+                snapshot.block_height(),
+                snapshot.cross_references().to_vec(),
+            )
+        })
         .collect()
 }
 
@@ -47,10 +52,16 @@ fn assert_cross_links_present(
     expected: &[CrossShardLink],
     recorded: Vec<CrossShardReference>,
 ) {
-    let mut recorded_set: HashSet<(String, String, u64)> =
-        recorded.into_iter().map(|link| (link.shard, link.partition, link.block_height)).collect();
+    let mut recorded_set: HashSet<(String, String, u64)> = recorded
+        .into_iter()
+        .map(|link| (link.shard, link.partition, link.block_height))
+        .collect();
     for link in expected {
-        let expected_tuple = (link.shard.to_string(), link.partition.to_string(), link.block_height);
+        let expected_tuple = (
+            link.shard.to_string(),
+            link.partition.to_string(),
+            link.block_height,
+        );
         if !recorded_set.remove(&expected_tuple) {
             panic!(
                 "missing cross-shard reference {}:{} at {} for snapshot {}",
@@ -101,7 +112,9 @@ fn assert_receipts_match_metadata(receipts: PersistedPrunerState) {
 
     for snapshot in matching_set.snapshots {
         assert_snapshot_present(snapshot, &mut recorded_snapshots);
-        let recorded_links = recorded_references.remove(&snapshot.block_height).unwrap_or_default();
+        let recorded_links = recorded_references
+            .remove(&snapshot.block_height)
+            .unwrap_or_default();
         assert_cross_links_present(
             snapshot.block_height,
             snapshot.cross_shard_links,
@@ -140,5 +153,8 @@ fn pruning_rejects_dangling_cross_shard_references() {
         });
 
     let result = panic::catch_unwind(|| assert_receipts_match_metadata(receipts));
-    assert!(result.is_err(), "dangling cross-shard references should fail validation");
+    assert!(
+        result.is_err(),
+        "dangling cross-shard references should fail validation"
+    );
 }

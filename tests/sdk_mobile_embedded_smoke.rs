@@ -18,10 +18,12 @@ use axum::response::{IntoResponse, Response};
 use axum::{routing::post, Json, Router};
 use rpp_chain::runtime::telemetry::metrics::{RuntimeMetrics, WalletRpcMethod};
 use rpp_chain::runtime::wallet::rpc::{
-    authenticated_handler, AuthenticatedRpcHandler, AuthToken, RateLimitWindow, RpcError, RpcInvocation,
-    RpcRequest, StaticAuthenticator, WalletAuditLogger, WalletRoleSet,
+    authenticated_handler, AuthToken, AuthenticatedRpcHandler, RateLimitWindow, RpcError,
+    RpcInvocation, RpcRequest, StaticAuthenticator, WalletAuditLogger, WalletRoleSet,
 };
-use rpp_wallet::rpc::client::{RateLimitWindow as ClientRateLimitWindow, WalletRpcClient, WalletRpcClientError};
+use rpp_wallet::rpc::client::{
+    RateLimitWindow as ClientRateLimitWindow, WalletRpcClient, WalletRpcClientError,
+};
 use rpp_wallet::rpc::dto::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use rpp_wallet::rpc::error::WalletRpcErrorCode;
 use serde_json::{json, Value};
@@ -40,12 +42,23 @@ async fn mobile_and_embedded_sdks_cover_auth_limits_and_signing() -> Result<()> 
     let (addr, shutdown) = spawn_server(router).await?;
     let endpoint = format!("http://{addr}/rpc");
 
-    let mobile_client = WalletRpcClient::from_endpoint(&endpoint, Some(AUTH_TOKEN.into()), None, Duration::from_secs(3))
-        .context("build mobile client")?;
-    let embedded_client = WalletRpcClient::from_endpoint(&endpoint, Some(AUTH_TOKEN.into()), None, Duration::from_secs(3))
-        .context("build embedded client")?;
+    let mobile_client = WalletRpcClient::from_endpoint(
+        &endpoint,
+        Some(AUTH_TOKEN.into()),
+        None,
+        Duration::from_secs(3),
+    )
+    .context("build mobile client")?;
+    let embedded_client = WalletRpcClient::from_endpoint(
+        &endpoint,
+        Some(AUTH_TOKEN.into()),
+        None,
+        Duration::from_secs(3),
+    )
+    .context("build embedded client")?;
     let unauthenticated =
-        WalletRpcClient::from_endpoint(&endpoint, None, None, Duration::from_secs(3)).context("build unauthenticated client")?;
+        WalletRpcClient::from_endpoint(&endpoint, None, None, Duration::from_secs(3))
+            .context("build unauthenticated client")?;
 
     let echo = mobile_client
         .request::<Value>(LIMITED_METHOD, Some(json!({ "flow": "mobile" })))
@@ -58,10 +71,18 @@ async fn mobile_and_embedded_sdks_cover_auth_limits_and_signing() -> Result<()> 
         .request::<Value>(LIMITED_METHOD, Option::<Value>::None)
         .await
         .expect_err("missing token should be rejected");
-    append_log(&log_dir, "unauthenticated", "error", &json!(format!("{unauth_error}")))?;
-    matches!(unauth_error, WalletRpcClientError::HttpStatus(StatusCode::UNAUTHORIZED))
-        .then_some(())
-        .context("auth guard should return 401")?;
+    append_log(
+        &log_dir,
+        "unauthenticated",
+        "error",
+        &json!(format!("{unauth_error}")),
+    )?;
+    matches!(
+        unauth_error,
+        WalletRpcClientError::HttpStatus(StatusCode::UNAUTHORIZED)
+    )
+    .then_some(())
+    .context("auth guard should return 401")?;
 
     let first = embedded_client
         .request::<Value>(LIMITED_METHOD, Some(json!({ "flow": "embedded" })))
@@ -121,7 +142,8 @@ fn append_log(dir: &Path, prefix: &str, event: &str, payload: &Value) -> Result<
 }
 
 type TestHandler = AuthenticatedRpcHandler<TestHandlerFn, JsonRpcRequest>;
-type TestHandlerFn = Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
+type TestHandlerFn =
+    Arc<dyn Fn(RpcInvocation<'_, JsonRpcRequest>) -> JsonRpcResponse + Send + Sync>;
 
 #[derive(Clone)]
 struct TestRpcServer {
@@ -133,15 +155,23 @@ impl TestRpcServer {
     fn handler_for(&self, method: &str) -> &TestHandler {
         self.handlers.get(method).unwrap_or(&self.fallback)
     }
-
 }
 
 fn build_router() -> Router {
     let metrics = Arc::new(RuntimeMetrics::noop());
     let mut handlers = HashMap::new();
-    handlers.insert(LIMITED_METHOD.to_string(), rate_limited_handler(Arc::clone(&metrics)));
-    handlers.insert(SIGNING_METHOD.to_string(), signing_error_handler(Arc::clone(&metrics)));
-    handlers.insert(HEALTH_METHOD.to_string(), health_handler(Arc::clone(&metrics)));
+    handlers.insert(
+        LIMITED_METHOD.to_string(),
+        rate_limited_handler(Arc::clone(&metrics)),
+    );
+    handlers.insert(
+        SIGNING_METHOD.to_string(),
+        signing_error_handler(Arc::clone(&metrics)),
+    );
+    handlers.insert(
+        HEALTH_METHOD.to_string(),
+        health_handler(Arc::clone(&metrics)),
+    );
 
     let server = Arc::new(TestRpcServer {
         handlers,
@@ -275,7 +305,8 @@ fn rpc_error_response(
         } else {
             JsonRpcError::new(err.code(), err.to_string(), err.details().cloned())
         };
-        let mut response = (err.status(), Json(JsonRpcResponse::error(id, payload))).into_response();
+        let mut response =
+            (err.status(), Json(JsonRpcResponse::error(id, payload))).into_response();
         if let Some(window) = err.rate_limit() {
             apply_rate_limit_headers(response.headers_mut(), window.clone());
         }
@@ -342,4 +373,3 @@ fn expect_rate_limit(err: WalletRpcClientError) -> Result<ClientRateLimitWindow>
 
     anyhow::bail!("expected rate limit error, got {err}")
 }
-

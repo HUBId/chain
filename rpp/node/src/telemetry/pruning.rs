@@ -22,6 +22,7 @@ pub struct PruningMetrics {
     stored_proofs: Histogram<u64>,
     retention_depth: Histogram<u64>,
     pause_transitions: Counter<u64>,
+    cancellations_total: Counter<u64>,
     pacing_decisions: Counter<u64>,
     pacing_delay_ms: Histogram<f64>,
     shard_label: KeyValue,
@@ -95,6 +96,11 @@ impl PruningMetrics {
             .with_description("Transitions of the pruning service pause state")
             .with_unit("1")
             .build();
+        let cancellations_total = meter
+            .u64_counter("rpp.node.pruning.cancellations_total")
+            .with_description("Count of pruning cancellation requests")
+            .with_unit("1")
+            .build();
         let pacing_decisions = meter
             .u64_counter("rpp.node.pruning.pacing_total")
             .with_description("Count of pruning pacing decisions grouped by reason and action")
@@ -127,6 +133,7 @@ impl PruningMetrics {
             stored_proofs,
             retention_depth,
             pause_transitions,
+            cancellations_total,
             pacing_decisions,
             pacing_delay_ms,
             shard_label,
@@ -222,6 +229,11 @@ impl PruningMetrics {
         self.pause_transitions.add(1, &attrs);
     }
 
+    pub fn record_cancellation_request(&self) {
+        let attrs = self.base_labels();
+        self.cancellations_total.add(1, &attrs);
+    }
+
     pub fn record_pacing(
         &self,
         reason: PacingReason,
@@ -313,6 +325,7 @@ impl PacingAction {
 pub enum CycleOutcome {
     Success,
     Failure,
+    Cancelled,
 }
 
 impl CycleOutcome {
@@ -320,6 +333,7 @@ impl CycleOutcome {
         match self {
             CycleOutcome::Success => "success",
             CycleOutcome::Failure => "failure",
+            CycleOutcome::Cancelled => "cancelled",
         }
     }
 }

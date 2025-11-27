@@ -26,6 +26,7 @@ use rpp_chain::runtime::config::{
 };
 use rpp_chain::runtime::node_runtime::node::SnapshotDownloadErrorCode;
 use rpp_chain::runtime::{RuntimeMetrics, TelemetryExporterBuilder};
+use rpp_chain::storage::pruner::receipt::SnapshotCancelReceipt;
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 use rpp_node_runtime_api::{BootstrapError, BootstrapResult, RuntimeMode, RuntimeOptions};
@@ -265,6 +266,8 @@ enum SnapshotCommand {
     Resume(SnapshotResumeCommand),
     /// Cancel an in-flight snapshot streaming session
     Cancel(SnapshotCancelCommand),
+    /// Cancel the current pruning job and persist progress
+    CancelPruning(PruningCancelCommand),
     /// Verify snapshot manifests and chunks using the configured signing key
     Verify(SnapshotVerifyCommand),
     /// Inspect Timetoke replay telemetry exported by the validator RPC
@@ -486,6 +489,12 @@ struct SnapshotCancelCommand {
     /// Snapshot session identifier to cancel
     #[arg(long, value_name = "ID")]
     session: u64,
+}
+
+#[derive(Args, Clone)]
+struct PruningCancelCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
 }
 
 #[derive(Args, Clone)]
@@ -1333,6 +1342,7 @@ async fn handle_snapshot_command(command: SnapshotCommand) -> Result<()> {
         SnapshotCommand::Status(args) => fetch_snapshot_status(args).await,
         SnapshotCommand::Resume(args) => resume_snapshot_session(args).await,
         SnapshotCommand::Cancel(args) => cancel_snapshot_session(args).await,
+        SnapshotCommand::CancelPruning(args) => cancel_pruning_job(args).await,
         SnapshotCommand::Verify(args) => verify_snapshot_manifest(args).await,
         SnapshotCommand::Replay(args) => match args {
             SnapshotReplayCommand::Status(status) => snapshot_replay_status(status).await,
@@ -2053,6 +2063,43 @@ async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
     }
 
     println!("snapshot session {} cancelled", args.session);
+    Ok(())
+}
+
+async fn cancel_pruning_job(args: PruningCancelCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let response = client
+        .send_with_retry("cancel pruning job", || {
+            let mut builder = client.client.post(client.endpoint("/snapshots/cancel"));
+            builder = client.with_auth(builder);
+            builder
+        })
+        .await
+        .context("failed to cancel pruning job")?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode pruning cancellation response")?;
+
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    let receipt: SnapshotCancelReceipt =
+        serde_json::from_str(&body).context("invalid pruning cancellation receipt")?;
+    if !receipt.accepted {
+        let detail = receipt.detail.unwrap_or_else(|| "request rejected".into());
+        anyhow::bail!("pruning cancellation rejected: {}", detail);
+    }
+
+    if let Some(detail) = receipt.detail {
+        println!("pruning cancellation accepted: {detail}");
+    } else {
+        println!("pruning cancellation accepted");
+    }
+
     Ok(())
 }
 
