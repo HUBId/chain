@@ -466,6 +466,18 @@ def _sustained(records: Sequence[Tuple[float, bool]], duration: float) -> Tuple[
     return False, None
 
 
+def _maintenance_active(store: MetricStore, scope: str, timestamp: float) -> bool:
+    for metric_name in ("maintenance:window_active", "rpp_node_maintenance_window_active"):
+        series = store.series(metric_name, {"scope": scope}) or store.series(metric_name)
+        if series is None:
+            continue
+        value = series.value_at(timestamp)
+        if value is not None and value > 0:
+            return True
+    return False
+
+
+
 def _evaluate_consensus_vrf_slow(store: MetricStore) -> Optional[AlertComputation]:
     bounds = ["10", "20", "50", "100", "+Inf"]
     bucket_series: List[Tuple[str, MetricSeries]] = []
@@ -906,6 +918,9 @@ def _evaluate_epoch_delay(
         value = series.value_at(timestamp)
         if value is None:
             continue
+        if _maintenance_active(store, "timetoke", timestamp):
+            evaluations.append((timestamp, False))
+            continue
         delayed = value > threshold
         evaluations.append((timestamp, delayed))
         if delayed:
@@ -928,6 +943,9 @@ def _evaluate_uptime_participation(
     for timestamp in store.all_timestamps():
         value = series.value_at(timestamp)
         if value is None:
+            continue
+        if _maintenance_active(store, "uptime", timestamp):
+            evaluations.append((timestamp, False))
             continue
         degraded = value < threshold
         evaluations.append((timestamp, degraded))
@@ -952,6 +970,9 @@ def _evaluate_uptime_gap(
         value = series.value_at(timestamp)
         if value is None:
             continue
+        if _maintenance_active(store, "uptime", timestamp):
+            evaluations.append((timestamp, False))
+            continue
         breached = value > threshold
         evaluations.append((timestamp, breached))
         if breached:
@@ -974,6 +995,9 @@ def _evaluate_timetoke_rate(
     observed_rates: List[Tuple[float, float]] = []
     for timestamp in timestamps:
         rate = series.rate_over_window(timestamp, window)
+        if _maintenance_active(store, "timetoke", timestamp):
+            evaluations.append((timestamp, False))
+            continue
         degraded = rate is not None and rate < minimum_rate
         if rate is not None:
             observed_rates.append((timestamp, rate))
@@ -2190,6 +2214,160 @@ def build_uptime_departure_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_uptime_maintenance_suppression_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_participation_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.93),
+                    (600.0, 0.92),
+                    (1200.0, 0.99),
+                    (1800.0, 0.992),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2100.0),
+                    (600.0, 2400.0),
+                    (1200.0, 420.0),
+                    (1800.0, 240.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_epoch_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 5000.0),
+                    (600.0, 5200.0),
+                    (1200.0, 1200.0),
+                    (1800.0, 900.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_accrual_hours_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10.0),
+                    (600.0, 10.05),
+                    (1200.0, 10.5),
+                    (1800.0, 10.9),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="maintenance:window_active",
+            labels={"scope": "uptime"},
+            samples=_build_samples([(0.0, 1.0), (1200.0, 0.0)]),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="maintenance:window_active",
+            labels={"scope": "timetoke"},
+            samples=_build_samples([(0.0, 1.0), (1200.0, 0.0)]),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_uptime_maintenance_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_participation_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.99),
+                    (600.0, 0.95),
+                    (1200.0, 0.93),
+                    (1800.0, 0.92),
+                    (2400.0, 0.92),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 420.0),
+                    (600.0, 900.0),
+                    (1200.0, 1800.0),
+                    (1800.0, 2100.0),
+                    (2400.0, 2160.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_epoch_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 2400.0),
+                    (600.0, 2700.0),
+                    (1200.0, 3900.0),
+                    (1800.0, 4800.0),
+                    (2400.0, 5100.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="timetoke_accrual_hours_total",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10.0),
+                    (600.0, 10.05),
+                    (1200.0, 10.05),
+                    (1800.0, 10.1),
+                    (2400.0, 10.12),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="maintenance:window_active",
+            labels={"scope": "uptime"},
+            samples=_build_samples([(0.0, 1.0), (1200.0, 0.0)]),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="maintenance:window_active",
+            labels={"scope": "timetoke"},
+            samples=_build_samples([(0.0, 1.0), (1200.0, 0.0)]),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_missed_slot_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -2777,6 +2955,23 @@ def default_validation_cases() -> List[ValidationCase]:
             expected_alerts={
                 "TimetokeAccrualStallCritical",
                 "TimetokeAccrualStallWarning",
+                "UptimeObservationGapCritical",
+                "UptimeObservationGapWarning",
+                "UptimeParticipationDropCritical",
+                "UptimeParticipationDropWarning",
+            },
+        ),
+        ValidationCase(
+            name="maintenance-window-suppression",
+            store=build_uptime_maintenance_suppression_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="maintenance-window-resume",
+            store=build_uptime_maintenance_recovery_store(),
+            expected_alerts={
+                "TimetokeAccrualStallWarning",
+                "TimetokeEpochDelayWarning",
                 "UptimeObservationGapCritical",
                 "UptimeObservationGapWarning",
                 "UptimeParticipationDropCritical",

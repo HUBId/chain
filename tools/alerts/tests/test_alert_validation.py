@@ -29,7 +29,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 19
+    assert len(results) == 21
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -51,6 +51,8 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "restart-finality-correlation",
         "timetoke-epoch-delay",
         "timetoke-epoch-recovery",
+        "maintenance-window-suppression",
+        "maintenance-window-resume",
         "baseline",
     }
     assert set(results_by_case) == expected_case_names

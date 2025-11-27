@@ -22,6 +22,7 @@ use rpp_p2p::{
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
+use time::OffsetDateTime;
 
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::electrs::ElectrsConfig;
@@ -2126,6 +2127,8 @@ pub struct NodeConfig {
     pub snapshot_download: SnapshotDownloadConfig,
     #[serde(default)]
     pub governance: GovernanceConfig,
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -2609,7 +2612,67 @@ impl Default for NodeConfig {
             snapshot_sizing: SnapshotSizingConfig::default(),
             snapshot_download: SnapshotDownloadConfig::default(),
             governance: GovernanceConfig::default(),
+            maintenance: MaintenanceConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MaintenanceConfig {
+    pub windows: Vec<MaintenanceWindow>,
+    pub poll_interval_secs: u64,
+}
+
+impl MaintenanceConfig {
+    pub fn active_windows(&self, now: OffsetDateTime) -> Vec<&MaintenanceWindow> {
+        self.windows
+            .iter()
+            .filter(|window| window.contains(now))
+            .collect()
+    }
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            windows: Vec::new(),
+            poll_interval_secs: 30,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MaintenanceWindow {
+    pub name: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub starts_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub ends_at: OffsetDateTime,
+    #[serde(default = "default_true")]
+    pub suppress_uptime: bool,
+    #[serde(default = "default_true")]
+    pub suppress_timetoke: bool,
+}
+
+impl MaintenanceWindow {
+    pub fn contains(&self, now: OffsetDateTime) -> bool {
+        now >= self.starts_at && now < self.ends_at
+    }
+
+    pub fn scopes(&self) -> Vec<&'static str> {
+        let mut scopes = Vec::new();
+        if self.suppress_uptime {
+            scopes.push("uptime");
+        }
+        if self.suppress_timetoke {
+            scopes.push("timetoke");
+        }
+        scopes
     }
 }
 

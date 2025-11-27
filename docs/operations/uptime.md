@@ -255,6 +255,25 @@ When drift triggers an alert:
   budgets above; clusters running hourly scans should avoid overlapping them
   with manual pruning to preserve uptime accrual continuity.【F:rpp/node/src/telemetry/snapshots.rs†L9-L58】【F:rpp/node/src/telemetry/pruning.rs†L9-L83】
 
+### Suppressing uptime/timetoke alerts during maintenance
+
+- **Configure the window in node config.** Declare planned work in the
+  `maintenance.windows` stanza with RFC 3339 `starts_at`/`ends_at` timestamps, a
+  human-readable `name`, and whether the window should suppress `uptime` and
+  `timetoke` alert scopes. Nodes poll this schedule every 30 seconds by
+  default, so you can ship a staged config before the window begins.【F:rpp/runtime/config.rs†L2069-L2152】
+- **Observe suppression explicitly.** The tracker emits
+  `rpp.node.maintenance.window_active{scope="uptime"|"timetoke"}` while a window
+  is live and records start/end transitions via
+  `rpp.node.maintenance.window_events_total{phase="start|end"}`. Correlate these
+  gauges with `maintenance:window_active` in Prometheus to confirm the alerts
+  are muted only during the scheduled window.【F:rpp/node/src/telemetry/maintenance.rs†L1-L61】【F:telemetry/prometheus/runtime-rules.yaml†L1-L26】
+- **Automatic resumption.** When the window expires the tracker logs that
+  suppression lifted and decrements the active gauge, allowing uptime and
+  timetoke alerts to fire again once the metrics cross their thresholds.
+  Validation fixtures assert the alerts stay silent during the window and resume
+  once the window ends while conditions persist.【F:rpp/node/src/services/maintenance.rs†L1-L86】【F:tools/alerts/validation.py†L2113-L2207】
+
 ### Reporting cadence
 
 - **CI gates:** The `alert-probes` job in CI runs the probes and fails the build

@@ -78,6 +78,7 @@ use storage::{
 
 use crate::pipeline::PipelineHookGuard;
 use crate::services::admission_reconciler::{AdmissionReconciler, AdmissionReconcilerSettings};
+use crate::services::maintenance::MaintenanceWindowTracker;
 use crate::services::pruning::PruningService;
 use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
@@ -450,6 +451,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut pruning_service: Option<PruningService> = None;
     let mut admission_reconciler: Option<AdmissionReconciler> = None;
     let mut uptime_service: Option<UptimeScheduler> = None;
+    let mut maintenance_windows: Option<MaintenanceWindowTracker> = None;
     let mut snapshot_validator: Option<SnapshotValidator> = None;
     let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
@@ -503,6 +505,10 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
 
         let validator = SnapshotValidator::start(&config);
         snapshot_validator = Some(validator);
+
+        if !config.maintenance.windows.is_empty() {
+            maintenance_windows = Some(MaintenanceWindowTracker::start(config.maintenance.clone()));
+        }
 
         info!(
             target = "rpc",
@@ -787,6 +793,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 uptime_service.take(),
                 admission_reconciler.take(),
                 snapshot_validator.take(),
+                maintenance_windows.take(),
             )) as _),
             _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
         };
@@ -1188,6 +1195,7 @@ async fn wait_for_node_shutdown(
     mut uptime: Option<UptimeScheduler>,
     admission_reconciler: Option<AdmissionReconciler>,
     snapshot_validator: Option<SnapshotValidator>,
+    maintenance: Option<MaintenanceWindowTracker>,
 ) -> ShutdownOutcome {
     tokio::pin!(runtime);
 
@@ -1255,6 +1263,9 @@ async fn wait_for_node_shutdown(
     }
     if let Some(service) = snapshot_validator.as_ref() {
         service.shutdown().await;
+    }
+    if let Some(tracker) = maintenance.as_ref() {
+        tracker.shutdown().await;
     }
 
     match runtime_result {
