@@ -39,6 +39,19 @@ validator --dry-run --config <template>` before promoting changes so the strict
 schema checks (auth tokens, TLS paths, cache sizing) exercise the same knobs
 that CI validates.【F:config/examples/production/validator-stwo-tls.toml†L1-L178】【F:config/examples/production/validator-plonky3-tls.toml†L1-L172】【F:config/examples/production/malachite.toml†L1-L76】
 
+### RPC and snapshot TLS/mTLS
+
+The HTTP server that fronts RPC and `/p2p/snapshots` runs behind the same
+listener; enabling `network.tls` forces both surfaces to require HTTPS. Plain
+HTTP requests fail the TLS handshake, and setting
+`network.tls.require_client_auth=true` promotes the listener to mTLS so snapshot
+and health probes only succeed when clients present certificates signed by
+`network.tls.client_ca`. Populate the CA chain, the leaf certificate, and the
+private key on disk (as shown in the production templates) and distribute client
+certificates to operators that need to call the snapshot or RPC surfaces. When
+rotating client trust or certificates, restart the node after updating the file
+paths to ensure the mTLS verifier reloads the new material.【F:config/examples/production/validator-stwo-tls.toml†L48-L71】【F:config/examples/production/validator-plonky3-tls.toml†L48-L71】
+
 ## Build and install the CLI
 
 Compile the binary with the release profile and select the backend that matches
