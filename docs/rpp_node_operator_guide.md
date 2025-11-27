@@ -255,6 +255,19 @@ Audit- und Dashboard-Belege synchron bleiben.【F:docs/runbooks/oncall.md†L21-
 visualisieren dieselben Fortschritts- und Fehlerindikatoren, die die CLI als
 Text ausgibt, und sind verpflichtende Artefakte für die Phase‑3-Abnahme.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】【F:docs/dashboards/vrf_overview.json†L1-L60】
 
+### RPC subscription probes
+
+CI und Nightly öffnen parallel zu Konsensus-Lasttests und Wartungsfenstern eine
+kleine Anzahl SSE-/WebSocket-Streams (z. B. `/wallet/pipeline/stream`) und
+schreiben die Kennzahlen `rpc_subscription_probe_success_ratio{phase}` und
+`rpc_subscription_probe_disconnects_total{phase,stream}` nach Prometheus. Die
+Alerts `RpcSubscriptionDisconnectLoad` und `RpcSubscriptionDisconnectMaintenance`
+feuern, sobald Keep-Alive-Raten unter 0,98 (Load) bzw. 0,90 (Maintenance) fallen
+oder Disconnect-Zähler ansteigen. Erwartung: nach Rolling Restarts steigen die
+Raten wieder auf `1.0`, und die Disconnect-Zähler bleiben konstant. Weicht das
+ab, prüfe Gateway-Timeouts, Restart-Reihenfolgen und etwaige Proxy-Puffer, bevor
+du die Streams wieder für Client-Traffic freigibst.【F:ops/alerts/rpc/streams.yaml†L1-L35】【F:tools/alerts/validation.py†L903-L977】【F:docs/operations/uptime.md†L80-L112】
+
 #### Limiting inbound snapshot sessions
 
 Snapshot providers can cap concurrent inbound streams via

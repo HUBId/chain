@@ -58,6 +58,13 @@ run to confirm alerts fire and then clear:
   proving `RpcAvailabilityDegraded*` alerts trip while consensus liveness still
   advances via `consensus:block_height_delta:5m`. Recovery fixtures return the
   ratio above 99% to confirm alerts clear independently of liveness probes.【F:tools/alerts/validation.py†L151-L223】【F:tools/alerts/validation.py†L1988-L2042】【F:ops/alerts/rpc/availability.yaml†L1-L32】
+- **RPC subscription streams** – opens `/wallet/pipeline/stream`-style RPC
+  subscriptions while consensus load is running and during maintenance windows.
+  The synthetic stores drop `rpc_subscription_probe_success_ratio` and bump the
+  `rpc_subscription_probe_disconnects_total` counter to ensure
+  `RpcSubscriptionDisconnect*` alerts fire when keep-alives or connections are
+  lost, and return both metrics to stable values to prove the probes clear after
+  reconnection.【F:tools/alerts/validation.py†L903-L977】【F:tools/alerts/validation.py†L1887-L2075】【F:ops/alerts/rpc/streams.yaml†L1-L35】
 - **Join and removal churn** – `uptime-join` keeps `uptime_participation_ratio`,
   `uptime_observation_age_seconds`, and `timetoke_accrual_hours_total`
   progressing through node joins, while `uptime-departure` forces those
@@ -143,6 +150,12 @@ When the soak or production telemetry raises uptime/finality alerts:
   consider redirecting client traffic while consensus continues to make
   progress. Use the uptime/finality dashboard panel to confirm the API outage is
   isolated from consensus liveness and finality graphs.【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:tools/alerts/validation.py†L128-L223】【F:docs/dashboards/uptime_finality_correlation.json†L1-L93】
+- **RPC subscription probes (`RpcSubscriptionDisconnect*`).** Warns when
+  `/wallet/pipeline/stream` or other RPC subscriptions drop during consensus
+  load or continue failing past a maintenance window. Examine ingress timeouts,
+  rolling restart order, and gateway buffering before resuming client traffic;
+  reconnect probes should restore `rpc_subscription_probe_success_ratio` to 1.0
+  and stop incrementing disconnect counters once routing stabilises.【F:ops/alerts/rpc/streams.yaml†L1-L35】【F:tools/alerts/validation.py†L903-L977】【F:tools/alerts/validation.py†L1887-L2075】
 
 ### Prover backlog correlation
 
