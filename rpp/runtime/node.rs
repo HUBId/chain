@@ -20,7 +20,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -729,6 +729,28 @@ pub struct PruningJobStatus {
     pub last_updated: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_time_remaining_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PruningCycleSummary {
+    pub status: Option<PruningJobStatus>,
+    pub cancelled: bool,
+}
+
+impl PruningCycleSummary {
+    pub fn completed(status: Option<PruningJobStatus>) -> Self {
+        Self {
+            status,
+            cancelled: false,
+        }
+    }
+
+    pub fn cancelled(status: Option<PruningJobStatus>) -> Self {
+        Self {
+            status,
+            cancelled: true,
+        }
+    }
 }
 
 impl PruningJobStatus {
@@ -1629,6 +1651,7 @@ fn parse_snapshot_signature(
 pub(crate) struct NodeInner {
     config: NodeConfig,
     mempool_limit: AtomicUsize,
+    pruning_cancelled: AtomicBool,
     queue_weights: RwLock<QueueWeightsConfig>,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
@@ -3016,6 +3039,7 @@ impl Node {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
             mempool_limit: AtomicUsize::new(mempool_limit),
+            pruning_cancelled: AtomicBool::new(false),
             queue_weights: RwLock::new(queue_weights),
             keypair,
             vrf_keypair,
@@ -4452,11 +4476,15 @@ impl NodeHandle {
         self.inner.reload_access_lists(allowlist, blocklist).await
     }
 
+    pub fn request_pruning_cancellation(&self) {
+        self.inner.request_pruning_cancellation();
+    }
+
     pub fn run_pruning_cycle(
         &self,
         chunk_size: usize,
         retention_depth: u64,
-    ) -> ChainResult<Option<PruningJobStatus>> {
+    ) -> ChainResult<PruningCycleSummary> {
         self.inner.run_pruning_cycle(chunk_size, retention_depth)
     }
 
@@ -4626,6 +4654,10 @@ impl NodeHandle {
 }
 
 impl NodeInner {
+    fn request_pruning_cancellation(&self) {
+        self.pruning_cancelled.store(true, Ordering::SeqCst);
+    }
+
     fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
         self.witness_channels.subscribe(topic)
     }
@@ -5750,9 +5782,9 @@ impl NodeInner {
         &self,
         chunk_size: usize,
         retention_depth: u64,
-    ) -> ChainResult<Option<PruningJobStatus>> {
+    ) -> ChainResult<PruningCycleSummary> {
         if !self.config.rollout.feature_gates.reconstruction {
-            return Ok(None);
+            return Ok(PruningCycleSummary::completed(None));
         }
         let engine = ReconstructionEngine::with_snapshot_dir(
             self.storage.clone(),
@@ -5800,9 +5832,14 @@ impl NodeInner {
         }
         missing_heights.sort_unstable();
         missing_heights.dedup();
+        let mut cancelled = self.pruning_cancelled.swap(false, Ordering::SeqCst);
         let mut stored_proofs = Vec::new();
         let mut previous_cache: Option<Block> = None;
         for height in missing_heights.iter().copied() {
+            if cancelled || self.pruning_cancelled.swap(false, Ordering::SeqCst) {
+                cancelled = true;
+                break;
+            }
             match self.storage.read_block_record(height)? {
                 Some(record) => {
                     let mut block = record.into_block();
@@ -5847,6 +5884,11 @@ impl NodeInner {
                     warn!(height, "missing block record for pruning proof persistence");
                 }
             }
+
+            if self.pruning_cancelled.swap(false, Ordering::SeqCst) {
+                cancelled = true;
+                break;
+            }
         }
         let last_updated = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5870,12 +5912,23 @@ impl NodeInner {
                 "pruning cycle identified missing history"
             );
         }
+
+        let summary = if cancelled {
+            PruningCycleSummary::cancelled(Some(status.clone()))
+        } else {
+            PruningCycleSummary::completed(Some(status.clone()))
+        };
+
         {
             let mut slot = self.pruning_status.write();
-            *slot = Some(status.clone());
+            *slot = summary.status.clone();
         }
-        self.emit_witness_json(GossipTopic::Snapshots, &status);
-        Ok(Some(status))
+
+        if let Some(ref payload) = summary.status {
+            self.emit_witness_json(GossipTopic::Snapshots, payload);
+        }
+
+        Ok(summary)
     }
 
     fn pruning_job_status(&self) -> Option<PruningJobStatus> {

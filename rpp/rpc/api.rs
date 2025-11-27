@@ -99,7 +99,9 @@ use crate::runtime::{
     ProofRpcMethod, RpcClass, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics,
     RuntimeMode, WalletRpcMethod,
 };
-use crate::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
+use crate::storage::pruner::receipt::{
+    SnapshotCancelReceipt, SnapshotRebuildReceipt, SnapshotTriggerReceipt,
+};
 use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
@@ -157,7 +159,7 @@ pub use routes::p2p::{
     reset_snapshot_breaker, snapshot_breaker_status, snapshot_stream_status, start_snapshot_stream,
     submit_pending_admission_policies, update_admission_policies,
 };
-pub use routes::state::{rebuild_snapshots, trigger_snapshot};
+pub use routes::state::{cancel_pruning, rebuild_snapshots, trigger_snapshot};
 pub use routes::state_sync::{
     chunk_by_id as state_sync_chunk_by_id, head_stream as state_sync_head_stream,
     session_status as state_sync_session_status, session_stream as state_sync_session_stream,
@@ -390,6 +392,16 @@ pub trait PruningServiceApi: Send + Sync {
     ) -> Pin<
         Box<
             dyn Future<Output = Result<SnapshotTriggerReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    fn cancel_pruning(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotCancelReceipt, PruningServiceError>>
                 + Send
                 + 'static,
         >,
@@ -2250,6 +2262,7 @@ where
         .route("/snapshots/jobs", get(snapshot_jobs))
         .route("/snapshots/rebuild", post(routes::state::rebuild_snapshots))
         .route("/snapshots/snapshot", post(routes::state::trigger_snapshot))
+        .route("/snapshots/cancel", post(routes::state::cancel_pruning))
         .route("/state-sync/plan", get(state_sync_plan))
         .route(
             "/state-sync/session",

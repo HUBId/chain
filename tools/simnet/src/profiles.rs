@@ -63,8 +63,9 @@ impl SimnetProfile {
             SimnetProfile::SmallWorld => "tools/simnet/scenarios/small_world_smoke.ron",
             SimnetProfile::ReorgStark => "tools/simnet/scenarios/consensus_reorg_stark.ron",
             SimnetProfile::CanaryRolling => "tools/simnet/scenarios/canary_rolling_restart.ron",
-            SimnetProfile::LeaderRotationProverLoad =>
-                "tools/simnet/scenarios/leader_rotation_prover_load.ron",
+            SimnetProfile::LeaderRotationProverLoad => {
+                "tools/simnet/scenarios/leader_rotation_prover_load.ron"
+            }
         })
     }
 }

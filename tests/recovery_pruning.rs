@@ -65,10 +65,11 @@ fn pruning_recovery_is_atomic_across_restart() {
     let blocks = build_chain(&handle, 4);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
-    let status = handle
+    let summary = handle
         .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle")
-        .expect("pruning status");
+        .expect("pruning cycle");
+    let status = summary.status.expect("pruning status");
+    assert!(!summary.cancelled, "unexpected cancellation");
     assert!(
         !status.stored_proofs.is_empty(),
         "pruning cycle should persist pruning proofs"
@@ -149,8 +150,8 @@ fn pruning_rolls_back_after_snapshot_persist_failure() {
 
     let retry = handle
         .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("retry pruning cycle")
-        .expect("pruning status after retry");
+        .expect("retry pruning cycle");
+    let retry = retry.status.expect("pruning status after retry");
 
     assert!(retry.persisted_path.is_some(), "retry should persist plan");
     assert!(
@@ -176,8 +177,8 @@ fn pruning_checkpoint_recovery_rejects_partial_files() {
 
     let status = handle
         .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle")
-        .expect("pruning status");
+        .expect("pruning cycle");
+    let status = status.status.expect("pruning status");
     let checkpoint_path = Path::new(
         status
             .persisted_path

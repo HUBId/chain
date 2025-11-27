@@ -19,7 +19,9 @@ use rpp_p2p::{
 };
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 use storage::snapshots::{known_snapshot_sets, CrossShardLink, SnapshotSet};
-use storage_firewood::pruning::{CrossShardReference, PersistedPrunerSnapshot, PersistedPrunerState};
+use storage_firewood::pruning::{
+    CrossShardReference, PersistedPrunerSnapshot, PersistedPrunerState,
+};
 use thiserror::Error;
 use tracing::info;
 use uuid::Uuid;
@@ -280,7 +282,10 @@ fn validate_snapshot_metadata(
         HashMap::with_capacity(persisted.snapshots.len());
     for snapshot in &persisted.snapshots {
         recorded.insert(snapshot.block_height(), snapshot);
-        recorded_references.insert(snapshot.block_height(), snapshot.cross_references().to_vec());
+        recorded_references.insert(
+            snapshot.block_height(),
+            snapshot.cross_references().to_vec(),
+        );
     }
 
     for snapshot in dataset.snapshots {
@@ -386,10 +391,16 @@ fn validate_cross_shard_links(
     recorded: Vec<CrossShardReference>,
     builder: &mut ReportBuilder,
 ) -> Result<(), VerificationError> {
-    let mut recorded_set: HashSet<(String, String, u64)> =
-        recorded.into_iter().map(|link| (link.shard, link.partition, link.block_height)).collect();
+    let mut recorded_set: HashSet<(String, String, u64)> = recorded
+        .into_iter()
+        .map(|link| (link.shard, link.partition, link.block_height))
+        .collect();
     for link in expected {
-        let needle = (link.shard.to_string(), link.partition.to_string(), link.block_height);
+        let needle = (
+            link.shard.to_string(),
+            link.partition.to_string(),
+            link.block_height,
+        );
         if !recorded_set.remove(&needle) {
             return Err(builder.fail(VerificationErrorKind::Metadata(format!(
                 "missing cross-shard reference {}:{} at {} for snapshot {}",

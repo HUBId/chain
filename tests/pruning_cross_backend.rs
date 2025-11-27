@@ -112,10 +112,11 @@ fn run_pruning_checkpoint_flow(use_rpp_stark: bool) {
     let blocks = build_chain(&handle, 5);
     let mut payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
-    let pruning_status = handle
+    let pruning_summary = handle
         .run_pruning_cycle(3, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle")
-        .expect("pruning status");
+        .expect("pruning cycle");
+    let pruning_status = pruning_summary.status.expect("pruning status");
+    assert!(!pruning_summary.cancelled, "unexpected cancellation");
     let checkpoint_path = temp.path().join(format!(
         "checkpoint-{}.json",
         pruning_status.plan.tip.height
@@ -171,10 +172,16 @@ fn run_pruning_checkpoint_flow(use_rpp_stark: bool) {
         block
     };
 
-    let advanced_status = handle
+    let advanced_summary = handle
         .run_pruning_cycle(3, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle after consensus advance")
+        .expect("pruning cycle after consensus advance");
+    let advanced_status = advanced_summary
+        .status
         .expect("pruning status after consensus advance");
+    assert!(
+        !advanced_summary.cancelled,
+        "unexpected cancellation after consensus advance",
+    );
 
     assert_eq!(
         advanced_status.plan.tip.height, finalized_block.header.height,
@@ -359,10 +366,11 @@ fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
     let blocks = build_chain(&handle, 6);
     let payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
-    let pruning_status = handle
+    let pruning_summary = handle
         .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
-        .expect("pruning cycle")
-        .expect("pruning status");
+        .expect("pruning cycle");
+    let pruning_status = pruning_summary.status.expect("pruning status");
+    assert!(!pruning_summary.cancelled, "unexpected cancellation");
     let pruning_tip = pruning_status.plan.tip.height;
 
     let engine = ReconstructionEngine::new(storage.clone());

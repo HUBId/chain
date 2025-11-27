@@ -64,6 +64,14 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    returns a receipt. Calls that pass validation respond with `accepted=true`; invalid cadence or
    retention overrides surface as `400 Bad Request` with details propagated from the service.
    【F:rpp/node/src/services/pruning.rs†L259-L303】
+3. **Cancel gracefully.** If a rebuild or snapshot run needs to stop mid-flight, call the new
+   cancellation endpoint instead of killing the node:
+   ```bash
+   rpp-node validator snapshot cancel-pruning --config config/validator.toml
+   ```
+   or send `POST /snapshots/cancel` with the bearer token to receive a cancellation receipt.
+   The worker logs the request, bumps `rpp.node.pruning.cancellations_total`, and marks the
+   cycle as `result="cancelled"` while keeping persisted plans intact for the next run.【F:rpp/chain-cli/src/lib.rs†L255-L265】【F:rpp/rpc/src/routes/state.rs†L1-L26】【F:rpp/node/src/services/pruning.rs†L321-L370】【F:rpp/node/src/telemetry/pruning.rs†L25-L124】
 3. **Authenticated tooling.** Automation or wrapper CLIs must include the RPC bearer token described
    in the [`rpp-node` operator guide](../rpp_node_operator_guide.md) so that the POST requests above pass
    gateway authentication and rate limiting. Reuse the guide’s credential rotation and diagnostics
