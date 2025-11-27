@@ -1,0 +1,28 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rpp-runtime-backlog
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: runtime-backlog
+      rules:
+        - alert: BlockBacklogCritical
+          expr: |
+            (rate(rpp_runtime_backlog_blocks_sum[5m]) / rate(rpp_runtime_backlog_blocks_count[5m])) > 16
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Block proposal backlog above critical threshold
+            runbook_url: https://github.com/ava-labs/chain/blob/main/docs/mempool.md#backlog-probes
+        - alert: TransactionBacklogCritical
+          expr: |
+            (rate(rpp_runtime_backlog_transactions_sum[5m]) / rate(rpp_runtime_backlog_transactions_count[5m])) > 4096
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Transaction backlog above critical threshold
+            runbook_url: https://github.com/ava-labs/chain/blob/main/docs/mempool.md#backlog-probes

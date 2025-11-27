@@ -90,6 +90,24 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   `mempool_limit` to drain legitimate traffic, and clear the saturated queues before resuming
   normal load—mirroring the saturation/recovery sequence validated by the probe.【F:tests/mempool/status_probe.rs†L108-L163】
 
+### Backlog probes
+
+* The `chain-cli health` probe now fails when block proposals or transactions exceed the configured
+  backlog thresholds. Override the limits with `--max-block-backlog` and
+  `--max-transaction-backlog` when exercising incident drills or staging rollouts, and use the
+  JSON output to feed automation that drains queues before restarts.【F:rpp/chain-cli/src/lib.rs†L205-L258】【F:rpp/runtime/node.rs†L330-L361】
+* Metrics `rpp_runtime_backlog_blocks` and `rpp_runtime_backlog_transactions` surface the queue
+  sizes; dashboards under `telemetry/grafana/dashboards/runtime_backlog.json` and the mirrored
+  `docs/dashboards/runtime_backlog.json` highlight the five-minute averages with thresholds that
+  match the probe defaults.【F:telemetry/grafana/dashboards/runtime_backlog.json†L1-L66】
+* Alerting mirrors the probe: `ops/alerts/runtime/backlog.yaml` pages when block backlog averages
+  above 16 or transaction backlog above 4,096 for five minutes. Keep the runbook URL in sync with
+  this section so on-call engineers land on the right remediation steps.【F:ops/alerts/runtime/backlog.yaml†L1-L24】
+* To validate the plumbing end-to-end, induce backlog by slowing block verification (start the
+  validator with a low-powered prover or temporarily disable pruning) and by raising the mempool
+  floor while replaying a known spam scenario. The probe should flip to `Unhealthy`, the backlog
+  panels should turn red, and the runtime backlog alerts should fire until the queues drain.
+
 ## Configuration and tuning controls
 
 Align tuning changes with the [mempool cleanup runbook](./mempool_cleanup.md) and the on-call
