@@ -996,6 +996,68 @@ EOF
           set -euo pipefail
           cargo test -p plonky3-backend --no-default-features --features plonky3-gpu -- consensus_proof_metadata_tracks_commitment_digest
 
+  prover-accelerator:
+    name: Prover accelerator (GPU/ROCm)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect accelerator availability
+        id: detect-accelerator
+        run: |
+          set -euo pipefail
+          if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+            echo "kind=nvidia" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v rocminfo >/dev/null 2>&1 && rocminfo >/dev/null 2>&1; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+            echo "kind=rocm" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=false" >>"$GITHUB_OUTPUT"
+          echo "kind=none" >>"$GITHUB_OUTPUT"
+
+      - name: Install stable toolchain
+        if: steps.detect-accelerator.outputs.available == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run GPU-enabled prover tests
+        if: steps.detect-accelerator.outputs.available == 'true'
+        id: gpu-tests
+        env:
+          PLONKY3_GPU_DISABLE: "0"
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cargo test -p plonky3-backend --no-default-features --features plonky3-gpu -- --nocapture | tee gpu-accelerator.log
+          end=$(date +%s)
+          echo "duration_seconds=$((end-start))" >>"$GITHUB_OUTPUT"
+
+      - name: Upload GPU test log
+        if: steps.detect-accelerator.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prover-accelerator-log
+          path: gpu-accelerator.log
+
+      - name: Summarize accelerator run
+        run: |
+          {
+            echo "## Prover accelerator lane";
+            if [ "${{ steps.detect-accelerator.outputs.available }}" != "true" ]; then
+              echo "- Status: skipped (no GPU/ROCm accelerator detected on runner)";
+            else
+              echo "- Accelerator: ${{ steps.detect-accelerator.outputs.kind }}";
+              echo "- GPU test duration: ${{ steps.gpu-tests.outputs.duration_seconds }}s";
+              echo "- Log artifact: prover-accelerator-log";
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
   simnet:
     name: Simnet harness (prod, prover-stwo, plonky3)
     runs-on: ubuntu-latest
