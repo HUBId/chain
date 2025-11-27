@@ -6,7 +6,9 @@ use std::path::Path;
 use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
-use rpp_chain::runtime::sync::{PruningCheckpoint, ReconstructionEngine};
+use rpp_chain::runtime::sync::{
+    CheckpointSignatureConfig, PruningCheckpoint, ReconstructionEngine,
+};
 use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
 use tempfile::TempDir;
@@ -34,6 +36,31 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     config.rollout.feature_gates.consensus_enforcement = false;
     config.network.rpc.listen = "127.0.0.1:0".parse().expect("rpc listen");
     (config, temp)
+}
+
+fn checkpoint_signing_config(config: &NodeConfig) -> CheckpointSignatureConfig {
+    let signing_key = config
+        .pruning
+        .checkpoint_signatures
+        .load_signing_key()
+        .expect("load pruning checkpoint signing key");
+    let verifying_key = config
+        .pruning
+        .checkpoint_signatures
+        .verifying_key()
+        .expect("decode pruning checkpoint verifying key")
+        .or_else(|| {
+            signing_key
+                .as_ref()
+                .map(|key| key.signing_key.verifying_key())
+        });
+
+    CheckpointSignatureConfig {
+        signing_key,
+        verifying_key,
+        expected_version: config.pruning.checkpoint_signatures.signature_version,
+        require_signatures: config.pruning.checkpoint_signatures.require_signatures,
+    }
 }
 
 fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> {
@@ -224,6 +251,107 @@ fn pruning_checkpoint_recovery_rejects_partial_files() {
         recovered.metadata.backend, checkpoint.metadata.backend,
         "backend metadata should survive recovery",
     );
+
+    drop(handle);
+    drop(node);
+    drop(temp);
+}
+
+#[test]
+fn pruning_checkpoint_signature_rejects_tampered_payload() {
+    let (mut config, temp) = prepare_config();
+    let snapshot_dir = config.snapshot_dir.clone();
+    let keys_dir = temp.path().join("keys");
+    config.pruning.checkpoint_signatures.signing_key_path =
+        Some(keys_dir.join("pruning-checkpoint-signing.toml"));
+    config.pruning.checkpoint_signatures.require_signatures = true;
+    let restart_config = config.clone();
+
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let blocks = build_chain(&handle, 3);
+    install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let status = handle
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle")
+        .status
+        .expect("pruning status");
+    let checkpoint_path = Path::new(
+        status
+            .persisted_path
+            .as_ref()
+            .expect("checkpoint path should be recorded"),
+    )
+    .to_path_buf();
+
+    let mut checkpoint_bytes = fs::read(&checkpoint_path).expect("read pruning checkpoint");
+    checkpoint_bytes[0] = checkpoint_bytes[0].wrapping_add(1);
+    fs::write(&checkpoint_path, &checkpoint_bytes).expect("tamper pruning checkpoint");
+
+    let signing = checkpoint_signing_config(&restart_config);
+    let engine = ReconstructionEngine::with_snapshot_dir(storage, snapshot_dir)
+        .with_checkpoint_signatures(signing);
+
+    let err = engine
+        .recover_checkpoint()
+        .expect_err("tampered checkpoint should be rejected");
+    assert!(matches!(err, ChainError::Config(msg) if msg.contains("signature")));
+
+    drop(handle);
+    drop(node);
+    drop(temp);
+}
+
+#[test]
+fn pruning_checkpoint_signature_rejects_tampered_signature() {
+    let (mut config, temp) = prepare_config();
+    let snapshot_dir = config.snapshot_dir.clone();
+    let keys_dir = temp.path().join("keys");
+    config.pruning.checkpoint_signatures.signing_key_path =
+        Some(keys_dir.join("pruning-checkpoint-signing.toml"));
+    config.pruning.checkpoint_signatures.require_signatures = true;
+    let restart_config = config.clone();
+
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let blocks = build_chain(&handle, 3);
+    install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let status = handle
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle")
+        .status
+        .expect("pruning status");
+    let checkpoint_path = Path::new(
+        status
+            .persisted_path
+            .as_ref()
+            .expect("checkpoint path should be recorded"),
+    )
+    .to_path_buf();
+
+    let mut signature_path = checkpoint_path.clone();
+    let mut sig_name = signature_path
+        .file_name()
+        .expect("checkpoint filename")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    fs::write(&signature_path, "invalid:signature").expect("tamper pruning signature");
+
+    let signing = checkpoint_signing_config(&restart_config);
+    let engine = ReconstructionEngine::with_snapshot_dir(storage, snapshot_dir)
+        .with_checkpoint_signatures(signing);
+
+    let err = engine
+        .recover_checkpoint()
+        .expect_err("tampered signature should be rejected");
+    assert!(matches!(err, ChainError::Config(msg) if msg.contains("signature")));
 
     drop(handle);
     drop(node);

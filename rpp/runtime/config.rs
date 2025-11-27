@@ -2354,6 +2354,13 @@ impl NodeConfig {
                 fs::create_dir_all(parent)?;
             }
         }
+        if let Some(path) = self.pruning.checkpoint_signatures.signing_key_path.as_ref() {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
+        }
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
         if let Some(parent) = self.consensus_pipeline_path.parent() {
@@ -2411,32 +2418,11 @@ impl NodeConfig {
     pub fn load_or_generate_timetoke_snapshot_signing_key(
         &self,
     ) -> ChainResult<SnapshotSigningKey> {
-        if self.timetoke_snapshot_key_path.exists() {
-            return self.load_timetoke_snapshot_signing_key();
-        }
-        let mut rng = OsRng;
-        let signing = SigningKey::generate(&mut rng);
-        let verifying = signing.verifying_key();
-        let stored = StoredSigningKey {
-            secret_key: hex::encode(signing.to_bytes()),
-            public_key: Some(hex::encode(verifying.to_bytes())),
-            version: Some(DEFAULT_SIGNING_KEY_VERSION),
-        };
-        let encoded = toml::to_string(&stored).map_err(|err| {
-            ChainError::Config(format!(
-                "unable to encode timetoke snapshot signing key: {err}"
-            ))
-        })?;
-        if let Some(parent) = self.timetoke_snapshot_key_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        fs::write(&self.timetoke_snapshot_key_path, encoded)?;
-        Ok(SnapshotSigningKey::new(
-            signing,
+        load_or_generate_signing_key(
+            &self.timetoke_snapshot_key_path,
             DEFAULT_SIGNING_KEY_VERSION,
-        ))
+        )
+        .map_err(|err| ChainError::Config(format!("timetoke snapshot signing key: {err}")))
     }
 
     pub fn validate(&self) -> ChainResult<()> {
@@ -2575,6 +2561,32 @@ fn read_signing_key(path: &Path) -> Result<SnapshotSigningKey, String> {
     Ok(SnapshotSigningKey::new(signing, version))
 }
 
+fn load_or_generate_signing_key(path: &Path, version: u32) -> Result<SnapshotSigningKey, String> {
+    if path.exists() {
+        return read_signing_key(path);
+    }
+
+    let mut rng = OsRng;
+    let signing = SigningKey::generate(&mut rng);
+    let verifying = signing.verifying_key();
+    let stored = StoredSigningKey {
+        secret_key: hex::encode(signing.to_bytes()),
+        public_key: Some(hex::encode(verifying.to_bytes())),
+        version: Some(version),
+    };
+    let encoded =
+        toml::to_string(&stored).map_err(|err| format!("unable to encode signing key: {err}"))?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("unable to create signing key parent: {err}"))?;
+        }
+    }
+    fs::write(path, encoded)
+        .map_err(|err| format!("unable to write signing key {}: {err}", path.display()))?;
+    Ok(SnapshotSigningKey::new(signing, version))
+}
+
 impl Default for NodeConfig {
     fn default() -> Self {
         let mut network = NetworkConfig::default();
@@ -2683,6 +2695,7 @@ pub struct PruningConfig {
     pub retention_depth: u64,
     pub emergency_pause: bool,
     pub pacing: PruningPacingConfig,
+    pub checkpoint_signatures: PruningCheckpointSignatureConfig,
 }
 
 impl PruningConfig {
@@ -2698,6 +2711,7 @@ impl PruningConfig {
             ));
         }
         self.pacing.validate()?;
+        self.checkpoint_signatures.validate()?;
         Ok(())
     }
 }
@@ -2709,6 +2723,104 @@ impl Default for PruningConfig {
             retention_depth: DEFAULT_PRUNING_RETENTION_DEPTH,
             emergency_pause: false,
             pacing: PruningPacingConfig::default(),
+            checkpoint_signatures: PruningCheckpointSignatureConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PruningCheckpointSignatureConfig {
+    /// Optional signing key that signs persisted pruning checkpoints.
+    pub signing_key_path: Option<PathBuf>,
+    /// Optional verifying key hex (32-byte) used to validate checkpoints.
+    pub verifying_key: Option<String>,
+    /// Expected signature format version when verifying checkpoints.
+    pub signature_version: u32,
+    /// Whether pruning checkpoints must include valid signatures to load.
+    pub require_signatures: bool,
+}
+
+impl PruningCheckpointSignatureConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.require_signatures
+            && self.signing_key_path.is_none()
+            && self.verifying_key.is_none()
+        {
+            return Err(ChainError::Config(
+                "pruning.checkpoint_signatures.require_signatures set without a signing or verifying key"
+                    .into(),
+            ));
+        }
+
+        if let Some(path) = self.signing_key_path.as_ref() {
+            if path.as_os_str().is_empty() {
+                return Err(ChainError::Config(
+                    "pruning.checkpoint_signatures.signing_key_path must not be empty".into(),
+                ));
+            }
+        }
+
+        if let Some(hex) = self.verifying_key.as_ref() {
+            let decoded = hex::decode(hex).map_err(|err| {
+                ChainError::Config(format!(
+                    "invalid pruning checkpoint verifying key encoding: {err}"
+                ))
+            })?;
+            let key_bytes: [u8; 32] = decoded.try_into().map_err(|_| {
+                ChainError::Config("pruning checkpoint verifying key must be 32 bytes".into())
+            })?;
+            VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+                ChainError::Config(format!(
+                    "invalid pruning checkpoint verifying key bytes: {err}"
+                ))
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn load_signing_key(&self) -> ChainResult<Option<SnapshotSigningKey>> {
+        match &self.signing_key_path {
+            Some(path) => load_or_generate_signing_key(path, self.signature_version)
+                .map(Some)
+                .map_err(|err| {
+                    ChainError::Config(format!("pruning checkpoint signing key: {err}"))
+                }),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn verifying_key(&self) -> ChainResult<Option<VerifyingKey>> {
+        match &self.verifying_key {
+            Some(hex) => {
+                let decoded = hex::decode(hex).map_err(|err| {
+                    ChainError::Config(format!(
+                        "invalid pruning checkpoint verifying key encoding: {err}"
+                    ))
+                })?;
+                let key_bytes: [u8; 32] = decoded.try_into().map_err(|_| {
+                    ChainError::Config("pruning checkpoint verifying key must be 32 bytes".into())
+                })?;
+                let key = VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+                    ChainError::Config(format!(
+                        "invalid pruning checkpoint verifying key bytes: {err}"
+                    ))
+                })?;
+                Ok(Some(key))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+impl Default for PruningCheckpointSignatureConfig {
+    fn default() -> Self {
+        Self {
+            signing_key_path: None,
+            verifying_key: None,
+            signature_version: DEFAULT_SIGNING_KEY_VERSION,
+            require_signatures: false,
         }
     }
 }

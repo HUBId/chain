@@ -92,7 +92,15 @@ raise incidents when three consecutive scheduled runs fail.
    same incident or maintenance log entry that tracks pruning receipts. When the
    hashes differ, stop snapshot exports and rebuild the checkpoint before
    resuming pruning automation.
-3. **Replay wallet indices across prover backends.** Run the wallet snapshot
+3. **Verify checkpoint signatures.** When
+   `pruning.checkpoint_signatures.require_signatures=true`, restart validation
+   fails fast if the companion `snapshot-<height>.json.sig` is missing or if the
+   recorded signature/version cannot be verified with the configured public key.
+   Store the signing key under a restricted path (for example
+   `/var/lib/rpp/keys/pruning-checkpoint.toml`) and back up the derived
+   verifying key so downstream validators can audit exports without copying the
+   secret key.
+4. **Replay wallet indices across prover backends.** Run the wallet snapshot
    round-trip tests to confirm balances and nonces (the wallet-facing index) do
    not drift after pruning. Execute both backends to cover the plonky3 default
    and the `backend-rpp-stark` stack:

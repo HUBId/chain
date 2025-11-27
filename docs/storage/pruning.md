@@ -13,6 +13,15 @@ used to generate it. The checkpoint and its metadata are written atomically to
 `snapshot-<height>.json`, so recovery routines can ignore truncated files and
 select the newest valid checkpoint by inspecting the metadata.
 
+When `pruning.checkpoint_signatures.signing_key_path` is configured, the node
+signs the JSON payload and writes `snapshot-<height>.json.sig` alongside it. The
+signature encodes the signing key version and an ed25519 signature of the full
+checkpoint bytes, so tampering either the plan or the companion signature file
+causes recovery to bail with a signature error. Operators can opt into strict
+verification by setting `pruning.checkpoint_signatures.require_signatures=true`;
+the key is generated automatically if the configured path is empty and the
+derived verifying key is used to validate checkpoints on restart.
+
 ## Running the cross-backend drill locally
 
 ```shell
