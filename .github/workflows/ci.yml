@@ -274,6 +274,28 @@ PY
             --no-default-features \
             --features "wallet_gui,prover-stwo,backup"
 
+  wallet-sdk-mobile-embedded:
+    name: Wallet SDK mobile/embedded smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-sdk-mobile-embedded
+      - name: Run mobile/embedded SDK flows against test node shim
+        run: |
+          set -euo pipefail
+          cargo test --locked --test sdk_mobile_embedded_smoke --features "wallet-integration" -- --nocapture
+      - name: Upload SDK smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-sdk-mobile-embedded-logs
+          path: logs/sdk-smoke
+
   proof-version-policy:
     name: Proof version policy
     runs-on: ubuntu-latest

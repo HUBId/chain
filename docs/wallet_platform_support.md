@@ -80,6 +80,19 @@ operators share the same expectations for deployment targets.【F:docs/wallet_su
   GUI scaling respects OS DPI but fonts may differ from Linux/macOS; confirm the
   wallet tabs render correctly before sign-off.
 
+## Mobile and embedded SDK support
+
+* **Support level** – The supported SDKs for mobile/embedded targets exercise the
+  authenticated JSON-RPC surface with bearer tokens, wallet signing, and rate
+  limits enforced. CI covers these flows in the `wallet-sdk-mobile-embedded` job
+  (see `.github/workflows/ci.yml`), which spins up a local test node shim and
+  uploads `logs/sdk-smoke/*.log` on failure for debugging.【F:.github/workflows/ci.yml†L1-L200】
+* **Reproduce locally** – Run `cargo test --locked --test sdk_mobile_embedded_smoke --features "wallet-integration" -- --nocapture`
+  from the repo root. The harness writes transcripts under `logs/sdk-smoke/`
+  showing the rate-limit window returned by the server, the signing error code
+  surfaced to SDK clients, and whether bearer auth was accepted.【F:tests/sdk_mobile_embedded_smoke.rs†L1-L207】 Use these logs to
+  validate platform-specific SDK wrappers before rolling out mobile or embedded builds.
+
 ## Platform-specific defaults & configuration
 
 * `[wallet.engine]` now records both `data_dir` and `backup_path` defaults, and

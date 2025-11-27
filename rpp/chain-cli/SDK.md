@@ -64,3 +64,21 @@ Use `classify_snapshot_error` to convert snapshot RPC responses into a typed
 `SnapshotError`. The helper understands the state-sync error codes described in
 `docs/interfaces/rpc/README.md` and backoffs according to rate-limit headers so
 callers can retry transient verifier failures without guessing delay windows.
+
+## Mobile and embedded SDK smoke coverage
+
+The CI job `wallet-sdk-mobile-embedded` exercises the minimal RPC surface that
+mobile and embedded SDKs rely on—auth negotiation, rate-limit headers, and the
+wallet signing error contract. The job runs `cargo test --locked --test
+sdk_mobile_embedded_smoke --features "wallet-integration"` against a local test
+node shim and uploads `logs/sdk-smoke/*.log` if the flow fails, giving SDK
+maintainers an artifact trail when throttling or auth regressions occur.
+
+To reproduce the same coverage locally:
+
+1. `cargo test --locked --test sdk_mobile_embedded_smoke --features "wallet-integration" -- --nocapture`
+2. Inspect `logs/sdk-smoke/mobile.log` and `logs/sdk-smoke/embedded.log` for the
+   echoed payloads, rate-limit windows, and the signing error emitted by the
+   server harness.
+3. Toggle the `AUTH_TOKEN` constant in `tests/sdk_mobile_embedded_smoke.rs` if
+   you want to validate client behavior against alternate bearer tokens.
