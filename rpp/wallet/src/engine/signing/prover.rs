@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 use std::fs;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::config::wallet::{WalletProverBackend, WalletProverConfig};
@@ -12,8 +12,10 @@ use super::{
     WitnessPlan,
 };
 use crate::engine::DraftTransaction;
+use hex::encode as hex_encode;
 use metrics::{counter, gauge, histogram};
 use prover_backend_interface::{
+    audit::{now_timestamp_ms, AuditLog, AuditRecord, AuditRole},
     Blake2sHasher, ProofBytes, ProofHeader, ProofSystemKind, WitnessBytes, WitnessHeader,
 };
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
@@ -35,6 +37,23 @@ use prover_stwo_backend::backend::StwoBackend;
 const MOCK_CIRCUIT_ID: &str = "wallet.tx";
 #[cfg(feature = "prover-stwo")]
 const STWO_CIRCUIT_ID: &str = "transaction";
+
+fn prover_audit_log() -> &'static Option<AuditLog> {
+    static LOG: OnceLock<Option<AuditLog>> = OnceLock::new();
+    LOG.get_or_init(
+        || match AuditLog::from_env(AuditLog::ENV_VAR, AuditLog::DEFAULT_PROVER_PATH) {
+            Ok(log) => log,
+            Err(err) => {
+                warn!(
+                    target = "wallet.prover.audit",
+                    %err,
+                    "failed to initialise prover audit log"
+                );
+                None
+            }
+        },
+    )
+}
 
 #[derive(Clone, Debug, Default)]
 struct ResourceUsage {
@@ -881,6 +900,53 @@ fn debug_assert_zeroized(buf: &[u8]) {
     );
 }
 
+fn append_prover_audit(
+    backend: &'static str,
+    witness_bytes: usize,
+    result: &Result<ProveResult, ProverError>,
+) {
+    let Some(log) = prover_audit_log() else {
+        return;
+    };
+
+    let (proof_bytes, fingerprint) = match result {
+        Ok(result) => {
+            let proof_bytes = result.proof().map(|proof| proof.as_ref().len());
+            let fingerprint = result.proof().map(|proof| {
+                let digest: [u8; 32] = Blake2sHasher::hash(proof.as_ref()).into();
+                hex_encode(digest)
+            });
+            (proof_bytes, fingerprint)
+        }
+        Err(_) => (None, None),
+    };
+
+    let record = AuditRecord {
+        index: 0,
+        timestamp_ms: now_timestamp_ms(),
+        role: AuditRole::Prover,
+        backend: backend.to_string(),
+        operation: "prove".to_string(),
+        circuit: None,
+        proof_fingerprint: fingerprint,
+        result: if result.is_ok() { "ok" } else { "err" }.to_string(),
+        message: result.as_ref().err().map(ToString::to_string),
+        witness_bytes: Some(witness_bytes),
+        proof_bytes,
+        prev_hash: String::new(),
+        entry_hash: String::new(),
+    };
+
+    if let Err(err) = log.append(record) {
+        warn!(
+            target = "wallet.prover.audit",
+            %err,
+            backend,
+            "failed to append prover audit record"
+        );
+    }
+}
+
 fn prove_with_plan<F>(
     backend: &'static str,
     jobs: &ProverJobManager,
@@ -898,7 +964,7 @@ where
     let handle = Handle::try_current().map_err(|err| {
         ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
     })?;
-    handle.block_on(async move {
+    let result = handle.block_on(async move {
         let token = permit.cancellation_token();
         let started_at = Instant::now();
         let job = task::spawn_blocking(move || {
@@ -929,7 +995,9 @@ where
             started_at,
             finished_at,
         ))
-    })
+    });
+    append_prover_audit(backend, witness_bytes, &result);
+    result
 }
 
 fn attest_default(backend: &'static str, result: &ProveResult) -> ProverMeta {
