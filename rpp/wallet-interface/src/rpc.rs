@@ -914,6 +914,12 @@ pub struct BackupMetadataDto {
     pub policy_entries: usize,
     pub meta_entries: usize,
     pub include_checksums: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub checkpoint_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub checkpoint_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

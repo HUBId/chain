@@ -2615,6 +2615,20 @@ fn metadata_lines(metadata: &BackupMetadataDto) -> Vec<String> {
         format!("Policy entries: {}", metadata.policy_entries),
         format!("Metadata entries: {}", metadata.meta_entries),
         format!(
+            "Checkpoint height: {}",
+            metadata
+                .checkpoint_height
+                .map(|height| height.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!(
+            "Checkpoint epoch: {}",
+            metadata
+                .checkpoint_epoch
+                .map(|epoch| epoch.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        format!(
             "Includes checksums: {}",
             format_bool(metadata.include_checksums)
         ),

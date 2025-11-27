@@ -2672,6 +2672,8 @@ fn metadata_to_dto(metadata: &crate::backup::BackupMetadata) -> BackupMetadataDt
         policy_entries: metadata.policy_entries,
         meta_entries: metadata.meta_entries,
         include_checksums: metadata.include_checksums,
+        checkpoint_height: metadata.checkpoint_height,
+        checkpoint_epoch: metadata.checkpoint_epoch,
     }
 }
 
