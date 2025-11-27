@@ -1,4 +1,12 @@
 groups:
+  - name: maintenance-windows
+    interval: 30s
+    rules:
+      - record: maintenance:window_active
+        expr: max by (environment, scope) (rpp_node_maintenance_window_active)
+        labels:
+          component: maintenance
+
   - name: consensus-liveness
     interval: 30s
     rules:
@@ -138,11 +146,13 @@ groups:
     rules:
       - alert: UptimeParticipationDropWarning
         expr: |
-          uptime_participation_ratio
-            < clamp_min(
-                uptime:participation_ratio:30d_p50 - 0.023,
-                0.97
-              )
+          (
+            uptime_participation_ratio
+              < clamp_min(
+                  uptime:participation_ratio:30d_p50 - 0.023,
+                  0.97
+                )
+          ) unless on(environment) (maintenance:window_active{scope="uptime"} > 0)
         for: 10m
         labels:
           severity: warning
@@ -159,11 +169,13 @@ groups:
 
       - alert: UptimeParticipationDropCritical
         expr: |
-          uptime_participation_ratio
-            < clamp_min(
-                uptime:participation_ratio:30d_p50 - 0.053,
-                0.94
-              )
+          (
+            uptime_participation_ratio
+              < clamp_min(
+                  uptime:participation_ratio:30d_p50 - 0.053,
+                  0.94
+                )
+          ) unless on(environment) (maintenance:window_active{scope="uptime"} > 0)
         for: 10m
         labels:
           severity: critical
@@ -180,11 +192,13 @@ groups:
 
       - alert: UptimeObservationGapWarning
         expr: |
-          max_over_time(uptime_observation_age_seconds[5m])
-            > clamp_min(
-                uptime:observation_gap_seconds:30d_p90 + 600,
-                900
-              )
+          (
+            max_over_time(uptime_observation_age_seconds[5m])
+              > clamp_min(
+                  uptime:observation_gap_seconds:30d_p90 + 600,
+                  900
+                )
+          ) unless on(environment) (maintenance:window_active{scope="uptime"} > 0)
         for: 10m
         labels:
           severity: warning
@@ -218,11 +232,13 @@ groups:
 
       - alert: UptimeObservationGapCritical
         expr: |
-          max_over_time(uptime_observation_age_seconds[5m])
-            > clamp_min(
-                uptime:observation_gap_seconds:30d_p90 + 1500,
-                1800
-              )
+          (
+            max_over_time(uptime_observation_age_seconds[5m])
+              > clamp_min(
+                  uptime:observation_gap_seconds:30d_p90 + 1500,
+                  1800
+                )
+          ) unless on(environment) (maintenance:window_active{scope="uptime"} > 0)
         for: 10m
         labels:
           severity: critical
@@ -239,11 +255,13 @@ groups:
 
       - alert: TimetokeEpochDelayWarning
         expr: |
-          max_over_time(timetoke_epoch_age_seconds[10m])
-            > clamp_min(
-                timetoke:epoch_age_seconds:30d_p90 + 1800,
-                3600
-              )
+          (
+            max_over_time(timetoke_epoch_age_seconds[10m])
+              > clamp_min(
+                  timetoke:epoch_age_seconds:30d_p90 + 1800,
+                  3600
+                )
+          ) unless on(environment) (maintenance:window_active{scope="timetoke"} > 0)
         for: 10m
         labels:
           severity: warning
@@ -260,11 +278,13 @@ groups:
 
       - alert: TimetokeEpochDelayCritical
         expr: |
-          max_over_time(timetoke_epoch_age_seconds[10m])
-            > clamp_min(
-                timetoke:epoch_age_seconds:30d_p90 + 3600,
-                5400
-              )
+          (
+            max_over_time(timetoke_epoch_age_seconds[10m])
+              > clamp_min(
+                  timetoke:epoch_age_seconds:30d_p90 + 3600,
+                  5400
+                )
+          ) unless on(environment) (maintenance:window_active{scope="timetoke"} > 0)
         for: 10m
         labels:
           severity: critical
@@ -281,11 +301,13 @@ groups:
 
       - alert: TimetokeAccrualStallWarning
         expr: |
-          rate(timetoke_accrual_hours_total[15m])
-            < clamp_min(
-                timetoke:accrual_rate_per_second:30d_p50 - 0.0003,
-                0.00025
-              )
+          (
+            rate(timetoke_accrual_hours_total[15m])
+              < clamp_min(
+                  timetoke:accrual_rate_per_second:30d_p50 - 0.0003,
+                  0.00025
+                )
+          ) unless on(environment) (maintenance:window_active{scope="timetoke"} > 0)
         for: 15m
         labels:
           severity: warning
@@ -302,11 +324,13 @@ groups:
 
       - alert: TimetokeAccrualStallCritical
         expr: |
-          rate(timetoke_accrual_hours_total[15m])
-            < clamp_min(
-                timetoke:accrual_rate_per_second:30d_p50 - 0.0003,
-                0.00025
-              )
+          (
+            rate(timetoke_accrual_hours_total[15m])
+              < clamp_min(
+                  timetoke:accrual_rate_per_second:30d_p50 - 0.0003,
+                  0.00025
+                )
+          ) unless on(environment) (maintenance:window_active{scope="timetoke"} > 0)
         for: 30m
         labels:
           severity: critical
