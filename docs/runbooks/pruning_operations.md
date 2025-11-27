@@ -50,12 +50,18 @@ raise incidents when three consecutive scheduled runs fail.
 
 - `pruning service started` – emitted once after worker spawn. Confirms cadence,
   chunk size, pause state, and retention depth resolved from configuration.【F:rpp/node/src/services/pruning.rs†L151-L163】
-- `pruning cycle failed` – emitted whenever a pruning cycle returns an error.
+- Structured pruning cycle markers include `pruning_cycle_start`,
+  `pruning_checkpoint_saved`, `pruning_batch_complete`, and
+  `pruning_cycle_finished`. Each record carries `checkpoint_id`, `shard`, and
+  `partition` so dashboards can align events with the right shard. Use the batch
+  markers to confirm proofs are flowing in chunks the size of
+  `chunk_size`/`DEFAULT_STATE_SYNC_CHUNK` and watch checkpoint saves for
+  persistence errors.【F:rpp/runtime/node.rs†L5929-L6073】
+- `pruning_cycle_error` – emitted whenever a pruning cycle returns an error.
   Correlate with `cycle_total{result="failure"}` and `/snapshots/jobs` receipts
-  to identify the failing height.【F:rpp/node/src/services/pruning.rs†L393-L400】【F:rpp/node/src/services/pruning.rs†L407-L417】
-- `persisted pruning snapshot plan` – emitted by the runtime when a cycle
-  stores the plan on disk. If the log is missing while `persisted_plan_total`
-  remains zero, storage or filesystem permissions likely regressed.【F:rpp/runtime/node.rs†L3200-L3202】【F:rpp/node/src/telemetry/pruning.rs†L36-L40】
+  to identify the failing height. The log includes the `checkpoint_id` and
+  shard/partition labels so parsing pipelines can route to the correct owner
+  without guessing from the message body.【F:rpp/runtime/node.rs†L5997-L6055】
 - Cross-shard references captured in the pruning receipts must line up with the
   canonical snapshot metadata before state sync proceeds. Validation rejects
   dangling `shard` / `partition` links so pruning cannot strand dependencies on

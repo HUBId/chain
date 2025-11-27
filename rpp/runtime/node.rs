@@ -15,6 +15,7 @@
 //! snapshot views without leaking internal locks.
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
+use std::env;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
@@ -713,6 +714,11 @@ pub struct TelemetryRuntimeStatus {
     pub last_observed_height: Option<u64>,
 }
 
+const DEFAULT_PRUNING_SHARD: &str = "primary";
+const DEFAULT_PRUNING_PARTITION: &str = "0";
+const PRUNING_SHARD_ENV: &str = "RPP_PRUNING_SHARD";
+const PRUNING_PARTITION_ENV: &str = "RPP_PRUNING_PARTITION";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RolloutStatus {
     pub release_channel: ReleaseChannel,
@@ -773,6 +779,236 @@ impl PruningJobStatus {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PruningLogContext {
+    checkpoint_id: Option<String>,
+    shard: String,
+    partition: String,
+}
+
+impl PruningLogContext {
+    fn new() -> Self {
+        Self {
+            checkpoint_id: None,
+            shard: env::var(PRUNING_SHARD_ENV)
+                .unwrap_or_else(|_| DEFAULT_PRUNING_SHARD.to_string()),
+            partition: env::var(PRUNING_PARTITION_ENV)
+                .unwrap_or_else(|_| DEFAULT_PRUNING_PARTITION.to_string()),
+        }
+    }
+
+    fn set_checkpoint_id(&mut self, checkpoint_id: impl Into<String>) {
+        self.checkpoint_id = Some(checkpoint_id.into());
+    }
+
+    fn checkpoint_id(&self) -> &str {
+        self.checkpoint_id.as_deref().unwrap_or("uninitialized")
+    }
+}
+
+fn checkpoint_identifier(snapshot_height: u64, snapshot_hash: &str) -> String {
+    format!("snapshot-{snapshot_height}-{snapshot_hash}")
+}
+
+fn log_pruning_cycle_start(
+    context: &PruningLogContext,
+    chunk_size: usize,
+    retention_depth: u64,
+    snapshot_height: u64,
+    tip_height: u64,
+    missing_heights: usize,
+    chunk_count: usize,
+) {
+    info!(
+        target = "pruning",
+        event = "pruning_cycle_start",
+        checkpoint_id = context.checkpoint_id(),
+        shard = context.shard.as_str(),
+        partition = context.partition.as_str(),
+        chunk_size,
+        retention_depth,
+        snapshot_height,
+        tip_height,
+        missing_heights,
+        chunk_count,
+        "pruning cycle started",
+    );
+}
+
+fn log_pruning_checkpoint_saved(
+    context: &PruningLogContext,
+    checkpoint_path: &Path,
+    snapshot_height: u64,
+) {
+    info!(
+        target = "pruning",
+        event = "pruning_checkpoint_saved",
+        checkpoint_id = context.checkpoint_id(),
+        shard = context.shard.as_str(),
+        partition = context.partition.as_str(),
+        snapshot_height,
+        ?checkpoint_path,
+        "persisted pruning checkpoint",
+    );
+}
+
+fn log_pruning_batch_complete(
+    context: &PruningLogContext,
+    batch_index: usize,
+    persisted: usize,
+    last_height: u64,
+) {
+    info!(
+        target = "pruning",
+        event = "pruning_batch_complete",
+        checkpoint_id = context.checkpoint_id(),
+        shard = context.shard.as_str(),
+        partition = context.partition.as_str(),
+        batch_index,
+        persisted,
+        last_height,
+        "pruning batch persisted",
+    );
+}
+
+fn log_pruning_cycle_finished(
+    context: &PruningLogContext,
+    summary: &PruningCycleSummary,
+    elapsed: Duration,
+) {
+    let (missing_heights, stored_proofs, persisted_path) = match summary.status.as_ref() {
+        Some(status) => (
+            status.missing_heights.len(),
+            status.stored_proofs.len(),
+            status.persisted_path.as_deref(),
+        ),
+        None => (0, 0, None),
+    };
+
+    info!(
+        target = "pruning",
+        event = "pruning_cycle_finished",
+        checkpoint_id = context.checkpoint_id(),
+        shard = context.shard.as_str(),
+        partition = context.partition.as_str(),
+        cancelled = summary.cancelled,
+        missing_heights,
+        stored_proofs,
+        persisted_path,
+        elapsed_ms = elapsed.as_millis(),
+        "pruning cycle finished",
+    );
+}
+
+fn log_pruning_cycle_error(context: &PruningLogContext, err: &ChainError) {
+    warn!(
+        target = "pruning",
+        event = "pruning_cycle_error",
+        checkpoint_id = context.checkpoint_id(),
+        shard = context.shard.as_str(),
+        partition = context.partition.as_str(),
+        ?err,
+        "pruning cycle failed",
+    );
+}
+
+#[cfg(test)]
+mod pruning_log_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt;
+
+    struct EnvGuard {
+        shard: Option<String>,
+        partition: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(shard: &str, partition: &str) -> Self {
+            let guard = Self {
+                shard: env::var(PRUNING_SHARD_ENV).ok(),
+                partition: env::var(PRUNING_PARTITION_ENV).ok(),
+            };
+            env::set_var(PRUNING_SHARD_ENV, shard);
+            env::set_var(PRUNING_PARTITION_ENV, partition);
+            guard
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.shard.take() {
+                Some(value) => env::set_var(PRUNING_SHARD_ENV, value),
+                None => env::remove_var(PRUNING_SHARD_ENV),
+            }
+            match self.partition.take() {
+                Some(value) => env::set_var(PRUNING_PARTITION_ENV, value),
+                None => env::remove_var(PRUNING_PARTITION_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn pruning_log_markers_include_identifiers() {
+        let _env_guard = EnvGuard::set("ops-shard", "5");
+        let mut context = PruningLogContext::new();
+        context.set_checkpoint_id("snapshot-42-deadbeef");
+        let summary = PruningCycleSummary::cancelled(None);
+
+        let output = capture_logs(|| {
+            log_pruning_cycle_start(&context, 4, 128, 42, 90, 12, 3);
+            log_pruning_checkpoint_saved(&context, Path::new("/var/lib/rpp/snapshot-42.json"), 42);
+            log_pruning_batch_complete(&context, 1, 7, 44);
+            log_pruning_cycle_finished(&context, &summary, Duration::from_millis(25));
+            log_pruning_cycle_error(&context, &ChainError::Config("boom".into()));
+        });
+
+        assert!(output.contains("event=\"pruning_cycle_start\""));
+        assert!(output.contains("event=\"pruning_checkpoint_saved\""));
+        assert!(output.contains("event=\"pruning_batch_complete\""));
+        assert!(output.contains("event=\"pruning_cycle_finished\""));
+        assert!(output.contains("event=\"pruning_cycle_error\""));
+        assert!(output.contains("checkpoint_id=\"snapshot-42-deadbeef\""));
+        assert!(output.contains("shard=\"ops-shard\""));
+        assert!(output.contains("partition=\"5\""));
+    }
+
+    #[test]
+    fn checkpoint_identifier_format_is_stable() {
+        let checkpoint_id = checkpoint_identifier(10, "abc123");
+
+        assert_eq!(checkpoint_id, "snapshot-10-abc123");
+    }
+
+    fn capture_logs<F: FnOnce()>(f: F) -> String {
+        struct VecWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for VecWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("lock").write(buf)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer = buffer.clone();
+
+        let subscriber = fmt()
+            .with_writer(move || VecWriter(writer.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f();
+
+        String::from_utf8(buffer.lock().expect("lock").clone()).expect("utf8 logs")
     }
 }
 
@@ -5813,153 +6049,211 @@ impl NodeInner {
         chunk_size: usize,
         retention_depth: u64,
     ) -> ChainResult<PruningCycleSummary> {
+        let mut log_context = PruningLogContext::new();
+        let log_start = Instant::now();
+
         if !self.config.rollout.feature_gates.reconstruction {
-            return Ok(PruningCycleSummary::completed(None));
+            let summary = PruningCycleSummary::completed(None);
+            log_pruning_cycle_finished(&log_context, &summary, log_start.elapsed());
+            return Ok(summary);
         }
-        let engine = ReconstructionEngine::with_snapshot_dir(
-            self.storage.clone(),
-            self.config.snapshot_dir.clone(),
-        )
-        .with_checkpoint_signatures(self.pruning_checkpoint_signatures.clone());
-        let mut state_sync_plan = engine.state_sync_plan(chunk_size)?;
-        let mut reconstruction_plan = engine.full_plan()?;
-        let retention_floor = if retention_depth == 0 {
-            0
-        } else {
+        let result: ChainResult<PruningCycleSummary> = (|| {
+            let engine = ReconstructionEngine::with_snapshot_dir(
+                self.storage.clone(),
+                self.config.snapshot_dir.clone(),
+            )
+            .with_checkpoint_signatures(self.pruning_checkpoint_signatures.clone());
+            let mut state_sync_plan = engine.state_sync_plan(chunk_size)?;
+            let mut reconstruction_plan = engine.full_plan()?;
+            let retention_floor = if retention_depth == 0 {
+                0
+            } else {
+                state_sync_plan
+                    .tip
+                    .height
+                    .saturating_sub(retention_depth.saturating_sub(1))
+            };
+            for chunk in state_sync_plan.chunks.iter_mut() {
+                chunk
+                    .requests
+                    .retain(|request| request.height >= retention_floor);
+                if let Some(first) = chunk.requests.first() {
+                    chunk.start_height = first.height;
+                }
+                if let Some(last) = chunk.requests.last() {
+                    chunk.end_height = last.height;
+                }
+            }
             state_sync_plan
-                .tip
-                .height
-                .saturating_sub(retention_depth.saturating_sub(1))
-        };
-        for chunk in state_sync_plan.chunks.iter_mut() {
-            chunk
+                .chunks
+                .retain(|chunk| !chunk.requests.is_empty());
+            state_sync_plan
+                .light_client_updates
+                .retain(|update| update.height >= retention_floor);
+            reconstruction_plan
                 .requests
                 .retain(|request| request.height >= retention_floor);
-            if let Some(first) = chunk.requests.first() {
-                chunk.start_height = first.height;
+            if let Some(first) = reconstruction_plan.requests.first() {
+                reconstruction_plan.start_height = first.height;
             }
-            if let Some(last) = chunk.requests.last() {
-                chunk.end_height = last.height;
-            }
-        }
-        state_sync_plan
-            .chunks
-            .retain(|chunk| !chunk.requests.is_empty());
-        state_sync_plan
-            .light_client_updates
-            .retain(|update| update.height >= retention_floor);
-        reconstruction_plan
-            .requests
-            .retain(|request| request.height >= retention_floor);
-        if let Some(first) = reconstruction_plan.requests.first() {
-            reconstruction_plan.start_height = first.height;
-        }
-        let persisted_path = engine.persist_plan(&reconstruction_plan)?;
-        let mut missing_heights = Vec::new();
-        for chunk in &state_sync_plan.chunks {
-            for request in &chunk.requests {
-                missing_heights.push(request.height);
-            }
-        }
-        missing_heights.sort_unstable();
-        missing_heights.dedup();
-        let mut cancelled = self.pruning_cancelled.swap(false, Ordering::SeqCst);
-        let mut stored_proofs = Vec::new();
-        let mut previous_cache: Option<Block> = None;
-        for height in missing_heights.iter().copied() {
-            if cancelled || self.pruning_cancelled.swap(false, Ordering::SeqCst) {
-                cancelled = true;
-                break;
-            }
-            match self.storage.read_block_record(height)? {
-                Some(record) => {
-                    let mut block = record.into_block();
-                    let metadata = self.storage.read_block_metadata(height)?.ok_or_else(|| {
-                        ChainError::CommitmentMismatch(format!(
-                            "missing block metadata for height {height}"
-                        ))
-                    })?;
-                    let previous_block = if block.header.height == 0 {
-                        None
-                    } else {
-                        let expected_height = block.header.height - 1;
-                        if previous_cache
-                            .as_ref()
-                            .map(|candidate| candidate.header.height)
-                            != Some(expected_height)
-                        {
-                            let predecessor =
-                                self.storage.read_block(expected_height)?.ok_or_else(|| {
-                                    ChainError::CommitmentMismatch(format!(
-                                        "missing predecessor block at height {expected_height}"
-                                    ))
-                                })?;
-                            previous_cache = Some(predecessor);
-                        }
-                        previous_cache.as_ref()
-                    };
-
-                    enforce_block_invariants(
-                        &mut block,
-                        &metadata,
-                        Some(&block.pruning_proof),
-                        previous_block,
-                    )?;
-
-                    self.storage
-                        .persist_pruning_proof(height, &block.pruning_proof)?;
-                    stored_proofs.push(height);
-                    previous_cache = Some(block);
-                }
-                None => {
-                    warn!(height, "missing block record for pruning proof persistence");
+            let persisted_path = engine.persist_plan(&reconstruction_plan)?;
+            let mut missing_heights = Vec::new();
+            for chunk in &state_sync_plan.chunks {
+                for request in &chunk.requests {
+                    missing_heights.push(request.height);
                 }
             }
+            missing_heights.sort_unstable();
+            missing_heights.dedup();
+            log_context.set_checkpoint_id(checkpoint_identifier(
+                state_sync_plan.snapshot.height,
+                &state_sync_plan.snapshot.block_hash,
+            ));
 
-            if self.pruning_cancelled.swap(false, Ordering::SeqCst) {
-                cancelled = true;
-                break;
-            }
-        }
-        let last_updated = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let status = PruningJobStatus {
-            plan: state_sync_plan,
-            missing_heights,
-            persisted_path: persisted_path.map(|path| path.to_string_lossy().to_string()),
-            stored_proofs,
-            last_updated,
-            estimated_time_remaining_ms: None,
-        };
-        if let Some(path) = status.persisted_path.as_ref() {
-            info!(?path, "persisted pruning snapshot plan");
-        }
-        if !status.missing_heights.is_empty() {
-            debug!(
-                heights = ?status.missing_heights,
-                proofs = status.stored_proofs.len(),
-                "pruning cycle identified missing history"
+            log_pruning_cycle_start(
+                &log_context,
+                chunk_size,
+                retention_depth,
+                state_sync_plan.snapshot.height,
+                reconstruction_plan.tip.height,
+                missing_heights.len(),
+                state_sync_plan.chunks.len(),
             );
+
+            if let Some(path) = persisted_path.as_ref() {
+                log_pruning_checkpoint_saved(&log_context, path, state_sync_plan.snapshot.height);
+            }
+            let mut cancelled = self.pruning_cancelled.swap(false, Ordering::SeqCst);
+            let mut stored_proofs = Vec::new();
+            let mut previous_cache: Option<Block> = None;
+            let mut batch_processed = 0usize;
+            let mut batch_index = 0usize;
+            for height in missing_heights.iter().copied() {
+                if cancelled || self.pruning_cancelled.swap(false, Ordering::SeqCst) {
+                    cancelled = true;
+                    break;
+                }
+                match self.storage.read_block_record(height)? {
+                    Some(record) => {
+                        let mut block = record.into_block();
+                        let metadata =
+                            self.storage.read_block_metadata(height)?.ok_or_else(|| {
+                                ChainError::CommitmentMismatch(format!(
+                                    "missing block metadata for height {height}"
+                                ))
+                            })?;
+                        let previous_block = if block.header.height == 0 {
+                            None
+                        } else {
+                            let expected_height = block.header.height - 1;
+                            if previous_cache
+                                .as_ref()
+                                .map(|candidate| candidate.header.height)
+                                != Some(expected_height)
+                            {
+                                let predecessor =
+                                    self.storage.read_block(expected_height)?.ok_or_else(|| {
+                                        ChainError::CommitmentMismatch(format!(
+                                            "missing predecessor block at height {expected_height}"
+                                        ))
+                                    })?;
+                                previous_cache = Some(predecessor);
+                            }
+                            previous_cache.as_ref()
+                        };
+
+                        enforce_block_invariants(
+                            &mut block,
+                            &metadata,
+                            Some(&block.pruning_proof),
+                            previous_block,
+                        )?;
+
+                        self.storage
+                            .persist_pruning_proof(height, &block.pruning_proof)?;
+                        stored_proofs.push(height);
+                        batch_processed += 1;
+                        if batch_processed == chunk_size {
+                            batch_index += 1;
+                            log_pruning_batch_complete(
+                                &log_context,
+                                batch_index,
+                                stored_proofs.len(),
+                                height,
+                            );
+                            batch_processed = 0;
+                        }
+                        previous_cache = Some(block);
+                    }
+                    None => {
+                        warn!(height, "missing block record for pruning proof persistence");
+                    }
+                }
+
+                if self.pruning_cancelled.swap(false, Ordering::SeqCst) {
+                    cancelled = true;
+                    break;
+                }
+            }
+            if batch_processed > 0 && !stored_proofs.is_empty() {
+                batch_index += 1;
+                if let Some(&last_height) = stored_proofs.last() {
+                    log_pruning_batch_complete(
+                        &log_context,
+                        batch_index,
+                        stored_proofs.len(),
+                        last_height,
+                    );
+                }
+            }
+            let last_updated = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let status = PruningJobStatus {
+                plan: state_sync_plan,
+                missing_heights,
+                persisted_path: persisted_path.map(|path| path.to_string_lossy().to_string()),
+                stored_proofs,
+                last_updated,
+                estimated_time_remaining_ms: None,
+            };
+            if let Some(path) = status.persisted_path.as_ref() {
+                info!(?path, "persisted pruning snapshot plan");
+            }
+            if !status.missing_heights.is_empty() {
+                debug!(
+                    heights = ?status.missing_heights,
+                    proofs = status.stored_proofs.len(),
+                    "pruning cycle identified missing history"
+                );
+            }
+
+            let summary = if cancelled {
+                PruningCycleSummary::cancelled(Some(status.clone()))
+            } else {
+                PruningCycleSummary::completed(Some(status.clone()))
+            };
+
+            {
+                let mut slot = self.pruning_status.write();
+                *slot = summary.status.clone();
+            }
+
+            if let Some(ref payload) = summary.status {
+                self.emit_witness_json(GossipTopic::Snapshots, payload);
+            }
+
+            log_pruning_cycle_finished(&log_context, &summary, log_start.elapsed());
+
+            Ok(summary)
+        })();
+
+        if let Err(err) = &result {
+            log_pruning_cycle_error(&log_context, err);
         }
 
-        let summary = if cancelled {
-            PruningCycleSummary::cancelled(Some(status.clone()))
-        } else {
-            PruningCycleSummary::completed(Some(status.clone()))
-        };
-
-        {
-            let mut slot = self.pruning_status.write();
-            *slot = summary.status.clone();
-        }
-
-        if let Some(ref payload) = summary.status {
-            self.emit_witness_json(GossipTopic::Snapshots, payload);
-        }
-
-        Ok(summary)
+        result
     }
 
     fn pruning_job_status(&self) -> Option<PruningJobStatus> {

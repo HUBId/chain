@@ -33,6 +33,13 @@ their OTLP form; apply your collector's naming transforms as needed.
   while pairing `rpc:availability_ratio:5m` with scrape health to isolate API
   outages that do not affect consensus. The updated uptime/finality dashboard
   renders both signals side-by-side for operators.【F:ops/alerts/consensus/liveness.yaml†L1-L22】【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:docs/dashboards/uptime_finality_correlation.json†L1-L93】
+- **Pruning timelines.** Ingest the pruning log markers (`pruning_cycle_start`,
+  `pruning_checkpoint_saved`, `pruning_batch_complete`,
+  `pruning_cycle_finished`, `pruning_cycle_error`) as labels in your log store
+  to drive annotations or per-shard timelines. Each entry includes
+  `checkpoint_id`, `shard`, and `partition` so dashboards can align the markers
+  with the corresponding Prometheus series and shard-specific maintenance
+  windows.【F:rpp/runtime/node.rs†L5929-L6073】
 
 ## Wallet
 
