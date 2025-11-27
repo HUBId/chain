@@ -30,6 +30,13 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
     propagation = summary.get("propagation") or {}
     p50 = propagation.get("p50_ms")
     p95 = propagation.get("p95_ms")
+    by_class = summary.get("propagation_by_peer_class") or {}
+    trusted = (by_class.get("trusted") or {}).get("p95_ms")
+    untrusted = (by_class.get("untrusted") or {}).get("p95_ms")
+    probes = summary.get("propagation_probes") or {}
+    probe_block = (probes.get("block") or {}).get("p95_ms")
+    probe_tx = (probes.get("transaction") or {}).get("p95_ms")
+    backend = probes.get("backend") or summary.get("backend")
     lines = [
         f"summary: {path}",
         f"  publishes: {summary.get('total_publishes', 0)}",
@@ -41,6 +48,17 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
         lines.append(f"  propagation_ms: p50={p50:.2f}, p95={p95:.2f}")
     else:
         lines.append("  propagation_ms: n/a")
+
+    if trusted is not None:
+        lines.append(f"  propagation_trusted_p95_ms: {trusted:.2f}")
+    if untrusted is not None:
+        lines.append(f"  propagation_untrusted_p95_ms: {untrusted:.2f}")
+
+    if probe_block is not None or probe_tx is not None:
+        block_part = f"block={probe_block:.2f}" if probe_block is not None else "block=n/a"
+        tx_part = f"tx={probe_tx:.2f}" if probe_tx is not None else "tx=n/a"
+        backend_part = f", backend={backend}" if backend else ""
+        lines.append(f"  propagation_probes_p95_ms: {block_part}, {tx_part}{backend_part}")
 
     recovery = summary.get("recovery") or {}
     resume_events = len(recovery.get("resume_latencies_ms", []) or [])
@@ -230,6 +248,51 @@ def write_chaos_alert(path: Path, summary: Dict[str, Any], failed: bool) -> None
         json.dump(alert, handle, indent=2)
 
 
+def write_propagation_alert(
+    path: Path,
+    summary: Dict[str, Any],
+    reasons: List[str],
+) -> None:
+    probes = summary.get("propagation_probes") or {}
+    alert_path = path.parent / "propagation_alert.json"
+    propagation = summary.get("propagation") or {}
+    by_class = summary.get("propagation_by_peer_class") or {}
+    trusted = (by_class.get("trusted") or {}).get("p95_ms")
+    untrusted = (by_class.get("untrusted") or {}).get("p95_ms")
+    block_probe = (probes.get("block") or {}).get("p95_ms")
+    tx_probe = (probes.get("transaction") or {}).get("p95_ms")
+    backend = probes.get("backend") or summary.get("backend")
+
+    alert = {
+        "receiver": "network-propagation-probe",
+        "status": "firing" if reasons else "resolved",
+        "alerts": [
+            {
+                "status": "firing" if reasons else "resolved",
+                "labels": {
+                    "alertname": "PropagationProbeLatency",
+                    "severity": "warning" if reasons else "info",
+                    "backend": backend or "unspecified",
+                },
+                "annotations": {
+                    "summary": "Propagation probe latency budget breached",
+                    "description": "Marker block/transaction propagation probes exceeded thresholds or had missing samples.",
+                    "overall_p95_ms": propagation.get("p95_ms"),
+                    "trusted_p95_ms": trusted,
+                    "untrusted_p95_ms": untrusted,
+                    "block_probe_p95_ms": block_probe,
+                    "transaction_probe_p95_ms": tx_probe,
+                    "failures": reasons,
+                },
+            }
+        ],
+    }
+
+    alert_path.parent.mkdir(parents=True, exist_ok=True)
+    with alert_path.open("w", encoding="utf-8") as handle:
+        json.dump(alert, handle, indent=2)
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -243,6 +306,24 @@ def main(argv: List[str]) -> int:
         type=float,
         default=500.0,
         help="Fail if the propagation p95 exceeds this threshold (ms)",
+    )
+    parser.add_argument(
+        "--max-propagation-p95-trusted",
+        type=float,
+        default=500.0,
+        help="Fail if trusted peer propagation p95 exceeds this threshold (ms)",
+    )
+    parser.add_argument(
+        "--max-propagation-p95-untrusted",
+        type=float,
+        default=500.0,
+        help="Fail if untrusted peer propagation p95 exceeds this threshold (ms)",
+    )
+    parser.add_argument(
+        "--max-probe-p95",
+        type=float,
+        default=500.0,
+        help="Fail if block/transaction probe p95 exceeds this threshold (ms)",
     )
     parser.add_argument(
         "--max-consensus-prove-p95",
@@ -344,12 +425,64 @@ def main(argv: List[str]) -> int:
                     )
             continue
 
+        propagation_reasons: List[str] = []
         propagation = summary.get("propagation") or {}
         p95 = propagation.get("p95_ms")
-        if p95 is not None and p95 > args.max_propagation_p95:
-            failures.append(
+        if p95 is None:
+            reason = f"{path} propagation p95 is missing"
+            failures.append(reason)
+            propagation_reasons.append(reason)
+        elif p95 > args.max_propagation_p95:
+            reason = (
                 f"{path} propagation p95 {p95:.2f}ms exceeds threshold {args.max_propagation_p95:.2f}ms"
             )
+            failures.append(reason)
+            propagation_reasons.append(reason)
+
+        by_class = summary.get("propagation_by_peer_class") or {}
+        trusted_p95 = (by_class.get("trusted") or {}).get("p95_ms")
+        if trusted_p95 is None:
+            reason = f"{path} trusted propagation probe missing"
+            failures.append(reason)
+            propagation_reasons.append(reason)
+        elif trusted_p95 > args.max_propagation_p95_trusted:
+            reason = (
+                f"{path} trusted propagation p95 {trusted_p95:.2f}ms exceeds threshold"
+                f" {args.max_propagation_p95_trusted:.2f}ms"
+            )
+            failures.append(reason)
+            propagation_reasons.append(reason)
+
+        untrusted_p95 = (by_class.get("untrusted") or {}).get("p95_ms")
+        if untrusted_p95 is None:
+            reason = f"{path} untrusted propagation probe missing"
+            failures.append(reason)
+            propagation_reasons.append(reason)
+        elif untrusted_p95 > args.max_propagation_p95_untrusted:
+            reason = (
+                f"{path} untrusted propagation p95 {untrusted_p95:.2f}ms exceeds threshold"
+                f" {args.max_propagation_p95_untrusted:.2f}ms"
+            )
+            failures.append(reason)
+            propagation_reasons.append(reason)
+
+        probes = summary.get("propagation_probes") or {}
+        block_probe = (probes.get("block") or {}).get("p95_ms")
+        tx_probe = (probes.get("transaction") or {}).get("p95_ms")
+        for probe_name, value in ("block", block_probe), ("transaction", tx_probe):
+            if value is None:
+                reason = f"{path} {probe_name} propagation probe missing"
+                failures.append(reason)
+                propagation_reasons.append(reason)
+            elif value > args.max_probe_p95:
+                reason = (
+                    f"{path} {probe_name} propagation probe p95 {value:.2f}ms exceeds threshold"
+                    f" {args.max_probe_p95:.2f}ms"
+                )
+                failures.append(reason)
+                propagation_reasons.append(reason)
+
+        write_propagation_alert(path, summary, propagation_reasons)
 
         recovery = summary.get("recovery") or {}
         max_resume = recovery.get("max_resume_latency_ms")

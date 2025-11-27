@@ -2,12 +2,48 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use super::collector::{FaultRecord, MeshChangeRecord, SlowPeerRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PropagationPercentiles {
     pub p50_ms: f64,
     pub p95_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PropagationProbeKind {
+    Block,
+    Transaction,
+}
+
+impl PropagationProbeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PropagationProbeKind::Block => "block",
+            PropagationProbeKind::Transaction => "transaction",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PropagationByPeerClass {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted: Option<PropagationPercentiles>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untrusted: Option<PropagationPercentiles>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct PropagationProbes {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block: Option<PropagationPercentiles>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction: Option<PropagationPercentiles>,
+    #[serde(default)]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -38,6 +74,10 @@ pub struct SimulationSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_guard: Option<ReplayGuardMetrics>,
     pub propagation: Option<PropagationPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propagation_by_peer_class: Option<PropagationByPeerClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub propagation_probes: Option<PropagationProbes>,
     pub mesh_changes: Vec<MeshChangeRecord>,
     pub faults: Vec<FaultRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,6 +92,8 @@ pub struct SimulationSummary {
     pub slow_peer_records: Vec<SlowPeerRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_usage: Option<ResourceUsageMetrics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<ComparisonReport>,
 }
@@ -140,6 +182,57 @@ impl RunMetrics {
             duplicates: summary.duplicates,
             propagation: summary.propagation.clone(),
         }
+    }
+}
+
+pub fn propagation_by_peer_class(
+    latencies: &HashMap<String, Vec<f64>>,
+) -> Option<PropagationByPeerClass> {
+    if latencies.is_empty() {
+        return None;
+    }
+
+    let trusted = latencies
+        .get("trusted")
+        .filter(|values| !values.is_empty())
+        .map(|values| calculate_percentiles(values));
+    let untrusted = latencies
+        .get("untrusted")
+        .filter(|values| !values.is_empty())
+        .map(|values| calculate_percentiles(values));
+
+    if trusted.is_none() && untrusted.is_none() {
+        None
+    } else {
+        Some(PropagationByPeerClass { trusted, untrusted })
+    }
+}
+
+pub fn propagation_by_probe_kind(
+    latencies: &HashMap<PropagationProbeKind, Vec<f64>>,
+    backend: Option<String>,
+) -> Option<PropagationProbes> {
+    if latencies.is_empty() {
+        return None;
+    }
+
+    let block = latencies
+        .get(&PropagationProbeKind::Block)
+        .filter(|values| !values.is_empty())
+        .map(|values| calculate_percentiles(values));
+    let transaction = latencies
+        .get(&PropagationProbeKind::Transaction)
+        .filter(|values| !values.is_empty())
+        .map(|values| calculate_percentiles(values));
+
+    if block.is_none() && transaction.is_none() {
+        None
+    } else {
+        Some(PropagationProbes {
+            block,
+            transaction,
+            backend,
+        })
     }
 }
 
@@ -237,6 +330,8 @@ mod tests {
                 p50_ms: 100.0,
                 p95_ms: 200.0,
             }),
+            propagation_by_peer_class: None,
+            propagation_probes: None,
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
@@ -245,6 +340,7 @@ mod tests {
             peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
+            backend: None,
             comparison: None,
         };
         let multi = SimulationSummary {
@@ -257,6 +353,8 @@ mod tests {
                 p50_ms: 110.0,
                 p95_ms: 205.0,
             }),
+            propagation_by_peer_class: None,
+            propagation_probes: None,
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
@@ -265,6 +363,7 @@ mod tests {
             peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
+            backend: None,
             comparison: None,
         };
 

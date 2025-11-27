@@ -21,6 +21,27 @@ pub fn render_compact(summary: &SimulationSummary) -> String {
         writeln!(&mut out, "Propagation    : (no samples)").unwrap();
     }
 
+    if let Some(by_class) = &summary.propagation_by_peer_class {
+        if let Some(trusted) = &by_class.trusted {
+            writeln!(&mut out, "  trusted p95 : {:>8.2} ms", trusted.p95_ms).unwrap();
+        }
+        if let Some(untrusted) = &by_class.untrusted {
+            writeln!(&mut out, "  untrusted p95: {:>8.2} ms", untrusted.p95_ms).unwrap();
+        }
+    }
+
+    if let Some(probes) = &summary.propagation_probes {
+        if let Some(block) = &probes.block {
+            writeln!(&mut out, "Probe (block) p95: {:>8.2} ms", block.p95_ms).unwrap();
+        }
+        if let Some(tx) = &probes.transaction {
+            writeln!(&mut out, "Probe (tx) p95 : {:>8.2} ms", tx.p95_ms).unwrap();
+        }
+        if let Some(backend) = &probes.backend {
+            writeln!(&mut out, "Probe backend : {}", backend).unwrap();
+        }
+    }
+
     if summary.mesh_changes.is_empty() {
         writeln!(&mut out, "Mesh changes  : none").unwrap();
     } else {
@@ -115,6 +136,8 @@ mod tests {
                 p50_ms: 120.5,
                 p95_ms: 240.75,
             }),
+            propagation_by_peer_class: None,
+            propagation_probes: None,
             mesh_changes: vec![],
             faults: vec![],
             recovery: Some(RecoveryMetrics {
@@ -127,6 +150,7 @@ mod tests {
             peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
+            backend: None,
             comparison: None,
         };
 
@@ -179,6 +203,8 @@ mod tests {
                 p50_ms: 110.0,
                 p95_ms: 210.0,
             }),
+            propagation_by_peer_class: None,
+            propagation_probes: None,
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
@@ -187,6 +213,7 @@ mod tests {
             peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
+            backend: None,
             comparison: Some(comparison),
         };
 

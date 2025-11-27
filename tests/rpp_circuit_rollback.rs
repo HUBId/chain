@@ -1,9 +1,7 @@
 #![cfg(feature = "backend-rpp-stark")]
 
 use anyhow::Result;
-use rpp_chain::zk::rpp_verifier::{
-    RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure,
-};
+use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
 use rpp_stark::params::{deserialize_params, params_limit_to_node_bytes};
 use rpp_stark::proof::types::{Proof, VerifyError, PROOF_VERSION};
 

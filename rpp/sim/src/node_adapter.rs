@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::metrics::collector::{MeshAction, SimEvent};
+use crate::metrics::PropagationProbeKind;
 use sha2::{Digest, Sha256};
 
 static NEXT_MEMORY_PORT: AtomicU64 = AtomicU64::new(1);
@@ -84,9 +85,17 @@ impl From<identify::Event> for SimBehaviourEvent {
 
 #[derive(Debug)]
 enum NodeCommand {
-    Dial { peer_id: PeerId, addr: Multiaddr },
-    Publish { data: Vec<u8> },
-    Disconnect { peer_id: PeerId },
+    Dial {
+        peer_id: PeerId,
+        addr: Multiaddr,
+    },
+    Publish {
+        data: Vec<u8>,
+        probe_kind: Option<PropagationProbeKind>,
+    },
+    Disconnect {
+        peer_id: PeerId,
+    },
     Shutdown,
 }
 
@@ -110,8 +119,24 @@ impl NodeHandle {
     }
 
     pub async fn publish(&self, data: Vec<u8>) -> Result<()> {
+        self.publish_with_probe(data, None).await
+    }
+
+    pub async fn publish_probe(
+        &self,
+        data: Vec<u8>,
+        probe_kind: PropagationProbeKind,
+    ) -> Result<()> {
+        self.publish_with_probe(data, Some(probe_kind)).await
+    }
+
+    async fn publish_with_probe(
+        &self,
+        data: Vec<u8>,
+        probe_kind: Option<PropagationProbeKind>,
+    ) -> Result<()> {
         self.command_tx
-            .send(NodeCommand::Publish { data })
+            .send(NodeCommand::Publish { data, probe_kind })
             .await
             .context("node command channel closed")
     }
@@ -208,7 +233,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                                 warn!(target = "rpp::sim::node", peer = %target_peer, "dial error: {err:?}");
                             }
                         }
-                        Some(NodeCommand::Publish { data }) => {
+                        Some(NodeCommand::Publish { data, probe_kind }) => {
                             let payload_bytes = data.len();
                             match swarm
                                 .behaviour_mut()
@@ -221,6 +246,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                                         message_id: message_id.to_string(),
                                         payload_bytes,
                                         timestamp: Instant::now(),
+                                        probe_kind,
                                     });
                                 }
                                 Err(err) => {

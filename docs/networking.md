@@ -75,6 +75,16 @@ messages through the gossip stack.【F:scenarios/partitioned_flood.toml†L23-L4
 
 ## Metrics of Interest
 
+* **Propagation probes** &mdash; the harness now emits block and transaction
+  marker payloads from both trusted and untrusted peers every 30 seconds. The
+  metrics export records `propagation_by_peer_class` and
+  `propagation_probes` blocks alongside the existing aggregate percentiles,
+  and the analyzer fails runs that are missing any class-specific samples or
+  that breach the 500 ms p95 ceiling for overall, trusted, untrusted, or
+  per-probe latencies. Set `SIM_BACKEND_LABEL` to tag probe metrics with the
+  backend under test; the analyzer writes `propagation_alert.json` with the
+  backend label and offending percentiles so CI/nightly runs can surface slow
+  meshes automatically.【F:rpp/sim/src/harness.rs†L302-L355】【F:rpp/sim/src/metrics/collector.rs†L21-L115】【F:scripts/analyze_simnet.py†L17-L55】【F:scripts/analyze_simnet.py†L450-L511】
 * **Peer recovery** &mdash; `resume_events`, `max_resume_ms`, and `mean_resume_ms`
   surface when the harness detects the partition healing. The analyzer now fails
   runs that report a recovery block without any resume latency samples so we can

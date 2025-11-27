@@ -75,6 +75,56 @@ pub fn export_csv<P: AsRef<Path>>(path: P, summary: &SimulationSummary) -> Resul
         ])?;
     }
 
+    if let Some(propagation_by_peer_class) = &summary.propagation_by_peer_class {
+        if let Some(trusted) = &propagation_by_peer_class.trusted {
+            writer.write_record(&[
+                "propagation_trusted_p50_ms".to_string(),
+                format!("{:.3}", trusted.p50_ms),
+            ])?;
+            writer.write_record(&[
+                "propagation_trusted_p95_ms".to_string(),
+                format!("{:.3}", trusted.p95_ms),
+            ])?;
+        }
+
+        if let Some(untrusted) = &propagation_by_peer_class.untrusted {
+            writer.write_record(&[
+                "propagation_untrusted_p50_ms".to_string(),
+                format!("{:.3}", untrusted.p50_ms),
+            ])?;
+            writer.write_record(&[
+                "propagation_untrusted_p95_ms".to_string(),
+                format!("{:.3}", untrusted.p95_ms),
+            ])?;
+        }
+    }
+
+    if let Some(probes) = &summary.propagation_probes {
+        if let Some(block) = &probes.block {
+            writer.write_record(&[
+                "propagation_probe_block_p50_ms".to_string(),
+                format!("{:.3}", block.p50_ms),
+            ])?;
+            writer.write_record(&[
+                "propagation_probe_block_p95_ms".to_string(),
+                format!("{:.3}", block.p95_ms),
+            ])?;
+        }
+        if let Some(tx) = &probes.transaction {
+            writer.write_record(&[
+                "propagation_probe_transaction_p50_ms".to_string(),
+                format!("{:.3}", tx.p50_ms),
+            ])?;
+            writer.write_record(&[
+                "propagation_probe_transaction_p95_ms".to_string(),
+                format!("{:.3}", tx.p95_ms),
+            ])?;
+        }
+        if let Some(backend) = &probes.backend {
+            writer.write_record(&["propagation_probe_backend".to_string(), backend.clone()])?;
+        }
+    }
+
     writer.write_record(&[
         "mesh_changes".to_string(),
         summary.mesh_changes.len().to_string(),
@@ -170,6 +220,27 @@ mod tests {
                 p50_ms: 120.0,
                 p95_ms: 340.5,
             }),
+            propagation_by_peer_class: Some(super::super::reduce::PropagationByPeerClass {
+                trusted: Some(super::super::reduce::PropagationPercentiles {
+                    p50_ms: 110.0,
+                    p95_ms: 220.0,
+                }),
+                untrusted: Some(super::super::reduce::PropagationPercentiles {
+                    p50_ms: 130.0,
+                    p95_ms: 260.0,
+                }),
+            }),
+            propagation_probes: Some(super::super::reduce::PropagationProbes {
+                block: Some(super::super::reduce::PropagationPercentiles {
+                    p50_ms: 125.0,
+                    p95_ms: 240.0,
+                }),
+                transaction: Some(super::super::reduce::PropagationPercentiles {
+                    p50_ms: 135.0,
+                    p95_ms: 280.0,
+                }),
+                backend: Some("plonky3".to_string()),
+            }),
             mesh_changes: Vec::new(),
             faults: Vec::new(),
             recovery: Some(super::super::reduce::RecoveryMetrics {
@@ -192,6 +263,7 @@ mod tests {
             peer_traffic: Vec::new(),
             slow_peer_records: Vec::new(),
             resource_usage: None,
+            backend: Some("plonky3".to_string()),
             comparison: None,
         }
     }
