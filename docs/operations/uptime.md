@@ -218,6 +218,34 @@ When drift triggers an alert:
 - **Block production:** `chain_block_height` must advance within ten minutes to
   avoid a liveness breach; the stall probe models this SLA in the alert
   validation harness.【F:tools/alerts/validation.py†L780-L808】
+
+### Scheduled SLA reports
+
+Nightly cron now queries Prometheus for the last 24 hours of uptime
+participation, finality lag, and missed slot coverage. The workflow uploads the
+JSON and Markdown artifacts to GitHub Actions under
+`sla-report-<environment>`; prod runs at 02:30 UTC by default and ad-hoc runs
+can be triggered with `workflow_dispatch` to scope to staging or custom time
+windows.【F:.github/workflows/sla-report.yml†L1-L45】【F:.github/workflows/sla-report.yml†L47-L73】 Use the artifacts to seed
+postmortems and to prove SLA adherence during release sign-off.
+
+Generate the same report locally when debugging regressions:
+
+```bash
+python tools/alerts/sla_report.py \
+  --prom-url "https://prometheus.example/api" \
+  --environment prod \
+  --hours 6 \
+  --output-dir /tmp/sla-reports
+```
+
+The Markdown summary highlights percentile and maximum values for the tracked
+metrics and lists any SLA breaches (finality lag above 12/24 slots, missed slots
+above 2/4 over 5m, uptime participation below 0.97/0.94) alongside the observed
+values. Use the JSON file to plot trends across reports or attach to incident
+tickets when alert pages fire.【F:tools/alerts/sla_report.py†L17-L200】【F:tools/alerts/sla_report.py†L205-L272】 The workflow exits non-zero
+on breaches when `--fail-on-breach` is set so scheduled jobs surface SLA
+violations immediately in CI.【F:.github/workflows/sla-report.yml†L47-L68】
 - **Slot budget adherence:** Keep the five-minute block production ratio above
   0.9; dips below 0.75 for ten minutes page on-call via the
   `ConsensusBlockProductionLag*` alerts. The ratio divides block height
