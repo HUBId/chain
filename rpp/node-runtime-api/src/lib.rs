@@ -43,6 +43,10 @@ pub struct PruningCliOverrides {
     /// Resume automatic pruning cycles on startup
     #[arg(long = "pruning-resume", action = ArgAction::SetTrue)]
     pub resume: bool,
+
+    /// Increase pruning log verbosity (-v for progress, -vv for pacing decisions/backoff)
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
+    pub verbose: u8,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -50,6 +54,7 @@ pub struct PruningOverrides {
     pub cadence_secs: Option<u64>,
     pub retention_depth: Option<u64>,
     pub emergency_pause: Option<bool>,
+    pub verbosity: Option<u8>,
 }
 
 impl PruningCliOverrides {
@@ -59,6 +64,7 @@ impl PruningCliOverrides {
             retention_depth,
             pause,
             resume,
+            verbose,
         } = self;
 
         let mut emergency_pause = None;
@@ -73,6 +79,7 @@ impl PruningCliOverrides {
             cadence_secs,
             retention_depth,
             emergency_pause,
+            verbosity: (verbose > 0).then_some(verbose),
         }
     }
 }

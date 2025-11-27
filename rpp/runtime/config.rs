@@ -2694,6 +2694,7 @@ pub struct PruningConfig {
     pub cadence_secs: u64,
     pub retention_depth: u64,
     pub emergency_pause: bool,
+    pub verbosity: PruningVerbosity,
     pub pacing: PruningPacingConfig,
     pub checkpoint_signatures: PruningCheckpointSignatureConfig,
 }
@@ -2722,9 +2723,55 @@ impl Default for PruningConfig {
             cadence_secs: DEFAULT_PRUNING_CADENCE_SECS,
             retention_depth: DEFAULT_PRUNING_RETENTION_DEPTH,
             emergency_pause: false,
+            verbosity: PruningVerbosity::Quiet,
             pacing: PruningPacingConfig::default(),
             checkpoint_signatures: PruningCheckpointSignatureConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PruningVerbosity {
+    Quiet,
+    Progress,
+    Decisions,
+}
+
+impl PruningVerbosity {
+    pub fn from_count(count: u8) -> Self {
+        match count {
+            0 => Self::Quiet,
+            1 => Self::Progress,
+            _ => Self::Decisions,
+        }
+    }
+
+    pub fn emits_progress(self) -> bool {
+        matches!(self, Self::Progress | Self::Decisions)
+    }
+
+    pub fn emits_decisions(self) -> bool {
+        matches!(self, Self::Decisions)
+    }
+}
+
+impl Default for PruningVerbosity {
+    fn default() -> Self {
+        Self::Quiet
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PruningVerbosity;
+
+    #[test]
+    fn verbosity_counts_map_to_levels() {
+        assert_eq!(PruningVerbosity::from_count(0), PruningVerbosity::Quiet);
+        assert_eq!(PruningVerbosity::from_count(1), PruningVerbosity::Progress);
+        assert_eq!(PruningVerbosity::from_count(2), PruningVerbosity::Decisions);
+        assert_eq!(PruningVerbosity::from_count(5), PruningVerbosity::Decisions);
     }
 }
 

@@ -66,7 +66,7 @@ use rpp_chain::crypto::{
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
-use rpp_chain::runtime::config::{TlsCipherSuite, TlsVersion};
+use rpp_chain::runtime::config::{PruningVerbosity, TlsCipherSuite, TlsVersion};
 use rpp_chain::runtime::{
     init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, TelemetryExporterBuilder,
 };
@@ -1519,6 +1519,9 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
     if let Some(paused) = options.pruning.emergency_pause {
         config.pruning.emergency_pause = paused;
     }
+    if let Some(level) = options.pruning.verbosity {
+        config.pruning.verbosity = PruningVerbosity::from_count(level);
+    }
 }
 
 fn map_tls_version_arg(value: TlsVersionArg) -> TlsVersion {
@@ -2691,6 +2694,7 @@ mod tests {
             cadence_secs: Some(120),
             retention_depth: Some(256),
             emergency_pause: Some(true),
+            verbosity: Some(2),
         };
 
         apply_overrides(&mut config, &options);
@@ -2698,6 +2702,7 @@ mod tests {
         assert_eq!(config.pruning.cadence_secs, 120);
         assert_eq!(config.pruning.retention_depth, 256);
         assert!(config.pruning.emergency_pause);
+        assert_eq!(config.pruning.verbosity, PruningVerbosity::Decisions);
     }
 
     #[cfg(unix)]
