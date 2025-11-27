@@ -229,6 +229,8 @@
 
 - Halte den vorherigen Build und die gesicherte `config/node.toml` bereit. Wenn Proof-Rejections oder Finality-Gaps nach dem Flip auftreten, stelle den vorherigen Binary-Stand wieder her, setze die Konfiguration zurück und starte den Dienst neu. Validere, dass `backend_health.<previous>.verifier.accepted` erneut steigt und dokumentiere den Zeitpunkt des Rollbacks im Incident-Log.
 - Bei Rolling Deployments sofort zum letzten stabilen Backend zurückkehren, falls der Canary Fehler zeigt; stoppe weitere Batches und verwirf nur den canary-spezifischen Proof-Cache, um Datenverlust zu vermeiden.
+- Circuit-Rollbacks ohne `PROOF_VERSION`-Bump müssen im `CHANGELOG.md` explizit als „Circuit-Rollback“ oder „Downgrade“ vermerkt werden, damit der Guardrail-Lauf (`cargo xtask proof-version-guard`) die Änderung akzeptiert. Ein fehlender Eintrag führt trotz unverändertem `PROOF_VERSION` zu einem Merge-Blocker.【F:xtask/src/release.rs†L78-L118】【F:xtask/src/release.rs†L392-L430】
+- Die neue Integration-Suite `rpp_circuit_rollback` simuliert Proofs, die mit einem neueren Circuit gebaut wurden, und verifiziert, dass ein zurückgerollter Verifier sie mit klaren Fehlern (`VersionMismatch`, `ParamsHashMismatch`) ablehnt. Sie läuft automatisch im Integration-Matrix-Job für `backend-rpp-stark` und dient als Regressionstest für Downgrade-Pfade.【F:tests/rpp_circuit_rollback.rs†L1-L93】【F:xtask/src/main.rs†L563-L607】
 
 ### Incident Runbook: rpp-stark verification failures
 

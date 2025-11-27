@@ -611,6 +611,18 @@ fn run_integration_workflows() -> Result<()> {
     apply_integration_feature_flags(&mut upgrade);
     run_command(upgrade, "upgrade compatibility workflows")?;
 
+    let mut circuit_rollback = Command::new("cargo");
+    circuit_rollback
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("rpp_circuit_rollback");
+    apply_integration_feature_flags(&mut circuit_rollback);
+    run_command(circuit_rollback, "circuit rollback compatibility")?;
+
     let mut lifecycle = Command::new("cargo");
     lifecycle
         .current_dir(&root)
