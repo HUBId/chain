@@ -97,6 +97,7 @@ rpp-node node [runtime options]
 rpp-node wallet [runtime options]
 rpp-node hybrid [runtime options]
 rpp-node validator [runtime options] [validator subcommand]
+rpp-node preflight --mode <node|wallet|hybrid|validator> [runtime options]
 ```
 
 Pass `--config`/`--wallet-config` to target custom configuration files or rely
@@ -106,6 +107,24 @@ rpp-chain -- <mode> --dry-run --config <path>` to validate configuration without
 starting long-running tasks; the CLI exits after bootstrap so operators can gate
 deployments in CI while the production binary stays reserved for supervisors and
 release artefacts.【F:docs/validator_quickstart.md†L195-L210】
+
+### Preflight validation for CI and on-host smoke tests
+
+Run `rpp-node preflight --mode <mode> [--config <path>]` before starting
+services to force configuration validation without opening listeners. The
+command returns exit code `2` for configuration problems and prints actionable
+errors when:
+
+- TLS listeners are enabled but certificate, private key, or client CA files are
+  missing or unreadable.
+- Recursive proof feature gates or validator modes are enabled without a
+  compiled zk backend.
+- Pruning settings violate minimum retention rules.
+- Storage directories (data_dir, snapshot_dir, proof_dir, VRF paths) cannot be
+  created on disk.
+
+CI smoke tests can call the preflight command directly so TLS, zk backend, and
+storage regressions fail fast without launching the runtime.【F:tests/runtime_smoke.rs†L92-L170】
 
 > **Networking reminder:** Whenever a runtime mode changes the node profile,
 > re-apply the [gossip tuning checklist](./networking.md#gossip-tuning-checklist)

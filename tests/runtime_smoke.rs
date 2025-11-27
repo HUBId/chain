@@ -59,6 +59,88 @@ fn runtime_smoke_alternate_consensus_backend() -> Result<()> {
     })
 }
 
+#[test]
+fn preflight_catches_tls_and_pruning_misconfigurations() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let mut ports = PortAllocator::default();
+
+    let config_path = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        &mut ports,
+        |config| {
+            config.network.tls.enabled = true;
+            config.network.tls.certificate = Some(temp_dir.path().join("missing.crt"));
+            config.network.tls.private_key = Some(temp_dir.path().join("missing.key"));
+            config.network.tls.require_client_auth = true;
+            config.network.tls.client_ca = Some(temp_dir.path().join("missing.ca"));
+            config.pruning.retention_depth = 0;
+        },
+    )
+    .context("failed to write node config for preflight failure case")?;
+
+    let output = Command::new(&binary)
+        .arg("preflight")
+        .arg("--mode")
+        .arg("node")
+        .arg("--config")
+        .arg(&config_path)
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to run preflight command")?;
+
+    anyhow::ensure!(
+        output.status.code() == Some(2),
+        "expected configuration exit code 2, got {:?}",
+        output.status.code()
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("network.tls.certificate") && stderr.contains("pruning.retention_depth"),
+        "preflight stderr should reference TLS and pruning issues: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preflight_passes_for_valid_configuration() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let mut ports = PortAllocator::default();
+
+    let config_path = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        &mut ports,
+        |config| {
+            config.rollout.feature_gates.consensus_enforcement = true;
+            config.network.tls.enabled = false;
+        },
+    )
+    .context("failed to write node config for preflight success case")?;
+
+    let status = Command::new(&binary)
+        .arg("preflight")
+        .arg("--mode")
+        .arg("node")
+        .arg("--config")
+        .arg(&config_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status()
+        .context("failed to run preflight command")?;
+
+    anyhow::ensure!(
+        status.success(),
+        "preflight should succeed for valid configuration, status: {status}"
+    );
+
+    Ok(())
+}
+
 fn run_runtime_smoke(spec: RuntimeSmokeSpec) -> Result<()> {
     let binary = locate_rpp_node_binary()
         .with_context(|| format!("failed to locate rpp-node binary for {}", spec.name))?;

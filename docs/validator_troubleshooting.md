@@ -10,6 +10,10 @@ includes an endpoint quick-reference table covering `/p2p/peers`,
 mentioned below. Note that all RPC calls in this quick-reference require the
 configured bearer token when RPC auth is enabled.
 
+If the runtime fails to start or supervisors exit early, run the preflight
+checks described in the [operator guide](./rpp_node_operator_guide.md#preflight-validation-for-ci-and-on-host-smoke-tests)
+to catch TLS, pruning, and storage misconfigurations before restarting.
+
 ## Capability discovery for mixed clusters
 
 When debugging gossip alignment or proof distribution across heterogeneous

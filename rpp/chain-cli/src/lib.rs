@@ -144,6 +144,8 @@ enum RootCommand {
     Hybrid(RuntimeCommand),
     /// Validator runtime and tooling
     Validator(ValidatorArgs),
+    /// Validate configuration without starting runtime services
+    Preflight(PreflightCommand),
 }
 
 #[derive(Args, Clone)]
@@ -159,6 +161,16 @@ struct ValidatorArgs {
 
     #[command(subcommand)]
     command: Option<ValidatorCommand>,
+}
+
+#[derive(Args, Clone)]
+struct PreflightCommand {
+    /// Runtime mode to validate
+    #[arg(value_enum)]
+    mode: RuntimeMode,
+
+    #[command(flatten)]
+    options: RuntimeOptions,
 }
 
 #[derive(Subcommand)]
@@ -657,6 +669,7 @@ where
                 .map_err(CliError::from),
             None => run_runtime(runtime, RuntimeMode::Validator, args.runtime).await,
         },
+        RootCommand::Preflight(command) => run_preflight(runtime, command).await,
     }
 }
 
@@ -673,6 +686,15 @@ fn handle_vrf_command(command: VrfCommand) -> Result<()> {
         VrfCommand::Inspect(args) => inspect_vrf_key(&args.config),
         VrfCommand::Export(args) => export_vrf_key(&args.config, args.output.as_ref()),
     }
+}
+
+async fn run_preflight<R>(runtime: &R, command: PreflightCommand) -> CliResult<()>
+where
+    R: RuntimeExecutor,
+{
+    let mut options = command.options;
+    options.dry_run = true;
+    run_runtime(runtime, command.mode, options).await
 }
 
 struct VrfRotationOutcome {
