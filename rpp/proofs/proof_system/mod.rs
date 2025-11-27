@@ -14,6 +14,7 @@ use crate::types::{
     AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, SignedTransaction,
     UptimeClaim,
 };
+use prover_backend_interface::audit::{now_timestamp_ms, AuditLog, AuditRecord, AuditRole};
 use prover_backend_interface::crash_reports::{CrashContextGuard, CrashReportHook};
 use rpp_p2p::{ProofCacheMetrics, ProofCacheMetricsSnapshot};
 use rpp_pruning::Envelope;
@@ -562,6 +563,20 @@ fn proof_system_label(system: ProofSystemKind) -> &'static str {
     }
 }
 
+fn verifier_audit_log() -> Option<AuditLog> {
+    match AuditLog::from_env(AuditLog::ENV_VAR, AuditLog::DEFAULT_VERIFIER_PATH) {
+        Ok(log) => log,
+        Err(err) => {
+            warn!(
+                target = "runtime.proof.audit",
+                %err,
+                "failed to initialise verifier audit log"
+            );
+            None
+        }
+    }
+}
+
 fn install_zk_crash_reports() -> &'static Option<CrashReportHook> {
     static HOOK: OnceLock<Option<CrashReportHook>> = OnceLock::new();
     HOOK.get_or_init(|| CrashReportHook::install_from_env("verifier"))
@@ -583,6 +598,7 @@ pub struct ProofVerifierRegistry {
     plonky3: Plonky3Verifier,
     #[cfg(feature = "backend-rpp-stark")]
     rpp_stark: RppStarkProofVerifier,
+    audit_log: Option<AuditLog>,
 }
 
 #[cfg(feature = "backend-rpp-stark")]
@@ -600,6 +616,7 @@ impl Default for ProofVerifierRegistry {
                 u32::try_from(DEFAULT_RPP_STARK_PROOF_LIMIT_BYTES)
                     .expect("default proof limit fits in u32"),
             ),
+            audit_log: verifier_audit_log(),
         }
     }
 }
@@ -718,6 +735,7 @@ impl ProofVerifierRegistry {
             plonky3: Plonky3Verifier::default(),
             #[cfg(feature = "backend-rpp-stark")]
             rpp_stark: RppStarkProofVerifier::new(limit),
+            audit_log: verifier_audit_log(),
         })
     }
 
@@ -759,6 +777,45 @@ impl ProofVerifierRegistry {
 
     fn proof_verifier(&self, proof: &ChainProof) -> ChainResult<&dyn ProofVerifier> {
         self.system_verifier(proof.system())
+    }
+
+    fn append_audit(
+        &self,
+        system: ProofSystemKind,
+        operation: &str,
+        fingerprint: Option<&str>,
+        success: bool,
+        error: Option<&ChainError>,
+    ) {
+        let Some(log) = &self.audit_log else {
+            return;
+        };
+
+        let record = AuditRecord {
+            index: 0,
+            timestamp_ms: now_timestamp_ms(),
+            role: AuditRole::Verifier,
+            backend: proof_system_label(system).to_string(),
+            operation: operation.to_string(),
+            circuit: None,
+            proof_fingerprint: fingerprint.map(|value| value.to_string()),
+            result: if success { "ok" } else { "err" }.to_string(),
+            message: error.map(ToString::to_string),
+            witness_bytes: None,
+            proof_bytes: None,
+            prev_hash: String::new(),
+            entry_hash: String::new(),
+        };
+
+        if let Err(err) = log.append(record) {
+            warn!(
+                target = "runtime.proof.audit",
+                %err,
+                backend = %proof_system_label(system),
+                operation,
+                "failed to append verifier audit record"
+            );
+        }
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -1070,6 +1127,13 @@ impl ProofVerifierRegistry {
         let success = result.is_ok();
         self.metrics
             .record(system, started.elapsed(), success, bypass);
+        self.append_audit(
+            system,
+            operation,
+            Some(fingerprint.as_str()),
+            success,
+            result.as_ref().err(),
+        );
         result
     }
 
@@ -1099,6 +1163,7 @@ impl ProofVerifierRegistry {
         let success = result.is_ok();
         self.metrics
             .record(system, started.elapsed(), success, bypass);
+        self.append_audit(system, operation, None, success, result.as_ref().err());
         result
     }
 }

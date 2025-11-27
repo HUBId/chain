@@ -167,6 +167,12 @@
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
 
+### Prover-/Verifier-Audit-Chains
+
+- Sowohl Wallet-Prover als auch Runtime-Verifier schreiben nun hash-verkettete Audit-Records als JSONL unter `logs/zk-prover-audit.jsonl` bzw. `logs/zk-verifier-audit.jsonl`. `RPP_ZK_AUDIT_LOG` kann den Pfad pro Prozess überschreiben oder mit dem Wert `off` deaktivieren.【F:prover-backend-interface/src/audit.rs†L15-L215】【F:rpp/wallet/src/engine/signing/prover.rs†L28-L120】【F:rpp/proofs/proof_system/mod.rs†L564-L841】
+- Jeder Eintrag enthält Backend, Operation (`prove` oder Verifier-Stage), Witness/Proof-Größen bzw. Proof-Fingerprint sowie `prev_hash`/`entry_hash`, sodass Manipulationen beim Export oder nach der Rotation erkennbar bleiben.【F:prover-backend-interface/src/audit.rs†L17-L123】【F:rpp/wallet/src/engine/signing/prover.rs†L89-L136】【F:rpp/proofs/proof_system/mod.rs†L691-L785】
+- Rotation erfolgt durch Umbenennen/Archivieren des aktuellen Files; der nächste Start legt eine frische Chain an. Verifiziere die archivierten Logs vor der Ablage mit `AuditLog::verify_chain(<path>)` oder dem CI-Test `cargo test -p prover-backend-interface -- audit::chain_rejects_tampering`, der Tampering und Hash-Drift ablehnt.【F:prover-backend-interface/src/audit.rs†L94-L215】【F:prover-backend-interface/src/audit.rs†L152-L209】
+
 ### Proof-Cache-Sizing & Telemetrie
 
 - Die Gossip-Proof-Persistenz ist auf 1 024 Einträge pro Backend limitiert (`PersistentProofStorage::with_capacity`), das älteste Element wird bei Überlauf im FIFO-Modus entfernt.【F:rpp/p2p/src/pipeline.rs†L831-L846】 Der Pfad bleibt über `config.proof_cache_dir` konfigurierbar, sodass Betreiber den Cache auf ein separates Volume legen können, falls größere Retentionswerte gebaut werden.
