@@ -320,6 +320,14 @@ pub struct TimetokeReplayTelemetrySnapshot {
     pub stall_warning: bool,
     pub stall_critical: bool,
     pub failure_breakdown: Vec<TimetokeReplayFailureBreakdown>,
+    pub slo: TimetokeReplaySloStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimetokeReplaySloStatus {
+    pub healthy: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 pub fn timetoke_replay_telemetry() -> TimetokeReplayTelemetrySnapshot {
@@ -450,6 +458,8 @@ impl TimetokeReplayMetrics {
             .map(|value| value >= STALLED_CRITICAL_THRESHOLD_SECS)
             .unwrap_or(false);
 
+        let slo = replay_slo_status(success_rate, p95, p99, stall_warning, stall_critical);
+
         TimetokeReplayTelemetrySnapshot {
             success_total,
             failure_total,
@@ -464,7 +474,87 @@ impl TimetokeReplayMetrics {
             stall_warning,
             stall_critical,
             failure_breakdown,
+            slo,
         }
+    }
+}
+
+fn replay_slo_status(
+    success_rate: Option<f64>,
+    latency_p95_ms: Option<u64>,
+    latency_p99_ms: Option<u64>,
+    stall_warning: bool,
+    stall_critical: bool,
+) -> TimetokeReplaySloStatus {
+    let mut warnings = Vec::new();
+    if let Some(rate) = success_rate {
+        if rate < 0.99 {
+            warnings.push(format!("success rate {:.2}% below 99% SLO", rate * 100.0));
+        }
+    }
+    if let Some(p95) = latency_p95_ms {
+        if p95 > 60_000 {
+            warnings.push(format!("p95 latency {} ms exceeds 60_000 ms SLO", p95));
+        }
+    }
+    if let Some(p99) = latency_p99_ms {
+        if p99 > 120_000 {
+            warnings.push(format!("p99 latency {} ms exceeds 120_000 ms SLO", p99));
+        }
+    }
+    if stall_warning {
+        warnings.push("last successful replay older than 60 seconds".to_string());
+    }
+    if stall_critical {
+        warnings.push("last successful replay older than 120 seconds".to_string());
+    }
+
+    TimetokeReplaySloStatus {
+        healthy: warnings.is_empty(),
+        warnings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{replay_slo_status, TimetokeReplaySloStatus};
+
+    #[test]
+    fn slo_status_remains_healthy_within_thresholds() {
+        let status = replay_slo_status(Some(0.995), Some(10_000), Some(20_000), false, false);
+        assert_eq!(
+            status,
+            TimetokeReplaySloStatus {
+                healthy: true,
+                warnings: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn slo_status_highlights_breaches() {
+        let status = replay_slo_status(Some(0.9), Some(70_000), Some(130_000), true, true);
+        assert!(!status.healthy);
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("success rate")));
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("p95 latency")));
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("p99 latency")));
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("60 seconds")));
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("120 seconds")));
     }
 }
 

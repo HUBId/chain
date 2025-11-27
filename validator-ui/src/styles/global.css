@@ -250,6 +250,47 @@ a {
   font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
 }
 
+.slo-warnings {
+  border-color: rgba(248, 113, 113, 0.35);
+  box-shadow: 0 12px 30px rgba(248, 113, 113, 0.1);
+}
+
+.warning-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.warning-entry h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  color: #fca5a5;
+}
+
+.warning-chip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.warning-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #fecdd3;
+  font-weight: 600;
+}
+
 .wallet-card {
   display: flex;
   flex-direction: column;

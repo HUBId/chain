@@ -21,7 +21,7 @@ use axum::http::header;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
 use futures::future::pending;
@@ -1129,6 +1129,8 @@ struct HealthResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot_breaker: Option<SnapshotBreakerStatus>,
     subsystems: HealthSubsystemStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slo: Option<SloStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1168,6 +1170,8 @@ struct HealthReadyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot_breaker: Option<SnapshotBreakerStatus>,
     subsystems: HealthSubsystemStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slo: Option<SloStatus>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1185,6 +1189,23 @@ struct RuntimeModeResponse {
 struct ValidatorStatusResponse {
     consensus: ConsensusStatus,
     node: NodeStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slo: Option<SloStatus>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+struct SloDetail {
+    healthy: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+struct SloStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timetoke: Option<SloDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uptime: Option<SloDetail>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2734,26 +2755,36 @@ async fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
     )))
 }
 
-async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
+async fn health(State(state): State<ApiContext>) -> Response {
     let mode = state.current_mode();
     let backend_status = state.backend_status();
+    let slo_status = slo_status(&state);
     let status = if backend_status
         .as_ref()
         .map(|status| status.sla.values().any(|sla| !sla.healthy))
         .unwrap_or(false)
+        || slo_status
+            .as_ref()
+            .map(|slo| !slo.warnings().is_empty())
+            .unwrap_or(false)
     {
         "degraded"
     } else {
         "ok"
     };
-    Json(HealthResponse {
+    let mut response = Json(HealthResponse {
         status,
         address: health_address(&state),
         role: mode.as_str(),
         backend: backend_status,
         snapshot_breaker: state.snapshot_breaker_status(),
         subsystems: state.subsystem_status(),
+        slo: slo_status.clone(),
     })
+    .into_response();
+
+    append_slo_header(&mut response, &slo_status);
+    response
 }
 
 #[cfg(feature = "wallet-integration")]
@@ -2802,6 +2833,90 @@ fn health_backend_status(snapshot: VerifierMetricsSnapshot) -> HealthBackendStat
     }
 }
 
+const UPTIME_STALL_WARNING_SECS: u64 = 900;
+const UPTIME_STALL_CRITICAL_SECS: u64 = 1_800;
+const UPTIME_PENDING_SLO_LIMIT: usize = 4;
+
+impl SloStatus {
+    fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if let Some(timetoke) = &self.timetoke {
+            warnings.extend_from_slice(&timetoke.warnings);
+        }
+        if let Some(uptime) = &self.uptime {
+            warnings.extend_from_slice(&uptime.warnings);
+        }
+        warnings
+    }
+}
+
+fn uptime_slo_status(
+    timetoke: &TimetokeReplayTelemetrySnapshot,
+    pending_uptime_proofs: usize,
+) -> SloDetail {
+    let mut warnings = Vec::new();
+    if let Some(age) = timetoke.seconds_since_success {
+        if age >= UPTIME_STALL_CRITICAL_SECS {
+            warnings.push(format!(
+                "last timetoke replay is {} seconds old (≥ {}s critical uptime window)",
+                age, UPTIME_STALL_CRITICAL_SECS
+            ));
+        } else if age >= UPTIME_STALL_WARNING_SECS {
+            warnings.push(format!(
+                "last timetoke replay is {} seconds old (≥ {}s warning uptime window)",
+                age, UPTIME_STALL_WARNING_SECS
+            ));
+        }
+    }
+
+    if pending_uptime_proofs > UPTIME_PENDING_SLO_LIMIT {
+        warnings.push(format!(
+            "{} pending uptime proofs exceed backlog limit {}",
+            pending_uptime_proofs, UPTIME_PENDING_SLO_LIMIT
+        ));
+    }
+
+    SloDetail {
+        healthy: warnings.is_empty(),
+        warnings,
+    }
+}
+
+fn slo_status(state: &ApiContext) -> Option<SloStatus> {
+    let timetoke_snapshot = timetoke_replay_telemetry();
+
+    let mut status = SloStatus {
+        timetoke: Some(SloDetail {
+            healthy: timetoke_snapshot.slo.healthy,
+            warnings: timetoke_snapshot.slo.warnings.clone(),
+        }),
+        uptime: None,
+    };
+
+    if let Some(node) = state.node_for_mode() {
+        if let Ok(node_status) = node.node_status() {
+            let uptime = uptime_slo_status(&timetoke_snapshot, node_status.pending_uptime_proofs);
+            status.uptime = Some(uptime);
+        }
+    }
+
+    Some(status)
+}
+
+fn append_slo_header(response: &mut Response, slo: &Option<SloStatus>) {
+    let warnings = slo
+        .as_ref()
+        .map(|status| status.warnings())
+        .unwrap_or_default();
+    if warnings.is_empty() {
+        return;
+    }
+
+    if let Ok(value) = HeaderValue::from_str(&warnings.join("; ")) {
+        response.headers_mut().insert("x-slo-warnings", value);
+    }
+}
+
 async fn health_live(State(state): State<ApiContext>) -> StatusCode {
     match state.node_for_mode() {
         Some(node) => match node.node_status() {
@@ -2812,9 +2927,10 @@ async fn health_live(State(state): State<ApiContext>) -> StatusCode {
     }
 }
 
-async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<HealthReadyResponse>) {
+async fn health_ready(State(state): State<ApiContext>) -> Response {
     let mode = state.current_mode();
     let subsystems = state.subsystem_status();
+    let slo_status = slo_status(&state);
 
     let node_ready = state.node_ready(mode);
     let wallet_ready = !mode.includes_wallet() || state.wallet_enabled();
@@ -2843,17 +2959,19 @@ async fn health_ready(State(state): State<ApiContext>) -> (StatusCode, Json<Heal
         StatusCode::SERVICE_UNAVAILABLE
     };
 
-    (
-        status,
-        Json(HealthReadyResponse {
-            status: if ready { "ok" } else { "unavailable" },
-            ready,
-            role: mode.as_str(),
-            backend: state.backend_status(),
-            snapshot_breaker: state.snapshot_breaker_status(),
-            subsystems,
-        }),
-    )
+    let mut response = Json(HealthReadyResponse {
+        status: if ready { "ok" } else { "unavailable" },
+        ready,
+        role: mode.as_str(),
+        backend: state.backend_status(),
+        snapshot_breaker: state.snapshot_breaker_status(),
+        subsystems,
+        slo: slo_status.clone(),
+    })
+    .into_response();
+    *response.status_mut() = status;
+    append_slo_header(&mut response, &slo_status);
+    response
 }
 
 async fn runtime_mode(State(state): State<ApiContext>) -> Json<RuntimeModeResponse> {
@@ -3108,15 +3226,20 @@ async fn state_sync_chunk(
 
 async fn validator_status(
     State(state): State<ApiContext>,
-) -> Result<Json<ValidatorStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let node = state.require_node()?;
     let consensus = node.consensus_status().map_err(to_http_error)?;
     let node_status = node.node_status().map_err(to_http_error)?;
 
-    Ok(Json(ValidatorStatusResponse {
+    let slo = slo_status(&state);
+    let mut response = Json(ValidatorStatusResponse {
         consensus,
         node: node_status,
-    }))
+        slo: slo.clone(),
+    })
+    .into_response();
+    append_slo_header(&mut response, &slo);
+    Ok(response)
 }
 
 async fn validator_proofs(
@@ -3578,8 +3701,19 @@ async fn sync_timetoke(
 
 async fn timetoke_replay_status(
     State(_state): State<ApiContext>,
-) -> Result<Json<TimetokeReplayTelemetrySnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    Ok(Json(timetoke_replay_telemetry()))
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let snapshot = timetoke_replay_telemetry();
+    let slo = SloStatus {
+        timetoke: Some(SloDetail {
+            healthy: snapshot.slo.healthy,
+            warnings: snapshot.slo.warnings.clone(),
+        }),
+        uptime: None,
+    };
+
+    let mut response = Json(snapshot).into_response();
+    append_slo_header(&mut response, &Some(slo));
+    Ok(response)
 }
 
 async fn reputation_audit(
@@ -4460,7 +4594,19 @@ mod health_tests {
     use std::collections::BTreeMap;
 
     use axum::extract::State;
+    use axum::http::StatusCode as HttpStatusCode;
+    use axum::response::Response as AxumResponse;
     use parking_lot::RwLock;
+    use serde::de::DeserializeOwned;
+
+    async fn extract_json<T: DeserializeOwned>(response: AxumResponse) -> (HttpStatusCode, T) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("slo response body");
+        let payload = serde_json::from_slice(&bytes).expect("deserialize response body");
+        (status, payload)
+    }
 
     #[tokio::test]
     async fn readiness_fails_when_zk_backend_is_unready() {
@@ -4480,9 +4626,11 @@ mod health_tests {
                 wallet_last_sync_timestamp: None,
             });
 
-        let (status, Json(response)) = health_ready(State(context)).await;
+        let response = health_ready(State(context)).await;
+        let (status, response): (HttpStatusCode, HealthReadyResponse) =
+            extract_json(response).await;
 
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, HttpStatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.ready);
         assert!(!response.subsystems.zk_ready);
         assert!(response.subsystems.pruning_available);
@@ -4507,9 +4655,11 @@ mod health_tests {
                 wallet_last_sync_timestamp: None,
             });
 
-        let (status, Json(response)) = health_ready(State(context)).await;
+        let response = health_ready(State(context)).await;
+        let (status, response): (HttpStatusCode, HealthReadyResponse) =
+            extract_json(response).await;
 
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, HttpStatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.ready);
         assert!(response.subsystems.zk_ready);
         assert!(!response.subsystems.pruning_available);
@@ -4534,9 +4684,11 @@ mod health_tests {
                 wallet_last_sync_timestamp: None,
             });
 
-        let (status, Json(response)) = health_ready(State(context)).await;
+        let response = health_ready(State(context)).await;
+        let (status, response): (HttpStatusCode, HealthReadyResponse) =
+            extract_json(response).await;
 
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, HttpStatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.ready);
         assert!(!response.subsystems.wallet_signer_ready);
         assert!(!response.subsystems.wallet_connected);
@@ -4603,11 +4755,12 @@ mod health_tests {
             last: None,
         };
 
-        let Json(response) = health(State(
+        let response = health(State(
             ApiContext::new(mode, None, None, None, None, false, None, None, false)
                 .with_test_backend_metrics(snapshot),
         ))
         .await;
+        let (_, response): (HttpStatusCode, HealthResponse) = extract_json(response).await;
 
         assert_eq!(response.status, "degraded");
         let backend = response.backend.expect("backend status missing");
@@ -4638,11 +4791,12 @@ mod health_tests {
             last: None,
         };
 
-        let Json(response) = health(State(
+        let response = health(State(
             ApiContext::new(mode, None, None, None, None, false, None, None, false)
                 .with_test_backend_metrics(snapshot),
         ))
         .await;
+        let (_, response): (HttpStatusCode, HealthResponse) = extract_json(response).await;
 
         assert_eq!(response.status, "ok");
         let backend = response.backend.expect("backend status missing");
@@ -4651,6 +4805,40 @@ mod health_tests {
             .get("rpp-stark")
             .expect("missing sla entry for rpp-stark");
         assert!(sla.healthy);
+    }
+
+    #[test]
+    fn uptime_slo_surfaces_backlog_and_stalls() {
+        let snapshot = TimetokeReplayTelemetrySnapshot {
+            success_total: 10,
+            failure_total: 0,
+            success_rate: Some(1.0),
+            latency_p50_ms: Some(1000),
+            latency_p95_ms: Some(2000),
+            latency_p99_ms: Some(3000),
+            last_attempt_epoch: Some(1),
+            last_success_epoch: Some(1),
+            seconds_since_attempt: Some(1_901),
+            seconds_since_success: Some(1_901),
+            stall_warning: true,
+            stall_critical: true,
+            failure_breakdown: Vec::new(),
+            slo: TimetokeReplaySloStatus {
+                healthy: false,
+                warnings: vec!["stall".into()],
+            },
+        };
+
+        let status = uptime_slo_status(&snapshot, UPTIME_PENDING_SLO_LIMIT + 1);
+        assert!(!status.healthy);
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("critical uptime window")));
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("pending uptime proofs")));
     }
 }
 

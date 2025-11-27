@@ -4,6 +4,7 @@ import { PipelineTimelineCard } from './components/PipelineTimelineCard';
 import { PeerListCard } from './components/PeerListCard';
 import { ProofQueuePanel } from './components/ProofQueuePanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
+import { SloWarningsCard } from './components/SloWarningsCard';
 import { WalletTabs } from './components/WalletTabs';
 import { useApiData } from './hooks/useApiData';
 import type {
@@ -42,6 +43,9 @@ export default function App() {
     <main className="dashboard">
       <PipelineTimelineCard />
       <PipelineAlertsPanel />
+      {status.status === 'ready' && status.data?.slo ? (
+        <SloWarningsCard slo={status.data.slo} />
+      ) : null}
       {status.status === 'ready' && status.data ? (
         <ConsensusStatusCard status={status.data.consensus} />
       ) : status.status === 'error' && status.error ? (
