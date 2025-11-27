@@ -136,6 +136,24 @@ Operators can alert on `rpp.runtime.consensus.rpc.failures` to detect repeated
 verification errors or stalled finality and then reference the troubleshooting
 guide for remediation steps.
 
+## RPC subscription probes
+
+Long-lived RPC streams (for example, `/wallet/pipeline/stream` SSE updates) are
+covered by synthetic probes that run during consensus load generators and
+operator maintenance windows. Each probe exports two metrics to the metrics
+stack:
+
+- `rpc_subscription_probe_success_ratio{phase}` – keep-alive success ratio per
+  phase (`consensus_load` or `maintenance`). Values should stay at `1.0` while
+  the probes are connected.
+- `rpc_subscription_probe_disconnects_total{phase,stream}` – counter incremented
+  whenever the probe reconnects a stream.
+
+Alerts fire when keep-alives drop below 0.98 during load or stay below 0.90
+beyond a maintenance window, or when disconnects accrue unexpectedly. Expect the
+metrics to return to `1.0` / `0` after rolling restarts, and review ingress
+timeouts or gateway buffering if the alerts remain active.【F:ops/alerts/rpc/streams.yaml†L1-L35】【F:tools/alerts/validation.py†L903-L977】【F:docs/operations/uptime.md†L80-L112】
+
 ### SDK error mapping helpers
 
 The Rust (`rpp/chain-cli`), Go (`ffi` module), and TypeScript (`validator-ui`)

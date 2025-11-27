@@ -906,6 +906,85 @@ def _evaluate_mempool_probe_readiness(
     return AlertComputation(starts_at=start_ts, value=lowest, details=detail)
 
 
+def _evaluate_rpc_subscription_health(
+    store: MetricStore,
+    phase: str,
+    minimum_ratio: float,
+    window: float,
+    duration: float,
+    max_disconnects: float,
+) -> Optional[AlertComputation]:
+    ratio_series = [
+        series
+        for labels, series in store.series_by_metric(
+            "rpc_subscription_probe_success_ratio"
+        )
+        if labels.get("phase") == phase
+    ]
+    disconnect_series = [
+        series
+        for labels, series in store.series_by_metric(
+            "rpc_subscription_probe_disconnects_total"
+        )
+        if labels.get("phase") == phase
+    ]
+
+    if not ratio_series and not disconnect_series:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed_ratios: List[Tuple[float, float]] = []
+    observed_disconnects: List[Tuple[float, float]] = []
+    for timestamp in sorted(store.all_timestamps()):
+        degraded = False
+
+        if ratio_series:
+            ratios = [
+                value
+                for series in ratio_series
+                if (value := series.value_at(timestamp)) is not None
+            ]
+            if ratios:
+                ratio = min(ratios)
+                observed_ratios.append((timestamp, ratio))
+                degraded |= ratio < minimum_ratio
+
+        if disconnect_series:
+            worst_delta: Optional[float] = None
+            for series in disconnect_series:
+                delta = series.delta_over_window(timestamp, window)
+                if delta is None:
+                    continue
+                worst_delta = max(worst_delta or delta, delta)
+            if worst_delta is not None:
+                observed_disconnects.append((timestamp, worst_delta))
+                degraded |= worst_delta > max_disconnects
+
+        evaluations.append((timestamp, degraded))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    detail_parts: List[str] = []
+    worst_ratio = min((value for ts, value in observed_ratios if ts >= start_ts), default=None)
+    if worst_ratio is not None:
+        detail_parts.append(f"keep-alive ratio={worst_ratio:.2f}")
+    worst_disconnect = max(
+        (value for ts, value in observed_disconnects if ts >= start_ts),
+        default=None,
+    )
+    if worst_disconnect is not None:
+        detail_parts.append(f"disconnect delta={worst_disconnect:.0f}")
+
+    detail = ", ".join(detail_parts) if detail_parts else None
+    return AlertComputation(
+        starts_at=start_ts,
+        value=worst_ratio if worst_ratio is not None else worst_disconnect,
+        details=detail,
+    )
+
+
 def _evaluate_epoch_delay(
     store: MetricStore, metric: str, threshold: float, duration: float
 ) -> Optional[AlertComputation]:
@@ -1276,6 +1355,44 @@ def default_alert_rules() -> List[AlertRule]:
             runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability",
             evaluator=lambda store: _evaluate_rpc_availability(
                 store, threshold=0.95, window=300.0, duration=600.0
+            ),
+        ),
+        AlertRule(
+            name="RpcSubscriptionDisconnectLoad",
+            severity="warning",
+            service="rpc",
+            summary="RPC subscriptions dropped during consensus load",
+            description=(
+                "Subscription probes lost keep-alives or disconnected while the consensus load generator ran. Inspect"
+                " gateway timeouts, node RPC logs, and /wallet/pipeline/stream connectivity before resuming traffic."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#rpc-subscription-probes",
+            evaluator=lambda store: _evaluate_rpc_subscription_health(
+                store,
+                phase="consensus_load",
+                minimum_ratio=0.98,
+                window=600.0,
+                duration=600.0,
+                max_disconnects=0.0,
+            ),
+        ),
+        AlertRule(
+            name="RpcSubscriptionDisconnectMaintenance",
+            severity="warning",
+            service="rpc",
+            summary="RPC subscriptions dropped during maintenance",
+            description=(
+                "Maintenance-mode subscription probes still see disconnects or missing keep-alives. Confirm drains and"
+                " restart ordering so long-running SSE/WebSocket streams survive maintenance windows."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#rpc-subscription-probes",
+            evaluator=lambda store: _evaluate_rpc_subscription_health(
+                store,
+                phase="maintenance",
+                minimum_ratio=0.90,
+                window=900.0,
+                duration=900.0,
+                max_disconnects=1.0,
             ),
         ),
         AlertRule(
@@ -2697,6 +2814,132 @@ def build_rpc_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_rpc_subscription_drop_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        _build_counter_from_increments(
+            "rpc_subscription_probe_disconnects_total",
+            labels={"phase": "consensus_load", "stream": "pipeline"},
+            increments=[0.0, 0.0, 1.0, 0.0, 0.0],
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "consensus_load"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (300.0, 1.0),
+                    (600.0, 0.97),
+                    (900.0, 0.72),
+                    (1200.0, 0.70),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "maintenance"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (600.0, 1.0),
+                    (1200.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_rpc_subscription_maintenance_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        _build_counter_from_increments(
+            "rpc_subscription_probe_disconnects_total",
+            labels={"phase": "maintenance", "stream": "pipeline"},
+            increments=[0.0, 1.0, 1.0, 0.0],
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "maintenance"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (600.0, 0.95),
+                    (1200.0, 0.82),
+                    (1800.0, 0.78),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "consensus_load"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (900.0, 1.0),
+                    (1800.0, 1.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_rpc_subscription_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        _build_counter_from_increments(
+            "rpc_subscription_probe_disconnects_total",
+            labels={"phase": "consensus_load", "stream": "pipeline"},
+            increments=[0.0, 0.0, 0.0, 0.0],
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "rpc_subscription_probe_disconnects_total",
+            labels={"phase": "maintenance", "stream": "pipeline"},
+            increments=[0.0, 0.0, 0.0, 0.0],
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "consensus_load"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (600.0, 1.0),
+                    (1200.0, 1.0),
+                    (1800.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="rpc_subscription_probe_success_ratio",
+            labels={"phase": "maintenance"},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (900.0, 0.96),
+                    (1800.0, 0.95),
+                    (2700.0, 0.96),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_prover_backlog_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -3028,6 +3271,21 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="rpc-availability-recovery",
             store=build_rpc_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="rpc-subscription-drop-load",
+            store=build_rpc_subscription_drop_store(),
+            expected_alerts={"RpcSubscriptionDisconnectLoad"},
+        ),
+        ValidationCase(
+            name="rpc-subscription-drop-maintenance",
+            store=build_rpc_subscription_maintenance_store(),
+            expected_alerts={"RpcSubscriptionDisconnectMaintenance"},
+        ),
+        ValidationCase(
+            name="rpc-subscription-recovery",
+            store=build_rpc_subscription_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(

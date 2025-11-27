@@ -29,7 +29,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 21
+    assert len(results) == 24
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -47,6 +47,9 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "block-schedule-recovery",
         "rpc-availability-outage",
         "rpc-availability-recovery",
+        "rpc-subscription-drop-load",
+        "rpc-subscription-drop-maintenance",
+        "rpc-subscription-recovery",
         "prover-backlog-correlation",
         "restart-finality-correlation",
         "timetoke-epoch-delay",
