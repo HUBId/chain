@@ -18,6 +18,10 @@ their OTLP form; apply your collector's naming transforms as needed.
   `rpp.runtime.consensus.round.leader_changes` alongside
   `rpp.runtime.consensus.failed_votes{reason=*}` to track instability and vote
   rejection trends.【F:rpp/runtime/telemetry/metrics.rs†L159-L192】
+- **Validator vote latency.** Slice
+  `rpp.runtime.consensus.vote.latency{validator,backend,epoch,slot}` by
+  validator and backend to highlight outliers that consistently lag quorum
+  formation.【F:rpp/runtime/telemetry/metrics.rs†L159-L192】
 - **Network connectivity.** Trend `rpp.runtime.network.peer_count` as a gauge to
   detect isolation, and layer alerts when the histogram collapses below the
   expected validator quorum.【F:rpp/runtime/telemetry/metrics.rs†L193-L200】

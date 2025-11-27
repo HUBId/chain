@@ -133,6 +133,7 @@ pub struct RuntimeMetrics {
     consensus_witness_events: Counter<u64>,
     consensus_slashing_events: Counter<u64>,
     consensus_failed_votes: Counter<u64>,
+    consensus_vote_latency: Histogram<f64>,
     consensus_block_schedule_slots_total: Counter<u64>,
     chain_block_height: Histogram<u64>,
     backlog_block_queue: Histogram<u64>,
@@ -391,6 +392,13 @@ impl RuntimeMetrics {
                 .u64_counter("rpp.runtime.consensus.failed_votes")
                 .with_description("Total failed consensus vote registrations")
                 .with_unit("1")
+                .build(),
+            consensus_vote_latency: meter
+                .f64_histogram("rpp.runtime.consensus.vote.latency")
+                .with_description(
+                    "Latency between vote receipt and processing, grouped by validator and backend"
+                )
+                .with_unit("ms")
                 .build(),
             consensus_block_schedule_slots_total: meter
                 .u64_counter("rpp.runtime.consensus.block_schedule.slots")
@@ -908,6 +916,24 @@ impl RuntimeMetrics {
         let reason = reason.into();
         let attributes = [KeyValue::new("reason", reason)];
         self.consensus_failed_votes.add(1, &attributes);
+    }
+
+    pub fn record_consensus_vote_latency(
+        &self,
+        validator: &str,
+        epoch: u64,
+        slot: u64,
+        backend: ProofVerificationBackend,
+        latency: Duration,
+    ) {
+        let attributes = [
+            KeyValue::new("validator", validator.to_string()),
+            KeyValue::new("epoch", epoch as i64),
+            KeyValue::new("slot", slot as i64),
+            KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        ];
+        self.consensus_vote_latency
+            .record(latency.as_millis() as f64, &attributes);
     }
 
     /// Record the expected block production slot for the provided epoch.

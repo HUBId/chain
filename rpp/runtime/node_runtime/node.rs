@@ -503,6 +503,7 @@ pub enum NodeEvent {
     Vote {
         peer: PeerId,
         vote: SignedBftVote,
+        received_at: SystemTime,
     },
     VoteRejected {
         peer: PeerId,
@@ -1650,6 +1651,7 @@ impl NodeInner {
                                         Ok(VoteOutcome::Recorded {
                                             reached_quorum,
                                             power,
+                                            received_at,
                                         }) => {
                                             if reached_quorum {
                                                 info!(
@@ -1672,6 +1674,7 @@ impl NodeInner {
                                             let _ = self.events.send(NodeEvent::Vote {
                                                 peer: peer.clone(),
                                                 vote,
+                                                received_at,
                                             });
                                         }
                                         Ok(VoteOutcome::Duplicate) => {

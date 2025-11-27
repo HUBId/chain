@@ -38,6 +38,18 @@ Phase‑2 acceptance and to keep operational runbooks aligned with the exported 
   existing `pipeline_consensus_finality.json` dashboards to determine whether a failed quorum impacts the
   overall block pipeline.
 
+### Vote processing latency
+* **Metric:** `rpp.runtime.consensus.vote.latency`
+* **Breakdown:** `validator`, `backend`, `epoch`, and `slot` labels isolate slow voters and make it easy to
+  compare STWO versus RPP-STARK processing times for the same round.【F:rpp/runtime/telemetry/metrics.rs†L160-L189】
+* **Targets:** keep 95th percentile latency below 750 ms per validator. Anything above 1.5 s should trigger
+  immediate investigation.
+* **Alert:** `ConsensusVoteLatencyWarning` and `ConsensusVoteLatencyCritical` fire when the p95 latency stays
+  above 750 ms or 1.5 s for five minutes. The alert payload includes the validator address and backend so you
+  can triage backend-specific regressions quickly.【F:ops/alerts/consensus/vote_latency.yaml†L1-L42】
+* **Runbook:** Check the backend label to determine whether STWO or RPP-STARK is slow, review gossip errors
+  for the validator, and confirm the prover host is healthy before considering validator demotion.
+
 ### Block production schedule adherence
 * **Metrics:**
   * `consensus_block_schedule_slots_total` counts scheduled block slots grouped by epoch. Each proposer tick

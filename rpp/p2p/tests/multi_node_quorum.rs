@@ -233,7 +233,7 @@ async fn wait_for_votes(
             }
 
             match events.recv().await {
-                Ok(NodeEvent::Vote { peer, vote }) => {
+                Ok(NodeEvent::Vote { peer, vote, .. }) => {
                     if vote.vote.block_hash != expected_hash {
                         continue;
                     }
