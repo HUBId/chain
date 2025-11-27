@@ -243,6 +243,18 @@ pub async fn run(mode: RuntimeMode, mut options: RuntimeOptions) -> BootstrapRes
     }
 }
 
+pub fn preflight(mode: RuntimeMode, mut options: RuntimeOptions) -> BootstrapResult<()> {
+    ensure_prover_backend(mode)?;
+
+    options.dry_run = true;
+    let bootstrap_options = options.into_bootstrap_options(mode);
+
+    let outcome = perform_preflight(mode, &bootstrap_options)?;
+    log_preflight_success(mode, &outcome);
+
+    Ok(())
+}
+
 pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> BootstrapResult<()> {
     if !options.dry_run {
         if let Ok(request) = env::var("RPP_NODE_TEST_FAILURE_MODE") {
@@ -260,45 +272,10 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         }
     }
 
-    let mut node_bundle =
-        load_node_configuration(mode, &options).map_err(BootstrapError::configuration)?;
-    if let Some(bundle) = node_bundle.as_mut() {
-        apply_overrides(&mut bundle.value, &options);
-    }
-    if let Some(bundle) = node_bundle.as_ref() {
-        bundle
-            .value
-            .validate()
-            .map_err(BootstrapError::configuration)?;
-    }
-    if let Some(bundle) = node_bundle.as_ref() {
-        ensure_worm_export_configured(mode, &bundle.value)?;
-    }
-    let mut wallet_bundle =
-        load_wallet_configuration(mode, &options).map_err(BootstrapError::configuration)?;
-
-    if let Some(bundle) = wallet_bundle.as_mut() {
-        if let Some(origin) = options.rpc_allowed_origin.as_ref() {
-            let origin = origin.trim();
-            if origin.is_empty() {
-                bundle.value.wallet.rpc.allowed_origin = None;
-            } else {
-                bundle.value.wallet.rpc.allowed_origin = Some(origin.to_string());
-            }
-        }
-    }
-
-    ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())
-        .map_err(BootstrapError::configuration)?;
-
-    if let Some(bundle) = wallet_bundle.as_ref() {
-        bundle
-            .value
-            .validate_for_mode(mode, node_bundle.as_ref().map(|bundle| &bundle.value))
-            .map_err(BootstrapError::configuration)?;
-    }
-
-    ensure_capabilities_supported(node_bundle.as_ref(), wallet_bundle.as_ref())?;
+    let PreflightOutcome {
+        node_bundle: mut node_bundle,
+        wallet_bundle: mut wallet_bundle,
+    } = perform_preflight(mode, &options)?;
 
     let node_metadata = node_bundle
         .as_ref()
@@ -1352,6 +1329,82 @@ fn load_node_configuration(
         metadata: Some(resolved.into_metadata()),
         capabilities: CapabilityHints::default(),
     }))
+}
+
+struct PreflightOutcome {
+    node_bundle: Option<ConfigBundle<NodeConfig>>,
+    wallet_bundle: Option<ConfigBundle<WalletConfig>>,
+}
+
+fn perform_preflight(
+    mode: RuntimeMode,
+    options: &BootstrapOptions,
+) -> BootstrapResult<PreflightOutcome> {
+    let mut node_bundle =
+        load_node_configuration(mode, options).map_err(BootstrapError::configuration)?;
+    if let Some(bundle) = node_bundle.as_mut() {
+        apply_overrides(&mut bundle.value, options);
+        bundle
+            .value
+            .validate()
+            .map_err(BootstrapError::configuration)?;
+        ensure_worm_export_configured(mode, &bundle.value)?;
+        bundle
+            .value
+            .ensure_directories()
+            .map_err(BootstrapError::configuration)?;
+    }
+
+    let mut wallet_bundle =
+        load_wallet_configuration(mode, options).map_err(BootstrapError::configuration)?;
+
+    if let Some(bundle) = wallet_bundle.as_mut() {
+        if let Some(origin) = options.rpc_allowed_origin.as_ref() {
+            let origin = origin.trim();
+            if origin.is_empty() {
+                bundle.value.wallet.rpc.allowed_origin = None;
+            } else {
+                bundle.value.wallet.rpc.allowed_origin = Some(origin.to_string());
+            }
+        }
+    }
+
+    ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())
+        .map_err(BootstrapError::configuration)?;
+
+    if let Some(bundle) = wallet_bundle.as_ref() {
+        bundle
+            .value
+            .validate_for_mode(mode, node_bundle.as_ref().map(|bundle| &bundle.value))
+            .map_err(BootstrapError::configuration)?;
+    }
+
+    ensure_capabilities_supported(node_bundle.as_ref(), wallet_bundle.as_ref())?;
+
+    Ok(PreflightOutcome {
+        node_bundle,
+        wallet_bundle,
+    })
+}
+
+fn log_preflight_success(mode: RuntimeMode, outcome: &PreflightOutcome) {
+    let node_config = outcome
+        .node_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.metadata.as_ref())
+        .map(|metadata| metadata.path.display().to_string())
+        .unwrap_or_else(|| "<none>".into());
+    let wallet_config = outcome
+        .wallet_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.metadata.as_ref())
+        .map(|metadata| metadata.path.display().to_string())
+        .unwrap_or_else(|| "<none>".into());
+
+    println!(
+        "preflight checks passed (mode={}); node_config={node_config} wallet_config={wallet_config}",
+        mode.as_str(),
+    );
 }
 
 fn load_wallet_configuration(
