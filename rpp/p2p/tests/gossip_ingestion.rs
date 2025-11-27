@@ -196,6 +196,7 @@ fn votes_from_multiple_peers_reach_quorum() {
         VoteOutcome::Recorded {
             reached_quorum,
             power,
+            ..
         } => {
             assert!(reached_quorum, "second vote should cross quorum");
             assert!(power >= (2.0 / 3.0) * 3.0);
@@ -252,6 +253,7 @@ fn quorum_requires_majority_of_weighted_voters() {
         VoteOutcome::Recorded {
             reached_quorum,
             power,
+            ..
         } => {
             assert!(reached_quorum, "expected quorum after three voters");
             assert!(power >= 3.0);
@@ -294,6 +296,7 @@ fn tier_weighted_votes_cross_quorum_and_deduplicate() {
         VoteOutcome::Recorded {
             reached_quorum,
             power,
+            ..
         } => {
             assert!(reached_quorum, "expected quorum after high + mid tiers");
             assert!(power >= (2.0 / 3.0) * 6.0);
@@ -313,6 +316,7 @@ fn tier_weighted_votes_cross_quorum_and_deduplicate() {
         VoteOutcome::Recorded {
             reached_quorum,
             power,
+            ..
         } => {
             assert!(
                 reached_quorum,

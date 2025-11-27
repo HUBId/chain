@@ -1670,7 +1670,7 @@ pub(crate) struct NodeInner {
     vrf_epoch: RwLock<VrfEpochManager>,
     chain_tip: RwLock<ChainTip>,
     block_interval: Duration,
-    vote_mempool: RwLock<VecDeque<SignedBftVote>>,
+    vote_mempool: RwLock<VecDeque<QueuedVote>>,
     proposal_inbox: RwLock<HashMap<(u64, Address), VerifiedProposal>>,
     consensus_rounds: RwLock<HashMap<u64, u64>>,
     consensus_lock: RwLock<Option<ConsensusLockState>>,
@@ -2681,6 +2681,12 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
 struct RecordedUptimeProof {
     proof: UptimeProof,
     credited_hours: u64,
+}
+
+#[derive(Clone)]
+struct QueuedVote {
+    vote: SignedBftVote,
+    received_at: SystemTime,
 }
 
 #[derive(Clone)]
@@ -4335,8 +4341,12 @@ impl NodeHandle {
             kind = ?vote.vote.kind
         )
     )]
-    pub fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
-        self.inner.submit_vote(vote)
+    pub fn submit_vote(
+        &self,
+        vote: SignedBftVote,
+        received_at: Option<SystemTime>,
+    ) -> ChainResult<String> {
+        self.inner.submit_vote(vote, received_at)
     }
 
     pub fn submit_block_proposal(&self, block: Block) -> ChainResult<String> {
@@ -4979,8 +4989,12 @@ impl NodeInner {
                         Ok(NodeEvent::BlockRejected { peer, block, reason }) => {
                             ingest.handle_invalid_block_gossip(&peer, block, &reason);
                         }
-                        Ok(NodeEvent::Vote { peer, vote }) => {
-                            if let Err(err) = ingest.submit_vote(vote) {
+                        Ok(NodeEvent::Vote {
+                            peer,
+                            vote,
+                            received_at,
+                        }) => {
+                            if let Err(err) = ingest.submit_vote(vote, Some(received_at)) {
                                 warn!(?err, %peer, "failed to ingest vote from gossip");
                             }
                         }
@@ -6965,7 +6979,11 @@ impl NodeInner {
             kind = ?vote.vote.kind
         )
     )]
-    fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
+    fn submit_vote(
+        &self,
+        vote: SignedBftVote,
+        received_at: Option<SystemTime>,
+    ) -> ChainResult<String> {
         if self.config.rollout.feature_gates.consensus_enforcement {
             vote.verify()?;
         }
@@ -6994,10 +7012,16 @@ impl NodeInner {
             "round": vote.vote.round,
             "kind": vote.vote.kind,
         });
-        if mempool.iter().any(|existing| existing.hash() == vote_hash) {
+        if mempool
+            .iter()
+            .any(|existing| existing.vote.hash() == vote_hash)
+        {
             return Err(ChainError::Transaction("vote already queued".into()));
         }
-        mempool.push_back(vote);
+        mempool.push_back(QueuedVote {
+            vote,
+            received_at: received_at.unwrap_or_else(SystemTime::now),
+        });
         self.emit_witness_json(GossipTopic::Votes, &vote_summary);
         Ok(vote_hash)
     }
@@ -7248,10 +7272,10 @@ impl NodeInner {
         if let Some(vote_kind) = evidence.vote_kind {
             let mut mempool = self.vote_mempool.write();
             mempool.retain(|vote| {
-                !(vote.vote.voter == evidence.address
-                    && vote.vote.height == evidence.height
-                    && vote.vote.round == evidence.round
-                    && vote.vote.kind == vote_kind)
+                !(vote.vote.vote.voter == evidence.address
+                    && vote.vote.vote.height == evidence.height
+                    && vote.vote.vote.round == evidence.round
+                    && vote.vote.vote.kind == vote_kind)
             });
         }
     }
@@ -7447,13 +7471,13 @@ impl NodeInner {
             .vote_mempool
             .read()
             .iter()
-            .map(|vote| PendingVoteSummary {
-                hash: vote.hash(),
-                voter: vote.vote.voter.clone(),
-                height: vote.vote.height,
-                round: vote.vote.round,
-                block_hash: vote.vote.block_hash.clone(),
-                kind: vote.vote.kind,
+            .map(|entry| PendingVoteSummary {
+                hash: entry.vote.hash(),
+                voter: entry.vote.vote.voter.clone(),
+                height: entry.vote.vote.height,
+                round: entry.vote.vote.round,
+                block_hash: entry.vote.vote.block_hash.clone(),
+                kind: entry.vote.vote.kind,
             })
             .collect();
         let uptime_proofs = self
@@ -7639,6 +7663,33 @@ impl NodeInner {
         }
     }
 
+    fn vote_backend(&self, block: &Block) -> ProofVerificationBackend {
+        block
+            .consensus_proof
+            .as_ref()
+            .map(proof_backend)
+            .unwrap_or(ProofVerificationBackend::Stwo)
+    }
+
+    fn record_vote_latency(
+        &self,
+        vote: &SignedBftVote,
+        received_at: SystemTime,
+        backend: ProofVerificationBackend,
+    ) {
+        let Ok(latency) = SystemTime::now().duration_since(received_at) else {
+            return;
+        };
+        let epoch = self.ledger.epoch_info().epoch;
+        self.runtime_metrics.record_consensus_vote_latency(
+            &vote.vote.voter,
+            epoch,
+            vote.vote.height,
+            backend,
+            latency,
+        );
+    }
+
     fn gather_vrf_submissions(
         &self,
         epoch: u64,
@@ -7758,12 +7809,12 @@ impl NodeInner {
         );
     }
 
-    fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<SignedBftVote> {
+    fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<QueuedVote> {
         let mut mempool = self.vote_mempool.write();
         let mut retained = VecDeque::new();
         let mut matched = Vec::new();
         while let Some(vote) = mempool.pop_front() {
-            if vote.vote.height == height && vote.vote.block_hash == block_hash {
+            if vote.vote.vote.height == height && vote.vote.vote.block_hash == block_hash {
                 matched.push(vote);
             } else {
                 retained.push_back(vote);
@@ -8419,6 +8470,7 @@ impl NodeInner {
                     "processing verified external proposal"
                 );
                 let block_hash = proposal.hash.clone();
+                let backend = self.vote_backend(&proposal.block);
                 round.set_block_hash(block_hash.clone());
                 let local_prevote =
                     self.build_local_vote(height, round.round(), &block_hash, BftVoteKind::PreVote);
@@ -8430,6 +8482,8 @@ impl NodeInner {
                     self.consensus_telemetry
                         .record_failed_vote("local_prevote".to_string());
                     self.update_runtime_metrics();
+                } else {
+                    self.record_vote_latency(&local_prevote, SystemTime::now(), backend);
                 }
                 let local_precommit = self.build_local_vote(
                     height,
@@ -8446,23 +8500,24 @@ impl NodeInner {
                         .record_failed_vote("local_precommit".to_string());
                     self.update_runtime_metrics();
                 } else {
+                    self.record_vote_latency(&local_precommit, SystemTime::now(), backend);
                     self.set_consensus_lock(height, round.round(), &block_hash);
                 }
                 let external_votes = self.drain_votes_for(height, &block_hash);
                 for vote in &external_votes {
-                    let result = match vote.vote.kind {
-                        BftVoteKind::PreVote => round.register_prevote(vote),
-                        BftVoteKind::PreCommit => round.register_precommit(vote),
+                    let result = match vote.vote.vote.kind {
+                        BftVoteKind::PreVote => round.register_prevote(&vote.vote),
+                        BftVoteKind::PreCommit => round.register_precommit(&vote.vote),
                     };
                     if let Err(err) = result {
-                        warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
+                        warn!(?err, voter = %vote.vote.vote.voter, "rejecting invalid consensus vote");
                         if self.config.rollout.feature_gates.consensus_enforcement {
-                            if let Err(slash_err) =
-                                self.slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                            if let Err(slash_err) = self
+                                .slash_validator(&vote.vote.vote.voter, SlashingReason::InvalidVote)
                             {
                                 warn!(
                                     ?slash_err,
-                                    voter = %vote.vote.voter,
+                                    voter = %vote.vote.vote.voter,
                                     "failed to slash validator for invalid vote"
                                 );
                             }
@@ -8470,10 +8525,12 @@ impl NodeInner {
                         self.consensus_telemetry
                             .record_failed_vote("external_vote".to_string());
                         self.update_runtime_metrics();
+                    } else {
+                        self.record_vote_latency(&vote.vote, vote.received_at, backend);
                     }
                 }
                 let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
-                recorded_votes.extend(external_votes.clone());
+                recorded_votes.extend(external_votes.iter().map(|vote| vote.vote.clone()));
 
                 let finalization_ctx = FinalizationContext::Local(LocalFinalizationContext {
                     round,
@@ -8728,10 +8785,16 @@ impl NodeInner {
         );
         let block_hash_hex = hex::encode(header.hash());
         round.set_block_hash(block_hash_hex.clone());
+        let backend = if cfg!(feature = "backend-rpp-stark") {
+            ProofVerificationBackend::RppStark
+        } else {
+            ProofVerificationBackend::Stwo
+        };
 
         let local_prevote =
             self.build_local_vote(height, round.round(), &block_hash_hex, BftVoteKind::PreVote);
         round.register_prevote(&local_prevote)?;
+        self.record_vote_latency(&local_prevote, SystemTime::now(), backend);
         let local_precommit = self.build_local_vote(
             height,
             round.round(),
@@ -8739,23 +8802,24 @@ impl NodeInner {
             BftVoteKind::PreCommit,
         );
         round.register_precommit(&local_precommit)?;
+        self.record_vote_latency(&local_precommit, SystemTime::now(), backend);
         self.set_consensus_lock(height, round.round(), &block_hash_hex);
 
         let external_votes = self.drain_votes_for(height, &block_hash_hex);
         for vote in &external_votes {
-            let result = match vote.vote.kind {
-                BftVoteKind::PreVote => round.register_prevote(vote),
-                BftVoteKind::PreCommit => round.register_precommit(vote),
+            let result = match vote.vote.vote.kind {
+                BftVoteKind::PreVote => round.register_prevote(&vote.vote),
+                BftVoteKind::PreCommit => round.register_precommit(&vote.vote),
             };
             if let Err(err) = result {
-                warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
+                warn!(?err, voter = %vote.vote.vote.voter, "rejecting invalid consensus vote");
                 if self.config.rollout.feature_gates.consensus_enforcement {
                     if let Err(slash_err) =
-                        self.slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                        self.slash_validator(&vote.vote.vote.voter, SlashingReason::InvalidVote)
                     {
                         warn!(
                             ?slash_err,
-                            voter = %vote.vote.voter,
+                            voter = %vote.vote.vote.voter,
                             "failed to slash validator for invalid vote"
                         );
                     }
@@ -8763,11 +8827,13 @@ impl NodeInner {
                 self.consensus_telemetry
                     .record_failed_vote("external_vote".to_string());
                 self.update_runtime_metrics();
+            } else {
+                self.record_vote_latency(&vote.vote, vote.received_at, backend);
             }
         }
 
         let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
-        recorded_votes.extend(external_votes.clone());
+        recorded_votes.extend(external_votes.iter().map(|vote| vote.vote.clone()));
 
         let finalization_ctx = FinalizationContext::Local(LocalFinalizationContext {
             round,
@@ -9994,6 +10060,73 @@ mod telemetry_metrics_tests {
         assert!(seen.contains("rpp.runtime.consensus.witness.events"));
         assert!(seen.contains("rpp.runtime.consensus.slashing.events"));
         assert!(seen.contains("rpp.runtime.consensus.failed_votes"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_vote_latency_records_backend_and_labels() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("vote-latency-metrics");
+        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+
+        metrics.record_consensus_vote_latency(
+            "validator-a",
+            1,
+            10,
+            ProofVerificationBackend::Stwo,
+            Duration::from_millis(42),
+        );
+        metrics.record_consensus_vote_latency(
+            "validator-b",
+            2,
+            20,
+            ProofVerificationBackend::RppStark,
+            Duration::from_millis(84),
+        );
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut backends = HashSet::new();
+        let mut slots = HashSet::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    if metric.name != "rpp.runtime.consensus.vote.latency" {
+                        continue;
+                    }
+                    if let Data::Histogram(histogram) = metric.data {
+                        for point in histogram.data_points {
+                            let mut attrs = HashMap::new();
+                            for attribute in point.attributes {
+                                attrs
+                                    .insert(attribute.key.to_string(), attribute.value.to_string());
+                            }
+                            if let Some(backend) = attrs.get(ProofVerificationBackend::KEY) {
+                                backends.insert(backend.clone());
+                            }
+                            if let Some(slot) = attrs.get("slot") {
+                                slots.insert(slot.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            backends.contains(&ProofVerificationBackend::Stwo.as_str().to_string()),
+            "expected stwo backend label",
+        );
+        assert!(
+            backends.contains(&ProofVerificationBackend::RppStark.as_str().to_string()),
+            "expected rpp-stark backend label",
+        );
+        assert!(slots.contains(&"10".to_string()));
+        assert!(slots.contains(&"20".to_string()));
 
         Ok(())
     }

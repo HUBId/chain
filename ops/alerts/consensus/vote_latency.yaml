@@ -1,0 +1,46 @@
+groups:
+  - name: consensus-vote-latency
+    interval: 30s
+    rules:
+      - record: consensus:vote_latency_p95:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, validator, backend, environment) (
+              rate(rpp_runtime_consensus_vote_latency_bucket[5m])
+            )
+          )
+        labels:
+          component: consensus
+
+      - alert: ConsensusVoteLatencyWarning
+        expr: consensus:vote_latency_p95:5m > 0.75
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator vote processing above 750 ms p95
+          description: >-
+            Validator {{ $labels.validator }} (backend={{ $labels.backend }}) is
+            taking more than 750 ms at the 95th percentile to process votes over
+            the last five minutes. Inspect gossip health and prover backends for
+            the affected validator before latency degrades quorum formation.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/observability/consensus.md#vote-processing-latency
+
+      - alert: ConsensusVoteLatencyCritical
+        expr: consensus:vote_latency_p95:5m > 1.5
+        for: 5m
+        labels:
+          severity: critical
+          team: consensus
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator vote processing above 1.5 s p95
+          description: >-
+            Validator {{ $labels.validator }} (backend={{ $labels.backend }}) is
+            exceeding the 1.5 s p95 vote processing budget. Page the on-call and
+            consider removing the validator from rotation or switching proof
+            backends until vote latency recovers.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/observability/consensus.md#vote-processing-latency

@@ -19,6 +19,12 @@ metrics:
   - name: rpp.runtime.consensus.failed_votes
     labels:
       - reason
+  - name: rpp.runtime.consensus.vote.latency
+    labels:
+      - backend
+      - validator
+      - epoch
+      - slot
   - name: rpp.runtime.consensus.round.duration
     labels:
       - height

@@ -992,7 +992,11 @@ pub struct ProposalState {
 
 #[derive(Debug)]
 pub enum VoteOutcome {
-    Recorded { reached_quorum: bool, power: f64 },
+    Recorded {
+        reached_quorum: bool,
+        power: f64,
+        received_at: SystemTime,
+    },
     Duplicate,
 }
 
@@ -1112,6 +1116,7 @@ impl ConsensusPipeline {
         Ok(VoteOutcome::Recorded {
             reached_quorum,
             power: power_accumulated,
+            received_at: record.received_at,
         })
     }
 
