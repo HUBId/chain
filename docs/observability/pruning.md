@@ -90,4 +90,9 @@ the label values; they default to `primary` and `0` when unset.【F:rpp/node/src
   regressions (for example `error="storage"`) reach the right owners.
 
 Combine the alerts with log streaming for `"pruning cycle failed"` to accelerate
-triage.【F:rpp/node/src/services/pruning.rs†L393-L400】
+triage.【F:rpp/node/src/services/pruning.rs†L393-L400】 The pruning worker now
+emits `event`-scoped markers (`pruning_cycle_start`, `pruning_checkpoint_saved`,
+`pruning_batch_complete`, `pruning_cycle_finished`, `pruning_cycle_error`) with
+`checkpoint_id`, `shard`, and `partition` labels. Parse those fields in log
+pipelines (e.g. Loki labels) so dashboards can render a per-shard timeline of
+starts, batches, persisted checkpoints, and any failures.【F:rpp/runtime/node.rs†L5929-L6073】
