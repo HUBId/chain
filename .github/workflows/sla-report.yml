@@ -1,0 +1,53 @@
+name: SLA report
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment label to scope metrics (e.g., prod, staging)
+        required: false
+        default: prod
+      hours:
+        description: Hours of history to include in the report window
+        required: false
+        default: '24'
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+  pull-requests: read
+  statuses: write
+
+jobs:
+  sla-report:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'prod' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Generate SLA report
+        env:
+          PROMETHEUS_BEARER_TOKEN: ${{ secrets.PROMETHEUS_BEARER_TOKEN }}
+        run: |
+          python tools/alerts/sla_report.py \
+            --prom-url "${{ secrets.PROMETHEUS_BASE_URL }}" \
+            --environment "${{ inputs.environment || 'prod' }}" \
+            --hours "${{ inputs.hours }}" \
+            --fail-on-breach \
+            --output-dir "${{ github.workspace }}/artifacts/sla"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sla-report-${{ inputs.environment || 'prod' }}
+          path: artifacts/sla
