@@ -13,6 +13,11 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   compute fee-based ordering during investigations. The test captures the highest observed fee and
   validates that custom queue weights surface in the response, mirroring the fields returned by the
   API.【F:tests/mempool/spam_recovery.rs†L63-L88】
+* When zk verification is enabled, proposers drain the transaction queue in
+  fee-descending order and fall back to the nonce when fees tie, ensuring
+  high-fee submissions survive proof verification, mempool replay, and
+  reorgs. Integration coverage spans the default backend and an RPP-STARK
+  recovery path to confirm ordering holds through partitions.【F:rpp/runtime/node.rs†L8388-L8415】【F:tests/integration/zk_ordering.rs†L1-L122】【F:tests/reorg_rpp_stark.rs†L229-L301】
 * `/status/node` exposes the aggregate pending transaction count, allowing dashboards to track the
   backlog as spam ebbs and flows.【F:tests/mempool/spam_recovery.rs†L41-L47】【F:tests/mempool/spam_recovery.rs†L110-L118】
 * Uptime-ready probes now submit tiny transactions (or observe mempool readiness) during consensus

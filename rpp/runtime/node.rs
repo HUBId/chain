@@ -6797,6 +6797,22 @@ impl NodeInner {
         }
     }
 
+    fn compare_transaction_priority(
+        lhs: &TransactionProofBundle,
+        rhs: &TransactionProofBundle,
+    ) -> std::cmp::Ordering {
+        rhs.transaction
+            .payload
+            .fee
+            .cmp(&lhs.transaction.payload.fee)
+            .then(
+                lhs.transaction
+                    .payload
+                    .nonce
+                    .cmp(&rhs.transaction.payload.nonce),
+            )
+    }
+
     fn purge_transaction_metadata(&self, bundles: &[TransactionProofBundle]) {
         if bundles.is_empty() {
             return;
@@ -8455,11 +8471,15 @@ impl NodeInner {
         let mut pending: Vec<TransactionProofBundle> = Vec::new();
         {
             let mut mempool = self.mempool.write();
-            while pending.len() < self.config.max_block_transactions {
-                if let Some(tx) = mempool.pop_front() {
-                    pending.push(tx);
-                } else {
-                    break;
+            if !mempool.is_empty() {
+                let mut ordered: Vec<_> = mempool.drain(..).collect();
+                ordered.sort_by(Self::compare_transaction_priority);
+                for bundle in ordered.into_iter() {
+                    if pending.len() < self.config.max_block_transactions {
+                        pending.push(bundle);
+                    } else {
+                        mempool.push_back(bundle);
+                    }
                 }
             }
         }

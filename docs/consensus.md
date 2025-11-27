@@ -152,6 +152,13 @@ skew and latency spread under 1.2s. Operators should treat ~1s of additional
 round latency and a one-block height spread as the safe drift budget; crossing
 those limits warrants deeper inspection before tightening alert thresholds.
 
+Fee ordering remains stable while zk verification is enabled: block builders
+pull transactions in fee-descending order (breaking ties by nonce) so that
+priority survives zk proof verification, backpressure, and block replays. The
+integration suite exercises the default backend and the RPP-STARK reorg drill to
+confirm that high-fee entries stay ahead of lower-fee submissions even after a
+partition heals and proofs are revalidated on the winning branch.【F:tests/integration/zk_ordering.rs†L1-L122】【F:tests/reorg_rpp_stark.rs†L229-L301】
+
 Complementary uptime skew tests enforce the same discipline at the proof layer:
 unit coverage now injects backwards clock offsets into both STWO and Plonky3
 uptime provers and expects them to reject the skew while recording rejection
