@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::reputation::Tier;
 
+use crate::config::{
+    PruningCheckpointRetentionConfig, DEFAULT_PRUNING_CHECKPOINT_RETENTION_COUNT,
+    DEFAULT_PRUNING_CHECKPOINT_RETENTION_DAYS,
+};
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "backend-plonky3")]
@@ -932,6 +936,54 @@ impl ReconstructionPlan {
 pub struct ReconstructionEngine {
     storage: Storage,
     snapshot_dir: Option<PathBuf>,
+    checkpoint_retention: CheckpointRetention,
+}
+
+#[derive(Clone, Debug)]
+pub struct CheckpointRetention {
+    pub max_checkpoints: usize,
+    pub max_age: Option<Duration>,
+}
+
+impl CheckpointRetention {
+    pub fn new(max_checkpoints: usize, max_age: Option<Duration>) -> Self {
+        let clamped = max_checkpoints.max(1);
+        Self {
+            max_checkpoints: clamped,
+            max_age,
+        }
+    }
+
+    fn is_expired(&self, checkpoint: &PruningCheckpoint, now: u64) -> bool {
+        let Some(limit) = self.max_age else {
+            return false;
+        };
+        let limit_secs = limit.as_secs();
+        if limit_secs == 0 {
+            return false;
+        }
+        now.saturating_sub(checkpoint.metadata.timestamp) > limit_secs
+    }
+}
+
+impl Default for CheckpointRetention {
+    fn default() -> Self {
+        Self {
+            max_checkpoints: DEFAULT_PRUNING_CHECKPOINT_RETENTION_COUNT,
+            max_age: Some(Duration::from_secs(
+                DEFAULT_PRUNING_CHECKPOINT_RETENTION_DAYS.saturating_mul(86_400),
+            )),
+        }
+    }
+}
+
+impl From<&PruningCheckpointRetentionConfig> for CheckpointRetention {
+    fn from(config: &PruningCheckpointRetentionConfig) -> Self {
+        let max_age = config
+            .max_age_days
+            .map(|days| Duration::from_secs(days.saturating_mul(86_400)));
+        CheckpointRetention::new(config.max_checkpoints, max_age)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1060,13 +1112,23 @@ impl ReconstructionEngine {
         Self {
             storage,
             snapshot_dir: None,
+            checkpoint_retention: CheckpointRetention::default(),
         }
     }
 
     pub fn with_snapshot_dir(storage: Storage, snapshot_dir: PathBuf) -> Self {
+        Self::with_snapshot_dir_and_retention(storage, snapshot_dir, CheckpointRetention::default())
+    }
+
+    pub fn with_snapshot_dir_and_retention(
+        storage: Storage,
+        snapshot_dir: PathBuf,
+        checkpoint_retention: CheckpointRetention,
+    ) -> Self {
         Self {
             storage,
             snapshot_dir: Some(snapshot_dir),
+            checkpoint_retention,
         }
     }
 
@@ -1434,6 +1496,7 @@ impl ReconstructionEngine {
         file.write_all(&encoded)?;
         file.sync_all()?;
         fs::rename(&tmp_path, &path)?;
+        self.enforce_checkpoint_retention(dir)?;
         Ok(path)
     }
 
@@ -1508,6 +1571,89 @@ impl ReconstructionEngine {
         });
 
         Ok(latest)
+    }
+
+    fn enforce_checkpoint_retention(&self, dir: &Path) -> ChainResult<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+
+        let mut checkpoints: Vec<(PathBuf, PruningCheckpoint)> = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("snapshot-")
+                || path.extension().and_then(|ext| ext.to_str()) != Some("json")
+            {
+                continue;
+            }
+
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    warn!(
+                        ?path,
+                        ?err,
+                        "failed to read pruning checkpoint during retention"
+                    );
+                    continue;
+                }
+            };
+
+            let checkpoint: PruningCheckpoint = match serde_json::from_slice(&bytes) {
+                Ok(checkpoint) => checkpoint,
+                Err(err) => {
+                    warn!(
+                        ?path,
+                        ?err,
+                        "failed to decode pruning checkpoint during retention"
+                    );
+                    continue;
+                }
+            };
+
+            checkpoints.push((path, checkpoint));
+        }
+
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+
+        checkpoints.sort_by(|(_, a), (_, b)| {
+            (a.metadata.height, a.metadata.timestamp)
+                .cmp(&(b.metadata.height, b.metadata.timestamp))
+        });
+        checkpoints.reverse();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut removals = Vec::new();
+        for (index, (path, checkpoint)) in checkpoints.into_iter().enumerate() {
+            if index == 0 {
+                continue;
+            }
+            let expired = self.checkpoint_retention.is_expired(&checkpoint, now);
+            let over_count = index >= self.checkpoint_retention.max_checkpoints;
+            if expired || over_count {
+                removals.push(path);
+            }
+        }
+
+        for path in removals {
+            if let Err(err) = fs::remove_file(&path) {
+                warn!(?path, ?err, "failed to remove expired pruning checkpoint");
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1724,10 +1870,13 @@ mod tests {
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
-    use crate::types::{Account, BlockHeader, PruningProof, RecursiveProof, Stake};
+    use crate::types::{Account, BlockHeader, ProofSystem, PruningProof, RecursiveProof, Stake};
     use ed25519_dalek::{Keypair, Signer};
     use rand::rngs::OsRng;
+    use serde_json;
     use std::collections::HashMap;
+    use std::fs;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     struct MemoryProvider {
@@ -2032,6 +2181,44 @@ mod tests {
         (block, keypair)
     }
 
+    fn dummy_plan(height: u64) -> ReconstructionPlan {
+        let commitments = GlobalStateCommitments {
+            global_state_root: [height as u8; 32],
+            utxo_root: [height as u8; 32],
+            reputation_root: [height as u8; 32],
+            timetoke_root: [height as u8; 32],
+            zsi_root: [height as u8; 32],
+            proof_root: [height as u8; 32],
+        };
+        let snapshot = SnapshotSummary {
+            height,
+            block_hash: format!("hash-{height}"),
+            commitments,
+            chain_commitment: format!("chain-{height}"),
+        };
+
+        ReconstructionPlan {
+            start_height: height.saturating_sub(1),
+            tip: BlockMetadata {
+                height,
+                hash: format!("hash-{height}"),
+                timestamp: height * 10,
+                previous_state_root: "prev".into(),
+                new_state_root: "new".into(),
+                proof_hash: String::new(),
+                pruning: None,
+                pruning_binding_digest: [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                pruning_segment_commitments: Vec::new(),
+                recursive_commitment: format!("recursive-{height}"),
+                recursive_previous_commitment: None,
+                recursive_system: ProofSystem::Stwo,
+                recursive_anchor: RecursiveProof::anchor(),
+            },
+            snapshot,
+            requests: Vec::new(),
+        }
+    }
+
     #[test]
     fn reconstruction_plan_detects_pruned_blocks() {
         let temp_dir = tempdir().expect("tempdir");
@@ -2134,5 +2321,89 @@ mod tests {
         assert!(light_client_feed
             .iter()
             .all(|update| !update.state_root.is_empty()));
+    }
+
+    #[test]
+    fn checkpoint_retention_limits_count_and_recovers_latest() {
+        let temp_dir = tempdir().expect("tempdir");
+        let snapshot_dir = temp_dir.path().join("snapshots");
+        let retention = CheckpointRetention::new(1, None);
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let engine = ReconstructionEngine::with_snapshot_dir_and_retention(
+            storage,
+            snapshot_dir.clone(),
+            retention,
+        );
+
+        engine
+            .persist_plan(&dummy_plan(1))
+            .expect("persist checkpoint")
+            .expect("checkpoint path");
+        engine
+            .persist_plan(&dummy_plan(2))
+            .expect("persist second checkpoint")
+            .expect("checkpoint path");
+
+        let retained: Vec<_> = fs::read_dir(&snapshot_dir)
+            .expect("list checkpoints")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .collect();
+        assert_eq!(
+            retained.len(),
+            1,
+            "only the newest checkpoint should remain"
+        );
+
+        let recovered = engine
+            .recover_checkpoint()
+            .expect("recover checkpoint")
+            .expect("checkpoint should exist");
+        assert_eq!(recovered.metadata.height, 2);
+    }
+
+    #[test]
+    fn checkpoint_retention_expires_old_files_by_age() {
+        let temp_dir = tempdir().expect("tempdir");
+        let snapshot_dir = temp_dir.path().join("snapshots");
+        let retention = CheckpointRetention::new(4, Some(Duration::from_secs(1)));
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let engine = ReconstructionEngine::with_snapshot_dir_and_retention(
+            storage,
+            snapshot_dir.clone(),
+            retention,
+        );
+
+        let old_path = engine
+            .persist_plan(&dummy_plan(10))
+            .expect("persist checkpoint")
+            .expect("checkpoint path");
+        let mut checkpoint: PruningCheckpoint =
+            serde_json::from_slice(&fs::read(&old_path).expect("read checkpoint"))
+                .expect("decode checkpoint");
+        checkpoint.metadata.timestamp = 0;
+        fs::write(
+            &old_path,
+            serde_json::to_vec_pretty(&checkpoint).expect("encode checkpoint"),
+        )
+        .expect("overwrite checkpoint");
+
+        engine
+            .persist_plan(&dummy_plan(11))
+            .expect("persist checkpoint")
+            .expect("checkpoint path");
+
+        let retained: Vec<_> = fs::read_dir(&snapshot_dir)
+            .expect("list checkpoints")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .collect();
+        assert_eq!(retained.len(), 1, "expired checkpoints should be pruned");
+
+        let recovered = engine
+            .recover_checkpoint()
+            .expect("recover checkpoint")
+            .expect("checkpoint should exist");
+        assert_eq!(recovered.metadata.height, 11);
     }
 }

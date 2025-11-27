@@ -2015,6 +2015,8 @@ fn default_node_config_version() -> String {
 
 pub const DEFAULT_PRUNING_CADENCE_SECS: u64 = 30;
 pub const DEFAULT_PRUNING_RETENTION_DEPTH: u64 = 128;
+pub const DEFAULT_PRUNING_CHECKPOINT_RETENTION_COUNT: usize = 5;
+pub const DEFAULT_PRUNING_CHECKPOINT_RETENTION_DAYS: u64 = 14;
 pub const DEFAULT_ADMISSION_RECONCILER_CADENCE_SECS: u64 = 60;
 pub const DEFAULT_ADMISSION_RECONCILER_ALERT_THRESHOLD: u64 = 1;
 pub const DEFAULT_ADMISSION_RECONCILER_AUDIT_LAG_SECS: u64 = 300;
@@ -2683,6 +2685,7 @@ pub struct PruningConfig {
     pub retention_depth: u64,
     pub emergency_pause: bool,
     pub pacing: PruningPacingConfig,
+    pub checkpoint_retention: PruningCheckpointRetentionConfig,
 }
 
 impl PruningConfig {
@@ -2698,6 +2701,7 @@ impl PruningConfig {
             ));
         }
         self.pacing.validate()?;
+        self.checkpoint_retention.validate()?;
         Ok(())
     }
 }
@@ -2709,6 +2713,41 @@ impl Default for PruningConfig {
             retention_depth: DEFAULT_PRUNING_RETENTION_DEPTH,
             emergency_pause: false,
             pacing: PruningPacingConfig::default(),
+            checkpoint_retention: PruningCheckpointRetentionConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PruningCheckpointRetentionConfig {
+    pub max_checkpoints: usize,
+    pub max_age_days: Option<u64>,
+}
+
+impl PruningCheckpointRetentionConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.max_checkpoints == 0 {
+            return Err(ChainError::Config(
+                "pruning.checkpoint_retention.max_checkpoints must be greater than 0".into(),
+            ));
+        }
+        if let Some(days) = self.max_age_days {
+            if days == 0 {
+                return Err(ChainError::Config(
+                    "pruning.checkpoint_retention.max_age_days must be greater than 0".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for PruningCheckpointRetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_checkpoints: DEFAULT_PRUNING_CHECKPOINT_RETENTION_COUNT,
+            max_age_days: Some(DEFAULT_PRUNING_CHECKPOINT_RETENTION_DAYS),
         }
     }
 }

@@ -117,8 +117,8 @@ use crate::stwo::proof::ProofPayload;
 #[cfg(feature = "prover-stwo")]
 use crate::stwo::prover::WalletProver;
 use crate::sync::{
-    invariants::enforce_block_invariants, PayloadProvider, ReconstructionEngine,
-    ReconstructionPlan, StateSyncPlan,
+    invariants::enforce_block_invariants, CheckpointRetention, PayloadProvider,
+    ReconstructionEngine, ReconstructionPlan, StateSyncPlan,
 };
 use crate::types::serde_pruning_proof;
 use crate::types::{
@@ -5735,9 +5735,12 @@ impl NodeInner {
                 "reconstruction feature gate disabled".into(),
             ));
         }
-        let engine = ReconstructionEngine::with_snapshot_dir(
+        let checkpoint_retention =
+            CheckpointRetention::from(&self.config.pruning.checkpoint_retention);
+        let engine = ReconstructionEngine::with_snapshot_dir_and_retention(
             self.storage.clone(),
             self.config.snapshot_dir.clone(),
+            checkpoint_retention,
         );
         let plan = engine.plan_from_height(start_height)?;
         if let Some(path) = engine.persist_plan(&plan)? {
@@ -5754,9 +5757,12 @@ impl NodeInner {
         if !self.config.rollout.feature_gates.reconstruction {
             return Ok(None);
         }
-        let engine = ReconstructionEngine::with_snapshot_dir(
+        let checkpoint_retention =
+            CheckpointRetention::from(&self.config.pruning.checkpoint_retention);
+        let engine = ReconstructionEngine::with_snapshot_dir_and_retention(
             self.storage.clone(),
             self.config.snapshot_dir.clone(),
+            checkpoint_retention,
         );
         let mut state_sync_plan = engine.state_sync_plan(chunk_size)?;
         let mut reconstruction_plan = engine.full_plan()?;

@@ -69,7 +69,20 @@ raise incidents when three consecutive scheduled runs fail.
   periods. Changes take effect without restarting the node when applied via the
   config reload path.【F:rpp/runtime/config.rs†L2618-L2665】【F:rpp/node/src/services/pruning.rs†L330-L420】
 
-## 4. Verify pruning checkpoints
+## 4. Checkpoint retention and verification
+
+- **Defaults.** Nodes keep the most recent five pruning checkpoints and purge
+  anything older than 14 days once a new checkpoint is written. The latest
+  checkpoint is always retained even when it is older than the age limit to
+  preserve crash recovery. Tune the window with
+  `pruning.checkpoint_retention.max_checkpoints` and
+  `pruning.checkpoint_retention.max_age_days` in the node configuration when
+  adjusting disk budgets or retention horizons.【F:rpp/runtime/config.rs†L2015-L2041】【F:rpp/runtime/node.rs†L5669-L5712】【F:rpp/runtime/sync.rs†L933-L1011】
+- **Override safely.** When shortening the window (for example, setting
+  `max_checkpoints` to `1` for constrained volumes), verify that snapshot
+  exporters or downstream consumers have already ingested the previous
+  checkpoint. Raising the limit for incident analysis is safe because expired
+  files are removed lazily after the next successful persist.【F:rpp/runtime/sync.rs†L1447-L1498】【F:rpp/runtime/sync.rs†L1013-L1035】
 
 1. **Capture roots before and after pruning.** Use `fwdctl compare` to hash the
    Firewood database captured prior to pruning or checkpoint rebuild and the
