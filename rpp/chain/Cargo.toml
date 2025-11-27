@@ -343,6 +343,11 @@ path = "../../tests/rpp_verifier_smoke.rs"
 required-features = ["backend-rpp-stark"]
 
 [[test]]
+name = "rpp_circuit_rollback"
+path = "../../tests/rpp_circuit_rollback.rs"
+required-features = ["backend-rpp-stark"]
+
+[[test]]
 name = "uptime_clock_skew"
 path = "../../tests/uptime_clock_skew.rs"
 required-features = ["prover-stwo"]

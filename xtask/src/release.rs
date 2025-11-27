@@ -108,22 +108,30 @@ pub(crate) fn proof_version_guard(args: &[String]) -> Result<()> {
     }
 
     if !circuit_related.is_empty() && version_changes.is_empty() {
-        let mut message = String::new();
-        message.push_str(
-            "proof-version-guard: circuit artifacts changed but PROOF_VERSION was not updated.\n",
-        );
-        message.push_str("Changed circuit files:\n");
-        for entry in circuit_related.iter().take(20) {
-            message.push_str(&format!("  - {entry}\n"));
+        if changelog_mentions_circuit_rollback(&workspace, &base_commit)? {
+            println!(
+                "proof-version-guard: detected circuit changes without a PROOF_VERSION bump; treating as a documented rollback"
+            );
+        } else {
+            let mut message = String::new();
+            message.push_str(
+                "proof-version-guard: circuit artifacts changed but PROOF_VERSION was not updated.\n",
+            );
+            message.push_str("Changed circuit files:\n");
+            for entry in circuit_related.iter().take(20) {
+                message.push_str(&format!("  - {entry}\n"));
+            }
+            if circuit_related.len() > 20 {
+                message.push_str(&format!("  ... and {} more\n", circuit_related.len() - 20));
+            }
+            message.push_str(
+                "Bump the PROOF_VERSION constants before merging or add a CHANGELOG.md entry describing the circuit rollback/downgrade.\n",
+            );
+            for source in PROOF_VERSION_SOURCES {
+                message.push_str(&format!("  - {} ({})\n", source.path, source.label));
+            }
+            bail!(message);
         }
-        if circuit_related.len() > 20 {
-            message.push_str(&format!("  ... and {} more\n", circuit_related.len() - 20));
-        }
-        message.push_str("Bump the PROOF_VERSION constants before merging:\n");
-        for source in PROOF_VERSION_SOURCES {
-            message.push_str(&format!("  - {} ({})\n", source.path, source.label));
-        }
-        bail!(message);
     }
 
     if version_changes.is_empty() {
@@ -412,6 +420,40 @@ fn changelog_mentions_proof_version(workspace: &Path, base: &str) -> Result<bool
         }
         let lowered = line.to_ascii_lowercase();
         if lowered.contains("proof_version") || lowered.contains("proof version") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn changelog_mentions_circuit_rollback(workspace: &Path, base: &str) -> Result<bool> {
+    let range = format!("{base}..HEAD");
+    let output = Command::new("git")
+        .current_dir(workspace)
+        .arg("diff")
+        .arg("--unified=0")
+        .arg(&range)
+        .arg("--")
+        .arg("CHANGELOG.md")
+        .output()
+        .with_context(|| format!("git diff --unified=0 {range} -- CHANGELOG.md"))?;
+
+    if !output.status.success() {
+        bail!("git diff {range} -- CHANGELOG.md failed");
+    }
+
+    let diff = String::from_utf8(output.stdout).context("decode changelog diff")?;
+    for line in diff.lines() {
+        if !line.starts_with('+') || line.starts_with("+++") {
+            continue;
+        }
+        let lowered = line.to_ascii_lowercase();
+        if lowered.contains("circuit")
+            && (lowered.contains("rollback")
+                || lowered.contains("roll back")
+                || lowered.contains("downgrade"))
+        {
             return Ok(true);
         }
     }
