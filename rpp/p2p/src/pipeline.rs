@@ -2102,6 +2102,10 @@ pub struct NetworkPeerTelemetry {
     pub version: String,
     pub latency_ms: u64,
     pub last_seen: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub features: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_backends: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2116,6 +2120,8 @@ pub struct NetworkFeatureAnnouncement {
     pub peer_id: String,
     #[serde(default)]
     pub features: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_backends: Vec<String>,
 }
 
 #[cfg(test)]

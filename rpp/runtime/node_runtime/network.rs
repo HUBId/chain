@@ -20,6 +20,7 @@ use crate::config::{
     FeatureGates, NetworkAdmissionConfig, P2pAllowlistEntry, P2pConfig, WormExportTargetConfig,
     WormRetentionModeConfig,
 };
+use crate::proof_system::ProofVerifierRegistry;
 
 /// Resolved libp2p networking configuration used by the runtime.
 #[derive(Clone, Debug)]
@@ -207,6 +208,7 @@ impl NetworkResources {
         } else {
             None
         };
+        let proof_backends = ProofVerifierRegistry::advertised_backends();
         let node_label = identity.peer_id().to_base58();
         let (handshake, profile) = if let Some(profile) = identity_profile {
             let features = profile.feature_gates.advertise();
@@ -217,13 +219,15 @@ impl NetworkResources {
                     Some(profile.vrf_proof.clone()),
                     profile.tier,
                 )
-                .with_features(features),
+                .with_features(features)
+                .with_proof_backends(proof_backends.clone()),
                 Some(profile),
             )
         } else {
             (
                 HandshakePayload::new(node_label, None, None, TierLevel::Tl0)
-                    .with_features(feature_gates.advertise()),
+                    .with_features(feature_gates.advertise())
+                    .with_proof_backends(proof_backends.clone()),
                 None,
             )
         };

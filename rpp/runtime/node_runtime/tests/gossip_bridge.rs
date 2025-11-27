@@ -40,6 +40,8 @@ struct StoredPeerRecordSnapshot {
     ban_until: Option<u64>,
     #[serde(default)]
     features: BTreeMap<String, bool>,
+    #[serde(default)]
+    proof_backends: Vec<String>,
 }
 
 fn reputation_floor_for_tier(tier: TierLevel) -> f64 {
