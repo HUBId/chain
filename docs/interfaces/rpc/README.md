@@ -169,6 +169,21 @@ token-bucket policy. See the language-specific docs below for examples:
 * TypeScript: `SnapshotError` and `snapshotRequest` in
   `validator-ui/src/lib/snapshotClient.ts`.
 
+### Pruning progress endpoints
+
+Operators and monitoring agents can now query pruning progress directly from
+RPC. Both endpoints require the RPC token when authentication is enabled and
+are throttled by the snapshot token bucket (rate-limit headers are included in
+the response):
+
+- `GET /snapshots/pruning/status` – returns the latest
+  `PruningStatusResponse` with the current job payload plus calculated
+  `progress` (`0.0-1.0`) and `eta_ms` when the worker has enough samples.
+- `GET /snapshots/pruning/status/stream` – Server-Sent Event stream that emits
+  the same payload on the `pruning` event name and keeps the connection alive
+  with a 15-second heartbeat comment. Monitoring tools should prefer the
+  stream to avoid burst-polling during pruning windows.
+
 ## Live API key rotation
 
 RPC authentication secrets are only loaded during process startup; there is no

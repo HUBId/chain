@@ -273,6 +273,13 @@ When drift triggers an alert:
   Use the event rates to pick windows that keep finality lag below the SLA
   budgets above; clusters running hourly scans should avoid overlapping them
   with manual pruning to preserve uptime accrual continuity.【F:rpp/node/src/telemetry/snapshots.rs†L9-L58】【F:rpp/node/src/telemetry/pruning.rs†L9-L83】
+- **Track pruning progress live.** During maintenance, poll
+  `/snapshots/pruning/status` or subscribe to
+  `/snapshots/pruning/status/stream` to capture current `progress` and
+  `eta_ms` without scraping the metrics backends. The responses are rate limited
+  by the snapshot token bucket and require the RPC bearer token when enabled,
+  making them safe to hand to dashboards or probes running alongside the
+  pruning window.【F:rpp/rpc/src/routes/state.rs†L19-L86】【F:docs/interfaces/rpc/README.md†L118-L133】
 
 ### Suppressing uptime/timetoke alerts during maintenance
 
