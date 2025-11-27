@@ -80,6 +80,16 @@ PY
             exit 1
           fi
 
+  secure-keystore-lint:
+    name: Secure keystore lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production keystore settings
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/lint_secure_keystores.py
+
   phasec-status-freshness:
     name: Phase‑C status freshness
     runs-on: ubuntu-latest

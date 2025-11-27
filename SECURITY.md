@@ -123,6 +123,20 @@ roles:
   that the correct backend and identifier are active, as documented in the
   validator tooling guide.【F:docs/validator_tooling.md†L15-L64】
 
+## Validator keystore policy
+
+- Production validator templates now default to HSM-backed keystores instead of
+  filesystem paths; CI enforces this via `scripts/ci/lint_secure_keystores.py`
+  so insecure defaults do not land in release branches.【F:config/examples/production/validator-plonky3-tls.toml†L15-L26】【F:scripts/ci/lint_secure_keystores.py†L1-L88】
+- The lint rejects missing `[secrets]` blocks, non-HSM/Vault backends, or empty
+  HSM identifiers. Development-only overrides must set
+  `ALLOW_INSECURE_KEY_STORAGE=1` when running the lint locally; production
+  pipelines must remediate by updating the template with the correct
+  `library_path`, slot, and `key_id` before rerunning the check.
+- When migrating existing deployments, rotate VRF keys through the HSM-backed
+  runtime (`validator vrf rotate`) and confirm `secrets.backend = "hsm"` is
+  present in the committed configuration.
+
 ## Wallet keystore hardening
 
 `wallet init` now produces an encrypted keystore that records Argon2id KDF
