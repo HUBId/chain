@@ -16,6 +16,8 @@ use crate::db::schema;
 use crate::db::{
     PolicySnapshot, StoredZsiArtifact, WalletStore, WalletStoreBatch, WalletStoreError,
 };
+use crate::indexer::checkpoints;
+use rpp_storage::ledger::DEFAULT_EPOCH_LENGTH;
 
 mod export;
 mod import;
@@ -25,7 +27,7 @@ pub use import::{
     backup_import, backup_validate, BackupImportOutcome, BackupValidation, BackupValidationMode,
 };
 
-const BACKUP_VERSION: u32 = 1;
+const BACKUP_VERSION: u32 = 2;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const SYMMETRIC_KEY_LEN: usize = 32;
@@ -48,6 +50,10 @@ pub struct BackupMetadata {
     pub policy_entries: usize,
     pub meta_entries: usize,
     pub include_checksums: bool,
+    #[serde(default)]
+    pub checkpoint_height: Option<u64>,
+    #[serde(default)]
+    pub checkpoint_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +95,12 @@ struct KdfMetadata {
     pub salt: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConsensusPoint {
+    height: u64,
+    epoch: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     #[error("wallet store error: {0}")]
@@ -111,6 +123,10 @@ pub enum BackupError {
     UnsupportedVersion { found: u32, expected: u32 },
     #[error("schema checksum mismatch (backup {backup}, local {local})")]
     SchemaMismatch { backup: String, local: String },
+    #[error(
+        "consensus checkpoint drifted during backup (expected height {recorded}, now {current})"
+    )]
+    ConsensusDrift { recorded: u64, current: u64 },
 }
 
 impl From<bincode::Error> for BackupError {
@@ -189,6 +205,39 @@ pub(super) fn current_timestamp_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+pub(super) fn consensus_point(store: &WalletStore) -> Result<Option<ConsensusPoint>, BackupError> {
+    let Some(height) = checkpoints::resume_height(store)?.or(checkpoints::birthday_height(store)?)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ConsensusPoint {
+        height,
+        epoch: height / DEFAULT_EPOCH_LENGTH,
+    }))
+}
+
+pub(super) fn ensure_consensus_stable(
+    store: &WalletStore,
+    recorded: &Option<ConsensusPoint>,
+) -> Result<(), BackupError> {
+    let Some(recorded) = recorded else {
+        return Ok(());
+    };
+    let Some(current) = consensus_point(store)? else {
+        return Err(BackupError::ConsensusDrift {
+            recorded: recorded.height,
+            current: 0,
+        });
+    };
+    if current.height != recorded.height || current.epoch != recorded.epoch {
+        return Err(BackupError::ConsensusDrift {
+            recorded: recorded.height,
+            current: current.height,
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn build_metadata(include_checksums: bool, payload: &BackupPayload) -> BackupMetadata {
     BackupMetadata {
         version: BACKUP_VERSION,
@@ -198,15 +247,22 @@ pub(super) fn build_metadata(include_checksums: bool, payload: &BackupPayload) -
         policy_entries: payload.policies.len(),
         meta_entries: payload.meta.len(),
         include_checksums,
+        checkpoint_height: None,
+        checkpoint_epoch: None,
     }
 }
 
 pub(super) fn prepare_envelope(
     payload: &BackupPayload,
     include_checksums: bool,
+    consensus: Option<ConsensusPoint>,
     passphrase: &Zeroizing<Vec<u8>>,
 ) -> Result<(BackupEnvelope, Zeroizing<Vec<u8>>), BackupError> {
-    let metadata = build_metadata(include_checksums, payload);
+    let mut metadata = build_metadata(include_checksums, payload);
+    if let Some(point) = consensus {
+        metadata.checkpoint_height = Some(point.height);
+        metadata.checkpoint_epoch = Some(point.epoch);
+    }
     let metadata_bytes = encode_metadata(&metadata)?;
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
@@ -269,10 +325,12 @@ pub(super) fn decrypt_envelope(
         )));
     }
     if envelope.metadata.version != BACKUP_VERSION {
-        return Err(BackupError::UnsupportedVersion {
-            found: envelope.metadata.version,
-            expected: BACKUP_VERSION,
-        });
+        if envelope.metadata.version != BACKUP_VERSION - 1 {
+            return Err(BackupError::UnsupportedVersion {
+                found: envelope.metadata.version,
+                expected: BACKUP_VERSION,
+            });
+        }
     }
 
     let salt_vec = BASE64
@@ -475,6 +533,12 @@ mod tests {
             .to_string()
     }
 
+    fn seed_checkpoint(store: &WalletStore, height: u64) {
+        let mut batch = store.batch().expect("batch");
+        checkpoints::persist_resume_height(&mut batch, Some(height)).expect("persist height");
+        batch.commit().expect("commit checkpoint");
+    }
+
     #[test]
     fn backup_round_trip_restores_state() {
         let temp = tempdir().expect("tempdir");
@@ -505,6 +569,8 @@ mod tests {
         }
 
         write_keystore(&keystore_path, b"encrypted-keystore");
+
+        seed_checkpoint(&store, 777);
 
         let passphrase = Zeroizing::new(b"correct horse battery staple".to_vec());
         let confirmation = Zeroizing::new(b"correct horse battery staple".to_vec());
@@ -698,6 +764,41 @@ mod tests {
         .expect("import");
         assert!(!outcome.restored_keystore);
         assert!(!keystore_path.exists());
+    }
+
+    #[test]
+    fn consensus_drift_is_reported() {
+        let temp = tempdir().expect("tempdir");
+        let store_dir = temp.path().join("store");
+        let backup_dir = temp.path().join("backups");
+        std::fs::create_dir_all(&backup_dir).expect("create backup dir");
+        let store = store_with_data(&store_dir);
+        seed_checkpoint(&store, 720);
+
+        let payload = BackupPayload {
+            keystore: None,
+            meta: collect_meta(&store).expect("meta"),
+            policies: Vec::new(),
+            zsi_artifacts: Vec::new(),
+            checksums: None,
+        };
+        let passphrase = Zeroizing::new(b"secret".to_vec());
+        let checkpoint = consensus_point(&store).expect("checkpoint");
+        let _ =
+            prepare_envelope(&payload, false, checkpoint.clone(), &passphrase).expect("envelope");
+
+        let mut batch = store.batch().expect("batch");
+        checkpoints::persist_resume_height(&mut batch, Some(721)).expect("advance height");
+        batch.commit().expect("commit drift");
+
+        let error = ensure_consensus_stable(&store, &checkpoint).expect_err("drift expected");
+        match error {
+            BackupError::ConsensusDrift { recorded, current } => {
+                assert_eq!(recorded, 720);
+                assert_eq!(current, 721);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

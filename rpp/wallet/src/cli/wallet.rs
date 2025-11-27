@@ -2647,6 +2647,20 @@ fn render_backup_metadata(metadata: &BackupMetadataDto) {
     println!("  Policy entries    : {}", metadata.policy_entries);
     println!("  Metadata entries  : {}", metadata.meta_entries);
     println!(
+        "  Checkpoint height : {}",
+        metadata
+            .checkpoint_height
+            .map(|height| height.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!(
+        "  Checkpoint epoch  : {}",
+        metadata
+            .checkpoint_epoch
+            .map(|epoch| epoch.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!(
         "  Includes checksums: {}",
         format_bool(metadata.include_checksums)
     );

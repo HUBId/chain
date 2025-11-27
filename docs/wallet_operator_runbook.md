@@ -98,19 +98,22 @@ evaluations propagate to the UI/RPC when exceeding tier limits as described in
 the wallet operations guide, and that the prover completes with the expected
 backend (mock vs. STWO).【F:docs/wallet/operations.md†L1-L24】
 5. **Backup export** – Trigger `rpp-wallet backup export` (manual) or force an
-auto-export if `wallet.backup.auto_export_enabled = true`. Verify the archive is
-written under `wallet.backup.export_dir` with the configured passphrase profile
-(Argon2id by default).【F:docs/wallet_phase4_advanced.md†L9-L36】【F:config/wallet.toml†L75-L83】
+   auto-export if `wallet.backup.auto_export_enabled = true`. Verify the archive is
+   written under `wallet.backup.export_dir` with the configured passphrase profile
+   (Argon2id by default). Quiesce the wallet sync (or coordinate a checkpoint)
+   so the recorded `checkpoint_height`/`checkpoint_epoch` in the metadata reflects
+   the node snapshot you pair it with; exports now fail if the checkpoint drifts
+   mid-run.【F:docs/wallet_phase4_advanced.md†L9-L36】【F:config/wallet.toml†L75-L83】
 6. **Restore drill** – Import the archive on an isolated host using
 `rpp-wallet backup restore --path <file>` and confirm checksum/passphrase
-validation occurs. Reject any restore that attempts to skip the current profile
-in production.【F:docs/wallet_phase4_advanced.md†L19-L36】
+   validation occurs. Reject any restore that attempts to skip the current profile
+   in production.【F:docs/wallet_phase4_advanced.md†L19-L36】
 7. **Snapshot pairing** – When taking node snapshots, place the encrypted
    wallet backup (or `wallet.backup.export_dir`) inside the same bundle and
    record its checksum. Restores should first rehydrate the RocksDB snapshot,
-   then run `rpp-wallet backup validate --path <backup>` to surface a clear
-   "passphrase" authentication error when the wrong key is provided before the
-   keystore is written back.【F:tests/wallet_backup_recovery_e2e.rs†L68-L152】
+   then run `rpp-wallet backup validate --path <backup>` to compare the embedded
+   checkpoint height/epoch against the snapshot height; divergence returns a
+   validation error before any keystore writes.【F:tests/wallet_backup_recovery_e2e.rs†L68-L152】
 8. **Watch-only projection** – Toggle `[wallet.watch_only].enabled = true` with
     an exported xpub and restart the daemon. Confirm RPC responses label accounts as
     `watch_only` and that attempts to sign or broadcast return the expected
