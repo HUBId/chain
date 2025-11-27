@@ -12,7 +12,7 @@ use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 use rpp_chain::api::{PruningServiceApi, PruningServiceError};
-use rpp_chain::config::{NodeConfig, PruningPacingConfig};
+use rpp_chain::config::{NodeConfig, PruningPacingConfig, PruningVerbosity};
 use rpp_chain::errors::{ChainError, ChainResult};
 use rpp_chain::node::{
     NodeHandle, PruningCycleSummary, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK,
@@ -34,6 +34,7 @@ pub struct PruningSettings {
     pub paused: bool,
     pub retention_depth: u64,
     pub pacing: PruningPacingConfig,
+    pub verbosity: PruningVerbosity,
 }
 
 impl PruningSettings {
@@ -44,6 +45,7 @@ impl PruningSettings {
             paused: config.pruning.emergency_pause,
             retention_depth: config.pruning.retention_depth,
             pacing: config.pruning.pacing.clone(),
+            verbosity: config.pruning.verbosity,
         }
     }
 }
@@ -96,6 +98,7 @@ struct PruningState {
     retention_depth: RwLock<u64>,
     paused: AtomicBool,
     cancel_requested: AtomicBool,
+    verbosity: PruningVerbosity,
 }
 
 enum Command {
@@ -330,6 +333,7 @@ impl PruningService {
             retention_depth: RwLock::new(settings.retention_depth),
             paused: AtomicBool::new(settings.paused),
             cancel_requested: AtomicBool::new(false),
+            verbosity: settings.verbosity,
         });
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_DEPTH);
         let (status_tx, status_rx) = watch::channel(None);
@@ -577,6 +581,7 @@ async fn run_worker(
     let mut pacing_reason: Option<PacingReason> = None;
     let mut pacing_wait: Option<Pin<Box<time::Sleep>>> = None;
     let mut running_cycle = false;
+    let verbosity = state.verbosity;
 
     loop {
         let run_reason = if let Some(reason) = next_run.take() {
@@ -658,6 +663,7 @@ async fn run_worker(
                     Some(decision.limit),
                     Some(decision.delay),
                 );
+                log_pacing_backoff(verbosity, reason, &decision);
                 pacing_reason = Some(decision.reason);
                 pacing_wait.get_or_insert_with(|| Box::pin(time::sleep(decision.delay)));
                 next_run = Some(reason);
@@ -672,6 +678,7 @@ async fn run_worker(
                         None,
                         None,
                     );
+                    log_pacing_resume(verbosity, reason);
                 }
             }
             Err(err) => {
@@ -694,6 +701,8 @@ async fn run_worker(
                     job_status.estimated_time_remaining_ms =
                         job_status.estimate_time_remaining_ms(elapsed);
                 }
+
+                log_pruning_progress(verbosity, cycle_reason, &summary, elapsed);
 
                 if let Err(err) = status_tx.send(summary.status.clone()) {
                     debug!(?err, "pruning status watchers dropped");
@@ -742,10 +751,73 @@ fn run_pruning_cycle(
     node.run_pruning_cycle(chunk_size, retention_depth)
 }
 
+fn log_pacing_backoff(
+    verbosity: PruningVerbosity,
+    run_reason: RunReason,
+    decision: &PacingDecision,
+) {
+    if verbosity.emits_decisions() {
+        info!(
+            target = "pruning",
+            ?run_reason,
+            pacing_reason = ?decision.reason,
+            observed = decision.observed,
+            limit = decision.limit,
+            backoff_ms = decision.delay.as_millis(),
+            "pruning pacing backoff applied",
+        );
+    }
+}
+
+fn log_pacing_resume(verbosity: PruningVerbosity, reason: PacingReason) {
+    if verbosity.emits_decisions() {
+        info!(
+            target = "pruning",
+            pacing_reason = ?reason,
+            "pruning pacing window cleared",
+        );
+    }
+}
+
+fn log_pruning_progress(
+    verbosity: PruningVerbosity,
+    cycle_reason: CycleReason,
+    summary: &PruningCycleSummary,
+    elapsed: Duration,
+) {
+    if !verbosity.emits_progress() {
+        return;
+    }
+
+    if let Some(status) = summary.status.as_ref() {
+        info!(
+            target = "pruning",
+            ?cycle_reason,
+            cancelled = summary.cancelled,
+            missing_heights = status.missing_heights.len(),
+            stored_proofs = status.stored_proofs.len(),
+            backfill_eta_ms = status.estimated_time_remaining_ms,
+            persisted_plan = status.persisted_path.as_deref(),
+            elapsed_ms = elapsed.as_millis(),
+            "pruning cycle progress",
+        );
+    } else {
+        info!(
+            target = "pruning",
+            ?cycle_reason,
+            cancelled = summary.cancelled,
+            elapsed_ms = elapsed.as_millis(),
+            "pruning cycle completed without status",
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt;
 
     struct StubLoadProbe {
         mempool: AtomicUsize,
@@ -759,6 +831,71 @@ mod tests {
                 timetoke: AtomicUsize::new(timetoke),
             }
         }
+    }
+
+    #[test]
+    fn pacing_logs_emit_at_verbose_level() {
+        let decision = PacingDecision {
+            reason: PacingReason::Cpu,
+            observed: 92.0,
+            limit: 85.0,
+            delay: Duration::from_secs(3),
+        };
+
+        let output = capture_logs(|| {
+            log_pacing_backoff(PruningVerbosity::Decisions, RunReason::Manual, &decision);
+        });
+
+        assert!(output.contains("pacing backoff applied"));
+
+        let suppressed = capture_logs(|| {
+            log_pacing_backoff(PruningVerbosity::Quiet, RunReason::Manual, &decision);
+        });
+
+        assert!(suppressed.is_empty());
+    }
+
+    #[test]
+    fn progress_logs_summarize_cycles() {
+        let summary = PruningCycleSummary::cancelled(None);
+        let output = capture_logs(|| {
+            log_pruning_progress(
+                PruningVerbosity::Progress,
+                CycleReason::Manual,
+                &summary,
+                Duration::from_millis(42),
+            );
+        });
+
+        assert!(output.contains("pruning cycle completed without status"));
+    }
+
+    fn capture_logs<F: FnOnce()>(f: F) -> String {
+        struct VecWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for VecWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("lock").write(buf)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer = buffer.clone();
+
+        let subscriber = fmt()
+            .with_writer(move || VecWriter(writer.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f();
+
+        String::from_utf8(buffer.lock().expect("lock").clone()).expect("utf8 logs")
     }
 
     impl PruningLoadProbe for StubLoadProbe {

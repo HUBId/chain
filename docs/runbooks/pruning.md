@@ -25,6 +25,8 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    pruning service status stream to verify `paused=false`. The worker logs
    `"pruning service started"` with the active cadence, pause flag, and retention depth on boot, so
    operators should see the updated values immediately.【F:rpp/node/src/services/pruning.rs†L100-L158】【F:rpp/node/src/services/pruning.rs†L139-L145】
+   Add `-v/--verbose` when launching `rpp-node` to surface pruning cycle progress; `-vv` also prints
+   pacing decisions and backoff delays so responders can see why work is yielding.【F:rpp/node-runtime-api/src/lib.rs†L28-L76】【F:rpp/node/src/services/pruning.rs†L589-L671】
 
 ## 2. Adjust cadence and retention
 
