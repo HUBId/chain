@@ -622,6 +622,20 @@ impl ApiContext {
         self.pruning_status.as_ref().map(Clone::clone)
     }
 
+    fn require_pruning_status_stream(
+        &self,
+    ) -> Result<watch::Receiver<Option<PruningJobStatus>>, (StatusCode, Json<ErrorResponse>)> {
+        if !self.node_available() {
+            return Err(not_started("node"));
+        }
+        if !self.node_enabled() {
+            return Err(unavailable("node"));
+        }
+
+        self.pruning_status_stream()
+            .ok_or_else(pruning_service_not_configured)
+    }
+
     #[cfg(feature = "wallet-integration")]
     fn wallet_enabled(&self) -> bool {
         self.wallet_available() && self.current_mode().includes_wallet()
@@ -2284,6 +2298,14 @@ where
         .route("/snapshots/rebuild", post(routes::state::rebuild_snapshots))
         .route("/snapshots/snapshot", post(routes::state::trigger_snapshot))
         .route("/snapshots/cancel", post(routes::state::cancel_pruning))
+        .route(
+            "/snapshots/pruning/status",
+            get(routes::state::pruning_status),
+        )
+        .route(
+            "/snapshots/pruning/status/stream",
+            get(routes::state::pruning_status_stream),
+        )
         .route("/state-sync/plan", get(state_sync_plan))
         .route(
             "/state-sync/session",
@@ -5015,6 +5037,142 @@ mod telemetry_tests {
         ));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod pruning_status_tests {
+    use super::*;
+    use axum::http::{header::AUTHORIZATION, Method, Request as HttpRequest};
+    use axum::routing::get;
+    use hyper::body::to_bytes;
+    use serde_json::Value;
+    use tokio::sync::watch;
+    use tower::ServiceExt;
+
+    fn sample_status() -> PruningJobStatus {
+        PruningJobStatus {
+            plan: StateSyncPlan {
+                snapshot: SnapshotSummary {
+                    height: 0,
+                    block_hash: String::new(),
+                    commitments: GlobalStateCommitments::default(),
+                    chain_commitment: String::new(),
+                },
+                tip: BlockMetadata {
+                    height: 0,
+                    hash: String::new(),
+                    timestamp: 0,
+                    previous_state_root: String::new(),
+                    new_state_root: String::new(),
+                    proof_hash: String::new(),
+                    pruning: None,
+                    pruning_binding_digest: [0u8; rpp_pruning::DOMAIN_TAG_LENGTH
+                        + rpp_pruning::DIGEST_LENGTH],
+                    pruning_segment_commitments: Vec::new(),
+                    recursive_commitment: String::new(),
+                    recursive_previous_commitment: None,
+                    recursive_system: ProofSystem::Stwo,
+                    recursive_anchor: String::new(),
+                },
+                chunks: Vec::new(),
+                light_client_updates: Vec::new(),
+                max_concurrent_requests: None,
+            },
+            missing_heights: vec![1, 2, 3, 4],
+            persisted_path: None,
+            stored_proofs: vec![1, 2],
+            last_updated: 0,
+            estimated_time_remaining_ms: Some(500),
+        }
+    }
+
+    fn build_router(
+        receiver: watch::Receiver<Option<PruningJobStatus>>,
+    ) -> Router<ApiContext, Body> {
+        let metrics = Arc::new(RuntimeMetrics::noop());
+        let context = ApiContext::new(
+            Arc::new(RwLock::new(RuntimeMode::Node)),
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some(receiver),
+            None,
+            false,
+        )
+        .with_metrics(metrics.clone());
+
+        let security = ApiSecurity::new(Some("secret".into()), None).unwrap();
+        let limits = SnapshotTokenBucketConfig {
+            enabled: true,
+            burst: 2,
+            replenish_per_minute: 1,
+            prefer_auth_identity: true,
+        };
+
+        Router::new()
+            .route(
+                "/snapshots/pruning/status",
+                get(routes::state::pruning_status),
+            )
+            .route(
+                "/snapshots/pruning/status/stream",
+                get(routes::state::pruning_status_stream),
+            )
+            .layer(SnapshotRateLimitLayer::new(&limits, metrics))
+            .layer(middleware::from_fn_with_state(security, auth_middleware))
+            .with_state(context)
+    }
+
+    fn make_request(path: &str, auth: bool) -> HttpRequest<Body> {
+        let mut builder = HttpRequest::builder().uri(path).method(Method::GET);
+
+        if auth {
+            builder = builder.header(AUTHORIZATION, "Bearer secret");
+        }
+
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn pruning_status_requires_auth_and_rate_limits() {
+        let (tx, rx) = watch::channel(Some(sample_status()));
+        let mut app = build_router(rx);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(make_request("/snapshots/pruning/status", false))
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let first = app
+            .clone()
+            .oneshot(make_request("/snapshots/pruning/status", true))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let body = to_bytes(first.into_body()).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["progress"], serde_json::json!(0.5));
+        assert_eq!(payload["eta_ms"], serde_json::json!(500));
+
+        let second = app
+            .clone()
+            .oneshot(make_request("/snapshots/pruning/status", true))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+
+        let throttled = app
+            .oneshot(make_request("/snapshots/pruning/status", true))
+            .await
+            .unwrap();
+        assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        tx.send_replace(None);
     }
 }
 
