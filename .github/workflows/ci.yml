@@ -497,6 +497,57 @@ PY
           name: alert-probes
           path: artifacts/alert-probes
 
+  alert-config-drift:
+    name: Alert config drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install alert tooling
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/alerts/requirements.txt
+
+      - name: Render staging alert bundle
+        run: |
+          set -euo pipefail
+          python tools/alerts/render_environment_rules.py \
+            --source ops/alerts \
+            --output artifacts/alerts/staging \
+            --environment staging
+
+      - name: Render production alert bundle
+        run: |
+          set -euo pipefail
+          python tools/alerts/render_environment_rules.py \
+            --source ops/alerts \
+            --output artifacts/alerts/production \
+            --environment production
+
+      - name: Validate rendered staging alerts
+        run: |
+          set -euo pipefail
+          ruby scripts/ci/validate_prometheus_rules.rb artifacts/alerts/staging
+
+      - name: Validate rendered production alerts
+        run: |
+          set -euo pipefail
+          ruby scripts/ci/validate_prometheus_rules.rb artifacts/alerts/production
+
+      - name: Detect staging/production drift
+        run: |
+          set -euo pipefail
+          python tools/alerts/compare_environment_rules.py \
+            --staging artifacts/alerts/staging \
+            --production artifacts/alerts/production
+
   uptime-baseline-guard:
     name: Uptime/timetoke baseline drift check
     runs-on: ubuntu-latest

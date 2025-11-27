@@ -47,6 +47,7 @@ frequently consulted references.
 - [Deployment observability checklist](deployment_observability.md)
 - [Telemetry reference](telemetry.md)
 - [Alert validation drill](runbooks/observability.md#alert-validation-drills)
+- [Alert promotion workflow](operations/alert_promotion.md)
 
 ## Zero-knowledge backend procedures
 
