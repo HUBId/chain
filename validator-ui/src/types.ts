@@ -21,6 +21,16 @@ export interface ConsensusStatus {
   failed_votes: number;
 }
 
+export interface SloDetail {
+  healthy: boolean;
+  warnings?: string[];
+}
+
+export interface SloStatus {
+  timetoke?: SloDetail;
+  uptime?: SloDetail;
+}
+
 export type TaggedDigestHex = string & { readonly __taggedDigestHex: unique symbol };
 
 export interface PruningSnapshotMetadata {
@@ -207,6 +217,7 @@ export interface NodeStatus {
 export interface ValidatorStatusResponse {
   consensus: ConsensusStatus;
   node: NodeStatus;
+  slo?: SloStatus;
 }
 
 export interface PendingUptimeSummary {

@@ -177,6 +177,12 @@ job fails. To retrieve them during incidents:
   key off the `status` string to surface warnings without hard-restarting pods.
   The per-backend SLA map is exposed under `backend.sla` for automation to
   pinpoint which backend is failing.【F:rpp/proofs/proof_system/mod.rs†L332-L360】【F:rpp/rpc/api.rs†L2706-L2720】
+- `/health` and `/health/ready` now attach an `x-slo-warnings` header and a
+  `slo` object when timetoke replay or uptime accrual dip below the documented
+  SLOs (success rate < 99%, p95 > 60s, p99 > 120s, replay stalls beyond
+  15/30 minutes, or uptime proof backlogs over the four-proof limit). Client
+  dashboards and SDKs can surface the preformatted warnings instead of inferring
+  SLO drift from raw metrics.【F:rpp/consensus/src/timetoke/replay.rs†L309-L360】【F:rpp/rpc/api.rs†L1095-L1186】
 - `/health/ready` remains tied to readiness (e.g., pruning availability,
   snapshot services, and wallet connectivity) and does not treat SLA breaches as
   fatal. Pods should continue using the ready endpoint for traffic gating while
@@ -207,6 +213,10 @@ When `/health` reports `status: degraded`, operators should:
    `ok` and the affected backend’s SLA entry reports `healthy: true`. Escalate to
    the cryptography team if error rates remain above budget after retries or
    cache tuning.
+- The validator dashboard surfaces the `Service Level Warnings` card whenever
+  `/validator/status` includes timetoke or uptime SLO drift, mirroring the
+  `x-slo-warnings` header for wallet clients and SDKs to surface degraded mode
+  messaging without reimplementing the thresholds.【F:validator-ui/src/components/SloWarningsCard.tsx†L1-L51】【F:validator-ui/src/App.tsx†L9-L52】
 
 ## Networking safeguards for on-call rotations
 
