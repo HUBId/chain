@@ -231,6 +231,8 @@ export interface NetworkPeerTelemetry {
   version: string;
   latency_ms: number;
   last_seen: number;
+  features?: Record<string, boolean>;
+  proof_backends?: string[];
 }
 
 export interface ValidatorPeerResponse {

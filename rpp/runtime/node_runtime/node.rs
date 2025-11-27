@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -136,12 +136,15 @@ pub struct PeerTelemetry {
     pub version: String,
     pub latency_ms: u64,
     pub last_seen: SystemTime,
+    pub features: BTreeMap<String, bool>,
+    pub proof_backends: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FeatureAnnouncement {
     pub peer_id: PeerId,
     pub feature_gates: FeatureGates,
+    pub proof_backends: Vec<String>,
 }
 
 impl From<&FeatureAnnouncement> for NetworkFeatureAnnouncement {
@@ -149,6 +152,7 @@ impl From<&FeatureAnnouncement> for NetworkFeatureAnnouncement {
         Self {
             peer_id: announcement.peer_id.to_base58(),
             features: announcement.feature_gates.advertise(),
+            proof_backends: announcement.proof_backends.clone(),
         }
     }
 }
@@ -163,9 +167,13 @@ impl TryFrom<NetworkFeatureAnnouncement> for FeatureAnnouncement {
             .map_err(|err| format!("invalid peer id: {err}"))?;
         let feature_gates = FeatureGates::from_advertisement(&announcement.features)
             .map_err(|err| err.to_string())?;
+        let mut proof_backends = announcement.proof_backends;
+        proof_backends.sort();
+        proof_backends.dedup();
         Ok(Self {
             peer_id,
             feature_gates,
+            proof_backends,
         })
     }
 }
@@ -242,6 +250,8 @@ impl From<&PeerTelemetry> for NetworkPeerTelemetry {
             version: telemetry.version.clone(),
             latency_ms: telemetry.latency_ms,
             last_seen: system_time_to_millis(telemetry.last_seen),
+            features: telemetry.features.clone(),
+            proof_backends: telemetry.proof_backends.clone(),
         }
     }
 }
@@ -259,6 +269,8 @@ impl TryFrom<NetworkPeerTelemetry> for PeerTelemetry {
             version: telemetry.version,
             latency_ms: telemetry.latency_ms,
             last_seen: millis_to_system_time(telemetry.last_seen),
+            features: telemetry.features,
+            proof_backends: telemetry.proof_backends,
         })
     }
 }
@@ -1060,7 +1072,9 @@ pub struct NodeInner {
     connected_peers: HashSet<PeerId>,
     known_versions: HashMap<PeerId, String>,
     peer_features: HashMap<PeerId, FeatureGates>,
+    peer_backends: HashMap<PeerId, Vec<String>>,
     local_features: FeatureGates,
+    local_backends: Vec<String>,
     meta_telemetry: MetaTelemetry,
     heartbeat_interval: Duration,
     gossip_enabled: bool,
@@ -1092,6 +1106,7 @@ impl NodeInner {
         let light_client_heads = pipelines.light_client.subscribe_light_client_heads();
         pipelines.register_voter(identity.peer_id(), identity.tier());
         let snapshot_streams = Arc::new(RwLock::new(HashMap::new()));
+        let local_backends = ProofVerifierRegistry::advertised_backends();
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
@@ -1127,6 +1142,8 @@ impl NodeInner {
             snapshot_streams,
             peer_features: HashMap::new(),
             local_features,
+            peer_backends: HashMap::new(),
+            local_backends,
             heuristic_counters: HashMap::new(),
         };
         Ok((inner, handle))
@@ -1164,6 +1181,7 @@ impl NodeInner {
         let announcement = FeatureAnnouncement {
             peer_id: self.identity.peer_id(),
             feature_gates: self.local_features.clone(),
+            proof_backends: self.local_backends.clone(),
         };
         let payload = match serde_json::to_vec(&NetworkFeatureAnnouncement::from(&announcement)) {
             Ok(payload) => payload,
@@ -1492,6 +1510,8 @@ impl NodeInner {
                     }
                 };
                 self.peer_features.insert(peer, features);
+                self.peer_backends
+                    .insert(peer, payload.proof_backends.clone());
                 let agent_version = payload
                     .telemetry
                     .as_ref()
@@ -1509,6 +1529,7 @@ impl NodeInner {
                 self.connected_peers.remove(&peer);
                 self.known_versions.remove(&peer);
                 self.peer_features.remove(&peer);
+                self.peer_backends.remove(&peer);
                 self.pipelines.remove_voter(&peer);
                 let _ = self.events.send(NodeEvent::PeerDisconnected { peer });
             }
@@ -1806,6 +1827,10 @@ impl NodeInner {
                                         self.peer_features.insert(
                                             announcement.peer_id,
                                             announcement.feature_gates,
+                                        );
+                                        self.peer_backends.insert(
+                                            announcement.peer_id,
+                                            announcement.proof_backends,
                                         );
                                     }
                                     MetaPayload::TimetokeDelta(delta) => {
@@ -2290,11 +2315,19 @@ impl NodeInner {
         let mut peers = Vec::new();
         for peer in &self.connected_peers {
             if let Some(event) = self.meta_telemetry.latest(peer) {
+                let features = self
+                    .peer_features
+                    .get(peer)
+                    .map(FeatureGates::advertise)
+                    .unwrap_or_default();
+                let proof_backends = self.peer_backends.get(peer).cloned().unwrap_or_default();
                 peers.push(PeerTelemetry {
                     peer: event.peer,
                     version: event.version.clone(),
                     latency_ms: event.latency.as_millis() as u64,
                     last_seen: event.received_at,
+                    features,
+                    proof_backends,
                 });
             }
         }
@@ -2683,6 +2716,37 @@ mod tests {
         let port = listener.local_addr().expect("addr").port();
         drop(listener);
         (format!("/ip4/127.0.0.1/tcp/{port}"), port)
+    }
+
+    #[test]
+    fn meta_telemetry_preserves_capabilities() {
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let mut features = BTreeMap::new();
+        features.insert("pruning".to_string(), true);
+        features.insert("witness_network".to_string(), false);
+        let proof_backends = vec!["plonky3".to_string(), "stwo".to_string()];
+
+        let report = MetaTelemetryReport {
+            local_peer_id: peer_a,
+            peer_count: 1,
+            peers: vec![PeerTelemetry {
+                peer: peer_b,
+                version: "v1.2.3".into(),
+                latency_ms: 5,
+                last_seen: SystemTime::UNIX_EPOCH,
+                features: features.clone(),
+                proof_backends: proof_backends.clone(),
+            }],
+        };
+
+        let network = NetworkMetaTelemetryReport::from(&report);
+        assert_eq!(network.peers[0].features, features);
+        assert_eq!(network.peers[0].proof_backends, proof_backends);
+
+        let roundtrip = MetaTelemetryReport::try_from(network).expect("roundtrip");
+        assert_eq!(roundtrip.peers[0].features, features);
+        assert_eq!(roundtrip.peers[0].proof_backends, proof_backends);
     }
 
     #[tokio::test(flavor = "current_thread")]

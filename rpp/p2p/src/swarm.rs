@@ -1240,8 +1240,10 @@ impl Network {
                 .telemetry
                 .clone()
                 .or_else(|| Some(Self::default_handshake_metadata()));
+            let proof_backends = guard.proof_backends.clone();
             *guard = HandshakePayload::new(zsi_id, Some(vrf_public_key), Some(vrf_proof), tier)
                 .with_features(features)
+                .with_proof_backends(proof_backends)
                 .with_telemetry(telemetry.unwrap());
         }
         let signed = self.sign_handshake()?;

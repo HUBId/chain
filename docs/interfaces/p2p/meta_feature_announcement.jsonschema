@@ -22,6 +22,11 @@
         "witness_network": {"type": "boolean"}
       },
       "additionalProperties": false
+    },
+    "proof_backends": {
+      "type": "array",
+      "description": "Enumerates proof verification backends compiled into the announcing node",
+      "items": {"type": "string"}
     }
   },
   "additionalProperties": false

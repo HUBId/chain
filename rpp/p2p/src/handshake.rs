@@ -31,6 +31,8 @@ pub struct HandshakePayload {
     pub telemetry: Option<TelemetryMetadata>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub features: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_backends: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +174,7 @@ impl HandshakePayload {
             signature: Vec::new(),
             telemetry: None,
             features: BTreeMap::new(),
+            proof_backends: Vec::new(),
         }
     }
 
@@ -182,6 +185,14 @@ impl HandshakePayload {
 
     pub fn with_features(mut self, features: BTreeMap<String, bool>) -> Self {
         self.features = features;
+        self
+    }
+
+    pub fn with_proof_backends(mut self, proof_backends: Vec<String>) -> Self {
+        let mut proof_backends = proof_backends;
+        proof_backends.sort();
+        proof_backends.dedup();
+        self.proof_backends = proof_backends;
         self
     }
 
@@ -214,6 +225,7 @@ impl HandshakePayload {
             self.vrf_proof.as_deref(),
             self.tier,
             &self.features,
+            &self.proof_backends,
             self.telemetry.as_ref(),
         )
     }
@@ -225,6 +237,7 @@ impl HandshakePayload {
             None,
             self.tier,
             &self.features,
+            &self.proof_backends,
             self.telemetry.as_ref(),
         );
         digest.to_vec()
@@ -243,6 +256,7 @@ impl HandshakePayload {
         vrf_proof: Option<&[u8]>,
         tier: TierLevel,
         features: &BTreeMap<String, bool>,
+        proof_backends: &[String],
         telemetry: Option<&TelemetryMetadata>,
     ) -> [u8; 32] {
         use blake2::digest::Digest;
@@ -274,6 +288,12 @@ impl HandshakePayload {
             hasher.update((bytes.len() as u32).to_le_bytes());
             hasher.update(bytes);
             hasher.update([*enabled as u8]);
+        }
+        hasher.update((proof_backends.len() as u32).to_le_bytes());
+        for backend in proof_backends {
+            let bytes = backend.as_bytes();
+            hasher.update((bytes.len() as u32).to_le_bytes());
+            hasher.update(bytes);
         }
         match telemetry {
             Some(meta) => {

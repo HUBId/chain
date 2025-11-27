@@ -10,6 +10,19 @@ includes an endpoint quick-reference table covering `/p2p/peers`,
 mentioned below. Note that all RPC calls in this quick-reference require the
 configured bearer token when RPC auth is enabled.
 
+## Capability discovery for mixed clusters
+
+When debugging gossip alignment or proof distribution across heterogeneous
+setups, query the peer capability snapshot before escalating:
+
+- `GET /p2p/peers` (or `GET /validator/peers` for the validator-scoped view)
+  now returns the advertised feature gates **and** the proof backends compiled
+  into each peer, mirroring handshake metadata and feature announcements from
+  the meta gossip topic.【F:rpp/runtime/node_runtime/node.rs†L116-L199】【F:rpp/rpc/api.rs†L2298-L2312】
+- Compare `proof_backends` values to spot mismatches before enabling new proof
+  sources; the registry fingerprints come directly from the compiled verifier
+  stack so mixed deployments remain observable.【F:rpp/proofs/proof_system/mod.rs†L703-L722】【F:rpp/p2p/src/handshake.rs†L17-L120】
+
 Snapshot and reconstruction calls return structured error codes. When an RPC
 response includes a `code` value, map it to the remediation steps in the
 [Snapshot and state sync RPC errors](interfaces/rpc/README.md#snapshot-and-state-sync-rpc-errors)

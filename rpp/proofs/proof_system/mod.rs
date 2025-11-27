@@ -729,13 +729,18 @@ impl ProofVerifierRegistry {
 
     /// Stable fingerprint of the compiled verifier backends for cache namespacing.
     pub fn backend_fingerprint() -> String {
+        Self::advertised_backends().join(",")
+    }
+
+    /// Ordered list of proof system backends compiled into the verifier registry.
+    pub fn advertised_backends() -> Vec<String> {
         let mut systems = registry_backends();
         systems.sort();
         systems
             .into_iter()
             .map(proof_system_label)
-            .collect::<Vec<_>>()
-            .join(",")
+            .map(ToString::to_string)
+            .collect()
     }
 
     fn system_verifier(&self, system: ProofSystemKind) -> ChainResult<&dyn ProofVerifier> {
