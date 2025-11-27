@@ -1,0 +1,219 @@
+# Production validator template (STWO backend + mTLS)
+# Required edits before launch:
+# - Replace auth tokens, TLS paths, and bootstrap peers with production values.
+# - Populate genesis accounts for your network.
+# - Ensure the binary is built with `--features "prod,prover-stwo"` (or
+#   `prover-stwo-simd`) so the runtime matches the cache sizing below.
+# - Keep this file alongside production/malachite.toml so consensus parameters
+#   stay in sync.
+
+config_version = "1.0"
+
+data_dir = "/var/lib/rpp/node"
+key_path = "/etc/rpp/keys/node.toml"
+p2p_key_path = "/etc/rpp/keys/p2p.toml"
+vrf_key_path = "/etc/rpp/keys/vrf.toml"
+
+[secrets]
+backend = "filesystem"
+
+snapshot_dir = "/var/lib/rpp/node/snapshots"
+proof_cache_dir = "/var/lib/rpp/node/proofs"
+
+[proof_cache]
+# Reserve cache space for the primary and fall-back verifiers.
+default_retain = 2048
+per_backend_retain = { stwo = 512, "rpp-stark" = 512 }
+
+block_time_ms = 5000
+max_block_transactions = 512
+max_block_identity_registrations = 32
+mempool_limit = 8192
+epoch_length = 1440
+target_validator_count = 100
+max_proof_size_bytes = 4194304
+
+[network.rpc]
+# Enforce auth on the public RPC surface; tokens must be non-empty when
+# require_auth=true.
+listen = "0.0.0.0:7070"
+auth_token = "replace-with-rpc-token"
+require_auth = true
+allowed_origin = "https://operator.example.com"
+
+[network.limits]
+# Tighter RPC surface to reduce resource spikes on production gateways.
+header_read_timeout_ms = 4000
+read_timeout_ms = 12000
+write_timeout_ms = 12000
+max_header_bytes = 12000
+max_body_bytes = 1572864
+
+[network.limits.per_ip_token_bucket.read]
+enabled = true
+burst = 96
+replenish_per_minute = 60
+
+[network.limits.per_ip_token_bucket.write]
+enabled = true
+burst = 96
+replenish_per_minute = 60
+
+[network.limits.snapshot_token_bucket]
+enabled = true
+burst = 4
+replenish_per_minute = 4
+prefer_auth_identity = true
+
+[network.tls]
+# Enable mTLS for the RPC gateway and restrict to TLS 1.3 ciphers.
+enabled = true
+certificate = "/etc/rpp/tls/node.crt"
+private_key = "/etc/rpp/tls/node.key"
+client_ca = "/etc/rpp/tls/ca-chain.pem"
+require_client_auth = true
+min_tls_version = "tls13"
+cipher_suites = [
+    "tls13_chacha20_poly1305_sha256",
+    "tls13_aes_256_gcm_sha384",
+]
+
+[network.admission]
+policy_path = "/var/lib/rpp/node/p2p/admission_policies.json"
+audit_retention_days = 90
+backup_dir = "/var/lib/rpp/node/p2p/admission/backups"
+backup_retention_days = 90
+
+[network.admission.signing]
+# Keep disabled until the admission keypair is provisioned via the secrets flow.
+enabled = false
+key_path = "/etc/rpp/keys/admission_signing.toml"
+active_key = "admission_prod"
+
+[network.admission.signing.trust_store]
+admission_prod = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.admission.defaults.blocks]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.votes]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.proofs]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.vrf_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.snapshots]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.meta]
+subscribe = "tl0"
+publish = "tl0"
+
+[network.admission.defaults.vrf_meta]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.witness_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.witness_meta]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.p2p]
+# Populate bootstrap_peers and allowlist with your validator mesh.
+listen_addr = "/ip4/0.0.0.0/tcp/7600"
+bootstrap_peers = ["/dns4/bootstrap1.example.com/tcp/7600"]
+heartbeat_interval_ms = 3000
+gossip_enabled = true
+gossip_rate_limit_per_sec = 192
+replay_window_size = 2048
+peerstore_path = "/var/lib/rpp/node/p2p/peerstore.json"
+gossip_path = "/var/lib/rpp/node/p2p/gossip.json"
+allowlist = []
+blocklist = []
+
+[network.p2p.reputation_heuristics]
+vote_timeout_penalty = 0.4
+proof_relay_penalty = 0.6
+gossip_backpressure_penalty = 0.25
+gossip_backpressure_threshold = 4
+
+[admission_reconciler]
+cadence_secs = 60
+drift_alert_threshold = 1
+max_audit_lag_secs = 300
+
+[queue_weights]
+priority = 0.7
+fee = 0.3
+
+[rollout]
+release_channel = "mainnet"
+
+[rollout.feature_gates]
+pruning = true
+recursive_proofs = true
+reconstruction = true
+consensus_enforcement = true
+malachite_consensus = true
+timetoke_rewards = true
+witness_network = true
+
+[rollout.telemetry]
+# Keep telemetry enabled for production visibility.
+enabled = true
+sample_interval_secs = 15
+
+[rollout.telemetry.metrics]
+listen = "127.0.0.1:9797"
+auth_token = "replace-with-metrics-token"
+
+[reputation.tier_thresholds]
+tier2_min_uptime_hours = 24
+tier3_min_consensus_success = 10
+tier4_min_consensus_success = 100
+tier5_min_score = 0.75
+
+[reputation.weights]
+validation = 0.4
+uptime = 0.2
+consensus = 0.2
+peer_feedback = 0.15
+decay = 0.05
+
+[pruning]
+# Aggressive cadence + pacing guardrails for production data volumes.
+cadence_secs = 20
+retention_depth = 512
+emergency_pause = false
+
+[pruning.pacing]
+cpu_max_percent = 75.0
+io_max_bytes_per_sec = 100663296
+mempool_backlog_limit = 1500
+timetoke_backlog_limit = 512
+backoff_secs = 15
+
+[storage]
+wal_max_mb = 4096
+
+[snapshot_validator]
+max_concurrent_validations = 2
+
+[genesis]
+chain_id = "rpp-mainnet"
+
+[[genesis.accounts]]
+address = "GENESIS_ADDRESS_PLACEHOLDER"
+balance = 1000000000
+stake = "1000"

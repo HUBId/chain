@@ -31,6 +31,14 @@ verification, pruning readiness, wallet smoke, and uptime alert checks. Update
 the commands and dashboard links there if defaults change so release sign-offs
 stay in sync with the active operator workflows.
 
+Production-ready templates live under `config/examples/production/` and keep the
+TLS, gossip, pruning pacing, and admission defaults aligned with the ship-ready
+runtime. Start with `validator-stwo-tls.toml` or `validator-plonky3-tls.toml`
+plus the accompanying `malachite.toml`, then run `cargo run -p rpp-chain --
+validator --dry-run --config <template>` before promoting changes so the strict
+schema checks (auth tokens, TLS paths, cache sizing) exercise the same knobs
+that CI validates.【F:config/examples/production/validator-stwo-tls.toml†L1-L178】【F:config/examples/production/validator-plonky3-tls.toml†L1-L172】【F:config/examples/production/malachite.toml†L1-L76】
+
 ## Build and install the CLI
 
 Compile the binary with the release profile and select the backend that matches
