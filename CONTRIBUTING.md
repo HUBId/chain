@@ -55,6 +55,11 @@ by running Clippy with `-D clippy::panic -D clippy::unwrap_used -D clippy::expec
 two crates; keep any necessary test-only allowances scoped to `#[cfg(test)]` blocks with a short
 justification so runtime code stays panic-free.
 
+The prover/verifier integration follows the same no-panic policy: constraint parsing now surfaces
+structured errors for bad segment or column references instead of aborting, and new regression tests
+lock in the behavior. Keep future blueprint changes consistent with this approach by returning
+typed failures rather than terminating execution.
+
 ### Documentation checks
 
 Pull requests that modify documentation automatically run the **Docs** workflow

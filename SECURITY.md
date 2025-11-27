@@ -80,6 +80,11 @@ the policy stays active even when those packages are built in isolation. Test
 modules may continue to use the operations for brevity, but the allow must
 remain confined to the test scope so runtime paths stay panic-free.
 
+The STWO prover and verifier adapters now follow the same guarantee: constraint
+analysis returns typed errors when a segment or column reference is invalid.
+Future backend changes should continue surfacing explicit error variants and
+tests rather than relying on panics to flag misuse.
+
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).
 
