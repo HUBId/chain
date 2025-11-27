@@ -241,6 +241,12 @@ When drift triggers an alert:
   or production. The Grafana correlation dashboard inherits the same label and
   exposes an environment template to slice restarts, finality lag, block rate,
   and RPC availability by deployment ring.【F:telemetry/prometheus/runtime-rules.yaml†L1-L75】【F:ops/alerts/consensus/liveness.yaml†L1-L45】【F:ops/alerts/rpc/availability.yaml†L1-L32】【F:docs/dashboards/uptime_finality_correlation.json†L1-L120】
+- **Render and lint staging bundles:** The alert bundles are rendered for
+  staging with injected `environment` labels via
+  `tools/alerts/render_environment_rules.py` and linted in both CI and release
+  workflows before promotion proceeds. Drift checks compare the rendered
+  staging and production bundles to guarantee parity before applying the
+  production payload.【F:.github/workflows/ci.yml†L468-L515】【F:.github/workflows/release.yml†L151-L204】【F:tools/alerts/render_environment_rules.py†L1-L70】【F:tools/alerts/compare_environment_rules.py†L1-L85】
 - **Pre-promotion probes:** A dedicated `staging-slo-probes` CI job reuses the
   staging soak orchestration to validate snapshot health, Timetoke SLOs, and
   admission reconciliation against staging-like endpoints before a production
