@@ -52,6 +52,18 @@ certificates to operators that need to call the snapshot or RPC surfaces. When
 rotating client trust or certificates, restart the node after updating the file
 paths to ensure the mTLS verifier reloads the new material.【F:config/examples/production/validator-stwo-tls.toml†L48-L71】【F:config/examples/production/validator-plonky3-tls.toml†L48-L71】
 
+### Proving/verification parameters (no hot reload)
+
+Proof cache directories and verification parameters load during bootstrap and
+are not watched for edits or hot-reload signals. Updating proving key blobs,
+blueprint parameter bundles, or verification metadata requires a restart so the
+runtime can validate the new artefacts, rebuild caches, and emit any startup
+errors instead of silently continuing with stale material. Drain or stop the
+validator or hybrid supervisor, update the proof cache directory and blueprint
+paths, run `rpp-node preflight --mode validator --config <path>` (or the
+`--dry-run` flow) to surface configuration issues, and then restart to pick up
+the new parameters.【F:docs/configuration.md†L7-L20】【F:config/examples/production/validator-stwo-tls.toml†L25-L31】
+
 ## Build and install the CLI
 
 Compile the binary with the release profile and select the backend that matches

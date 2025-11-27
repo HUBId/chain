@@ -62,4 +62,14 @@ for top in README.md CONTRIBUTING.md MIGRATION.md; do
   fi
 done
 
+if ! grep -qi "Proving/verification parameters (no hot reload)" docs/rpp_node_operator_guide.md; then
+  echo "rpp_node_operator_guide.md must document that proving/verifying parameters do not support hot reload" >&2
+  exit 1
+fi
+
+if ! grep -qi "Hot reload status and parameter rotation" docs/runbooks/plonky3.md; then
+  echo "plonky3 runbook must describe the absence of hot reload and the rotation workflow" >&2
+  exit 1
+fi
+
 lychee --include-fragments --scheme file --base . "${targets[@]}"
