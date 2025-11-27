@@ -135,6 +135,8 @@ pub struct RuntimeMetrics {
     consensus_failed_votes: Counter<u64>,
     consensus_block_schedule_slots_total: Counter<u64>,
     chain_block_height: Histogram<u64>,
+    backlog_block_queue: Histogram<u64>,
+    backlog_transaction_queue: Histogram<u64>,
     network_peer_counts: Histogram<u64>,
     reputation_penalties: Counter<u64>,
     state_sync_stream_starts: Counter<u64>,
@@ -398,6 +400,16 @@ impl RuntimeMetrics {
             chain_block_height: meter
                 .u64_histogram("rpp.runtime.chain.block_height")
                 .with_description("Observed blockchain heights on the local node")
+                .with_unit("1")
+                .build(),
+            backlog_block_queue: meter
+                .u64_histogram("rpp.runtime.backlog.blocks")
+                .with_description("Queued block proposals awaiting consensus ingestion")
+                .with_unit("1")
+                .build(),
+            backlog_transaction_queue: meter
+                .u64_histogram("rpp.runtime.backlog.transactions")
+                .with_description("Queued transactions awaiting block inclusion")
                 .with_unit("1")
                 .build(),
             network_peer_counts: meter
@@ -908,6 +920,13 @@ impl RuntimeMetrics {
     /// Record the latest observed block height.
     pub fn record_block_height(&self, height: u64) {
         self.chain_block_height.record(height, &[]);
+    }
+
+    /// Record queued block proposals and transactions waiting to be included in blocks.
+    pub fn record_backlog(&self, block_backlog: usize, transaction_backlog: usize) {
+        self.backlog_block_queue.record(block_backlog as u64, &[]);
+        self.backlog_transaction_queue
+            .record(transaction_backlog as u64, &[]);
     }
 
     /// Record the latest observed peer count on the networking layer.

@@ -246,6 +246,14 @@ struct HealthCommand {
     /// Emit the summary as JSON for automation and alerting pipelines
     #[arg(long, default_value_t = false)]
     json: bool,
+
+    /// Maximum queued block proposals tolerated before the probe fails
+    #[arg(long, value_name = "COUNT", default_value_t = 16)]
+    max_block_backlog: usize,
+
+    /// Maximum queued transactions tolerated before the probe fails
+    #[arg(long, value_name = "COUNT", default_value_t = 4096)]
+    max_transaction_backlog: usize,
 }
 
 #[derive(Subcommand)]
@@ -817,6 +825,7 @@ struct HealthSummary {
     zk_backend: Option<BackendSummary>,
     pruning: Option<PruningJobStatus>,
     wallet: Option<WalletReadinessSummary>,
+    backlog: Option<BacklogSummary>,
     uptime_backlog: Option<usize>,
     timetoke_records: Option<usize>,
 }
@@ -934,8 +943,25 @@ struct ConsensusSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct NodeStatusSnapshot {
+    height: Option<u64>,
+    #[serde(default)]
+    pending_block_proposals: usize,
+    #[serde(default)]
+    pending_transactions: usize,
+    #[serde(default)]
+    pending_identities: usize,
+    #[serde(default)]
+    pending_votes: usize,
     #[serde(default)]
     pending_uptime_proofs: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BacklogSummary {
+    blocks: usize,
+    max_blocks: usize,
+    transactions: usize,
+    max_transactions: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1084,6 +1110,14 @@ async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary
     .await
     .map_err(|err| anyhow!("validator status: {err}"));
 
+    let node_status = get_json::<NodeStatusSnapshot>(
+        &client,
+        &format!("{}/status/node", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .map_err(|err| anyhow!("node status: {err}"));
+
     let telemetry = get_json::<ValidatorTelemetrySnapshot>(
         &client,
         &format!("{}/validator/telemetry", base),
@@ -1103,6 +1137,7 @@ async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary
 
     let mut issues = Vec::new();
     let mut critical = Vec::new();
+    let mut backlog = None;
 
     let readiness_summary = readiness.ok().map(|probe| {
         if !probe.payload.ready {
@@ -1178,6 +1213,31 @@ async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary
         }
     };
 
+    if let Ok(status) = node_status {
+        let blocks = status.pending_block_proposals;
+        let transactions = status.pending_transactions;
+
+        if blocks > command.max_block_backlog {
+            critical.push(format!(
+                "{} pending block proposals exceeds limit {}",
+                blocks, command.max_block_backlog
+            ));
+        }
+        if transactions > command.max_transaction_backlog {
+            critical.push(format!(
+                "{} pending transactions exceeds limit {}",
+                transactions, command.max_transaction_backlog
+            ));
+        }
+
+        backlog = Some(BacklogSummary {
+            blocks,
+            max_blocks: command.max_block_backlog,
+            transactions,
+            max_transactions: command.max_transaction_backlog,
+        });
+    }
+
     let timetoke_records = match timetoke_records {
         Ok(count) => Some(count),
         Err(err) => {
@@ -1219,6 +1279,7 @@ async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary
         zk_backend: backend_summary,
         pruning,
         wallet: wallet_summary,
+        backlog,
         uptime_backlog,
         timetoke_records,
     })
@@ -1315,6 +1376,13 @@ fn render_health_summary(summary: &HealthSummary) {
 
     if let Some(backlog) = summary.uptime_backlog {
         println!("Uptime proofs queued: {}", backlog);
+    }
+
+    if let Some(backlog) = summary.backlog.as_ref() {
+        println!(
+            "Backlog: blocks {} (limit {}), transactions {} (limit {})",
+            backlog.blocks, backlog.max_blocks, backlog.transactions, backlog.max_transactions
+        );
     }
 
     if let Some(records) = summary.timetoke_records {
@@ -1757,6 +1825,8 @@ mod tests {
             rpc_url: format!("http://{}", addr),
             auth_token: None,
             json: false,
+            max_block_backlog: 16,
+            max_transaction_backlog: 4_096,
         };
 
         let summary = collect_health_summary(&command)
@@ -1766,6 +1836,14 @@ mod tests {
         assert_eq!(summary.overall, OverallHealthStatus::Healthy);
         assert_eq!(summary.uptime_backlog, Some(0));
         assert_eq!(summary.timetoke_records, Some(1));
+        assert_eq!(
+            summary.backlog.as_ref().map(|backlog| backlog.blocks),
+            Some(0)
+        );
+        assert_eq!(
+            summary.backlog.as_ref().map(|backlog| backlog.transactions),
+            Some(0)
+        );
         assert!(summary.issues.is_empty());
 
         shutdown_tx.send(()).ok();
@@ -1778,18 +1856,28 @@ mod tests {
             rpc_url: format!("http://{}", addr),
             auth_token: None,
             json: false,
+            max_block_backlog: 16,
+            max_transaction_backlog: 4_096,
         };
 
         let summary = collect_health_summary(&command)
             .await
             .expect("health summary to succeed");
 
-        assert_eq!(summary.overall, OverallHealthStatus::Degraded);
+        assert_eq!(summary.overall, OverallHealthStatus::Unhealthy);
         assert!(summary
             .issues
             .iter()
             .any(|issue| issue.contains("unavailable")));
         assert!(summary.issues.iter().any(|issue| issue.contains("quorum")));
+        assert!(summary
+            .issues
+            .iter()
+            .any(|issue| issue.contains("block proposals")));
+        assert!(summary
+            .issues
+            .iter()
+            .any(|issue| issue.contains("pending transactions")));
 
         shutdown_tx.send(()).ok();
     }
@@ -1869,6 +1957,7 @@ mod tests {
                     "/validator/status" => validator_status_payload(degraded),
                     "/validator/telemetry" => telemetry_payload(degraded),
                     "/ledger/timetoke" => (StatusCode::OK, Body::from("[{\"id\":1}]")),
+                    "/status/node" => node_status_payload(degraded),
                     _ => (StatusCode::NOT_FOUND, Body::from("")),
                 };
 
@@ -1923,6 +2012,14 @@ mod tests {
         let body = format!(
             "{{\"consensus\":{{\"height\":10,\"round\":2,\"commit_power\":\"70\",\"quorum_threshold\":\"67\",\"quorum_reached\":{quorum},\"quorum_latency_ms\":5}},\"node\":{{\"pending_uptime_proofs\":{pending}}}}}",
             pending = if degraded { 3 } else { 0 }
+        );
+        (StatusCode::OK, Body::from(body))
+    }
+
+    fn node_status_payload(degraded: bool) -> (StatusCode, Body) {
+        let (blocks, transactions) = if degraded { (20, 5_000) } else { (0, 0) };
+        let body = format!(
+            "{{\"height\":10,\"pending_block_proposals\":{blocks},\"pending_transactions\":{transactions},\"pending_identities\":0,\"pending_votes\":0,\"pending_uptime_proofs\":0}}"
         );
         (StatusCode::OK, Body::from(body))
     }

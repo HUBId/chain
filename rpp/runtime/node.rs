@@ -334,6 +334,7 @@ pub struct NodeStatus {
     pub last_hash: String,
     pub epoch: u64,
     pub epoch_nonce: String,
+    pub pending_block_proposals: usize,
     pub pending_transactions: usize,
     pub pending_identities: usize,
     pub pending_votes: usize,
@@ -7346,6 +7347,13 @@ impl NodeInner {
         let epoch_info: EpochInfo = self.ledger.epoch_info();
         let metadata = self.storage.tip()?;
         let verifier_metrics = self.verifiers.metrics_snapshot();
+        let block_backlog = self.proposal_inbox.read().len();
+        let transaction_backlog = self.mempool.read().len();
+        let identity_backlog = self.identity_mempool.read().len();
+        let vote_backlog = self.vote_mempool.read().len();
+        let uptime_backlog = self.uptime_mempool.read().len();
+        self.runtime_metrics
+            .record_backlog(block_backlog, transaction_backlog);
         let mut backend_health = BTreeMap::new();
         for (backend, metrics) in verifier_metrics.per_backend {
             backend_health.insert(
@@ -7378,10 +7386,11 @@ impl NodeInner {
             last_hash: hex::encode(tip.last_hash),
             epoch: epoch_info.epoch,
             epoch_nonce: epoch_info.epoch_nonce,
-            pending_transactions: self.mempool.read().len(),
-            pending_identities: self.identity_mempool.read().len(),
-            pending_votes: self.vote_mempool.read().len(),
-            pending_uptime_proofs: self.uptime_mempool.read().len(),
+            pending_block_proposals: block_backlog,
+            pending_transactions: transaction_backlog,
+            pending_identities: identity_backlog,
+            pending_votes: vote_backlog,
+            pending_uptime_proofs: uptime_backlog,
             vrf_metrics: self.vrf_metrics.read().clone(),
             tip: metadata,
             backend_health,
