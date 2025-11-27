@@ -81,6 +81,22 @@ pub enum AdapterError {
         expected: usize,
         actual: usize,
     },
+
+    /// Raised when a constraint references a trace segment that does not exist
+    /// in the provided execution trace.
+    #[error("constraint '{constraint}' references unknown segment '{segment}'")]
+    MissingConstraintSegment { constraint: String, segment: String },
+
+    /// Raised when a constraint references a column that is not part of the
+    /// referenced trace segment.
+    #[error(
+        "constraint '{constraint}' references unknown column '{column}' in segment '{segment}'"
+    )]
+    MissingConstraintColumn {
+        constraint: String,
+        segment: String,
+        column: String,
+    },
 }
 
 /// Metadata describing a single execution trace segment.
@@ -168,7 +184,7 @@ impl<'a> BlueprintComponent<'a> {
         }
 
         #[cfg(feature = "prover-stwo")]
-        let column_masks = build_column_masks(air, &segments, &segment_lookup);
+        let column_masks = build_column_masks(air, &segments, &segment_lookup)?;
 
         Ok(Self {
             air,
@@ -193,7 +209,7 @@ fn build_column_masks<'a>(
     air: &'a AirDefinition,
     segments: &[SegmentDescriptor<'a>],
     segment_lookup: &HashMap<&'a str, usize>,
-) -> Vec<Vec<ColumnMask>> {
+) -> Result<Vec<Vec<ColumnMask>>, AdapterError> {
     let mut offsets: Vec<Vec<BTreeSet<isize>>> = segments
         .iter()
         .map(|descriptor| vec![BTreeSet::new(); descriptor.column_count])
@@ -205,10 +221,11 @@ fn build_column_masks<'a>(
             segments,
             segment_lookup,
             &mut offsets,
-        );
+            &constraint.name,
+        )?;
     }
 
-    offsets
+    Ok(offsets
         .into_iter()
         .map(|segment_offsets| {
             segment_offsets
@@ -216,7 +233,7 @@ fn build_column_masks<'a>(
                 .map(|set| ColumnMask::new(set.into_iter().collect()))
                 .collect()
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(feature = "prover-stwo")]
@@ -225,33 +242,42 @@ fn collect_expression_offsets<'a>(
     segments: &[SegmentDescriptor<'a>],
     segment_lookup: &HashMap<&'a str, usize>,
     offsets: &mut [Vec<BTreeSet<isize>>],
-) {
+    constraint: &str,
+) -> Result<(), AdapterError> {
     match expression {
         AirExpression::Constant(_) => {}
         AirExpression::Column(reference) => {
             let column_ref = reference.column();
             let segment = column_ref.segment();
             let column = column_ref.column();
-            let segment_index = *segment_lookup
-                .get(segment)
-                .unwrap_or_else(|| panic!("unknown segment '{segment}'"));
+            let Some(&segment_index) = segment_lookup.get(segment) else {
+                return Err(AdapterError::MissingConstraintSegment {
+                    constraint: constraint.to_string(),
+                    segment: segment.to_string(),
+                });
+            };
             let descriptor = &segments[segment_index];
-            let column_index = *descriptor
-                .column_indices
-                .get(column)
-                .unwrap_or_else(|| panic!("unknown column '{column}' in segment '{segment}'"));
+            let Some(&column_index) = descriptor.column_indices.get(column) else {
+                return Err(AdapterError::MissingConstraintColumn {
+                    constraint: constraint.to_string(),
+                    segment: segment.to_string(),
+                    column: column.to_string(),
+                });
+            };
             offsets[segment_index][column_index].insert(reference.offset());
         }
         AirExpression::Add(terms) | AirExpression::Mul(terms) => {
             for term in terms {
-                collect_expression_offsets(term, segments, segment_lookup, offsets);
+                collect_expression_offsets(term, segments, segment_lookup, offsets, constraint)?;
             }
         }
         AirExpression::Sub(lhs, rhs) => {
-            collect_expression_offsets(lhs, segments, segment_lookup, offsets);
-            collect_expression_offsets(rhs, segments, segment_lookup, offsets);
+            collect_expression_offsets(lhs, segments, segment_lookup, offsets, constraint)?;
+            collect_expression_offsets(rhs, segments, segment_lookup, offsets, constraint)?;
         }
     }
+
+    Ok(())
 }
 
 fn column_to_base_field<'a, I>(column: I) -> Vec<BaseField>
@@ -827,6 +853,13 @@ mod tests {
     #[cfg(feature = "prover-stwo")]
     use crate::stwo_official::prover::{DomainEvaluationAccumulator, Trace};
 
+    fn single_column_trace(column_name: &str, rows: usize) -> TraceSegment {
+        let params = StarkParameters::blueprint_default();
+        let zero = FieldElement::zero(params.modulus());
+        TraceSegment::new("main", vec![column_name.into()], vec![vec![zero]; rows])
+            .expect("valid trace segment")
+    }
+
     fn sample_segment(name: &str, columns: usize, rows: usize) -> TraceSegment {
         let params = StarkParameters::blueprint_default();
         let mut data = Vec::with_capacity(rows);
@@ -848,6 +881,57 @@ mod tests {
         let secure_values = column_to_secure(segment.rows.iter().map(|row| &row[0]));
         assert_eq!(base_values.len(), 3);
         assert_eq!(secure_values.len(), 3);
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn errors_when_constraint_references_missing_segment() {
+        let params = StarkParameters::blueprint_default();
+        let segment = single_column_trace("value", 2);
+        let trace = ExecutionTrace::single(segment).expect("valid execution trace");
+        let constraint = AirConstraint::new(
+            "missing_segment",
+            "absent",
+            ConstraintDomain::AllRows,
+            AirExpression::Constant(FieldElement::one(params.modulus())),
+        );
+        let air = AirDefinition::new(vec![constraint]);
+
+        let error = BlueprintComponent::new(&air, &trace, &params).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AdapterError::MissingConstraintSegment {
+                ref constraint,
+                ref segment
+            } if constraint == "missing_segment" && segment == "absent"
+        ));
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[test]
+    fn errors_when_constraint_references_missing_column() {
+        let params = StarkParameters::blueprint_default();
+        let segment = single_column_trace("present", 2);
+        let trace = ExecutionTrace::single(segment).expect("valid execution trace");
+        let constraint = AirConstraint::new(
+            "missing_column",
+            "main",
+            ConstraintDomain::AllRows,
+            AirColumn::new("main", "missing").expr(),
+        );
+        let air = AirDefinition::new(vec![constraint]);
+
+        let error = BlueprintComponent::new(&air, &trace, &params).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AdapterError::MissingConstraintColumn {
+                ref constraint,
+                ref segment,
+                ref column
+            } if constraint == "missing_column" && segment == "main" && column == "missing"
+        ));
     }
 
     #[cfg(feature = "prover-stwo")]
