@@ -1106,7 +1106,12 @@ impl Wallet {
         &self,
         indexer_client: Arc<dyn IndexerClient>,
     ) -> Result<WalletSyncCoordinator, WalletError> {
-        WalletSyncCoordinator::start(self.engine_handle(), indexer_client).map_err(Into::into)
+        WalletSyncCoordinator::start(
+            self.engine_handle(),
+            indexer_client,
+            self.prover_config.backend.as_str(),
+        )
+        .map_err(Into::into)
     }
 }
 

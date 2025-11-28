@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
+
+use metrics::{counter, histogram};
 
 use crate::engine::WalletEngine;
 use crate::indexer::client::IndexerClient;
@@ -49,6 +51,7 @@ pub struct WalletSyncCoordinator {
     shutdown_tx: watch::Sender<bool>,
     task: AsyncMutex<Option<JoinHandle<()>>>,
     state: Arc<Mutex<StatusState>>,
+    prover_backend: String,
 }
 
 enum SyncCommand {
@@ -60,21 +63,31 @@ impl WalletSyncCoordinator {
     pub fn start(
         engine: Arc<WalletEngine>,
         indexer_client: Arc<dyn IndexerClient>,
+        prover_backend: impl Into<String>,
     ) -> Result<Self, WalletSyncError> {
         let scanner = WalletScanner::new(engine, indexer_client)?;
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let state = Arc::new(Mutex::new(StatusState::default()));
         let task_state = Arc::clone(&state);
+        let backend = prover_backend.into();
         let mut task_shutdown_rx = shutdown_rx.clone();
         let task = tokio::spawn(async move {
-            run_loop(scanner, command_rx, &mut task_shutdown_rx, task_state).await;
+            run_loop(
+                scanner,
+                command_rx,
+                &mut task_shutdown_rx,
+                task_state,
+                backend,
+            )
+            .await;
         });
         let coordinator = Self {
             command_tx,
             shutdown_tx,
             task: AsyncMutex::new(Some(task)),
             state,
+            prover_backend: backend,
         };
         // Trigger the initial resume synchronisation.
         let _ = coordinator.request_resume_sync();
@@ -229,6 +242,7 @@ async fn run_loop(
     mut commands: mpsc::UnboundedReceiver<SyncCommand>,
     shutdown_rx: &mut watch::Receiver<bool>,
     state: Arc<Mutex<StatusState>>,
+    prover_backend: String,
 ) {
     loop {
         let command = tokio::select! {
@@ -259,7 +273,7 @@ async fn run_loop(
                 let result = scanner
                     .sync_resume(&abort_token)
                     .map_err(WalletSyncError::from)
-                    .and_then(|outcome| evaluate_expectation(outcome, expected));
+                    .and_then(|outcome| evaluate_expectation(outcome, expected, &prover_backend));
                 update_state(&state, &result);
                 if let Err(error) = &result {
                     error!(?error, "wallet resume synchronisation failed");
@@ -281,7 +295,7 @@ async fn run_loop(
                 let result = scanner
                     .rescan_from(from_height, &abort_token)
                     .map_err(WalletSyncError::from)
-                    .and_then(|outcome| evaluate_expectation(outcome, expected));
+                    .and_then(|outcome| evaluate_expectation(outcome, expected, &prover_backend));
                 update_state(&state, &result);
                 if let Err(error) = &result {
                     error!(?error, from_height, "wallet rescan failed");
@@ -317,22 +331,68 @@ fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncOutcome, Wa
 fn evaluate_expectation(
     outcome: SyncOutcome,
     expected: Option<ScanSnapshot>,
+    prover_backend: &str,
 ) -> Result<SyncOutcome, WalletSyncError> {
     if let Some(expected) = expected {
         if expected != outcome.snapshot {
+            let classification = classify_mismatch(&expected, &outcome.snapshot);
+            let height = outcome.status.current_height;
+            counter!(
+                "wallet_sync_mismatch_total",
+                1,
+                "backend" => prover_backend.to_string(),
+                "classification" => classification,
+            );
+            histogram!(
+                "wallet_sync_mismatch_height",
+                height as f64,
+                "backend" => prover_backend.to_string(),
+                "classification" => classification,
+            );
+            info!(
+                target = "wallet::sync",
+                backend = prover_backend,
+                classification,
+                expected_balance = ?expected.balance,
+                expected_nonce = expected.nonce,
+                observed_balance = ?outcome.snapshot.balance,
+                observed_nonce = outcome.snapshot.nonce,
+                height,
+                "wallet sync snapshot mismatch detected",
+            );
             return Err(WalletSyncError::Divergence {
                 expected,
                 observed: outcome.snapshot,
             });
         }
     }
+    info!(
+        target = "wallet::sync",
+        backend = prover_backend,
+        current_height = outcome.status.current_height,
+        target_height = outcome.status.target_height,
+        mode = ?outcome.status.mode,
+        "wallet sync completed",
+    );
     Ok(outcome)
+}
+
+fn classify_mismatch(expected: &ScanSnapshot, observed: &ScanSnapshot) -> &'static str {
+    match (
+        expected.balance == observed.balance,
+        expected.nonce == observed.nonce,
+    ) {
+        (false, false) => "balance_and_nonce",
+        (false, true) => "balance",
+        (true, false) => "nonce",
+        (true, true) => "none",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig};
+    use crate::config::wallet::{WalletFeeConfig, WalletPolicyConfig, WalletProverBackend};
     use crate::db::WalletStore;
     use crate::indexer::client::{
         GetHeadersRequest, GetHeadersResponse, GetScripthashStatusRequest,
@@ -443,8 +503,12 @@ mod tests {
         let engine = test_engine();
         let indexer = CountingIndexer::new();
         let calls = indexer.calls();
-        let coordinator =
-            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
 
         wait_for_calls(&calls, 1).await;
         assert!(coordinator.latest_status().is_some());
@@ -466,8 +530,12 @@ mod tests {
         let indexer = CountingIndexer::new();
         let calls = indexer.calls();
         let heights = indexer.last_heights();
-        let coordinator =
-            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
 
         wait_for_calls(&calls, 1).await;
 
@@ -494,8 +562,12 @@ mod tests {
     async fn node_failures_surface_hints_in_status() {
         let engine = test_engine();
         let indexer = CountingIndexer::new();
-        let coordinator =
-            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
 
         {
             let mut guard = coordinator.state.lock().unwrap();
@@ -543,8 +615,12 @@ mod tests {
         let engine = test_engine();
         let indexer = CountingIndexer::new();
         let calls = indexer.calls();
-        let coordinator =
-            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
 
         wait_for_calls(&calls, 1).await;
 
@@ -567,8 +643,12 @@ mod tests {
         let engine = test_engine();
         let indexer = CountingIndexer::new();
         let calls = indexer.calls();
-        let coordinator =
-            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
 
         wait_for_calls(&calls, 1).await;
 
