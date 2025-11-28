@@ -1906,9 +1906,11 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{Account, BlockHeader, PruningProof, RecursiveProof, Stake};
-    use ed25519_dalek::{Keypair, Signer};
+    use ed25519_dalek::{Keypair, Signer, SigningKey};
     use rand::rngs::OsRng;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     struct MemoryProvider {
@@ -1939,6 +1941,85 @@ mod tests {
         storage
             .persist_account(&account)
             .expect("persist validator account");
+    }
+
+    fn signed_checkpoint_fixture(
+        version: u32,
+    ) -> (
+        tempfile::TempDir,
+        CheckpointSignatureConfig,
+        PathBuf,
+        Vec<u8>,
+    ) {
+        let temp = tempdir().expect("temp dir");
+        let payload = br#"{"height": 1}"#.to_vec();
+        let checkpoint = temp.path().join("checkpoint.json");
+        fs::write(&checkpoint, &payload).expect("write checkpoint payload");
+
+        let signing = SigningKey::generate(&mut OsRng);
+        let signing_config = CheckpointSignatureConfig {
+            signing_key: Some(SnapshotSigningKey::new(signing.clone(), version)),
+            verifying_key: Some(signing.verifying_key()),
+            expected_version: version,
+            require_signatures: true,
+            allow_unsigned_legacy: false,
+        };
+        signing_config
+            .sign_checkpoint(&payload, &checkpoint)
+            .expect("sign checkpoint payload");
+
+        (temp, signing_config, checkpoint, payload)
+    }
+
+    #[test]
+    fn checkpoint_signatures_reject_version_mismatch() {
+        let (_temp, signing_config, checkpoint, payload) = signed_checkpoint_fixture(3);
+        let verifying_key = signing_config
+            .verifying_key
+            .as_ref()
+            .expect("verifying key available")
+            .clone();
+        let verifier = CheckpointSignatureConfig {
+            signing_key: None,
+            verifying_key: Some(verifying_key),
+            expected_version: 9,
+            require_signatures: true,
+            allow_unsigned_legacy: false,
+        };
+
+        let error = verifier
+            .verify_checkpoint(&payload, &checkpoint)
+            .expect_err("version mismatch should be rejected");
+        assert!(
+            format!("{error}").contains("signature version"),
+            "version mismatch error should mention signature version: {error}",
+        );
+    }
+
+    #[test]
+    fn checkpoint_signatures_reject_tampered_payloads() {
+        let (_temp, signing_config, checkpoint, mut payload) = signed_checkpoint_fixture(1);
+        let verifying_key = signing_config
+            .verifying_key
+            .as_ref()
+            .expect("verifying key available")
+            .clone();
+        let verifier = CheckpointSignatureConfig {
+            signing_key: None,
+            verifying_key: Some(verifying_key),
+            expected_version: signing_config.expected_version,
+            require_signatures: true,
+            allow_unsigned_legacy: false,
+        };
+
+        payload.push(0); // mutate payload without updating signature
+        let error = verifier
+            .verify_checkpoint(&payload, &checkpoint)
+            .expect_err("tampering should invalidate signature");
+        assert!(
+            format!("{error}").contains("verification failed"),
+            "tampering error should mention signature verification: {error}",
+        );
     }
 
     fn dummy_state_proof() -> StarkProof {

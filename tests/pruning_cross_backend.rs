@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use ed25519_dalek::VerifyingKey;
 use rpp_chain::config::{GenesisAccount, NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::rpp::AccountBalanceWitness;
-use rpp_chain::runtime::sync::ReconstructionEngine;
-use rpp_chain::runtime::types::{Block, BlockMetadata, ValidatedPruningEnvelope};
+use rpp_chain::runtime::sync::{CheckpointSignatureConfig, ReconstructionEngine};
+use rpp_chain::runtime::types::{Block, BlockMetadata, ProofSystem, ValidatedPruningEnvelope};
 use rpp_chain::runtime::RuntimeMetrics;
+use rpp_chain::storage::Storage;
 use serde_json::Value;
 use storage_firewood::wal::{FileWal, WalError};
 use tempfile::TempDir;
@@ -43,6 +45,43 @@ use {
     rand::{rngs::StdRng, SeedableRng},
 };
 
+fn signature_path_for(checkpoint_path: &Path) -> PathBuf {
+    let mut name = checkpoint_path
+        .file_name()
+        .expect("checkpoint filename")
+        .to_os_string();
+    name.push(".sig");
+    let mut signature = checkpoint_path.to_path_buf();
+    signature.set_file_name(name);
+    signature
+}
+
+fn checkpoint_signing_config(config: &NodeConfig) -> CheckpointSignatureConfig {
+    let signing_key = config
+        .pruning
+        .checkpoint_signatures
+        .load_signing_key()
+        .expect("load pruning checkpoint signing key");
+    let verifying_key = config
+        .pruning
+        .checkpoint_signatures
+        .verifying_key()
+        .expect("decode pruning checkpoint verifying key")
+        .or_else(|| {
+            signing_key
+                .as_ref()
+                .map(|key| key.signing_key.verifying_key())
+        });
+
+    CheckpointSignatureConfig {
+        signing_key,
+        verifying_key,
+        expected_version: config.pruning.checkpoint_signatures.signature_version,
+        require_signatures: config.pruning.checkpoint_signatures.require_signatures,
+        allow_unsigned_legacy: config.pruning.checkpoint_signatures.allow_unsigned_legacy,
+    }
+}
+
 fn prepare_config(base: &TempDir, use_rpp_stark: bool) -> NodeConfig {
     let mut config = sample_node_config(base.path(), 8);
     config.rollout.feature_gates.pruning = true;
@@ -50,6 +89,104 @@ fn prepare_config(base: &TempDir, use_rpp_stark: bool) -> NodeConfig {
     config.rollout.feature_gates.recursive_proofs = use_rpp_stark;
     config.rollout.feature_gates.malachite_consensus = use_rpp_stark;
     config
+}
+
+fn enable_checkpoint_signatures(config: &mut NodeConfig, signing_key: &Path) -> VerifyingKey {
+    config.pruning.checkpoint_signatures.signing_key_path = Some(signing_key.to_path_buf());
+    config.pruning.checkpoint_signatures.allow_unsigned_legacy = false;
+    config.pruning.checkpoint_signatures.require_signatures = true;
+
+    let signing = config
+        .pruning
+        .checkpoint_signatures
+        .load_signing_key()
+        .expect("load pruning checkpoint signing key")
+        .expect("checkpoint signing key persisted");
+    let verifying = signing.signing_key.verifying_key();
+    config.pruning.checkpoint_signatures.verifying_key = Some(hex::encode(verifying.to_bytes()));
+    verifying
+}
+
+fn retag_chain_backend(blocks: &mut [Block], backend: ProofSystem) {
+    for block in blocks {
+        block.header.recursive_system = backend.clone();
+        block.recursive_proof.system = backend.clone();
+        block.hash = hex::encode(block.header.hash());
+    }
+}
+
+fn verification_config(
+    verifying_key: &VerifyingKey,
+    signature_version: u32,
+) -> CheckpointSignatureConfig {
+    CheckpointSignatureConfig {
+        signing_key: None,
+        verifying_key: Some(verifying_key.clone()),
+        expected_version: signature_version,
+        require_signatures: true,
+        allow_unsigned_legacy: false,
+    }
+}
+
+fn copy_checkpoint_bundle(source: &Path, destination: &Path) -> PathBuf {
+    fs::create_dir_all(destination).expect("create checkpoint copy directory");
+    let filename = source.file_name().expect("checkpoint filename");
+    let target = destination.join(filename);
+    fs::copy(source, &target).expect("copy checkpoint payload");
+    let source_sig = signature_path_for(source);
+    if source_sig.exists() {
+        let target_sig = signature_path_for(&target);
+        fs::copy(&source_sig, &target_sig).expect("copy checkpoint signature");
+    }
+    target
+}
+
+fn generate_signed_checkpoint(
+    use_rpp_stark: bool,
+) -> (TempDir, Storage, PathBuf, VerifyingKey, u32) {
+    let temp = TempDir::new().expect("temp dir");
+    let mut config = prepare_config(&temp, use_rpp_stark);
+    let signing_key_path = temp.path().join(if use_rpp_stark {
+        "rpp-stark-key"
+    } else {
+        "stwo-key"
+    });
+    let verifying_key = enable_checkpoint_signatures(&mut config, &signing_key_path);
+    let signature_version = config.pruning.checkpoint_signatures.signature_version;
+
+    let node = Node::new(config.clone(), RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let mut blocks = build_chain(&handle, 3);
+    let backend = if use_rpp_stark {
+        ProofSystem::RppStark
+    } else {
+        ProofSystem::Stwo
+    };
+    retag_chain_backend(&mut blocks, backend);
+    install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let summary = handle
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("pruning cycle");
+    let status = summary.status.expect("pruning status");
+    let checkpoint_path = PathBuf::from(
+        status
+            .persisted_path
+            .expect("pruning status must include persisted checkpoint"),
+    );
+
+    drop(handle);
+    drop(node);
+
+    (
+        temp,
+        storage,
+        checkpoint_path,
+        verifying_key,
+        signature_version,
+    )
 }
 
 fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> {
@@ -325,6 +462,59 @@ fn pruning_checkpoint_round_trip_default_backend() {
 #[test]
 fn pruning_checkpoint_round_trip_rpp_stark_backend() {
     run_pruning_checkpoint_flow(true);
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[test]
+fn pruning_checkpoints_cross_backend_signature_enforcement() {
+    for use_rpp_stark in [false, true] {
+        let (temp, storage, checkpoint_path, verifying_key, signature_version) =
+            generate_signed_checkpoint(use_rpp_stark);
+        let opposite_label = if use_rpp_stark {
+            "stwo-import"
+        } else {
+            "rpp-import"
+        };
+
+        let signed_dir = temp.path().join(opposite_label);
+        copy_checkpoint_bundle(&checkpoint_path, &signed_dir);
+        let signatures = verification_config(&verifying_key, signature_version);
+
+        ReconstructionEngine::with_snapshot_dir(storage.clone(), signed_dir.clone())
+            .with_checkpoint_signatures(signatures.clone())
+            .recover_checkpoint()
+            .expect("recover signed checkpoint")
+            .expect("signed checkpoint should load across backends");
+
+        let missing_dir = temp.path().join(format!("{opposite_label}-missing"));
+        let missing_checkpoint = copy_checkpoint_bundle(&checkpoint_path, &missing_dir);
+        let missing_signature = signature_path_for(&missing_checkpoint);
+        fs::remove_file(&missing_signature).expect("remove checkpoint signature");
+        let missing_err = ReconstructionEngine::with_snapshot_dir(storage.clone(), missing_dir)
+            .with_checkpoint_signatures(signatures.clone())
+            .recover_checkpoint()
+            .expect_err("unsigned checkpoints should be rejected");
+        assert!(
+            format!("{missing_err}").contains("signature missing"),
+            "missing signature error should be clear: {missing_err}",
+        );
+
+        let corrupted_dir = temp.path().join(format!("{opposite_label}-corrupted"));
+        let corrupted_checkpoint = copy_checkpoint_bundle(&checkpoint_path, &corrupted_dir);
+        let corrupted_signature = signature_path_for(&corrupted_checkpoint);
+        fs::write(&corrupted_signature, format!("{}:Zm9v", signature_version))
+            .expect("corrupt checkpoint signature");
+        let corrupted_err = ReconstructionEngine::with_snapshot_dir(storage.clone(), corrupted_dir)
+            .with_checkpoint_signatures(signatures.clone())
+            .recover_checkpoint()
+            .expect_err("corrupted signatures should be rejected");
+        let corrupted_message = format!("{corrupted_err}");
+        assert!(
+            corrupted_message.contains("signature verification failed")
+                || corrupted_message.contains("invalid pruning checkpoint signature"),
+            "corrupted signature error should mention verification: {corrupted_message}",
+        );
+    }
 }
 
 fn run_wallet_snapshot_round_trip(use_rpp_stark: bool) {
