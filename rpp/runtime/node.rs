@@ -821,6 +821,7 @@ fn log_pruning_cycle_start(
     tip_height: u64,
     missing_heights: usize,
     chunk_count: usize,
+    resume_from_checkpoint: bool,
 ) {
     info!(
         target = "pruning",
@@ -834,6 +835,7 @@ fn log_pruning_cycle_start(
         tip_height,
         missing_heights,
         chunk_count,
+        resume_from_checkpoint,
         "pruning cycle started",
     );
 }
@@ -878,6 +880,7 @@ fn log_pruning_cycle_finished(
     context: &PruningLogContext,
     summary: &PruningCycleSummary,
     elapsed: Duration,
+    resume_from_checkpoint: bool,
 ) {
     let (missing_heights, stored_proofs, persisted_path) = match summary.status.as_ref() {
         Some(status) => (
@@ -899,6 +902,7 @@ fn log_pruning_cycle_finished(
         stored_proofs,
         persisted_path,
         elapsed_ms = elapsed.as_millis(),
+        resume_from_checkpoint,
         "pruning cycle finished",
     );
 }
@@ -959,10 +963,10 @@ mod pruning_log_tests {
         let summary = PruningCycleSummary::cancelled(None);
 
         let output = capture_logs(|| {
-            log_pruning_cycle_start(&context, 4, 128, 42, 90, 12, 3);
+            log_pruning_cycle_start(&context, 4, 128, 42, 90, 12, 3, false);
             log_pruning_checkpoint_saved(&context, Path::new("/var/lib/rpp/snapshot-42.json"), 42);
             log_pruning_batch_complete(&context, 1, 7, 44);
-            log_pruning_cycle_finished(&context, &summary, Duration::from_millis(25));
+            log_pruning_cycle_finished(&context, &summary, Duration::from_millis(25), false);
             log_pruning_cycle_error(&context, &ChainError::Config("boom".into()));
         });
 
@@ -6136,10 +6140,22 @@ impl NodeInner {
     ) -> ChainResult<PruningCycleSummary> {
         let mut log_context = PruningLogContext::new();
         let log_start = Instant::now();
+        let resume_from_checkpoint = self
+            .pruning_status
+            .read()
+            .as_ref()
+            .and_then(|status| status.persisted_path.as_ref())
+            .map(|path| Path::new(path).exists())
+            .unwrap_or(false);
 
         if !self.config.rollout.feature_gates.reconstruction {
             let summary = PruningCycleSummary::completed(None);
-            log_pruning_cycle_finished(&log_context, &summary, log_start.elapsed());
+            log_pruning_cycle_finished(
+                &log_context,
+                &summary,
+                log_start.elapsed(),
+                resume_from_checkpoint,
+            );
             return Ok(summary);
         }
         let result: ChainResult<PruningCycleSummary> = (|| {
@@ -6203,6 +6219,7 @@ impl NodeInner {
                 reconstruction_plan.tip.height,
                 missing_heights.len(),
                 state_sync_plan.chunks.len(),
+                resume_from_checkpoint,
             );
 
             if let Some(path) = persisted_path.as_ref() {
@@ -6329,7 +6346,12 @@ impl NodeInner {
                 self.emit_witness_json(GossipTopic::Snapshots, payload);
             }
 
-            log_pruning_cycle_finished(&log_context, &summary, log_start.elapsed());
+            log_pruning_cycle_finished(
+                &log_context,
+                &summary,
+                log_start.elapsed(),
+                resume_from_checkpoint,
+            );
 
             Ok(summary)
         })();

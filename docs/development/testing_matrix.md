@@ -19,6 +19,10 @@ The Firewood storage feature combinations and zk backend permutations run in CI 
 The combined-feature lanes also exercise the pruning rollback guardrail added in
 `pruning_rolls_back_after_snapshot_persist_failure`, ensuring aborted cycles can
 be retried cleanly after filesystem faults.
+They also run the checkpoint-resume regressions in
+`pruning_resume_recovers_checkpoint_with_stwo_backend` and
+`pruning_resume_recovers_checkpoint_with_rpp_stark_backend` so cancellation+
+resume is covered in both default and `backend-rpp-stark` variants.【F:tests/recovery_pruning.rs†L343-L361】
 
 ## Cold start smoke reproduction
 

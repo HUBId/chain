@@ -15,6 +15,8 @@ use rpp_chain::runtime::types::{
     BlockPayload, BlockProofBundle, ChainProof, PruningProof, PruningProofExt, RecursiveProof,
     ReputationUpdate, SignedBftVote, SignedTransaction, TimetokeUpdate, UptimeProof,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_chain::runtime::types::RppStarkProof;
 use rpp_chain::state::merkle::compute_merkle_root;
 use rpp_chain::storage::Storage;
 use rpp_chain::stwo::aggregation::StateCommitmentSnapshot;
@@ -111,7 +113,22 @@ pub fn install_pruned_chain(
 }
 
 /// Generates a deterministic dummy block suitable for storage and reconstruction tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestProofBackend {
+    Stwo,
+    #[cfg(feature = "backend-rpp-stark")]
+    RppStark,
+}
+
 pub fn make_dummy_block(height: u64, previous: Option<&Block>) -> Block {
+    make_dummy_block_with_backend(height, previous, TestProofBackend::Stwo)
+}
+
+pub fn make_dummy_block_with_backend(
+    height: u64,
+    previous: Option<&Block>,
+    backend: TestProofBackend,
+) -> Block {
     let previous_hash = previous
         .map(|block| block.hash.clone())
         .unwrap_or_else(|| hex::encode([0u8; 32]));
@@ -145,39 +162,86 @@ pub fn make_dummy_block(height: u64, previous: Option<&Block>) -> Block {
     );
     let pruning_proof = pruning_from_previous(previous, &header);
     let pruning_binding_digest = pruning_proof.binding_digest().prefixed_bytes();
-    let pruning_segment_commitments = pruning_proof
+    let pruning_segment_commitments: Vec<_> = pruning_proof
         .segments()
         .iter()
         .map(|segment| segment.segment_commitment().prefixed_bytes())
         .collect();
-    let recursive_proof = RecursiveProof::from_parts(
-        rpp_chain::runtime::types::ProofSystem::Stwo,
-        "99".repeat(32),
-        None,
-        pruning_binding_digest,
-        pruning_segment_commitments,
-        ChainProof::Stwo(dummy_recursive_proof(
-            None,
-            "99".repeat(32),
-            &header,
-            &pruning_proof,
-        )),
-    )
-    .expect("construct recursive proof");
-    let state_stark = dummy_state_proof();
-    let pruning_stark = dummy_pruning_proof();
-    let recursive_chain = ChainProof::Stwo(dummy_recursive_proof(
-        recursive_proof.previous_commitment.clone(),
-        recursive_proof.commitment.clone(),
-        &header,
-        &pruning_proof,
-    ));
+
+    let recursive_commitment = format!("{:064x}", height + 0x99);
+    let recursive_previous = previous
+        .map(|block| block.recursive_proof.commitment.clone())
+        .or_else(|| Some(RecursiveProof::anchor()));
+
+    let (state_proof, pruning_chain, recursive_chain, recursive_proof) = match backend {
+        TestProofBackend::Stwo => {
+            let recursive_proof = RecursiveProof::from_parts(
+                rpp_chain::runtime::types::ProofSystem::Stwo,
+                recursive_commitment.clone(),
+                None,
+                pruning_binding_digest,
+                pruning_segment_commitments.clone(),
+                ChainProof::Stwo(dummy_recursive_proof(
+                    None,
+                    recursive_commitment.clone(),
+                    &header,
+                    &pruning_proof,
+                )),
+            )
+            .expect("construct recursive proof");
+
+            (
+                ChainProof::Stwo(dummy_state_proof()),
+                ChainProof::Stwo(dummy_pruning_proof()),
+                ChainProof::Stwo(dummy_recursive_proof(
+                    recursive_proof.previous_commitment.clone(),
+                    recursive_proof.commitment.clone(),
+                    &header,
+                    &pruning_proof,
+                )),
+                recursive_proof,
+            )
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        TestProofBackend::RppStark => {
+            let params = vec![0xAA, 0x10, height as u8];
+            let public_inputs = format!("pruning-{height}").into_bytes();
+            let proof_bytes = vec![0xBB, 0x20, height as u8];
+            let recursive_proof = RecursiveProof {
+                system: rpp_chain::runtime::types::ProofSystem::RppStark,
+                commitment: recursive_commitment.clone(),
+                previous_commitment: recursive_previous,
+                pruning_binding_digest,
+                pruning_segment_commitments: pruning_segment_commitments.clone(),
+                proof: ChainProof::RppStark(RppStarkProof::new(
+                    params.clone(),
+                    public_inputs.clone(),
+                    proof_bytes.clone(),
+                )),
+            };
+
+            (
+                ChainProof::RppStark(RppStarkProof::new(
+                    params.clone(),
+                    public_inputs.clone(),
+                    proof_bytes.clone(),
+                )),
+                ChainProof::RppStark(RppStarkProof::new(
+                    params.clone(),
+                    public_inputs.clone(),
+                    proof_bytes.clone(),
+                )),
+                ChainProof::RppStark(RppStarkProof::new(params, public_inputs, proof_bytes)),
+                recursive_proof,
+            )
+        }
+    };
     let module_witnesses = ModuleWitnessBundle::default();
     let proof_artifacts = Vec::<ProofArtifact>::new();
     let stark_bundle = BlockProofBundle::new(
         Vec::new(),
-        ChainProof::Stwo(state_stark),
-        ChainProof::Stwo(pruning_stark),
+        state_proof,
+        pruning_chain,
         recursive_chain,
     );
     let signature = ed25519_dalek::Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
