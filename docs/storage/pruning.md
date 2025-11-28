@@ -7,6 +7,13 @@ state-sync checkpoint before simulating a WAL crash. The recovered node reloads
 both the pruning plan and any transactions staged in the mempool WAL to ensure
 state hashes and proof verification remain consistent across backends.
 
+Before any pruning artifacts are rotated, the storage layer now rehydrates the
+latest manifest from disk and compares its height, digests, and checksum with
+the just-committed state root. A mismatch (including missing proof files) aborts
+the prune with a `PruningInvariantViolation` so operators can reconcile the WAL
+and snapshot directories before losing retention depth. This check runs for both
+prover backends and for each branch factor exercised by the Firewood tree tests.
+
 Each checkpoint JSON now embeds a `metadata` block that records the snapshot
 height, the Unix timestamp when the plan was persisted, and the proof backend
 used to generate it. The checkpoint and its metadata are written atomically to
@@ -70,6 +77,21 @@ The scenarios:
 These steps now run in the integration matrix (default and `backend-rpp-stark`)
 so regressions in pruning, proof verification, or WAL handling are surfaced
 before release.
+
+## Operator runbook for manifest/WAL divergence
+
+1. **Detect the failure.** A prune will now fail fast with a
+   `PruningInvariantViolation` that calls out which snapshot height diverged
+   from the committed root or missing proof bytes. The node leaves all files in
+   place so operators can inspect the mismatch.
+2. **Cross-check WAL vs. snapshots.** Use the latest committed block height in
+   logs to compare against `cf_pruning_snapshots/<height>.json` and confirm the
+   manifest `state_root` and checksum match what the WAL would rebuild. If they
+   differ, regenerate the manifest/proof pair from the WAL contents or replay
+   the affected block.
+3. **Repair and retry.** Once the manifest and proof checksum line up with the
+   rebuilt state root, rerun the pruning job. The validation step will pass and
+   retention will resume without silently deleting inconsistent artifacts.
 
 ## Rotating pruning and consensus checkpoint signing keys
 
