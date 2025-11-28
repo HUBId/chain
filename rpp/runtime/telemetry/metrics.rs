@@ -116,7 +116,7 @@ pub struct RuntimeMetrics {
     wallet_sync_progress: Arc<Mutex<WalletSyncSnapshot>>,
     rpc_request_latency: RpcHistogram<RpcMethod, RpcResult>,
     rpc_request_total: RpcCounter<RpcMethod, RpcResult>,
-    rpc_rate_limit_total: RpcClassCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
+    rpc_rate_limit_total: RpcRateLimitCounter<RpcClass, RpcMethod, RpcRateLimitStatus>,
     consensus_rpc_failures: EnumCounter<ConsensusRpcFailure>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
     wal_flush_bytes: EnumU64Histogram<WalFlushOutcome>,
@@ -292,10 +292,12 @@ impl RuntimeMetrics {
                     .with_unit("1")
                     .build(),
             ),
-            rpc_rate_limit_total: RpcClassCounter::new(
+            rpc_rate_limit_total: RpcRateLimitCounter::new(
                 meter
                     .u64_counter("rpp.runtime.rpc.rate_limit.total")
-                    .with_description("RPC rate limit decisions grouped by class, method and allow/throttle status")
+                    .with_description(
+                        "RPC rate limit decisions grouped by class, method, tenant, and allow/throttle status",
+                    )
                     .with_unit("1")
                     .build(),
             ),
@@ -767,8 +769,10 @@ impl RuntimeMetrics {
         class: RpcClass,
         method: RpcMethod,
         status: RpcRateLimitStatus,
+        tenant: Option<&str>,
     ) {
-        self.rpc_rate_limit_total.add(class, method, status, 1);
+        self.rpc_rate_limit_total
+            .add(class, method, status, tenant, 1);
     }
 
     pub fn record_consensus_rpc_failure(&self, reason: ConsensusRpcFailure) {
@@ -2196,6 +2200,43 @@ impl<M: MetricLabel, R: MetricLabel> RpcCounter<M, R> {
             KeyValue::new(R::KEY, result.as_str()),
         ];
         self.counter.add(value, &attributes);
+    }
+}
+
+#[derive(Clone)]
+struct RpcRateLimitCounter<C: MetricLabel, M: MetricLabel, R: MetricLabel> {
+    counter: Counter<u64>,
+    _marker: PhantomData<(C, M, R)>,
+}
+
+impl<C: MetricLabel, M: MetricLabel, R: MetricLabel> RpcRateLimitCounter<C, M, R> {
+    fn new(counter: Counter<u64>) -> Self {
+        Self {
+            counter,
+            _marker: PhantomData,
+        }
+    }
+
+    fn add(&self, class: C, method: M, result: R, tenant: Option<&str>, value: u64) {
+        match tenant {
+            Some(tenant) => {
+                let attributes = [
+                    KeyValue::new(C::KEY, class.as_str()),
+                    KeyValue::new(M::KEY, method.as_str()),
+                    KeyValue::new(R::KEY, result.as_str()),
+                    KeyValue::new("tenant", tenant),
+                ];
+                self.counter.add(value, &attributes);
+            }
+            None => {
+                let attributes = [
+                    KeyValue::new(C::KEY, class.as_str()),
+                    KeyValue::new(M::KEY, method.as_str()),
+                    KeyValue::new(R::KEY, result.as_str()),
+                ];
+                self.counter.add(value, &attributes);
+            }
+        }
     }
 }
 

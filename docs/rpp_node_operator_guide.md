@@ -52,6 +52,22 @@ certificates to operators that need to call the snapshot or RPC surfaces. When
 rotating client trust or certificates, restart the node after updating the file
 paths to ensure the mTLS verifier reloads the new material.【F:config/examples/production/validator-stwo-tls.toml†L48-L71】【F:config/examples/production/validator-plonky3-tls.toml†L48-L71】
 
+### Multi-tenant RPC policy and telemetry
+
+- Issue distinct bearer or API tokens per tenant or automation surface so rate
+  limits remain scoped to the calling tenant rather than the shared IP. The
+  server returns `X-RateLimit-*` headers plus `X-RateLimit-Tenant` on throttled
+  responses so dashboards and clients can confirm which tenant exhausted its
+  bucket.【F:rpp/rpc/tests/server_limits.rs†L133-L186】【F:rpp/rpc/tests/rate_limit_metrics.rs†L38-L118】
+- Tenants stay isolated across nodes and zk backends; a token exhausted on one
+  backend does not consume quota on another, and the rate-limit metric
+  (`rpp.runtime.rpc.rate_limit.total`) includes a `tenant` label alongside the
+  backend resource for per-tenant alerting.【F:rpp/rpc/tests/rate_limit_metrics.rs†L120-L230】【F:rpp/runtime/telemetry/metrics.rs†L98-L110】
+- Prefer authenticated tenants over anonymous access so throttling decisions and
+  Prometheus series stay tenant-aware. Anonymous callers fall back to per-IP
+  buckets and emit `tenant="absent"` in metrics, which should not drive
+  customer-facing alerts.
+
 ### Proving/verification parameters (no hot reload)
 
 Proof cache directories and verification parameters load during bootstrap and

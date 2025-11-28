@@ -169,6 +169,12 @@ async fn api_keys_are_rate_limited_independently() {
             .and_then(|value| value.to_str().ok()),
         Some("0")
     );
+    assert_eq!(
+        headers
+            .get("x-ratelimit-tenant")
+            .and_then(|value| value.to_str().ok()),
+        Some("tenant-a"),
+    );
     let reset = headers
         .get("x-ratelimit-reset")
         .and_then(|value| value.to_str().ok())
