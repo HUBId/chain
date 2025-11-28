@@ -11,7 +11,7 @@ use crate::db::{
     AddressKind, TxCacheEntry, UtxoOutpoint, UtxoRecord, WalletStore, WalletStoreBatch,
     WalletStoreError,
 };
-use crate::engine::{AddressError, WalletEngine};
+use crate::engine::{AddressError, WalletBalance, WalletEngine};
 use crate::indexer::checkpoints::{
     birthday_height, last_compact_scan_ts, last_full_rescan_ts, last_scan_ts,
     last_targeted_rescan_ts, persist_birthday_height, persist_last_compact_scan_ts,
@@ -92,6 +92,18 @@ pub struct SyncStatus {
     pub node_issue: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanSnapshot {
+    pub balance: WalletBalance,
+    pub nonce: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub status: SyncStatus,
+    pub snapshot: ScanSnapshot,
+}
+
 /// Overall mode executed during a wallet scan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SyncMode {
@@ -148,12 +160,12 @@ impl WalletScanner {
     }
 
     /// Execute a full synchronisation starting from the configured birthday height.
-    pub fn sync_full(&self, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
+    pub fn sync_full(&self, abort: &ScanAbortToken) -> Result<SyncOutcome, ScannerError> {
         self.scan(ScanIntent::Full, abort)
     }
 
     /// Resume synchronisation from the last stored checkpoint.
-    pub fn sync_resume(&self, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
+    pub fn sync_resume(&self, abort: &ScanAbortToken) -> Result<SyncOutcome, ScannerError> {
         self.scan(ScanIntent::Resume, abort)
     }
 
@@ -162,11 +174,15 @@ impl WalletScanner {
         &self,
         from_height: u64,
         abort: &ScanAbortToken,
-    ) -> Result<SyncStatus, ScannerError> {
+    ) -> Result<SyncOutcome, ScannerError> {
         self.scan(ScanIntent::Rescan { from_height }, abort)
     }
 
-    fn scan(&self, intent: ScanIntent, abort: &ScanAbortToken) -> Result<SyncStatus, ScannerError> {
+    fn scan(
+        &self,
+        intent: ScanIntent,
+        abort: &ScanAbortToken,
+    ) -> Result<SyncOutcome, ScannerError> {
         let store = self.engine.store();
         let base_height = match intent {
             ScanIntent::Full => self.start_height,
@@ -214,17 +230,22 @@ impl WalletScanner {
             ScanIntent::Rescan { from_height } => SyncMode::Rescan { from_height },
         };
 
-        Ok(SyncStatus {
-            latest_height,
-            current_height: checkpoints.resume_height.unwrap_or(base_height),
-            target_height: latest_height,
-            mode,
-            scanned_scripthashes,
-            discovered_transactions,
-            pending_ranges,
-            checkpoints,
-            hints: Vec::new(),
-            node_issue: None,
+        let snapshot = self.collect_snapshot()?;
+
+        Ok(SyncOutcome {
+            status: SyncStatus {
+                latest_height,
+                current_height: checkpoints.resume_height.unwrap_or(base_height),
+                target_height: latest_height,
+                mode,
+                scanned_scripthashes,
+                discovered_transactions,
+                pending_ranges,
+                checkpoints,
+                hints: Vec::new(),
+                node_issue: None,
+            },
+            snapshot,
         })
     }
 
@@ -536,9 +557,12 @@ mod tests {
         let (_, abort) = ScanAbortToken::new_pair();
         let status = scanner.sync_full(&abort).expect("sync full");
 
-        assert_eq!(status.latest_height, latest_height);
-        assert!(matches!(status.mode, SyncMode::Full { start_height: 0 }));
-        assert_eq!(status.pending_ranges, vec![(0, latest_height)]);
+        assert_eq!(status.status.latest_height, latest_height);
+        assert!(matches!(
+            status.status.mode,
+            SyncMode::Full { start_height: 0 }
+        ));
+        assert_eq!(status.status.pending_ranges, vec![(0, latest_height)]);
         let utxos = engine.store().iter_utxos().expect("utxos");
         assert_eq!(utxos.len(), 1);
         assert_eq!(utxos[0].owner, addresses[1]);
@@ -575,7 +599,7 @@ mod tests {
         let (_, abort) = ScanAbortToken::new_pair();
         scanner.sync_full(&abort).expect("first sync");
         let resume_status = scanner.sync_resume(&abort).expect("resume sync");
-        assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
+        assert!(matches!(resume_status.status.mode, SyncMode::Resume { .. }));
 
         let utxos = engine.store().iter_utxos().expect("utxos");
         assert_eq!(utxos.len(), 1);
@@ -592,9 +616,10 @@ mod tests {
         mock.add_status(&addresses[0]);
 
         let (engine, scanner) = test_engine_and_scanner(seed, mock);
-        let status = scanner.sync_full().expect("sync full");
-        assert_eq!(status.latest_height, latest_height);
-        assert!(matches!(status.mode, SyncMode::Full { .. }));
+        let (_, abort) = ScanAbortToken::new_pair();
+        let status = scanner.sync_full(&abort).expect("sync full");
+        assert_eq!(status.status.latest_height, latest_height);
+        assert!(matches!(status.status.mode, SyncMode::Full { .. }));
 
         let store = engine.store();
         let resume = checkpoints::resume_height(store).expect("resume");
@@ -621,13 +646,15 @@ mod tests {
 
         let full_status = scanner.sync_full(&abort).expect("full");
         let full_ts = full_status
+            .status
             .checkpoints
             .last_full_rescan_ts
             .expect("full ts");
 
         let resume_status = scanner.sync_resume(&abort).expect("resume");
-        assert!(matches!(resume_status.mode, SyncMode::Resume { .. }));
+        assert!(matches!(resume_status.status.mode, SyncMode::Resume { .. }));
         let resume_ts = resume_status
+            .status
             .checkpoints
             .last_compact_scan_ts
             .expect("resume ts");
@@ -635,10 +662,11 @@ mod tests {
 
         let rescan_status = scanner.rescan_from(5, &abort).expect("rescan");
         assert!(matches!(
-            rescan_status.mode,
+            rescan_status.status.mode,
             SyncMode::Rescan { from_height: 5 }
         ));
         let rescan_ts = rescan_status
+            .status
             .checkpoints
             .last_targeted_rescan_ts
             .expect("rescan ts");
@@ -774,5 +802,17 @@ mod tests {
                 .cloned();
             Ok(client::GetTransactionResponse::new(tx))
         }
+    }
+
+    fn collect_snapshot(&self) -> Result<ScanSnapshot, ScannerError> {
+        let utxos = self.engine.store().iter_utxos()?;
+        let balance = WalletBalance {
+            confirmed: utxos.iter().map(|utxo| utxo.value).sum(),
+            pending: 0,
+        };
+
+        let nonce = self.engine.address_manager().pending_locks()?.len() as u64;
+
+        Ok(ScanSnapshot { balance, nonce })
     }
 }
