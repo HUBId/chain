@@ -29,9 +29,9 @@ use dto::{
     ReleasePendingLocksResponse, RescanAbortResponse, RescanParams, RescanResponse,
     RescanStatusResponse, SetAddressLabelParams, SetAddressLabelResponse, SetPolicyParams,
     SetPolicyResponse, SignTxParams, SignTxResponse, SignedTxProverBundleDto, SyncCheckpointDto,
-    SyncLagAddressDto, SyncLagResponse, SyncModeDto, SyncStatusParams, SyncStatusResponse,
-    TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto, UtxoDto,
-    WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
+    SyncLagAddressDto, SyncLagResponse, SyncMismatchDto, SyncModeDto, SyncStatusParams,
+    SyncStatusResponse, TelemetryCounterDto, TelemetryCountersResponse, TransactionEntryDto,
+    UtxoDto, WatchOnlyEnableParams, WatchOnlyStatusResponse, JSONRPC_VERSION,
 };
 #[cfg(feature = "wallet_multisig_hooks")]
 use dto::{
@@ -1221,6 +1221,7 @@ impl WalletRpcRouter {
             last_rescan_timestamp,
             node_issue,
             hints,
+            mismatch,
         ) = if let Some(status) = status {
             (
                 Some(match status.mode {
@@ -1246,6 +1247,21 @@ impl WalletRpcRouter {
                 status.checkpoints.last_targeted_rescan_ts,
                 status.node_issue.clone(),
                 status.hints.clone(),
+                status.mismatch.as_ref().map(|mismatch| SyncMismatchDto {
+                    height: mismatch.height,
+                    expected_balance: BalanceResponse {
+                        confirmed: mismatch.expected_balance.confirmed,
+                        pending: mismatch.expected_balance.pending,
+                        total: mismatch.expected_balance.total(),
+                    },
+                    observed_balance: BalanceResponse {
+                        confirmed: mismatch.observed_balance.confirmed,
+                        pending: mismatch.observed_balance.pending,
+                        total: mismatch.observed_balance.total(),
+                    },
+                    expected_nonce: mismatch.expected_nonce,
+                    observed_nonce: mismatch.observed_nonce,
+                }),
             )
         } else {
             (
@@ -1261,6 +1277,7 @@ impl WalletRpcRouter {
                 None,
                 None,
                 Vec::new(),
+                None,
             )
         };
         let last_error = sync.last_error().map(|error| error.to_string());
@@ -1279,6 +1296,7 @@ impl WalletRpcRouter {
             last_error,
             node_issue,
             hints,
+            mismatch,
         };
         to_value(response)
     }
@@ -3474,6 +3492,7 @@ mod tests {
             },
             hints: Vec::new(),
             node_issue: None,
+            mismatch: None,
         };
         let sync = Arc::new(StubSync {
             status: Some(status),
@@ -3511,6 +3530,7 @@ mod tests {
             },
             hints: Vec::new(),
             node_issue: None,
+            mismatch: None,
         };
         let mut recording = RecordingSync::default();
         recording.status = Some(status);
@@ -3547,6 +3567,7 @@ mod tests {
             },
             hints: Vec::new(),
             node_issue: None,
+            mismatch: None,
         };
         let sync = Arc::new(StubSync {
             status: Some(status),
@@ -3616,6 +3637,7 @@ mod tests {
             },
             hints: Vec::new(),
             node_issue: None,
+            mismatch: None,
         };
         let sync = Arc::new(StubSync {
             status: Some(status),

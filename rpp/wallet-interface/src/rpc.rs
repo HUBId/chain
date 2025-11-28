@@ -1504,6 +1504,18 @@ pub struct SyncStatusResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     /// Additional hints for operators.
     pub hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Snapshot mismatch diagnostics when sync validation fails.
+    pub mismatch: Option<SyncMismatchDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncMismatchDto {
+    pub height: u64,
+    pub expected_balance: BalanceResponse,
+    pub observed_balance: BalanceResponse,
+    pub expected_nonce: u64,
+    pub observed_nonce: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

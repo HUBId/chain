@@ -983,6 +983,7 @@ mod tests {
             last_error: None,
             node_issue: None,
             hints: Vec::new(),
+            mismatch: None,
         };
         app.update(Message::SyncStatusLoaded(Ok(status)));
         assert!(!app.model.sync_inflight);

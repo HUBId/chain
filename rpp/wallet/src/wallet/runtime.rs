@@ -9,8 +9,8 @@ use metrics::{counter, histogram};
 use crate::engine::WalletEngine;
 use crate::indexer::client::IndexerClient;
 use crate::indexer::scanner::{
-    ScanAbortHandle, ScanAbortToken, ScanSnapshot, ScannerError, SyncOutcome, SyncStatus,
-    WalletScanner,
+    ScanAbortHandle, ScanAbortToken, ScanSnapshot, ScannerError, SyncMismatch, SyncOutcome,
+    SyncStatus, WalletScanner,
 };
 use crate::node_client::NodeClientError;
 
@@ -24,6 +24,7 @@ pub enum WalletSyncError {
     Divergence {
         expected: ScanSnapshot,
         observed: ScanSnapshot,
+        status: SyncStatus,
     },
 }
 
@@ -323,6 +324,9 @@ fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncOutcome, Wa
             guard.node_hints.clear();
         }
         Err(error) => {
+            if let WalletSyncError::Divergence { status, .. } = error {
+                guard.last_status = Some(status.clone());
+            }
             guard.last_error = Some(error.clone());
         }
     }
@@ -362,7 +366,17 @@ fn evaluate_expectation(
             );
             return Err(WalletSyncError::Divergence {
                 expected,
-                observed: outcome.snapshot,
+                observed: outcome.snapshot.clone(),
+                status: SyncStatus {
+                    mismatch: Some(SyncMismatch {
+                        expected_balance: expected.balance.clone(),
+                        observed_balance: outcome.snapshot.balance.clone(),
+                        expected_nonce: expected.nonce,
+                        observed_nonce: outcome.snapshot.nonce,
+                        height,
+                    }),
+                    ..outcome.status
+                },
             });
         }
     }
@@ -582,6 +596,7 @@ mod tests {
                 checkpoints: SyncCheckpoints::default(),
                 hints: Vec::new(),
                 node_issue: None,
+                mismatch: None,
             });
         }
 
@@ -665,13 +680,96 @@ mod tests {
             WalletSyncError::Divergence {
                 expected: e,
                 observed,
+                status,
             } => {
                 assert_eq!(e, expected);
                 assert_eq!(observed.nonce, 0);
+                assert!(status.mismatch.is_some());
             }
             other => panic!("unexpected error: {other:?}"),
         }
 
         coordinator.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn mismatch_diagnostics_surface_in_status() {
+        let engine = test_engine();
+        let indexer = CountingIndexer::new();
+        let calls = indexer.calls();
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
+
+        wait_for_calls(&calls, 1).await;
+
+        let expected = ScanSnapshot {
+            balance: WalletBalance {
+                confirmed: 5,
+                pending: 3,
+            },
+            nonce: 2,
+        };
+        coordinator.set_expected_snapshot(Some(expected.clone()));
+
+        assert!(coordinator.request_resume_sync().expect("resume"));
+        wait_for_calls(&calls, 2).await;
+
+        let status = coordinator
+            .latest_status()
+            .expect("status after mismatch available");
+        let mismatch = status.mismatch.as_ref().expect("mismatch present");
+        assert_eq!(mismatch.expected_balance, expected.balance);
+        assert_eq!(mismatch.observed_balance, WalletBalance::default());
+        assert_eq!(mismatch.expected_nonce, expected.nonce);
+        assert_eq!(mismatch.observed_nonce, 0);
+        assert_eq!(mismatch.height, status.current_height);
+
+        assert!(matches!(
+            coordinator.last_error(),
+            Some(WalletSyncError::Divergence { .. })
+        ));
+
+        coordinator.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn pending_workflows_reflect_validation_failure() {
+        let engine = test_engine();
+        let indexer = CountingIndexer::new();
+        let calls = indexer.calls();
+        let coordinator = WalletSyncCoordinator::start(
+            engine,
+            Arc::new(indexer),
+            WalletProverBackend::Mock.as_str(),
+        )
+        .expect("coordinator");
+
+        wait_for_calls(&calls, 1).await;
+
+        let expected = ScanSnapshot {
+            balance: WalletBalance::default(),
+            nonce: 9,
+        };
+        coordinator.set_expected_snapshot(Some(expected));
+
+        assert!(coordinator.request_resume_sync().expect("resume"));
+        wait_for_calls(&calls, 2).await;
+
+        coordinator.shutdown().await.expect("shutdown");
+
+        {
+            let mut guard = lock_state(&coordinator.state);
+            guard.pending_resume = true;
+            guard.pending_rescan = Some(7);
+        }
+
+        let status = coordinator.latest_status().expect("status present");
+        assert!(status.mismatch.is_some());
+        assert!(status.pending_ranges.contains(&(7, 7)));
+        assert!(status.checkpoints.resume_height.is_some());
     }
 }

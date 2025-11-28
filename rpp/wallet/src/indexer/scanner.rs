@@ -90,6 +90,17 @@ pub struct SyncStatus {
     pub hints: Vec<String>,
     /// Sanitised description of the latest node-facing error, if any.
     pub node_issue: Option<String>,
+    /// Optional snapshot mismatch diagnostics when validation fails.
+    pub mismatch: Option<SyncMismatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncMismatch {
+    pub expected_balance: WalletBalance,
+    pub observed_balance: WalletBalance,
+    pub expected_nonce: u64,
+    pub observed_nonce: u64,
+    pub height: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,6 +255,7 @@ impl WalletScanner {
                 checkpoints,
                 hints: Vec::new(),
                 node_issue: None,
+                mismatch: None,
             },
             snapshot,
         })
