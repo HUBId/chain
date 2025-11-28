@@ -949,6 +949,7 @@ fn run_simnet_smoke() -> Result<()> {
         "quorum-stress",
         "consensus-chaos",
         "epoch-drift",
+        "validator-set-rotation",
         "partition",
     ];
     if has_feature_flag("backend-rpp-stark") {

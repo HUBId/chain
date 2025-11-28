@@ -370,6 +370,29 @@ capturing probe failures. The nightly drill mirrors the CI job and preserves
 artifacts even when probes fail, making it easier to debug missed-slot or block
 stall regressions.【F:.github/workflows/ci.yml†L393-L425】【F:.github/workflows/nightly.yml†L1-L87】【F:tools/alerts/validate_alerts.py†L16-L87】【F:tools/alerts/validate_alerts.py†L89-L131】
 
+### Validator rotation checklist
+
+Validator membership updates now stream dedicated metrics:
+
+* `validator_set_changes_total{epoch}` and `validator_set_change_height{epoch}`
+  record each epoch transition.
+* `validator_set_change_quorum_delay_ms{epoch,height}` measures the time from
+  the transition to the next quorum; the alert budget is 5s (warning) / 10s
+  (critical).
+* `timetoke_root_mismatch_total{source,peer}` increments whenever timetoke
+  deltas fail alignment during gossip sync.【F:rpp/runtime/telemetry/metrics.rs†L164-L197】【F:telemetry/prometheus/runtime-rules.yaml†L65-L112】
+
+When rotating validators:
+
+1. Drain and replace in small batches. After each batch, confirm
+   `validator_set_change_quorum_delay_ms` stays below the warning threshold and
+   `timetoke_root_mismatch_total` does not increase.
+2. Cross-check finality panels (`finality_lag_slots`, `finalized_height_gap`)
+   and the validator-change alerts before proceeding to the next batch.
+3. If any alert fires, pause the rollout, verify peer counts and proposer health
+   on the new members, and rerun the batch once timetoke and finality signals
+   stabilise.【F:ops/alerts/consensus/validator_changes.yaml†L1-L44】
+
 ### Historical baselines and buffers
 
 Uptime and timetoke alerts now key off rolling 30-day baselines with explicit

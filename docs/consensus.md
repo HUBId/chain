@@ -166,6 +166,34 @@ metrics for alerting. A corrupted uptime payload that rewrites the embedded
 clock forces the verifier to emit a rejection that can be wired to paging so
 clock drift never silently bypasses proof validation.【F:tests/uptime_clock_skew.rs†L1-L99】
 
+## Validator set changes and timetoke alignment
+
+Validator rotations can expose finality gaps and timetoke drift if quorum takes
+too long to settle. The runtime now emits `validator_set_changes_total` with the
+`epoch` label for every epoch transition, a matching
+`validator_set_change_height` sample at the triggering height, and a
+`validator_set_change_quorum_delay_ms` histogram that measures how long it took
+to form the next quorum. Timetoke gossip mismatches raise
+`timetoke_root_mismatch_total{source,peer}` whenever a delta fails alignment
+checks.【F:rpp/runtime/telemetry/metrics.rs†L164-L197】【F:rpp/runtime/node.rs†L5001-L5007】 The Prometheus rules under
+`consensus-validator-changes` page when the p95 quorum delay exceeds 5s/10s or
+when any timetoke misalignment is detected.【F:telemetry/prometheus/runtime-rules.yaml†L65-L112】【F:ops/alerts/consensus/validator_changes.yaml†L1-L44】
+
+Run the new `validator-set-rotation` simnet profile to rehearse the signal flow:
+
+* Injects churn into a 22-node small-world mesh to mimic validator replacements
+  mid-flight.
+* Records tx propagation across trusted/untrusted peers while validator changes
+  occur.
+* Persists JSON/CSV summaries under
+  `target/simnet/validator-set-rotation/summaries/` for pipeline triage.
+
+Use the drill to validate that `validator_set_change_quorum_delay_ms` remains
+under 5s and no `timetoke_root_mismatch_total` samples appear before promoting
+membership changes beyond canaries.【F:tools/simnet/scenarios/validator_set_rotation.ron†L1-L20】【F:scenarios/validator_set_rotation.toml†L1-L75】 During live rotations,
+correlate the alert stream with `finality_lag_slots`/`finalized_height_gap` to
+ensure continuity before moving to the next batch.
+
 ## RPP-STARK reorg drills and observability
 
 Nightly simnet runs now include an RPP-STARK-specific reorg scenario that
