@@ -111,6 +111,31 @@ a canary for client-facing impact: if it fires in production, pause bulk
 submissions, restart or drain stuck validators, and follow the mempool cleanup
 playbook before reopening traffic.【F:docs/mempool.md†L7-L74】
 
+### Transaction latency probes
+
+Synthetic wallet probes now submit tiny transactions during partial outages and
+record their time-to-inclusion and time-to-finality. Recording rules expose
+`pipeline:time_to_inclusion_seconds:p95` and
+`pipeline:time_to_finality_seconds:p95`, and alerts fire when either p95 metric
+stays above the documented SLOs (60 s/120 s for inclusion, 180 s/300 s for
+finality) for ten minutes.【F:telemetry/prometheus/runtime-rules.yaml†L265-L284】【F:ops/alerts/uptime/transaction_latency.yaml†L1-L43】
+`TransactionInclusionLatency*` indicates the probes are landing slowly even
+while blocks advance; `TransactionFinalityLatency*` highlights cases where
+transactions make it into blocks but linger before finalization.
+
+Troubleshoot the latency probes as follows:
+
+1. Inspect RPC success and latency panels for `node_submit_transaction` to rule
+   out front-door throttling or timeouts.
+2. Check mempool backlog depth, leader rotation, and recent churn to confirm the
+   slow path is not caused by stuck proposers.
+3. Correlate `pipeline:time_to_finality_seconds:p95` with `finality_lag_slots`
+   and prover queue depth to identify prover-induced lag before recycling
+   workers or draining traffic.【F:tools/alerts/validation.py†L120-L184】【F:tools/alerts/validation.py†L141-L215】
+4. Keep the probes running until both latency metrics drop below the warning
+   thresholds and the alerts clear, then document any config changes in the
+   incident ticket.
+
 Run the probes with the existing validation harness (`python -m pytest
 tools/alerts/tests`) whenever alert expressions change to preserve coverage.
 

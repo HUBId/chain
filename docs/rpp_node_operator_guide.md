@@ -91,6 +91,24 @@ paths to ensure the mTLS verifier reloads the new material.【F:config/examples/
   `method` label so operators can route incidents to the right client surface
   quickly.【F:telemetry/prometheus/runtime-rules.yaml†L19-L70】【F:telemetry/prometheus/runtime-rules.yaml†L72-L108】
 
+### Pipeline transaction latency probes
+
+- The wallet pipeline exports per-stage latency histograms. Recording rules
+  derive p95 time-to-inclusion and time-to-finality (`pipeline:time_to_*`), and
+  uptime alerts fire when either metric breaches the 60 s/120 s inclusion or
+  180 s/300 s finality SLOs for ten minutes.【F:telemetry/prometheus/runtime-rules.yaml†L265-L284】【F:ops/alerts/uptime/transaction_latency.yaml†L1-L43】
+- When `TransactionInclusionLatency*` or `TransactionFinalityLatency*` alerts
+  fire, pull the wallet pipeline dashboard (`/wallet/pipeline/dashboard`) or the
+  streaming feed to confirm which hashes are stalled and whether a specific
+  stage (mempool vs. BFT finality) dominates the delay. Tie the slow hashes back
+  to RPC latency (`node_submit_transaction`), backlog metrics, and prover queue
+  depth to isolate whether the outage is front-door, scheduling, or prover
+  bound.【F:rpp/runtime/orchestration.rs†L450-L533】【F:tools/alerts/validation.py†L120-L184】【F:tools/alerts/validation.py†L141-L215】
+- Recovery steps mirror the alerts: drain or restart validators if inclusion is
+  slow despite healthy finality, recycle prover workers if finality stays above
+  the SLO, and keep probes running until the p95 metrics fall under the warning
+  thresholds so the alert clears on its own.
+
 ### Proving/verification parameters (no hot reload)
 
 Proof cache directories and verification parameters load during bootstrap and

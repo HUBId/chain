@@ -4,7 +4,12 @@ import pytest
 import yaml
 
 from tools.alerts.baselines import UPTIME_BASELINES, compute_uptime_thresholds
-from tools.alerts.settings import BLOCK_PRODUCTION_SLA, FINALITY_SLA, UPTIME_SLA
+from tools.alerts.settings import (
+    BLOCK_PRODUCTION_SLA,
+    FINALITY_SLA,
+    PIPELINE_LATENCY_SLA,
+    UPTIME_SLA,
+)
 from tools.alerts.validation import (
     AlertValidationError,
     AlertValidationAggregateError,
@@ -29,7 +34,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 24
+    assert len(results) == 25
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -39,6 +44,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "uptime-recovery",
         "uptime-join",
         "uptime-departure",
+        "transaction-latency-outage",
         "missed-slots",
         "missed-slot-recovery",
         "missed-blocks",
@@ -193,6 +199,31 @@ def test_block_production_alerts_match_sla_thresholds() -> None:
         f"< {BLOCK_PRODUCTION_SLA.critical_ratio}"
         in expressions["ConsensusBlockProductionLagCritical"]
     )
+
+
+def test_transaction_latency_alerts_match_sla_thresholds() -> None:
+    with open("ops/alerts/uptime/transaction_latency.yaml", "r", encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle)
+
+    expressions = {
+        rule["alert"]: rule["expr"]
+        for group in manifest.get("groups", [])
+        for rule in group.get("rules", [])
+        if "alert" in rule
+    }
+
+    assert str(int(PIPELINE_LATENCY_SLA.inclusion_warning_seconds)) in expressions[
+        "TransactionInclusionLatencyWarning"
+    ]
+    assert str(int(PIPELINE_LATENCY_SLA.inclusion_critical_seconds)) in expressions[
+        "TransactionInclusionLatencyCritical"
+    ]
+    assert str(int(PIPELINE_LATENCY_SLA.finality_warning_seconds)) in expressions[
+        "TransactionFinalityLatencyWarning"
+    ]
+    assert str(int(PIPELINE_LATENCY_SLA.finality_critical_seconds)) in expressions[
+        "TransactionFinalityLatencyCritical"
+    ]
 
 
 def test_uptime_alerts_follow_baseline_buffers() -> None:

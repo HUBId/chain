@@ -12,7 +12,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 from tools.alerts.baselines import UPTIME_BASELINES, UptimeBaselineThresholds, compute_uptime_thresholds
-from tools.alerts.settings import BLOCK_PRODUCTION_SLA, FINALITY_SLA, UPTIME_SLA
+from tools.alerts.settings import (
+    BLOCK_PRODUCTION_SLA,
+    FINALITY_SLA,
+    PIPELINE_LATENCY_SLA,
+    UPTIME_SLA,
+)
 
 UPTIME_THRESHOLDS: UptimeBaselineThresholds = compute_uptime_thresholds(UPTIME_SLA)
 
@@ -22,6 +27,7 @@ PROVER_QUEUE_CORRELATION_DURATION = 300.0
 PROVER_LATENCY_CORRELATION_DURATION = 600.0
 MEMPOOL_PROBE_MIN_RATIO = 0.5
 MEMPOOL_PROBE_FAILURE_DURATION = 600.0
+PIPELINE_LATENCY_DURATION = PIPELINE_LATENCY_SLA.evaluation_duration_seconds
 
 import socketserver
 
@@ -906,6 +912,33 @@ def _evaluate_mempool_probe_readiness(
     return AlertComputation(starts_at=start_ts, value=lowest, details=detail)
 
 
+def _evaluate_pipeline_latency(
+    store: MetricStore, metric: str, threshold: float, duration: float
+) -> Optional[AlertComputation]:
+    series = store.series(metric)
+    if series is None:
+        return None
+
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in store.all_timestamps():
+        value = series.value_at(timestamp)
+        degraded = value is not None and value > threshold
+        evaluations.append((timestamp, degraded))
+        if value is not None:
+            observed.append((timestamp, value))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    worst = max((value for ts, value in observed if ts >= start_ts), default=None)
+    detail = None
+    if worst is not None:
+        detail = f"p95 latency={worst:.0f}s"
+    return AlertComputation(starts_at=start_ts, value=worst, details=detail)
+
+
 def _evaluate_rpc_subscription_health(
     store: MetricStore,
     phase: str,
@@ -1411,6 +1444,74 @@ def default_alert_rules() -> List[AlertRule]:
                 "uptime_mempool_probe_success_ratio",
                 MEMPOOL_PROBE_MIN_RATIO,
                 MEMPOOL_PROBE_FAILURE_DURATION,
+            ),
+        ),
+        AlertRule(
+            name="TransactionInclusionLatencyWarning",
+            severity="warning",
+            service="uptime",
+            summary="Synthetic inclusion probes exceeded the one-minute budget",
+            description=(
+                "Synthetic transaction probes are taking longer than the documented inclusion SLO. Inspect RPC ingress, "
+                "mempool backlog, or proposer churn before queues build up during partial outages."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes",
+            evaluator=lambda store: _evaluate_pipeline_latency(
+                store,
+                "pipeline:time_to_inclusion_seconds:p95",
+                PIPELINE_LATENCY_SLA.inclusion_warning_seconds,
+                PIPELINE_LATENCY_DURATION,
+            ),
+        ),
+        AlertRule(
+            name="TransactionInclusionLatencyCritical",
+            severity="critical",
+            service="uptime",
+            summary="Synthetic inclusion probes exceeded the two-minute budget",
+            description=(
+                "Synthetic transaction probes remain above the two-minute inclusion threshold. Drain traffic to healthy nodes "
+                "or restart stuck validators before user submissions time out."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes",
+            evaluator=lambda store: _evaluate_pipeline_latency(
+                store,
+                "pipeline:time_to_inclusion_seconds:p95",
+                PIPELINE_LATENCY_SLA.inclusion_critical_seconds,
+                PIPELINE_LATENCY_DURATION,
+            ),
+        ),
+        AlertRule(
+            name="TransactionFinalityLatencyWarning",
+            severity="warning",
+            service="uptime",
+            summary="Synthetic finality probes exceeded the three-minute budget",
+            description=(
+                "Synthetic transaction probes are taking longer than expected to finalize. Inspect prover queues, block "
+                "production, and RPC availability before finality lag widens."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes",
+            evaluator=lambda store: _evaluate_pipeline_latency(
+                store,
+                "pipeline:time_to_finality_seconds:p95",
+                PIPELINE_LATENCY_SLA.finality_warning_seconds,
+                PIPELINE_LATENCY_DURATION,
+            ),
+        ),
+        AlertRule(
+            name="TransactionFinalityLatencyCritical",
+            severity="critical",
+            service="uptime",
+            summary="Synthetic finality probes exceeded the five-minute budget",
+            description=(
+                "Synthetic transaction probes remain above the five-minute finality SLO. Escalate to uptime/finality "
+                "runbooks, drain traffic, and clear prover bottlenecks before clients accumulate retries."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes",
+            evaluator=lambda store: _evaluate_pipeline_latency(
+                store,
+                "pipeline:time_to_finality_seconds:p95",
+                PIPELINE_LATENCY_SLA.finality_critical_seconds,
+                PIPELINE_LATENCY_DURATION,
             ),
         ),
         AlertRule(
@@ -2200,6 +2301,47 @@ def build_uptime_recovery_store() -> MetricStore:
                     (2400.0, 320.0),
                     (2700.0, 335.0),
                     (3000.0, 350.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_transaction_latency_outage_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="pipeline:time_to_inclusion_seconds:p95",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 45.0),
+                    (300.0, 55.0),
+                    (600.0, 80.0),
+                    (900.0, 140.0),
+                    (1200.0, 150.0),
+                    (1500.0, 130.0),
+                    (1800.0, 90.0),
+                    (2100.0, 55.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="pipeline:time_to_finality_seconds:p95",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 120.0),
+                    (300.0, 160.0),
+                    (600.0, 190.0),
+                    (900.0, 320.0),
+                    (1200.0, 340.0),
+                    (1500.0, 310.0),
+                    (1800.0, 220.0),
+                    (2100.0, 150.0),
                 ]
             ),
         )
@@ -3202,6 +3344,16 @@ def default_validation_cases() -> List[ValidationCase]:
                 "UptimeObservationGapWarning",
                 "UptimeParticipationDropCritical",
                 "UptimeParticipationDropWarning",
+            },
+        ),
+        ValidationCase(
+            name="transaction-latency-outage",
+            store=build_transaction_latency_outage_store(),
+            expected_alerts={
+                "TransactionFinalityLatencyCritical",
+                "TransactionFinalityLatencyWarning",
+                "TransactionInclusionLatencyCritical",
+                "TransactionInclusionLatencyWarning",
             },
         ),
         ValidationCase(
