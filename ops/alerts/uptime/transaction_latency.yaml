@@ -1,0 +1,67 @@
+groups:
+  - name: uptime-transaction-latency
+    interval: 30s
+    rules:
+      - alert: TransactionInclusionLatencyWarning
+        expr: pipeline:time_to_inclusion_seconds:p95 > 60
+        for: 10m
+        labels:
+          severity: warning
+          team: uptime
+          sla: latency
+          sla_target: transaction_inclusion
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Transaction inclusion p95 above 60s
+          description: >-
+            Synthetic probes are taking longer than the one-minute budget to land in blocks. Check RPC intake,
+            mempool backlog, and leader rotation before queues grow.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes
+
+      - alert: TransactionInclusionLatencyCritical
+        expr: pipeline:time_to_inclusion_seconds:p95 > 120
+        for: 10m
+        labels:
+          severity: critical
+          team: uptime
+          sla: latency
+          sla_target: transaction_inclusion
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Transaction inclusion p95 above 120s
+          description: >-
+            Synthetic probes exceeded the two-minute inclusion budget. Drain traffic to healthy nodes or restart stuck validators
+            before user transactions time out.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes
+
+      - alert: TransactionFinalityLatencyWarning
+        expr: pipeline:time_to_finality_seconds:p95 > 180
+        for: 10m
+        labels:
+          severity: warning
+          team: uptime
+          sla: latency
+          sla_target: transaction_finality
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Transaction finality p95 above 180s
+          description: >-
+            Synthetic probes are taking more than three minutes to finalize. Inspect prover queues and leader health before
+            finality lag widens.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes
+
+      - alert: TransactionFinalityLatencyCritical
+        expr: pipeline:time_to_finality_seconds:p95 > 300
+        for: 10m
+        labels:
+          severity: critical
+          team: uptime
+          sla: latency
+          sla_target: transaction_finality
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Transaction finality p95 above 300s
+          description: >-
+            Synthetic probes exceeded the five-minute finality budget. Escalate to finality and uptime runbooks, drain traffic,
+            and clear prover bottlenecks before clients accumulate retries.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#transaction-latency-probes

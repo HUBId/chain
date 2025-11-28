@@ -53,3 +53,21 @@ BLOCK_PRODUCTION_SLA = BlockProductionServiceLevel(
     window_seconds=300.0,
     duration_seconds=600.0,
 )
+
+
+@dataclass(frozen=True)
+class PipelineLatencyServiceLevel:
+    inclusion_warning_seconds: float
+    inclusion_critical_seconds: float
+    finality_warning_seconds: float
+    finality_critical_seconds: float
+    evaluation_duration_seconds: float
+
+
+PIPELINE_LATENCY_SLA = PipelineLatencyServiceLevel(
+    inclusion_warning_seconds=60.0,
+    inclusion_critical_seconds=120.0,
+    finality_warning_seconds=180.0,
+    finality_critical_seconds=300.0,
+    evaluation_duration_seconds=600.0,
+)
