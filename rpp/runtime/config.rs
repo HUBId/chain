@@ -2786,6 +2786,8 @@ pub struct PruningCheckpointSignatureConfig {
     pub signature_version: u32,
     /// Whether pruning checkpoints must include valid signatures to load.
     pub require_signatures: bool,
+    /// Allow legacy unsigned pruning checkpoints to be loaded without verification.
+    pub allow_unsigned_legacy: bool,
 }
 
 impl PruningCheckpointSignatureConfig {
@@ -2796,6 +2798,16 @@ impl PruningCheckpointSignatureConfig {
         {
             return Err(ChainError::Config(
                 "pruning.checkpoint_signatures.require_signatures set without a signing or verifying key"
+                    .into(),
+            ));
+        }
+
+        if !self.allow_unsigned_legacy
+            && self.signing_key_path.is_none()
+            && self.verifying_key.is_none()
+        {
+            return Err(ChainError::Config(
+                "pruning.checkpoint_signatures.allow_unsigned_legacy=false requires a signing or verifying key"
                     .into(),
             ));
         }
@@ -2868,6 +2880,7 @@ impl Default for PruningCheckpointSignatureConfig {
             verifying_key: None,
             signature_version: DEFAULT_SIGNING_KEY_VERSION,
             require_signatures: false,
+            allow_unsigned_legacy: true,
         }
     }
 }
