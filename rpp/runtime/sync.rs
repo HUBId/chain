@@ -920,22 +920,55 @@ pub struct PruningCheckpoint {
     pub metadata: PruningCheckpointMetadata,
 }
 
-#[derive(Clone, Debug, Default)]
+fn backend_tag(system: ProofSystem) -> ChainResult<&'static str> {
+    match system {
+        ProofSystem::Stwo => Ok("stwo"),
+        ProofSystem::Plonky3 => Ok("plonky3"),
+        ProofSystem::RppStark => Ok("rpp-stark"),
+    }
+}
+
+fn normalize_backend_tag(raw: &str) -> ChainResult<&'static str> {
+    let normalized = raw.to_ascii_lowercase();
+    match normalized.as_str() {
+        "stwo" => Ok("stwo"),
+        "plonky3" => Ok("plonky3"),
+        "rpp-stark" | "rppstark" => Ok("rpp-stark"),
+        other => Err(ChainError::Config(format!(
+            "unsupported pruning checkpoint backend tag: {other}"
+        ))),
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CheckpointSignatureConfig {
     pub signing_key: Option<SnapshotSigningKey>,
     pub verifying_key: Option<VerifyingKey>,
     pub expected_version: u32,
     pub require_signatures: bool,
+    pub allow_unsigned_legacy: bool,
+}
+
+impl Default for CheckpointSignatureConfig {
+    fn default() -> Self {
+        Self {
+            signing_key: None,
+            verifying_key: None,
+            expected_version: 0,
+            require_signatures: false,
+            allow_unsigned_legacy: true,
+        }
+    }
 }
 
 impl CheckpointSignatureConfig {
     fn is_verification_enabled(&self) -> bool {
-        self.verifying_key.is_some() || self.require_signatures
+        self.verifying_key.is_some() || self.require_signatures || !self.allow_unsigned_legacy
     }
 
     fn sign_checkpoint(&self, payload: &[u8], checkpoint_path: &Path) -> ChainResult<()> {
         let Some(signing_key) = self.signing_key.as_ref() else {
-            if self.require_signatures {
+            if self.require_signatures || !self.allow_unsigned_legacy {
                 return Err(ChainError::Config(
                     "pruning checkpoint signatures required but signing key missing".into(),
                 ));
@@ -957,7 +990,7 @@ impl CheckpointSignatureConfig {
 
     fn verify_checkpoint(&self, payload: &[u8], checkpoint_path: &Path) -> ChainResult<()> {
         let Some(verifying_key) = self.verifying_key.as_ref() else {
-            if self.require_signatures {
+            if self.require_signatures || !self.allow_unsigned_legacy {
                 return Err(ChainError::Config(
                     "pruning checkpoint signatures required but verifying key missing".into(),
                 ));
@@ -968,7 +1001,7 @@ impl CheckpointSignatureConfig {
         let signature_path = checkpoint_signature_path(checkpoint_path)?;
         if !signature_path.exists() {
             return Err(ChainError::Config(format!(
-                "pruning checkpoint signature missing at {}",
+                "pruning checkpoint signature missing at {}; enable allow_unsigned_legacy to load unsigned checkpoints",
                 signature_path.display()
             )));
         }
@@ -1539,7 +1572,7 @@ impl ReconstructionEngine {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            backend: format!("{:?}", plan.tip.recursive_system),
+            backend: backend_tag(plan.tip.recursive_system)?.to_string(),
         };
         let checkpoint = PruningCheckpoint {
             plan: plan.clone(),
@@ -1570,6 +1603,7 @@ impl ReconstructionEngine {
             Err(err) => return Err(err.into()),
         };
 
+        let verification_required = self.checkpoint_signatures.is_verification_enabled();
         let mut candidates: Vec<PruningCheckpoint> = Vec::new();
         for entry in entries {
             let entry = entry?;
@@ -1593,7 +1627,7 @@ impl ReconstructionEngine {
 
             if let Err(err) = self.checkpoint_signatures.verify_checkpoint(&bytes, &path) {
                 warn!(?path, ?err, "failed to verify pruning checkpoint signature");
-                if self.checkpoint_signatures.is_verification_enabled() {
+                if verification_required {
                     return Err(err);
                 }
                 continue;
@@ -1617,14 +1651,32 @@ impl ReconstructionEngine {
                 continue;
             }
 
-            let backend = format!("{:?}", checkpoint.plan.tip.recursive_system);
-            if checkpoint.metadata.backend != backend {
+            let recorded_backend = match normalize_backend_tag(&checkpoint.metadata.backend) {
+                Ok(tag) => tag,
+                Err(err) => {
+                    warn!(?path, ?err, "unsupported pruning checkpoint backend tag");
+                    if verification_required {
+                        return Err(err);
+                    }
+                    continue;
+                }
+            };
+            let expected_backend = backend_tag(checkpoint.plan.tip.recursive_system)?;
+            if recorded_backend != expected_backend {
+                let err = ChainError::Config(format!(
+                    "pruning checkpoint backend mismatch at {}: expected {expected_backend}, recorded {}",
+                    path.display(),
+                    checkpoint.metadata.backend,
+                ));
                 warn!(
                     ?path,
-                    recorded = checkpoint.metadata.backend,
-                    expected = backend,
-                    "pruning checkpoint backend mismatch",
+                    expected = expected_backend,
+                    recorded = recorded_backend,
+                    "pruning checkpoint backend mismatch"
                 );
+                if verification_required {
+                    return Err(err);
+                }
                 continue;
             }
 

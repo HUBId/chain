@@ -3153,6 +3153,7 @@ impl Node {
             }),
             expected_version: config.pruning.checkpoint_signatures.signature_version,
             require_signatures: config.pruning.checkpoint_signatures.require_signatures,
+            allow_unsigned_legacy: config.pruning.checkpoint_signatures.allow_unsigned_legacy,
         };
         let p2p_identity = Arc::new(
             NodeIdentity::load_or_generate(&config.p2p_key_path)

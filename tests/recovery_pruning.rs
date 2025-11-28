@@ -60,6 +60,7 @@ fn checkpoint_signing_config(config: &NodeConfig) -> CheckpointSignatureConfig {
         verifying_key,
         expected_version: config.pruning.checkpoint_signatures.signature_version,
         require_signatures: config.pruning.checkpoint_signatures.require_signatures,
+        allow_unsigned_legacy: config.pruning.checkpoint_signatures.allow_unsigned_legacy,
     }
 }
 
