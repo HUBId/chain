@@ -68,6 +68,29 @@ paths to ensure the mTLS verifier reloads the new material.【F:config/examples/
   buckets and emit `tenant="absent"` in metrics, which should not drive
   customer-facing alerts.
 
+### RPC endpoint metrics and SLO dashboards
+
+- Every RPC call now emits both a counter and latency histogram tagged with the
+  specific endpoint label (`method`) and the result classification
+  (`success`/`client_error`/`server_error`). Node endpoints carry the
+  `node_*` prefix (for example `node_health_ready`, `node_submit_transaction`),
+  while proof and wallet endpoints continue to use `block_proof` and the
+  wallet-specific labels from the REST and JSON-RPC surfaces.【F:rpp/runtime/telemetry/metrics.rs†L117-L131】【F:rpp/runtime/telemetry/metrics.rs†L172-L206】
+- The RPC middleware records the method name for every response or error path so
+  success/failure ratios and latency SLOs remain per-endpoint, including wallet
+  APIs and snapshot/state-sync flows.【F:rpp/rpc/api.rs†L1698-L1776】【F:rpp/rpc/api.rs†L1683-L1720】
+- Grafana ships a dedicated `RPC SLOs` dashboard that plots the 5-minute
+  success ratio and p95 latency for the critical `node_health_ready`,
+  `node_submit_transaction`, and `block_proof` endpoints. Import
+  `telemetry/grafana/dashboards/rpc_slo.json` or place it in your provisioning
+  directory to expose the panels.【F:telemetry/grafana/dashboards/rpc_slo.json†L1-L84】
+- Prometheus rules add per-endpoint recording rules and alerts for these
+  SLOs. `RpcCriticalEndpointAvailability` fires when any tracked endpoint drops
+  below 99% success for five minutes, and `RpcCriticalEndpointLatency` warns
+  when p95 exceeds 750 ms for ten minutes. Both alerts are scoped by the
+  `method` label so operators can route incidents to the right client surface
+  quickly.【F:telemetry/prometheus/runtime-rules.yaml†L19-L70】【F:telemetry/prometheus/runtime-rules.yaml†L72-L108】
+
 ### Proving/verification parameters (no hot reload)
 
 Proof cache directories and verification parameters load during bootstrap and

@@ -96,8 +96,8 @@ use crate::runtime::node_runtime::node::{
 };
 use crate::runtime::sync::StateSyncServer;
 use crate::runtime::{
-    ProofRpcMethod, RpcClass, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics,
-    RuntimeMode, WalletRpcMethod,
+    NodeRpcMethod, ProofRpcMethod, RpcClass, RpcMethod, RpcRateLimitStatus, RpcResult,
+    RuntimeMetrics, RuntimeMode, SnapshotRpcMethod, WalletRpcMethod,
 };
 use crate::storage::pruner::receipt::{
     SnapshotCancelReceipt, SnapshotRebuildReceipt, SnapshotTriggerReceipt,
@@ -1521,8 +1521,12 @@ fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
         return RpcMethod::Proof(proof);
     }
 
-    if path.starts_with("/snapshots/") || path.starts_with("/state-sync/") {
-        return RpcMethod::Snapshot;
+    if let Some(snapshot) = snapshot_rpc_method(path) {
+        return RpcMethod::Snapshot(snapshot);
+    }
+
+    if let Some(node) = node_rpc_method(path) {
+        return RpcMethod::Node(node);
     }
 
     RpcMethod::Other
@@ -1656,6 +1660,128 @@ fn wallet_rpc_method(_method: &Method, path: &str) -> Option<WalletRpcMethod> {
 #[cfg(not(feature = "wallet-integration"))]
 fn wallet_rpc_method(_method: &Method, _path: &str) -> Option<WalletRpcMethod> {
     None
+}
+
+fn snapshot_rpc_method(path: &str) -> Option<SnapshotRpcMethod> {
+    if path.starts_with("/snapshots/plan") {
+        return Some(SnapshotRpcMethod::SnapshotPlan);
+    }
+
+    if path.starts_with("/snapshots/jobs") {
+        return Some(SnapshotRpcMethod::SnapshotJobs);
+    }
+
+    if path.starts_with("/snapshots/rebuild") {
+        return Some(SnapshotRpcMethod::SnapshotRebuild);
+    }
+
+    if path.starts_with("/snapshots/snapshot") {
+        return Some(SnapshotRpcMethod::SnapshotTrigger);
+    }
+
+    if path.starts_with("/snapshots/cancel") {
+        return Some(SnapshotRpcMethod::SnapshotCancel);
+    }
+
+    if path.starts_with("/snapshots/pruning/status/stream") {
+        return Some(SnapshotRpcMethod::PruningStatusStream);
+    }
+
+    if path.starts_with("/snapshots/pruning/status") {
+        return Some(SnapshotRpcMethod::PruningStatus);
+    }
+
+    if path.starts_with("/state-sync/plan") {
+        return Some(SnapshotRpcMethod::StateSyncPlan);
+    }
+
+    if path.starts_with("/state-sync/session/stream") {
+        return Some(SnapshotRpcMethod::StateSyncSessionStream);
+    }
+
+    if path.starts_with("/state-sync/session") {
+        return Some(SnapshotRpcMethod::StateSyncSessionStatus);
+    }
+
+    if path.starts_with("/state-sync/head/stream") {
+        return Some(SnapshotRpcMethod::StateSyncHeadStream);
+    }
+
+    if path.starts_with("/state-sync/chunk") {
+        return Some(SnapshotRpcMethod::StateSyncChunk);
+    }
+
+    if path.starts_with("/snapshots/") || path.starts_with("/state-sync/") {
+        return Some(SnapshotRpcMethod::Unknown);
+    }
+
+    None
+}
+
+fn node_rpc_method(path: &str) -> Option<NodeRpcMethod> {
+    match path {
+        "/health" => Some(NodeRpcMethod::Health),
+        "/health/live" => Some(NodeRpcMethod::HealthLive),
+        "/health/ready" => Some(NodeRpcMethod::HealthReady),
+        "/runtime/mode" => Some(NodeRpcMethod::RuntimeMode),
+        "/ui/node" => Some(NodeRpcMethod::UiNode),
+        "/ui/reputation" => Some(NodeRpcMethod::UiReputation),
+        "/ui/bft/membership" => Some(NodeRpcMethod::UiBftMembership),
+        "/validator/status" => Some(NodeRpcMethod::ValidatorStatus),
+        "/validator/proofs" => Some(NodeRpcMethod::ValidatorProofs),
+        "/validator/peers" => Some(NodeRpcMethod::ValidatorPeers),
+        "/validator/telemetry" => Some(NodeRpcMethod::ValidatorTelemetry),
+        "/validator/vrf" => Some(NodeRpcMethod::ValidatorVrf),
+        "/validator/vrf/rotate" => Some(NodeRpcMethod::ValidatorRotateVrf),
+        "/validator/uptime" => Some(NodeRpcMethod::ValidatorSubmitUptime),
+        "/p2p/peers" => Some(NodeRpcMethod::P2pPeers),
+        "/p2p/censorship" => Some(NodeRpcMethod::P2pCensorship),
+        "/p2p/admission/policies" => Some(NodeRpcMethod::AdmissionPolicies),
+        "/p2p/admission/policies/pending" => Some(NodeRpcMethod::AdmissionPoliciesPending),
+        "/p2p/admission/audit" => Some(NodeRpcMethod::AdmissionAudit),
+        "/p2p/admission/backups" => Some(NodeRpcMethod::AdmissionBackups),
+        "/p2p/snapshots" => Some(NodeRpcMethod::P2pSnapshotStart),
+        "/p2p/snapshots/breaker" => Some(NodeRpcMethod::P2pSnapshotBreakerStatus),
+        "/p2p/snapshots/breaker/reset" => Some(NodeRpcMethod::P2pSnapshotBreakerReset),
+        "/p2p/access-lists" => Some(NodeRpcMethod::P2pAccessLists),
+        "/status/node" => Some(NodeRpcMethod::NodeStatus),
+        "/status/mempool" => Some(NodeRpcMethod::MempoolStatus),
+        "/control/mempool" => Some(NodeRpcMethod::UpdateMempoolLimits),
+        "/status/consensus" => Some(NodeRpcMethod::ConsensusStatus),
+        "/status/rollout" => Some(NodeRpcMethod::RolloutStatus),
+        "/consensus/vrf/submit" => Some(NodeRpcMethod::VrfSubmit),
+        "/consensus/vrf/threshold" => Some(NodeRpcMethod::VrfThreshold),
+        "/consensus/proof/status" => Some(NodeRpcMethod::ProofStatus),
+        "/transactions" => Some(NodeRpcMethod::SubmitTransaction),
+        "/identities" => Some(NodeRpcMethod::SubmitIdentity),
+        "/consensus/votes" => Some(NodeRpcMethod::SubmitVote),
+        "/uptime/proofs" => Some(NodeRpcMethod::SubmitUptimeProof),
+        "/ledger/slashing" => Some(NodeRpcMethod::SlashingEvents),
+        "/ledger/timetoke" => Some(NodeRpcMethod::TimetokeSnapshot),
+        "/ledger/timetoke/sync" => Some(NodeRpcMethod::TimetokeSync),
+        "/observability/timetoke/replay" => Some(NodeRpcMethod::TimetokeReplay),
+        "/observability/audits/reputation" => Some(NodeRpcMethod::ReputationAuditStream),
+        "/observability/audits/slashing" => Some(NodeRpcMethod::SlashingAuditStream),
+        "/blocks/latest" => Some(NodeRpcMethod::LatestBlock),
+        _ => None,
+    }
+    .or_else(|| {
+        if path.starts_with("/p2p/admission/policies/pending/") {
+            Some(NodeRpcMethod::AdmissionPoliciesApprove)
+        } else if path.starts_with("/p2p/snapshots/") {
+            Some(NodeRpcMethod::P2pSnapshotStatus)
+        } else if path.starts_with("/validator/vrf/") {
+            Some(NodeRpcMethod::VrfStatus)
+        } else if path.starts_with("/ledger/reputation/") {
+            Some(NodeRpcMethod::ReputationAudit)
+        } else if path.starts_with("/blocks/") {
+            Some(NodeRpcMethod::BlockByHeight)
+        } else if path.starts_with("/accounts/") {
+            Some(NodeRpcMethod::AccountInfo)
+        } else {
+            None
+        }
+    })
 }
 
 fn proof_rpc_method(path: &str) -> Option<ProofRpcMethod> {
@@ -2282,7 +2408,7 @@ where
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let bucket_key = SnapshotRateLimitKey::from_request(&request, self.prefer_auth_identity);
-        let rpc_method = RpcMethod::Snapshot;
+        let rpc_method = classify_rpc_method(request.method(), request.uri().path());
         let rpc_class = classify_rpc_class(request.method());
         let mut inner = self.inner.clone();
         let state = self.state.clone();
@@ -4962,6 +5088,7 @@ mod telemetry_tests {
         InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
     };
     use parking_lot::RwLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -5120,6 +5247,81 @@ mod telemetry_tests {
             &exported,
             "rpp.runtime.rpc.request.total",
             "block_proof",
+            "server_error",
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn node_requests_emit_success_and_failure_metrics() -> Result<(), MetricError> {
+        let (metrics, exporter, provider) = setup_metrics();
+        let responses_ok = Arc::new(AtomicBool::new(true));
+
+        let app = Router::new()
+            .route(
+                "/health/ready",
+                get({
+                    let responses_ok = responses_ok.clone();
+                    move || {
+                        let responses_ok = responses_ok.clone();
+                        async move {
+                            if responses_ok.swap(false, Ordering::SeqCst) {
+                                StatusCode::OK
+                            } else {
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            }
+                        }
+                    }
+                }),
+            )
+            .layer(RpcMetricsLayer::new(metrics))
+            .with_state(());
+
+        let request = HttpRequest::builder()
+            .uri("/health/ready")
+            .method(Method::GET)
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let failing_request = HttpRequest::builder()
+            .uri("/health/ready")
+            .method(Method::GET)
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(failing_request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.latency",
+            "node_health_ready",
+            "success",
+        ));
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.total",
+            "node_health_ready",
+            "success",
+        ));
+
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.latency",
+            "node_health_ready",
+            "server_error",
+        ));
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.total",
+            "node_health_ready",
             "server_error",
         ));
 
