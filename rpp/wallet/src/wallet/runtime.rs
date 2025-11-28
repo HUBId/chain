@@ -7,7 +7,8 @@ use tracing::{error, warn};
 use crate::engine::WalletEngine;
 use crate::indexer::client::IndexerClient;
 use crate::indexer::scanner::{
-    ScanAbortHandle, ScanAbortToken, ScannerError, SyncStatus, WalletScanner,
+    ScanAbortHandle, ScanAbortToken, ScanSnapshot, ScannerError, SyncOutcome, SyncStatus,
+    WalletScanner,
 };
 use crate::node_client::NodeClientError;
 
@@ -17,6 +18,11 @@ pub enum WalletSyncError {
     Scanner(Arc<ScannerError>),
     #[error("sync coordinator stopped")]
     Stopped,
+    #[error("sync diverged from expected snapshot")]
+    Divergence {
+        expected: ScanSnapshot,
+        observed: ScanSnapshot,
+    },
 }
 
 impl From<ScannerError> for WalletSyncError {
@@ -35,6 +41,7 @@ struct StatusState {
     node_issue: Option<String>,
     node_hints: Vec<String>,
     abort_handle: Option<ScanAbortHandle>,
+    expected_snapshot: Option<ScanSnapshot>,
 }
 
 pub struct WalletSyncCoordinator {
@@ -146,6 +153,13 @@ impl WalletSyncCoordinator {
         lock_state(&self.state).is_syncing
     }
 
+    pub fn set_expected_snapshot(&self, snapshot: Option<ScanSnapshot>) -> Option<ScanSnapshot> {
+        let mut guard = lock_state(&self.state);
+        let previous = guard.expected_snapshot.take();
+        guard.expected_snapshot = snapshot;
+        previous
+    }
+
     pub async fn shutdown(&self) -> Result<(), WalletSyncError> {
         self.abort_active_scan();
         let _ = self.shutdown_tx.send(true);
@@ -234,6 +248,7 @@ async fn run_loop(
         match command {
             SyncCommand::Resume => {
                 let (abort_handle, abort_token) = ScanAbortToken::new_pair();
+                let expected = { lock_state(&state).expected_snapshot.clone() };
                 {
                     let mut guard = lock_state(&state);
                     guard.is_syncing = true;
@@ -243,7 +258,8 @@ async fn run_loop(
                 }
                 let result = scanner
                     .sync_resume(&abort_token)
-                    .map_err(WalletSyncError::from);
+                    .map_err(WalletSyncError::from)
+                    .and_then(|outcome| evaluate_expectation(outcome, expected));
                 update_state(&state, &result);
                 if let Err(error) = &result {
                     error!(?error, "wallet resume synchronisation failed");
@@ -256,6 +272,7 @@ async fn run_loop(
                     guard.last_error = None;
                     guard.pending_rescan.take().unwrap_or_default()
                 };
+                let expected = { lock_state(&state).expected_snapshot.clone() };
                 let (abort_handle, abort_token) = ScanAbortToken::new_pair();
                 {
                     let mut guard = lock_state(&state);
@@ -263,7 +280,8 @@ async fn run_loop(
                 }
                 let result = scanner
                     .rescan_from(from_height, &abort_token)
-                    .map_err(WalletSyncError::from);
+                    .map_err(WalletSyncError::from)
+                    .and_then(|outcome| evaluate_expectation(outcome, expected));
                 update_state(&state, &result);
                 if let Err(error) = &result {
                     error!(?error, from_height, "wallet rescan failed");
@@ -278,13 +296,13 @@ async fn run_loop(
     guard.pending_rescan = None;
 }
 
-fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncStatus, WalletSyncError>) {
+fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncOutcome, WalletSyncError>) {
     let mut guard = lock_state(state);
     guard.is_syncing = false;
     guard.abort_handle = None;
     match result {
-        Ok(status) => {
-            guard.last_status = Some(status.clone());
+        Ok(outcome) => {
+            guard.last_status = Some(outcome.status.clone());
             guard.last_error = None;
             // Successful sync clears previously recorded node hints.
             guard.node_issue = None;
@@ -294,6 +312,21 @@ fn update_state(state: &Arc<Mutex<StatusState>>, result: &Result<SyncStatus, Wal
             guard.last_error = Some(error.clone());
         }
     }
+}
+
+fn evaluate_expectation(
+    outcome: SyncOutcome,
+    expected: Option<ScanSnapshot>,
+) -> Result<SyncOutcome, WalletSyncError> {
+    if let Some(expected) = expected {
+        if expected != outcome.snapshot {
+            return Err(WalletSyncError::Divergence {
+                expected,
+                observed: outcome.snapshot,
+            });
+        }
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -306,8 +339,9 @@ mod tests {
         GetScripthashStatusResponse, GetTransactionRequest, GetTransactionResponse, IndexedHeader,
         IndexerClientError, ListScripthashUtxosRequest, ListScripthashUtxosResponse,
     };
-    use crate::indexer::scanner::{SyncCheckpoints, SyncMode};
+    use crate::indexer::scanner::{ScanSnapshot, SyncCheckpoints, SyncMode};
     use crate::node_client::NodeRejectionHint;
+    use crate::WalletBalance;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
@@ -500,6 +534,63 @@ mod tests {
             .expect("status after clearing node hint");
         assert!(cleared.node_issue.is_none());
         assert!(cleared.hints.is_empty());
+
+        coordinator.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn expected_snapshots_match_observed_results() {
+        let engine = test_engine();
+        let indexer = CountingIndexer::new();
+        let calls = indexer.calls();
+        let coordinator =
+            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+
+        wait_for_calls(&calls, 1).await;
+
+        let expected = ScanSnapshot {
+            balance: WalletBalance::default(),
+            nonce: 0,
+        };
+        coordinator.set_expected_snapshot(Some(expected));
+
+        assert!(coordinator.request_resume_sync().expect("resume"));
+        wait_for_calls(&calls, 2).await;
+
+        assert!(coordinator.last_error().is_none());
+
+        coordinator.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn expected_snapshot_divergence_surfaces_error() {
+        let engine = test_engine();
+        let indexer = CountingIndexer::new();
+        let calls = indexer.calls();
+        let coordinator =
+            WalletSyncCoordinator::start(engine, Arc::new(indexer)).expect("coordinator");
+
+        wait_for_calls(&calls, 1).await;
+
+        let expected = ScanSnapshot {
+            balance: WalletBalance::default(),
+            nonce: 1,
+        };
+        coordinator.set_expected_snapshot(Some(expected.clone()));
+
+        assert!(coordinator.request_resume_sync().expect("resume"));
+        wait_for_calls(&calls, 2).await;
+
+        match coordinator.last_error().expect("divergence error") {
+            WalletSyncError::Divergence {
+                expected: e,
+                observed,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(observed.nonce, 0);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
 
         coordinator.shutdown().await.expect("shutdown");
     }
