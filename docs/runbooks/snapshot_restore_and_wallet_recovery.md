@@ -97,6 +97,11 @@ This guide walks responders through restoring node state from exported snapshots
    The report highlights replay success/failure counts and latency quantiles so responders can decide whether to keep the node in rotation.【F:xtask/src/main.rs†L5588-L5592】【F:xtask/src/main.rs†L3797-L3847】
 3. **Monitor uptime dashboards.** Load the uptime/finality correlation dashboard to verify alerts track the recovered node and that uptime/finality pairs remain within SLO thresholds before closing the incident.【F:docs/dashboards/uptime_finality_correlation.json†L1-L200】【F:RELEASE.md†L41-L43】
 
+4. **Track restore-time SLO drift.** Snapshot restores briefly pause block production; make the pause explicit:
+   - **Finality latency:** The transaction probes underpinning `pipeline:time_to_finality_seconds:p95` should remain below the 180 s warning SLO (300 s critical) once the restored node rejoins the cluster.【F:docs/operations/uptime.md†L101-L118】【F:telemetry/prometheus/runtime-rules.yaml†L440-L520】 If p95 stays above 180 s for a 10‑minute window, hold traffic and restart lagging proposers until finality recovers.
+   - **Uptime backlog:** Pending uptime proofs should drain immediately after the snapshot resumes. Keep `pending_uptime_proofs` under the single-digit backlog we accept for steady state; if the queue keeps growing, trigger a timetoke replay and check peer health before resuming rotation.
+   - **Backends and branch factors:** Record which proof backends and the active branch factor were restored when collecting evidence. Divergent backends or branch factors can mask slow finality—capture the metrics artifacts (or the new `snapshot_restore_slo` test output) to prove the combination stayed within the documented SLOs.
+
 ## 6. Incident documentation and handoff
 
 - Record snapshot sources, checksum outputs, pruning receipts, wallet restore commands, and backend verification results in the shared incident log. The incident response and operator guides link back to this page—keep those references updated when steps change.
