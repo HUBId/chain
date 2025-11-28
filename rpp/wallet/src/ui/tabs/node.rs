@@ -2410,6 +2410,7 @@ mod tests {
             last_error: None,
             node_issue: None,
             hints: Vec::new(),
+            mismatch: None,
         });
 
         let command = state.update(dummy_client(), Message::RequestRescanFromHeight);

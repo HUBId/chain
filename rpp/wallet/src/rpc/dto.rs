@@ -522,6 +522,7 @@ mod tests {
             }),
             last_rescan_timestamp: Some(4),
             last_error: Some("stalled".to_string()),
+            mismatch: None,
         };
         roundtrip(&response);
     }
