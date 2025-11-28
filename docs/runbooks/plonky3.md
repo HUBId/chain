@@ -22,6 +22,20 @@ which enumerates the artefacts and commands auditors expect before a rollout.【
   - Runtime parameters inherit the boolean `use_gpu_acceleration` switch from the validator configuration. Setting the flag to `false` pins the prover to CPU execution for all circuits. This mirrors the default shipping profile and remains the quickest way to exclude the GPU path during scheduled maintenance.【F:rpp/proofs/plonky3/params.rs†L5-L16】【F:rpp/proofs/plonky3/prover/mod.rs†L150-L249】
   - Emergency override: export `PLONKY3_GPU_DISABLE=1` (or any truthy value) in the prover service environment. The backend detects the override, emits an informational log entry per circuit, and automatically downgrades to CPU proving/verification without requiring a binary rebuild.【F:prover/plonky3_backend/src/gpu.rs†L24-L66】【F:prover/plonky3_backend/src/lib.rs†L1869-L1911】
 
+## Hot reload status and parameter rotation
+
+* **No live reload path.** Proving and verification parameters are loaded during
+  startup; the runtime does not watch the cache directory or respond to signals
+  to replace keys or parameter bundles on the fly.【F:docs/configuration.md†L7-L20】
+* **Rotation workflow.** To swap parameter snapshots or proving/verifying keys,
+  pause the prover or validator service, replace the assets under
+  `proof_cache_dir`, and run a dry run (`rpp-node preflight --mode validator --config <path>` or
+  `cargo run -p rpp-chain -- validator --dry-run --config <path> --wallet-config <path>`) before
+  restarting so startup validation surfaces missing files or checksum errors in
+  logs/exit codes.【F:config/node.toml†L5-L20】【F:docs/validator_quickstart.md†L195-L210】 Monitor
+  `backend_health.plonky3` and proof generation/verification metrics after the
+  restart to confirm the new parameters are active.【F:rpp/runtime/node.rs†L4862-L4894】【F:rpp/runtime/telemetry/metrics.rs†L426-L520】
+
 ## 1. Validation before rollout
 
 1. **Build artefacts**
