@@ -126,3 +126,33 @@ State sync validation is wired into the light-client tests and helper routines i
 `tests/support/sync.rs`. CI jobs or release pipelines can invoke the helpers to
 assemble plans, collect artifacts, and assert that every verification stage
 completes before publishing a new snapshot set.【F:tests/support/sync.rs†L91-L188】
+
+Wallet pipelines now run a dedicated state-sync reconciliation that rebuilds
+pruned blocks and wallet account state across both prover backends. The
+`wallet_state_sync_replays_accounts_across_backends` test builds a pruning plan,
+reconstructs each requested block, and compares the resulting account map to the
+seeded expectations; any hash or balance/nonce drift fails the run while
+printing the backend label that diverged.【F:tests/state_sync_wallet.rs†L58-L106】
+
+To reproduce the reconciliation locally, run the test once per backend and
+preserve the log output for audit evidence:
+
+```
+RPP_PROVER_DETERMINISTIC=1 cargo test --locked --test state_sync_wallet \
+  --features "wallet-integration,prover-stwo" -- --nocapture
+RPP_PROVER_DETERMINISTIC=1 cargo test --locked --test state_sync_wallet \
+  --features "wallet-integration,backend-rpp-stark" -- --nocapture
+```
+
+Each invocation emits a `state_sync_wallet.log` file in CI artifacts. When a
+backend diverges, the assertion messages identify whether the reconstructed
+block hashes or the wallet account balances failed to match. Correlate failures
+with the runtime wallet telemetry that tracks prover backend outcomes and sync
+progress to isolate the cause:
+
+- `rpp.runtime.wallet.prover.jobs`/`rpp.runtime.wallet.prover.failures` record
+  successes and error codes per backend, flagging prover-level regressions
+  surfaced by the reconciliation run.【F:rpp/runtime/telemetry/metrics.rs†L188-L244】
+- `rpp.runtime.wallet.sync.{wallet_height,chain_tip_height,lag.blocks}` expose
+  the replayed height and observed lag, helping operators confirm whether the
+  reconstructed plan stalled before the account map drifted.【F:rpp/runtime/telemetry/metrics.rs†L244-L276】

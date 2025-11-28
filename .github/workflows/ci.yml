@@ -1170,6 +1170,39 @@ PY
             pruning_checkpoint_round_trip_rpp_stark_backend \
             wallet_snapshot_round_trip_rpp_stark_backend
 
+  wallet-state-sync-reconciliation:
+    name: Wallet state-sync reconciliation (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: prover-stwo
+            features: prover-stwo
+          - backend: rpp-stark
+            features: backend-rpp-stark
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wallet-state-sync-${{ matrix.backend }}
+      - name: Run wallet reconciliation test (${{ matrix.backend }})
+        env:
+          RPP_PROVER_DETERMINISTIC: 1
+        run: |
+          set -euo pipefail
+          mkdir -p "artifacts/wallet-state-sync/${{ matrix.backend }}"
+          cargo test --locked --test state_sync_wallet --features "wallet-integration,${{ matrix.features }}" -- --nocapture \
+            2>&1 | tee "artifacts/wallet-state-sync/${{ matrix.backend }}/state_sync_wallet.log"
+      - name: Upload wallet reconciliation artifacts (${{ matrix.backend }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-state-sync-${{ matrix.backend }}
+          path: artifacts/wallet-state-sync/${{ matrix.backend }}
+
   snapshot-verifier:
     name: Snapshot verifier smoke test
     runs-on: ubuntu-latest
