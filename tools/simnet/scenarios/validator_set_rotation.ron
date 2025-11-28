@@ -1,0 +1,20 @@
+{
+  "name": "validator-set-rotation",
+  "description": "Restart and rotate validators while checking timetoke alignment and finality continuity",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "resources": {
+    "cpus": 12,
+    "memory_gb": 24
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/validator_set_rotation.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/validator_set_rotation.json"
+  },
+  "consensus": null
+}

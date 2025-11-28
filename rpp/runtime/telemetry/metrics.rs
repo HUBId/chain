@@ -133,6 +133,10 @@ pub struct RuntimeMetrics {
     consensus_witness_events: Counter<u64>,
     consensus_slashing_events: Counter<u64>,
     consensus_failed_votes: Counter<u64>,
+    validator_set_changes: Counter<u64>,
+    validator_set_change_height: Histogram<u64>,
+    validator_set_quorum_delay: Histogram<f64>,
+    timetoke_root_mismatches: Counter<u64>,
     consensus_vote_latency: Histogram<f64>,
     consensus_block_schedule_slots_total: Counter<u64>,
     chain_block_height: Histogram<u64>,
@@ -393,6 +397,30 @@ impl RuntimeMetrics {
             consensus_failed_votes: meter
                 .u64_counter("rpp.runtime.consensus.failed_votes")
                 .with_description("Total failed consensus vote registrations")
+                .with_unit("1")
+                .build(),
+            validator_set_changes: meter
+                .u64_counter("validator_set_changes_total")
+                .with_description("Count of validator set/epoch transitions observed locally")
+                .with_unit("1")
+                .build(),
+            validator_set_change_height: meter
+                .u64_histogram("validator_set_change_height")
+                .with_description("Block heights at which validator set transitions were observed")
+                .with_unit("1")
+                .build(),
+            validator_set_quorum_delay: meter
+                .f64_histogram("validator_set_change_quorum_delay_ms")
+                .with_description(
+                    "Latency between validator set transitions and first subsequent quorum",
+                )
+                .with_unit("ms")
+                .build(),
+            timetoke_root_mismatches: meter
+                .u64_counter("timetoke_root_mismatch_total")
+                .with_description(
+                    "Total timetoke root mismatches encountered during gossip timetoke sync",
+                )
                 .with_unit("1")
                 .build(),
             consensus_vote_latency: meter
@@ -920,6 +948,32 @@ impl RuntimeMetrics {
         let reason = reason.into();
         let attributes = [KeyValue::new("reason", reason)];
         self.consensus_failed_votes.add(1, &attributes);
+    }
+
+    /// Record a validator set or epoch transition along with the triggering height.
+    pub fn record_validator_set_change(&self, epoch: u64, height: u64) {
+        let epoch_attr = [KeyValue::new("epoch", epoch as i64)];
+        self.validator_set_changes.add(1, &epoch_attr);
+        self.validator_set_change_height.record(height, &epoch_attr);
+    }
+
+    /// Record the latency from a validator set change to the next observed quorum.
+    pub fn record_validator_set_quorum_delay(&self, epoch: u64, height: u64, latency: Duration) {
+        let attributes = [
+            KeyValue::new("epoch", epoch as i64),
+            KeyValue::new("height", height as i64),
+        ];
+        self.validator_set_quorum_delay
+            .record(latency.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record a timetoke root mismatch detected during gossip timetoke sync.
+    pub fn record_timetoke_root_mismatch<S: Into<String>>(&self, source: S, peer: Option<String>) {
+        let mut attributes = vec![KeyValue::new("source", source.into())];
+        if let Some(peer) = peer {
+            attributes.push(KeyValue::new("peer", peer));
+        }
+        self.timetoke_root_mismatches.add(1, &attributes);
     }
 
     pub fn record_consensus_vote_latency(

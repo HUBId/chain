@@ -28,6 +28,7 @@ back to `--scenario` for ad-hoc RON files.
 | `reorg-stark` | `tools/simnet/scenarios/consensus_reorg_stark.ron` | Exercises the STARK backend reorg scenario. | `12` cores / `24 GiB` |
 | `reorg-rpp-stark` | `tools/simnet/scenarios/consensus_reorg_rpp_stark.ron` | Exercises RPP-STARK fork-choice validation and recovery. | `12` cores / `24 GiB` |
 | `epoch-drift` | `tools/simnet/scenarios/consensus_epoch_drift.ron` | Injects skewed latency and slow peers to fuzz epoch transitions and fork-choice stability. | `10` cores / `20 GiB` |
+| `validator-set-rotation` | `tools/simnet/scenarios/validator_set_rotation.ron` | Restarts and rotates validators while checking timetoke alignment and finality continuity. | `12` cores / `24 GiB` |
 | `uptime-soak` | `tools/simnet/scenarios/uptime_soak.ron` | Multi-hour soak with induced pauses to track uptime/finality health. | `12` cores / `24 GiB` |
 
 Pass a custom path to execute ad-hoc scenarios:

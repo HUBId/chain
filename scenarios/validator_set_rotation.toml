@@ -1,0 +1,66 @@
+[sim]
+seed = 9201
+# Validator rotation drill that restarts and replaces peers while tracking
+# timetoke alignment and finality continuity.
+duration_ms = 68000
+
+[topology]
+type = "small_world"
+n = 22
+k = 5
+rewire_p = 0.2
+
+[regions]
+assignments = [
+  "CORE", "CORE", "CORE", "CORE", "CORE", "CORE",
+  "EDGE", "EDGE", "EDGE", "EDGE", "EDGE", "EDGE",
+  "CANDIDATE", "CANDIDATE", "CANDIDATE", "CANDIDATE", "CANDIDATE", "CANDIDATE",
+  "CHURN", "CHURN", "CHURN", "CHURN",
+]
+
+[links]
+default = { delay_ms = 28, jitter_ms = 9, loss = 0.008 }
+CORE-EDGE = { delay_ms = 44, jitter_ms = 12, loss = 0.014 }
+CORE-CANDIDATE = { delay_ms = 48, jitter_ms = 14, loss = 0.016 }
+EDGE-CHURN = { delay_ms = 56, jitter_ms = 15, loss = 0.02 }
+CANDIDATE-CHURN = { delay_ms = 52, jitter_ms = 14, loss = 0.018 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 8, jitter_ms = 3 }
+untrusted = { extra_delay_ms = 18, jitter_ms = 7 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.08 }
+
+[traffic.tx.payload]
+min_bytes = 640
+max_bytes = 4096
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 12000
+model = "poisson"
+lambda_per_sec = 18.0
+
+[[traffic.tx.phases]]
+name = "rotation"
+duration_ms = 26000
+model = "on_off_bursty"
+on_lambda_per_sec = 36.0
+on_duration_ms = 4200
+off_duration_ms = 1400
+
+[[traffic.tx.phases]]
+name = "recovery"
+duration_ms = 30000
+model = "poisson"
+lambda_per_sec = 20.0
+
+[faults.churn]
+start_ms = 14000
+rate_per_min = 32.0
+restart_after_ms = 3600
+
+[metrics]
+json = "target/simnet/validator-set-rotation/summaries/validator_set_rotation.json"
+csv = "target/simnet/validator-set-rotation/summaries/validator_set_rotation.csv"

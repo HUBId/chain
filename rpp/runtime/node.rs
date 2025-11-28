@@ -21,7 +21,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1127,11 +1127,19 @@ struct ConsensusTelemetryState {
     witness_events: u64,
     slashing_events: u64,
     failed_votes: u64,
+    pending_validator_change: Option<ValidatorChangeMarker>,
 }
 
 pub struct ConsensusTelemetry {
     state: ParkingMutex<ConsensusTelemetryState>,
     metrics: Arc<RuntimeMetrics>,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatorChangeMarker {
+    epoch: u64,
+    height: u64,
+    started: Instant,
 }
 
 impl ConsensusTelemetry {
@@ -1140,6 +1148,17 @@ impl ConsensusTelemetry {
             state: ParkingMutex::new(ConsensusTelemetryState::default()),
             metrics,
         }
+    }
+
+    pub fn record_validator_change(&self, epoch: u64, height: u64) {
+        let mut state = self.state.lock();
+        state.pending_validator_change = Some(ValidatorChangeMarker {
+            epoch,
+            height,
+            started: Instant::now(),
+        });
+        drop(state);
+        self.metrics.record_validator_set_change(epoch, height);
     }
 
     pub fn record_round_start(&self, height: u64, round: u64, leader: &Address) {
@@ -1166,18 +1185,31 @@ impl ConsensusTelemetry {
     }
 
     pub fn record_quorum(&self, height: u64, round: u64) {
-        let mut state = self.state.lock();
-        if state.last_round_height == Some(height) && state.last_round_number == Some(round) {
-            let latency_ms = state
-                .last_round_started
-                .map(|started| started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
-            state.quorum_latency_ms = latency_ms;
-            drop(state);
-            if let Some(latency_ms) = latency_ms {
-                self.metrics.record_consensus_quorum_latency(
-                    height,
-                    round,
-                    Duration::from_millis(latency_ms),
+        let (latency_ms, pending_change) = {
+            let mut state = self.state.lock();
+            if state.last_round_height == Some(height) && state.last_round_number == Some(round) {
+                let latency_ms = state
+                    .last_round_started
+                    .map(|started| started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+                let pending_change = latency_ms
+                    .is_some()
+                    .then(|| state.pending_validator_change.take())
+                    .flatten();
+                state.quorum_latency_ms = latency_ms;
+                (latency_ms, pending_change)
+            } else {
+                (None, None)
+            }
+        };
+        if let Some(latency_ms) = latency_ms {
+            let latency = Duration::from_millis(latency_ms);
+            self.metrics
+                .record_consensus_quorum_latency(height, round, latency);
+            if let Some(change) = pending_change {
+                self.metrics.record_validator_set_quorum_delay(
+                    change.epoch,
+                    change.height,
+                    latency,
                 );
             }
         }
@@ -1898,6 +1930,7 @@ pub(crate) struct NodeInner {
     address: Address,
     storage: Storage,
     ledger: Ledger,
+    last_epoch: AtomicU64,
     mempool: RwLock<VecDeque<TransactionProofBundle>>,
     pending_transaction_metadata: RwLock<HashMap<String, PendingTransactionMetadata>>,
     identity_mempool: RwLock<VecDeque<AttestedIdentityRequest>>,
@@ -3305,6 +3338,7 @@ impl Node {
             address,
             storage,
             ledger,
+            last_epoch: AtomicU64::new(ledger.current_epoch()),
             mempool: RwLock::new(VecDeque::new()),
             pending_transaction_metadata: RwLock::new(HashMap::new()),
             identity_mempool: RwLock::new(VecDeque::new()),
@@ -4987,6 +5021,8 @@ impl NodeInner {
                 actual = %local_root,
                 "timetoke root mismatch after applying delta"
             );
+            self.runtime_metrics
+                .record_timetoke_root_mismatch("gossip_delta", Some(peer.to_base58()));
         }
         Ok(())
     }
@@ -5110,6 +5146,17 @@ impl NodeInner {
             slashing_events: consensus_snapshot.slashing_events,
             failed_votes: consensus_snapshot.failed_votes,
         })
+    }
+
+    fn sync_epoch_with_metrics(&self, height: u64) {
+        self.ledger.sync_epoch_for_height(height);
+        let epoch = self.ledger.current_epoch();
+        let previous = self.inner.last_epoch.swap(epoch, Ordering::SeqCst);
+        if previous != epoch {
+            self.inner
+                .consensus_telemetry
+                .record_validator_change(epoch, height);
+        }
     }
 
     fn update_runtime_metrics(&self) {
@@ -7215,7 +7262,7 @@ impl NodeInner {
 
     fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {
         let next_height = self.chain_tip.read().height.saturating_add(1);
-        self.ledger.sync_epoch_for_height(next_height);
+        self.sync_epoch_with_metrics(next_height);
         if self.config.rollout.feature_gates.recursive_proofs {
             if let Err(err) = self
                 .verifiers
@@ -8712,7 +8759,7 @@ impl NodeInner {
         let height = tip_snapshot.height + 1;
         span.record("height", &height);
         self.prune_consensus_rounds_below(height);
-        self.ledger.sync_epoch_for_height(height);
+        self.sync_epoch_with_metrics(height);
         let epoch = self.ledger.current_epoch();
         self.runtime_metrics.record_block_schedule_slot(epoch);
         let accounts_snapshot = self.ledger.accounts_snapshot();
@@ -9496,7 +9543,7 @@ impl NodeInner {
             Some(consensus_proof),
         );
         block.verify(previous_block.as_ref(), &self.keypair.public)?;
-        self.ledger.sync_epoch_for_height(height.saturating_add(1));
+        self.sync_epoch_with_metrics(height.saturating_add(1));
         let encoded_new_root = hex::encode(receipt.new_root);
         let previous_root_hex = hex::encode(
             TaggedDigest::new(SNAPSHOT_STATE_TAG, receipt.previous_root).prefixed_bytes(),
@@ -9800,7 +9847,7 @@ impl NodeInner {
             );
         }
 
-        self.ledger.sync_epoch_for_height(height);
+        self.sync_epoch_with_metrics(height);
 
         let participants = round.commit_participants();
         let witness_bundle =
@@ -9913,7 +9960,7 @@ impl NodeInner {
         }
 
         let state_proof_artifact = block.stark.state_proof.clone();
-        self.ledger.sync_epoch_for_height(height.saturating_add(1));
+        self.sync_epoch_with_metrics(height.saturating_add(1));
         let receipt = self.persist_accounts(height)?;
         let encoded_new_root = hex::encode(receipt.new_root);
         let previous_root_hex = hex::encode(

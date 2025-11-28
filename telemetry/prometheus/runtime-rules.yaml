@@ -75,6 +75,60 @@ groups:
             and execute the consensus liveness runbook to restore proposer health before finality stalls.
         runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#block-production-rate-and-slot-budget
 
+  - name: consensus-validator-changes
+    interval: 30s
+    rules:
+      - record: consensus:validator_change_quorum_p95_ms:10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, environment) (rate(validator_set_change_quorum_delay_ms_bucket[10m]))
+          )
+        labels:
+          component: consensus
+
+      - alert: ValidatorSetChangeQuorumDelayWarning
+        expr: consensus:validator_change_quorum_p95_ms:10m > 5000
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator set change waiting more than 5s for quorum
+          description: >-
+            Validator membership changed and the next quorum took longer than the 5s budget. Inspect
+            proposer health, churn events, and timetoke alignment before rotating additional validators.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#validator-set-changes
+
+      - alert: ValidatorSetChangeQuorumDelayCritical
+        expr: consensus:validator_change_quorum_p95_ms:10m > 10000
+        for: 2m
+        labels:
+          severity: critical
+          team: consensus
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator set change taking more than 10s to regain quorum
+          description: >-
+            Validator membership changed and quorum formation exceeded ten seconds. Pause further rotations and confirm
+            finality continuity before resuming the rollout.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#validator-set-changes
+
+      - alert: TimetokeRootMisalignment
+        expr: sum by (environment) (increase(timetoke_root_mismatch_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: consensus
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Timetoke root mismatches observed during gossip sync
+          description: >-
+            The node observed timetoke root mismatches while applying gossip deltas. Verify snapshot keys, validator set
+            alignment, and retry the sync before accepting further membership changes.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#validator-set-changes
+
   - name: rpc-availability
     interval: 30s
     rules:
