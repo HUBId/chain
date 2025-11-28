@@ -1796,6 +1796,15 @@ struct TokenBucketState<K> {
     replenish_per_second: f64,
 }
 
+impl ApiKey {
+    fn tenant_label(&self) -> Option<String> {
+        match self {
+            ApiKey::Provided(value) => sanitize_tenant_label(value),
+            ApiKey::Anonymous => None,
+        }
+    }
+}
+
 impl<K> TokenBucketState<K>
 where
     K: Eq + std::hash::Hash + Clone,
@@ -1921,6 +1930,7 @@ fn attach_rate_limit_headers(
     headers: &mut HeaderMap,
     snapshot: &RateLimitSnapshot,
     class: RpcClass,
+    tenant: Option<&str>,
 ) {
     let _ = headers.insert(
         "X-RateLimit-Limit",
@@ -1942,9 +1952,20 @@ fn attach_rate_limit_headers(
         HeaderValue::from_str(class.as_str())
             .unwrap_or_else(|_| HeaderValue::from_static("unknown")),
     );
+
+    if let Some(tenant) = tenant {
+        let _ = headers.insert(
+            "X-RateLimit-Tenant",
+            HeaderValue::from_str(tenant).unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+        );
+    }
 }
 
-fn rate_limit_response(snapshot: RateLimitSnapshot, class: RpcClass) -> Response {
+fn rate_limit_response(
+    snapshot: RateLimitSnapshot,
+    class: RpcClass,
+    tenant: Option<&str>,
+) -> Response {
     let mut response = Response::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
         .body(Body::from(format!(
@@ -1952,7 +1973,7 @@ fn rate_limit_response(snapshot: RateLimitSnapshot, class: RpcClass) -> Response
             class.as_str()
         )))
         .unwrap();
-    attach_rate_limit_headers(response.headers_mut(), &snapshot, class);
+    attach_rate_limit_headers(response.headers_mut(), &snapshot, class, tenant);
     response
 }
 
@@ -1987,6 +2008,13 @@ impl SnapshotRateLimitKey {
                 }
             })
     }
+
+    fn tenant_label(&self) -> Option<String> {
+        match self {
+            SnapshotRateLimitKey::Auth(api_key) => api_key.tenant_label(),
+            SnapshotRateLimitKey::Ip(ip) => Some(ip.to_string()),
+        }
+    }
 }
 
 fn extract_api_key(request: &Request<Body>) -> ApiKey {
@@ -2007,6 +2035,29 @@ fn extract_api_key(request: &Request<Body>) -> ApiKey {
     }
 
     ApiKey::Anonymous
+}
+
+fn sanitize_tenant_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_bearer = trimmed.strip_prefix("Bearer ").unwrap_or(trimmed);
+    let sanitized: String = without_bearer
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | ':' | '.' => ch,
+            _ => '_',
+        })
+        .take(64)
+        .collect();
+
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
 }
 
 #[derive(Clone)]
@@ -2073,6 +2124,7 @@ where
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
+        let tenant_label = api_key.tenant_label();
 
         Box::pin(async move {
             match state.try_acquire(rpc_class, api_key) {
@@ -2081,6 +2133,7 @@ where
                         rpc_class,
                         rpc_method,
                         RpcRateLimitStatus::Allowed,
+                        tenant_label.as_deref(),
                     );
                     inner.call(request).await
                 }
@@ -2089,8 +2142,13 @@ where
                         rpc_class,
                         rpc_method,
                         RpcRateLimitStatus::Throttled,
+                        tenant_label.as_deref(),
                     );
-                    Ok(rate_limit_response(snapshot, rpc_class))
+                    Ok(rate_limit_response(
+                        snapshot,
+                        rpc_class,
+                        tenant_label.as_deref(),
+                    ))
                 }
             }
         })
@@ -2127,6 +2185,7 @@ where
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
+        let tenant_label = remote_ip.map(|ip| ip.to_string());
 
         Box::pin(async move {
             if let Some(ip) = remote_ip {
@@ -2136,6 +2195,7 @@ where
                             rpc_class,
                             rpc_method,
                             RpcRateLimitStatus::Allowed,
+                            tenant_label.as_deref(),
                         );
                     }
                     Err(snapshot) => {
@@ -2143,12 +2203,22 @@ where
                             rpc_class,
                             rpc_method,
                             RpcRateLimitStatus::Throttled,
+                            tenant_label.as_deref(),
                         );
-                        return Ok(rate_limit_response(snapshot, rpc_class));
+                        return Ok(rate_limit_response(
+                            snapshot,
+                            rpc_class,
+                            tenant_label.as_deref(),
+                        ));
                     }
                 }
             } else {
-                metrics.record_rpc_rate_limit(rpc_class, rpc_method, RpcRateLimitStatus::Allowed);
+                metrics.record_rpc_rate_limit(
+                    rpc_class,
+                    rpc_method,
+                    RpcRateLimitStatus::Allowed,
+                    tenant_label.as_deref(),
+                );
             }
 
             inner.call(request).await
@@ -2217,10 +2287,16 @@ where
         let mut inner = self.inner.clone();
         let state = self.state.clone();
         let metrics = self.metrics.clone();
+        let tenant_label = bucket_key.as_ref().and_then(|key| key.tenant_label());
 
         Box::pin(async move {
             let Some(key) = bucket_key else {
-                metrics.record_rpc_rate_limit(rpc_class, rpc_method, RpcRateLimitStatus::Allowed);
+                metrics.record_rpc_rate_limit(
+                    rpc_class,
+                    rpc_method,
+                    RpcRateLimitStatus::Allowed,
+                    tenant_label.as_deref(),
+                );
                 return inner.call(request).await;
             };
 
@@ -2230,9 +2306,15 @@ where
                         rpc_class,
                         rpc_method,
                         RpcRateLimitStatus::Allowed,
+                        tenant_label.as_deref(),
                     );
                     let mut response = inner.call(request).await?;
-                    attach_rate_limit_headers(response.headers_mut(), &snapshot, rpc_class);
+                    attach_rate_limit_headers(
+                        response.headers_mut(),
+                        &snapshot,
+                        rpc_class,
+                        tenant_label.as_deref(),
+                    );
                     Ok(response)
                 }
                 Err(snapshot) => {
@@ -2240,8 +2322,13 @@ where
                         rpc_class,
                         rpc_method,
                         RpcRateLimitStatus::Throttled,
+                        tenant_label.as_deref(),
                     );
-                    Ok(rate_limit_response(snapshot, rpc_class))
+                    Ok(rate_limit_response(
+                        snapshot,
+                        rpc_class,
+                        tenant_label.as_deref(),
+                    ))
                 }
             }
         })

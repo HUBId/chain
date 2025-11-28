@@ -188,7 +188,28 @@ fn run_unit_suites() -> Result<()> {
     run_wallet_feature_matrix()?;
     run_stwo_backend_matrix_tests()?;
     run_zsi_renewal_tests()?;
+    run_rpc_rate_limit_tests()?;
     run_rpp_fail_matrix_tests()
+}
+
+fn run_rpc_rate_limit_tests() -> Result<()> {
+    let root = workspace_root();
+
+    for target in ["server_limits", "rate_limit_metrics"] {
+        let mut command = Command::new("cargo");
+        command
+            .current_dir(&root)
+            .arg("test")
+            .arg("-p")
+            .arg("rpp-chain")
+            .arg("--locked")
+            .arg("--test")
+            .arg(target);
+        apply_feature_flags(&mut command);
+        run_command(command, &format!("rpc rate limit suite ({target})"))?;
+    }
+
+    Ok(())
 }
 
 fn run_wallet_gui_tests() -> Result<()> {
