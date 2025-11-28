@@ -137,8 +137,7 @@ fn commit_rejects_leaked_allocator_after_pruning() {
     header.set_size(header.size() + AreaIndex::MIN.size());
     header_slice.copy_from_slice(bytes_of(&header));
     file.seek(SeekFrom::Start(0)).expect("rewind header");
-    file.write_all(&header_block)
-        .expect("persist leaked size");
+    file.write_all(&header_block).expect("persist leaked size");
     file.sync_data().expect("flush leaked size");
 
     let err = db
