@@ -1061,6 +1061,10 @@ pub struct ProofMetrics {
     cache_hits: Counter<u64>,
     cache_misses: Counter<u64>,
     cache_evictions: Counter<u64>,
+    cache_queue_depth: Histogram<u64>,
+    cache_max_queue_depth: Histogram<u64>,
+    cache_persist_latency: Histogram<f64>,
+    cache_load_latency: Histogram<f64>,
     verification_outcome_state:
         Arc<Mutex<BTreeMap<VerificationOutcomeKey, VerificationOutcomeState>>>,
 }
@@ -1154,6 +1158,26 @@ impl ProofMetrics {
                 .u64_counter("rpp.runtime.proof.cache.evictions")
                 .with_description("Gossip proof cache evictions observed by the runtime")
                 .with_unit("1")
+                .build(),
+            cache_queue_depth: meter
+                .u64_histogram("rpp.runtime.proof.cache.queue_depth")
+                .with_description("Depth of the gossip proof cache queue")
+                .with_unit("1")
+                .build(),
+            cache_max_queue_depth: meter
+                .u64_histogram("rpp.runtime.proof.cache.max_queue_depth")
+                .with_description("Peak depth observed for the gossip proof cache queue")
+                .with_unit("1")
+                .build(),
+            cache_persist_latency: meter
+                .f64_histogram("rpp.runtime.proof.cache.persist_latency")
+                .with_description("Latency of persisting gossip proofs to storage in milliseconds")
+                .with_unit("ms")
+                .build(),
+            cache_load_latency: meter
+                .f64_histogram("rpp.runtime.proof.cache.load_latency")
+                .with_description("Latency of loading gossip proofs from storage in milliseconds")
+                .with_unit("ms")
                 .build(),
             verification_outcome_state: Arc::new(Mutex::new(BTreeMap::new())),
         }
@@ -1263,10 +1287,7 @@ impl ProofMetrics {
         delta_misses: u64,
         delta_evictions: u64,
     ) {
-        let mut attributes = vec![KeyValue::new("cache", cache.to_string())];
-        if let Some(backend) = backend {
-            attributes.push(KeyValue::new("backend", backend.to_string()));
-        }
+        let attributes = cache_attributes(cache, backend);
         if delta_hits > 0 {
             self.cache_hits.add(delta_hits, &attributes);
         }
@@ -1275,6 +1296,35 @@ impl ProofMetrics {
         }
         if delta_evictions > 0 {
             self.cache_evictions.add(delta_evictions, &attributes);
+        }
+    }
+
+    pub fn record_cache_depths(
+        &self,
+        cache: &str,
+        backend: Option<&str>,
+        depth: usize,
+        max_depth: usize,
+    ) {
+        let attributes = cache_attributes(cache, backend);
+        self.cache_queue_depth.record(depth as u64, &attributes);
+        self.cache_max_queue_depth
+            .record(max_depth as u64, &attributes);
+    }
+
+    pub fn record_cache_io_latencies(
+        &self,
+        cache: &str,
+        backend: Option<&str>,
+        load_latency_ms: Option<u64>,
+        persist_latency_ms: Option<u64>,
+    ) {
+        let attributes = cache_attributes(cache, backend);
+        if let Some(ms) = load_latency_ms {
+            self.cache_load_latency.record(ms as f64, &attributes);
+        }
+        if let Some(ms) = persist_latency_ms {
+            self.cache_persist_latency.record(ms as f64, &attributes);
         }
     }
 
@@ -1323,6 +1373,14 @@ fn verification_attributes(
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
         KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
     ]
+}
+
+fn cache_attributes(cache: &str, backend: Option<&str>) -> Vec<KeyValue> {
+    let mut attributes = vec![KeyValue::new("cache", cache.to_string())];
+    if let Some(backend) = backend {
+        attributes.push(KeyValue::new("backend", backend.to_string()));
+    }
+    attributes
 }
 
 fn verification_ratio_attributes(

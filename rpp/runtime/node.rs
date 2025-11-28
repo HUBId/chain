@@ -5060,11 +5060,23 @@ impl NodeInner {
 
         *checkpoint = snapshot.clone();
 
+        let proof_metrics = self.runtime_metrics.proofs();
+        proof_metrics.record_cache_depths(
+            "gossip-proof-cache",
+            snapshot.backend.as_deref(),
+            snapshot.queue_depth,
+            snapshot.max_queue_depth,
+        );
+        proof_metrics.record_cache_io_latencies(
+            "gossip-proof-cache",
+            snapshot.backend.as_deref(),
+            snapshot.last_load_latency_ms,
+            snapshot.last_persist_latency_ms,
+        );
         if delta_hits == 0 && delta_misses == 0 && delta_evictions == 0 {
             return;
         }
 
-        let proof_metrics = self.runtime_metrics.proofs();
         proof_metrics.record_cache_events(
             "gossip-proof-cache",
             snapshot.backend.as_deref(),

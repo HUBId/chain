@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::PeerId;
 use base64::{engine::general_purpose, Engine as _};
@@ -273,6 +273,14 @@ pub struct ProofCacheMetricsSnapshot {
     pub capacity: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_persist_latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_load_latency_ms: Option<u64>,
+    #[serde(default)]
+    pub queue_depth: usize,
+    #[serde(default)]
+    pub max_queue_depth: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -282,6 +290,10 @@ pub struct ProofCacheMetrics {
     evictions: Arc<AtomicU64>,
     capacity: Arc<AtomicUsize>,
     backend: Arc<RwLock<Option<String>>>,
+    last_persist_latency_ms: Arc<AtomicU64>,
+    last_load_latency_ms: Arc<AtomicU64>,
+    queue_depth: Arc<AtomicUsize>,
+    max_queue_depth: Arc<AtomicUsize>,
 }
 
 impl ProofCacheMetrics {
@@ -311,6 +323,21 @@ impl ProofCacheMetrics {
         }
     }
 
+    pub fn record_persist_latency(&self, duration: Duration) {
+        self.last_persist_latency_ms
+            .store(duration.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    pub fn record_load_latency(&self, duration: Duration) {
+        self.last_load_latency_ms
+            .store(duration.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    pub fn record_queue_depth(&self, depth: usize) {
+        self.queue_depth.store(depth, Ordering::Relaxed);
+        self.max_queue_depth.fetch_max(depth, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> ProofCacheMetricsSnapshot {
         ProofCacheMetricsSnapshot {
             hits: self.hits.load(Ordering::Relaxed),
@@ -318,6 +345,16 @@ impl ProofCacheMetrics {
             evictions: self.evictions.load(Ordering::Relaxed),
             capacity: self.capacity.load(Ordering::Relaxed),
             backend: self.backend.read().clone(),
+            last_persist_latency_ms: match self.last_persist_latency_ms.load(Ordering::Relaxed) {
+                0 => None,
+                value => Some(value),
+            },
+            last_load_latency_ms: match self.last_load_latency_ms.load(Ordering::Relaxed) {
+                0 => None,
+                value => Some(value),
+            },
+            queue_depth: self.queue_depth.load(Ordering::Relaxed),
+            max_queue_depth: self.max_queue_depth.load(Ordering::Relaxed),
         }
     }
 }
@@ -903,13 +940,16 @@ impl ProofMempool {
     ) -> Result<Self, PipelineError> {
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
+        let load_started = Instant::now();
         for record in storage.load()? {
             seen.insert(record.digest);
             queue.push_back(record);
         }
+        cache_metrics.record_load_latency(load_started.elapsed());
         if let Some(capacity) = storage.capacity() {
             cache_metrics.record_capacity(capacity);
         }
+        cache_metrics.record_queue_depth(queue.len());
         Ok(Self {
             seen,
             queue,
@@ -945,16 +985,22 @@ impl ProofMempool {
             digest,
             received_at: SystemTime::now(),
         };
+        let persist_started = Instant::now();
         let evicted = self.storage.persist(&record)?;
+        self.cache_metrics
+            .record_persist_latency(persist_started.elapsed());
         if evicted > 0 {
             self.cache_metrics.record_evictions(evicted);
         }
         self.queue.push_back(record);
+        self.cache_metrics.record_queue_depth(self.queue.len());
         Ok(true)
     }
 
     pub fn pop(&mut self) -> Option<ProofRecord> {
-        self.queue.pop_front()
+        let record = self.queue.pop_front();
+        self.cache_metrics.record_queue_depth(self.queue.len());
+        record
     }
 
     pub fn is_empty(&self) -> bool {
