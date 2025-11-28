@@ -4,7 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{CheckerError, FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -125,6 +125,10 @@ pub enum Error {
     /// A file I/O error occurred
     FileIO(#[from] FileIoError),
 
+    /// Allocator invariants failed during pruning
+    #[error("allocator integrity check failed: {0:?}")]
+    AllocatorIntegrity(Vec<CheckerError>),
+
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
     AlreadyCommitted,
@@ -160,13 +164,14 @@ pub enum Error {
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound};
+        use RevisionManagerError::{AllocatorIntegrity, FileIoError, NotLatest, RevisionNotFound};
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
             RevisionNotFound { provided } => Self::RevisionNotFound {
                 provided: Some(provided),
             },
             FileIoError(io_err) => Self::FileIO(io_err),
+            AllocatorIntegrity(errors) => Self::AllocatorIntegrity(errors),
         }
     }
 }

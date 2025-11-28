@@ -28,8 +28,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    StorageMetricsHandle, TrieHash,
+    CheckOpt, CheckerError, Committed, FileBacked, FileIoError, HashedNodeReader,
+    ImmutableProposal, NodeStore, StorageMetricsHandle, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -221,6 +221,8 @@ pub(crate) enum RevisionManagerError {
     },
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
+    #[error("allocator integrity check failed: {0:?}")]
+    AllocatorIntegrity(Vec<CheckerError>),
 }
 
 impl RevisionManager {
@@ -337,6 +339,7 @@ impl RevisionManager {
         // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
+        let mut pruned_revision = false;
         while self.historical_read().len() >= self.max_revisions {
             let Some(oldest) = self.historical_write().pop_front() else {
                 break;
@@ -378,6 +381,21 @@ impl RevisionManager {
             }
             gauge!("firewood.active_revisions").set(self.historical_read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
+            pruned_revision = true;
+        }
+
+        if pruned_revision {
+            let check = committed_store.check(CheckOpt {
+                hash_check: false,
+                progress_bar: None,
+            });
+            if !check.errors.is_empty() {
+                warn!(
+                    "allocator check failed after pruning historical revisions: {:?}",
+                    check.errors
+                );
+                return Err(RevisionManagerError::AllocatorIntegrity(check.errors));
+            }
         }
 
         // 4. Persist to disk.

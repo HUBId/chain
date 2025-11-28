@@ -558,13 +558,13 @@ impl NodeStore<Committed, FileBacked> {
                     .get_mut(item)
                     .expect("should be an index into the array");
 
-                if entry.result()
-                    != pbe
-                        .pinned_buffer
-                        .len()
-                        .try_into()
-                        .expect("buffer should be small enough")
-                {
+                let expected: i32 = pbe
+                    .pinned_buffer
+                    .len()
+                    .try_into()
+                    .expect("buffer should be small enough");
+
+                if entry.result() != expected {
                     let error = if entry.result() >= 0 {
                         std::io::Error::other("Partial write")
                     } else {
