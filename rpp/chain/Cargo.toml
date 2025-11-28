@@ -156,6 +156,8 @@ plonky3-backend = { path = "../../prover/plonky3_backend", optional = true }
 
 [dev-dependencies]
 chrono = "=0.4.42"
+dhat = "=0.3.2"
+libc = "=0.2.177"
 tempfile.workspace = true
 tracing-test = "=0.2.5"
 jsonschema = "=0.17.1"
@@ -229,6 +231,11 @@ path = "../../tests/zk_alert_probe.rs"
 [[test]]
 name = "zk_load"
 path = "../../tests/zk_load.rs"
+required-features = ["prover-stwo", "backend-rpp-stark"]
+
+[[test]]
+name = "zk_load_memory"
+path = "../../tests/zk_load_memory.rs"
 required-features = ["prover-stwo", "backend-rpp-stark"]
 
 [[test]]

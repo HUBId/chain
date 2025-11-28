@@ -1,36 +1,45 @@
 #![cfg(all(feature = "prover-stwo", feature = "backend-rpp-stark"))]
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use futures::future::try_join_all;
+use rand::{rngs::StdRng, SeedableRng};
+use rpp_chain::zk::rpp_verifier::{RppStarkVerifier, RppStarkVerifierError, RppStarkVerifyFailure};
+use rpp_stark::backend::params_limit_to_node_bytes;
+use rpp_stark::params::deserialize_params;
+use tokio::sync::Semaphore;
 
-mod zk_load_common;
-use zk_load_common::{emit_vector_checksums, run_rpp_batch, run_stwo_batch};
+#[path = "rpp_vectors.rs"]
+mod rpp_vectors;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn zk_backends_handle_parallel_batches_and_size_limits() -> Result<()> {
-    emit_vector_checksums()?;
+use rpp_vectors::{load_bytes, log_vector_checksums};
 
-    let stwo_metrics = run_stwo_batch().await.context("stwo batch generation")?;
-    assert!(
-        stwo_metrics.throughput_per_second > 0.1,
-        "stwo throughput should stay above minimal floor"
-    );
+use prover_stwo_backend::official::params::StarkParameters;
+use prover_stwo_backend::official::prover::WalletProver as StwoWalletProver;
+use prover_stwo_backend::official::verifier::NodeVerifier;
+use prover_stwo_backend::types::{
+    Account, ChainProof, SignedTransaction, Stake, Transaction, TransactionWitness, UptimeProof,
+    UptimeWitness,
+};
+use prover_stwo_backend::{reputation::Tier, ReputationWeights};
 
-    let rpp_metrics = run_rpp_batch().await.context("rpp-stark verifier batch")?;
-    assert!(
-        rpp_metrics.oversize_failure_recorded,
-        "oversized proofs must fail"
-    );
+pub const STWO_CONCURRENCY: usize = 2;
+pub const RPP_CONCURRENCY: usize = 3;
 
-    Ok(())
+pub fn emit_vector_checksums() -> Result<()> {
+    log_vector_checksums()
 }
 
-struct BatchMetrics {
-    latencies: Vec<Duration>,
-    throughput_per_second: f64,
-    oversize_failure_recorded: bool,
+pub struct BatchMetrics {
+    pub latencies: Vec<Duration>,
+    pub throughput_per_second: f64,
+    pub oversize_failure_recorded: bool,
 }
 
-async fn run_stwo_batch() -> Result<BatchMetrics> {
+pub async fn run_stwo_batch() -> Result<BatchMetrics> {
     let parameters = StarkParameters::blueprint_default();
     let prover = Arc::new(StwoWalletProver::new(parameters.clone()));
     let verifier = Arc::new(NodeVerifier::with_parameters(parameters));
@@ -66,6 +75,63 @@ async fn run_stwo_batch() -> Result<BatchMetrics> {
         latencies,
         throughput_per_second,
         oversize_failure_recorded: false,
+    })
+}
+
+pub async fn run_rpp_batch() -> Result<BatchMetrics> {
+    let params = load_bytes("params.bin")?;
+    let public_inputs = load_bytes("public_inputs.bin")?;
+    let proof = load_bytes("proof.bin")?;
+    let verifier = Arc::new(RppStarkVerifier::new());
+
+    let stark_params = deserialize_params(&params).context("decode stark params")?;
+    let node_limit = params_limit_to_node_bytes(&stark_params).context("map node size limit")?;
+
+    let semaphore = Arc::new(Semaphore::new(RPP_CONCURRENCY));
+    let start = Instant::now();
+    let mut jobs = Vec::new();
+    for _ in 0..9 {
+        let permit = semaphore.clone().acquire_owned().await?;
+        let verifier = verifier.clone();
+        let params = params.clone();
+        let public_inputs = public_inputs.clone();
+        let proof = proof.clone();
+        jobs.push(tokio::spawn(async move {
+            let latency = measure_latency(|| {
+                verifier.verify(&params, &public_inputs, &proof, node_limit)?;
+                Ok(())
+            })?;
+            drop(permit);
+            Ok::<Duration, anyhow::Error>(latency)
+        }));
+    }
+
+    let latencies: Vec<Duration> = try_join_all(jobs)
+        .await?
+        .into_iter()
+        .collect::<Result<_, _>>()?;
+    let elapsed = start.elapsed().max(Duration::from_millis(1));
+    let throughput_per_second = latencies.len() as f64 / elapsed.as_secs_f64();
+
+    let oversize_failure_recorded = matches!(
+        verifier
+            .verify(
+                &params,
+                &public_inputs,
+                &[proof.clone(), vec![0u8; 2048]].concat(),
+                node_limit
+            )
+            .expect_err("oversized proof should fail"),
+        RppStarkVerifierError::VerificationFailed {
+            failure: RppStarkVerifyFailure::ProofTooLarge { .. },
+            ..
+        }
+    );
+
+    Ok(BatchMetrics {
+        latencies,
+        throughput_per_second,
+        oversize_failure_recorded,
     })
 }
 
@@ -154,61 +220,4 @@ fn prove_and_verify_uptime(
     verifier
         .verify_uptime(&ChainProof::Stwo(proof))
         .context("verify uptime proof")
-}
-
-async fn run_rpp_batch() -> Result<BatchMetrics> {
-    let params = load_bytes("params.bin")?;
-    let public_inputs = load_bytes("public_inputs.bin")?;
-    let proof = load_bytes("proof.bin")?;
-    let verifier = Arc::new(RppStarkVerifier::new());
-
-    let stark_params = deserialize_params(&params).context("decode stark params")?;
-    let node_limit = params_limit_to_node_bytes(&stark_params).context("map node size limit")?;
-
-    let semaphore = Arc::new(Semaphore::new(RPP_CONCURRENCY));
-    let start = Instant::now();
-    let mut jobs = Vec::new();
-    for _ in 0..9 {
-        let permit = semaphore.clone().acquire_owned().await?;
-        let verifier = verifier.clone();
-        let params = params.clone();
-        let public_inputs = public_inputs.clone();
-        let proof = proof.clone();
-        jobs.push(tokio::spawn(async move {
-            let latency = measure_latency(|| {
-                verifier.verify(&params, &public_inputs, &proof, node_limit)?;
-                Ok(())
-            })?;
-            drop(permit);
-            Ok::<Duration, anyhow::Error>(latency)
-        }));
-    }
-
-    let latencies: Vec<Duration> = try_join_all(jobs)
-        .await?
-        .into_iter()
-        .collect::<Result<_, _>>()?;
-    let elapsed = start.elapsed().max(Duration::from_millis(1));
-    let throughput_per_second = latencies.len() as f64 / elapsed.as_secs_f64();
-
-    let oversize_failure_recorded = matches!(
-        verifier
-            .verify(
-                &params,
-                &public_inputs,
-                &[proof.clone(), vec![0u8; 2048]].concat(),
-                node_limit
-            )
-            .expect_err("oversized proof should fail"),
-        RppStarkVerifierError::VerificationFailed {
-            failure: RppStarkVerifyFailure::ProofTooLarge { .. },
-            ..
-        }
-    );
-
-    Ok(BatchMetrics {
-        latencies,
-        throughput_per_second,
-        oversize_failure_recorded,
-    })
 }
