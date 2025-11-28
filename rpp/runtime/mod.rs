@@ -88,9 +88,10 @@ pub mod wallet_security;
 pub mod wallet;
 
 pub use telemetry::metrics::{
-    init_runtime_metrics, ConsensusStage, ProofKind, ProofRpcMethod, ProofVerificationBackend,
-    ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, RpcClass, RpcMethod,
-    RpcRateLimitStatus, RpcResult, RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
+    init_runtime_metrics, ConsensusStage, NodeRpcMethod, ProofKind, ProofRpcMethod,
+    ProofVerificationBackend, ProofVerificationKind, ProofVerificationOutcome,
+    ProofVerificationStage, RpcClass, RpcMethod, RpcRateLimitStatus, RpcResult, RuntimeMetrics,
+    RuntimeMetricsGuard, SnapshotRpcMethod, WalFlushOutcome,
 };
 
 #[cfg(feature = "wallet-integration")]

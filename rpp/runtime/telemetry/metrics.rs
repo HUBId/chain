@@ -1792,15 +1792,171 @@ impl MetricLabel for WalletActionResult {
     }
 }
 
+/// Node RPC surface area exposed to operators and clients.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum NodeRpcMethod {
+    Health,
+    HealthLive,
+    HealthReady,
+    RuntimeMode,
+    UiNode,
+    UiReputation,
+    UiBftMembership,
+    ValidatorStatus,
+    ValidatorProofs,
+    ValidatorPeers,
+    ValidatorTelemetry,
+    ValidatorVrf,
+    ValidatorRotateVrf,
+    ValidatorSubmitUptime,
+    P2pPeers,
+    P2pCensorship,
+    AdmissionPolicies,
+    AdmissionPoliciesPending,
+    AdmissionPoliciesApprove,
+    AdmissionAudit,
+    AdmissionBackups,
+    P2pSnapshotStart,
+    P2pSnapshotStatus,
+    P2pSnapshotBreakerStatus,
+    P2pSnapshotBreakerReset,
+    P2pAccessLists,
+    NodeStatus,
+    MempoolStatus,
+    UpdateMempoolLimits,
+    ConsensusStatus,
+    RolloutStatus,
+    VrfSubmit,
+    VrfThreshold,
+    VrfStatus,
+    ProofStatus,
+    SubmitTransaction,
+    SubmitIdentity,
+    SubmitVote,
+    SubmitUptimeProof,
+    SlashingEvents,
+    TimetokeSnapshot,
+    TimetokeSync,
+    TimetokeReplay,
+    ReputationAudit,
+    ReputationAuditStream,
+    SlashingAuditStream,
+    LatestBlock,
+    BlockByHeight,
+    AccountInfo,
+    Unknown,
+}
+
+impl MetricLabel for NodeRpcMethod {
+    const KEY: &'static str = "method";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Health => "node_health",
+            Self::HealthLive => "node_health_live",
+            Self::HealthReady => "node_health_ready",
+            Self::RuntimeMode => "node_runtime_mode",
+            Self::UiNode => "node_ui_node",
+            Self::UiReputation => "node_ui_reputation",
+            Self::UiBftMembership => "node_ui_bft_membership",
+            Self::ValidatorStatus => "node_validator_status",
+            Self::ValidatorProofs => "node_validator_proofs",
+            Self::ValidatorPeers => "node_validator_peers",
+            Self::ValidatorTelemetry => "node_validator_telemetry",
+            Self::ValidatorVrf => "node_validator_vrf",
+            Self::ValidatorRotateVrf => "node_validator_vrf_rotate",
+            Self::ValidatorSubmitUptime => "node_validator_submit_uptime",
+            Self::P2pPeers => "node_p2p_peers",
+            Self::P2pCensorship => "node_p2p_censorship",
+            Self::AdmissionPolicies => "node_admission_policies",
+            Self::AdmissionPoliciesPending => "node_admission_policies_pending",
+            Self::AdmissionPoliciesApprove => "node_admission_policies_approve",
+            Self::AdmissionAudit => "node_admission_audit_log",
+            Self::AdmissionBackups => "node_admission_backups",
+            Self::P2pSnapshotStart => "node_p2p_snapshot_start",
+            Self::P2pSnapshotStatus => "node_p2p_snapshot_status",
+            Self::P2pSnapshotBreakerStatus => "node_p2p_snapshot_breaker_status",
+            Self::P2pSnapshotBreakerReset => "node_p2p_snapshot_breaker_reset",
+            Self::P2pAccessLists => "node_p2p_access_lists",
+            Self::NodeStatus => "node_status",
+            Self::MempoolStatus => "node_mempool_status",
+            Self::UpdateMempoolLimits => "node_update_mempool_limits",
+            Self::ConsensusStatus => "node_consensus_status",
+            Self::RolloutStatus => "node_rollout_status",
+            Self::VrfSubmit => "node_vrf_submit",
+            Self::VrfThreshold => "node_vrf_threshold",
+            Self::VrfStatus => "node_vrf_status",
+            Self::ProofStatus => "node_proof_status",
+            Self::SubmitTransaction => "node_submit_transaction",
+            Self::SubmitIdentity => "node_submit_identity",
+            Self::SubmitVote => "node_submit_vote",
+            Self::SubmitUptimeProof => "node_submit_uptime_proof",
+            Self::SlashingEvents => "node_slashing_events",
+            Self::TimetokeSnapshot => "node_timetoke_snapshot",
+            Self::TimetokeSync => "node_timetoke_sync",
+            Self::TimetokeReplay => "node_timetoke_replay",
+            Self::ReputationAudit => "node_reputation_audit",
+            Self::ReputationAuditStream => "node_reputation_audit_stream",
+            Self::SlashingAuditStream => "node_slashing_audit_stream",
+            Self::LatestBlock => "node_latest_block",
+            Self::BlockByHeight => "node_block_by_height",
+            Self::AccountInfo => "node_account_info",
+            Self::Unknown => "node_unknown",
+        }
+    }
+}
+
+/// Snapshot and state-sync RPC handlers.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum SnapshotRpcMethod {
+    SnapshotPlan,
+    SnapshotJobs,
+    SnapshotRebuild,
+    SnapshotTrigger,
+    SnapshotCancel,
+    PruningStatus,
+    PruningStatusStream,
+    StateSyncPlan,
+    StateSyncSessionStatus,
+    StateSyncSessionStream,
+    StateSyncHeadStream,
+    StateSyncChunk,
+    Unknown,
+}
+
+impl MetricLabel for SnapshotRpcMethod {
+    const KEY: &'static str = "method";
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::SnapshotPlan => "snapshot_plan",
+            Self::SnapshotJobs => "snapshot_jobs",
+            Self::SnapshotRebuild => "snapshot_rebuild",
+            Self::SnapshotTrigger => "snapshot_trigger",
+            Self::SnapshotCancel => "snapshot_cancel",
+            Self::PruningStatus => "pruning_status",
+            Self::PruningStatusStream => "pruning_status_stream",
+            Self::StateSyncPlan => "state_sync_plan",
+            Self::StateSyncSessionStatus => "state_sync_session_status",
+            Self::StateSyncSessionStream => "state_sync_session_stream",
+            Self::StateSyncHeadStream => "state_sync_head_stream",
+            Self::StateSyncChunk => "state_sync_chunk",
+            Self::Unknown => "snapshot_unknown",
+        }
+    }
+}
+
 /// RPC handlers grouped by logical subsystem.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RpcMethod {
+    /// Node RPC handlers exposed for operators and clients.
+    Node(NodeRpcMethod),
     /// Wallet-centric RPC handlers.
     Wallet(WalletRpcMethod),
     /// Proof related RPC handlers.
     Proof(ProofRpcMethod),
     /// Snapshot/state-sync related handlers.
-    Snapshot,
+    Snapshot(SnapshotRpcMethod),
     /// Any other handler that is not explicitly categorised.
     Other,
 }
@@ -1817,9 +1973,10 @@ impl MetricLabel for RpcMethod {
 
     fn as_str(&self) -> &'static str {
         match self {
+            Self::Node(method) => method.as_str(),
             Self::Wallet(method) => method.as_str(),
             Self::Proof(method) => method.as_str(),
-            Self::Snapshot => "snapshot",
+            Self::Snapshot(method) => method.as_str(),
             Self::Other => "other",
         }
     }

@@ -86,6 +86,36 @@ groups:
         labels:
           component: rpc
 
+      - record: rpc:endpoint:availability_ratio:5m
+        expr: |
+          sum by (environment, method) (
+            rate(
+              rpp_runtime_rpc_request_total{method=~"node_health_ready|node_submit_transaction|block_proof",result="success"}[5m]
+            )
+          )
+            /
+          clamp_min(
+            sum by (environment, method) (
+              rate(rpp_runtime_rpc_request_total{method=~"node_health_ready|node_submit_transaction|block_proof"}[5m])
+            ),
+            0.0001
+          )
+        labels:
+          component: rpc
+
+      - record: rpc:endpoint:latency_ms:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, environment, method) (
+              rate(
+                rpp_runtime_rpc_request_latency_bucket{method=~"node_health_ready|node_submit_transaction|block_proof",result="success"}[5m]
+              )
+            )
+          )
+        labels:
+          component: rpc
+
       - alert: RpcAvailabilityDegradedWarning
         expr: rpc:availability_ratio:5m < 0.99
         for: 5m
@@ -117,6 +147,40 @@ groups:
             RPC endpoints have been failing more than 5% of requests for ten minutes. Page the on-call,
             validate node readiness, and consider draining traffic while recovering the API layer.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#consensus-liveness-and-rpc-availability
+
+      - alert: RpcCriticalEndpointAvailability
+        expr: rpc:endpoint:availability_ratio:5m < 0.99
+        for: 5m
+        labels:
+          severity: critical
+          team: rpc
+          sla: availability
+          sla_target: endpoint_success_ratio
+          environment: "{{ $labels.environment }}"
+          method: "{{ $labels.method }}"
+        annotations:
+          summary: "{{ $labels.method }} success ratio below 99%"
+          description: >-
+            The critical RPC endpoint {{ $labels.method }} has dipped below the 99% SLO window for five minutes.
+            Validate ingress health and recent deploys before rerouting traffic.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#rpc-endpoint-slos
+
+      - alert: RpcCriticalEndpointLatency
+        expr: rpc:endpoint:latency_ms:p95 > 750
+        for: 10m
+        labels:
+          severity: warning
+          team: rpc
+          sla: latency
+          sla_target: endpoint_p95_latency
+          environment: "{{ $labels.environment }}"
+          method: "{{ $labels.method }}"
+        annotations:
+          summary: "{{ $labels.method }} p95 latency above 750ms"
+          description: >-
+            The p95 latency for {{ $labels.method }} exceeded the documented SLO for ten minutes. Inspect upstream services
+            and recent deployments before impact spreads to wallets or validators.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/uptime.md#rpc-endpoint-slos
 
   - name: uptime-baselines
     interval: 1m
