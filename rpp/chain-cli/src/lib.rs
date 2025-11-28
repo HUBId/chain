@@ -179,6 +179,8 @@ enum ValidatorCommand {
     Vrf(VrfCommand),
     /// Fetch validator telemetry snapshots from the RPC service
     Telemetry(TelemetryCommand),
+    /// Summarise zk backend queue/cache health for STWO and RPP-STARK
+    BackendStatus(BackendStatusCommand),
     /// Manage uptime proofs via the validator RPC
     Uptime(UptimeCommand),
     /// Query health endpoints and summarise validator readiness
@@ -266,6 +268,21 @@ struct HealthCommand {
     /// Maximum queued transactions tolerated before the probe fails
     #[arg(long, value_name = "COUNT", default_value_t = 4096)]
     max_transaction_backlog: usize,
+}
+
+#[derive(Args, Clone)]
+struct BackendStatusCommand {
+    /// Base URL of the validator RPC endpoint
+    #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:7070")]
+    rpc_url: String,
+
+    /// Optional bearer token for secured RPC deployments
+    #[arg(long)]
+    auth_token: Option<String>,
+
+    /// Emit the summary as JSON for automation and alerting pipelines
+    #[arg(long, default_value_t = false)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -654,6 +671,11 @@ where
             Some(ValidatorCommand::Telemetry(command)) => {
                 fetch_telemetry(command).await.map_err(CliError::from)
             }
+            Some(ValidatorCommand::BackendStatus(command)) => {
+                handle_backend_status_command(command)
+                    .await
+                    .map_err(CliError::from)
+            }
             Some(ValidatorCommand::Uptime(command)) => {
                 handle_uptime_command(command).await.map_err(CliError::from)
             }
@@ -938,6 +960,27 @@ struct BackendSummary {
     cache: Option<ProofCacheMetricsSnapshot>,
 }
 
+#[derive(Debug, Serialize)]
+struct BackendStatusReport {
+    backends: Vec<BackendStatusEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackendStatusEntry {
+    name: String,
+    accepted: u64,
+    rejected: u64,
+    bypassed: u64,
+    error_rate: Option<f64>,
+    cache_hits: u64,
+    cache_misses: u64,
+    cache_evictions: u64,
+    cache_capacity: usize,
+    queue_depth: usize,
+    max_queue_depth: usize,
+    cache_owner: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HealthResponsePayload {
     status: String,
@@ -1107,6 +1150,127 @@ async fn handle_health_command(command: HealthCommand) -> Result<()> {
             message: summary.issues.join("; "),
         }),
     }
+}
+
+async fn handle_backend_status_command(command: BackendStatusCommand) -> Result<()> {
+    let status = collect_backend_status(&command).await?;
+
+    if command.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        render_backend_status(&status)?;
+    }
+
+    Ok(())
+}
+
+async fn collect_backend_status(command: &BackendStatusCommand) -> Result<BackendStatusReport> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build backend status HTTP client")?;
+    let base = command.rpc_url.trim_end_matches('/');
+
+    let telemetry = get_json::<ValidatorTelemetrySnapshot>(
+        &client,
+        &format!("{}/validator/telemetry", base),
+        command.auth_token.as_deref(),
+    )
+    .await
+    .context("validator telemetry unavailable")?;
+
+    let metrics = telemetry
+        .verifier_metrics
+        .ok_or_else(|| anyhow!("telemetry payload missing verifier metrics"))?;
+
+    let mut backends = Vec::new();
+    for backend in ["stwo", "rpp-stark"] {
+        backends.push(extract_backend_status(backend, &metrics));
+    }
+
+    Ok(BackendStatusReport { backends })
+}
+
+fn extract_backend_status(name: &str, metrics: &VerifierMetricsSnapshot) -> BackendStatusEntry {
+    let verifier = metrics.per_backend.get(name);
+    let (accepted, rejected, bypassed) = verifier
+        .map(|entry| (entry.accepted, entry.rejected, entry.bypassed))
+        .unwrap_or_default();
+    let attempts = accepted.saturating_add(rejected) as f64;
+    let error_rate = if attempts > 0.0 {
+        Some(rejected as f64 / attempts)
+    } else {
+        None
+    };
+
+    let cache = &metrics.cache;
+    let cache_owner = cache.backend.clone();
+    let (queue_depth, max_queue_depth) = if cache_owner
+        .as_deref()
+        .map(|owner| owner == name)
+        .unwrap_or(true)
+    {
+        (cache.queue_depth, cache.max_queue_depth)
+    } else {
+        (0, 0)
+    };
+
+    BackendStatusEntry {
+        name: name.to_string(),
+        accepted,
+        rejected,
+        bypassed,
+        error_rate,
+        cache_hits: cache.hits,
+        cache_misses: cache.misses,
+        cache_evictions: cache.evictions,
+        cache_capacity: cache.capacity,
+        queue_depth,
+        max_queue_depth,
+        cache_owner,
+    }
+}
+
+fn render_backend_status(report: &BackendStatusReport) -> io::Result<()> {
+    render_backend_status_to(report, &mut io::stdout())
+}
+
+fn render_backend_status_to<W: Write>(
+    report: &BackendStatusReport,
+    mut writer: W,
+) -> io::Result<()> {
+    writeln!(writer, "Backend status:")?;
+
+    for entry in &report.backends {
+        let error_rate = entry
+            .error_rate
+            .map(|value| format!("{:.2}%", value * 100.0))
+            .unwrap_or_else(|| "n/a".to_string());
+        let cache_owner = entry.cache_owner.as_deref().unwrap_or("unspecified");
+
+        writeln!(writer, "- {}", entry.name)?;
+        writeln!(
+            writer,
+            "  accepted={} rejected={} bypassed={} error_rate={}",
+            entry.accepted, entry.rejected, entry.bypassed, error_rate
+        )?;
+        writeln!(
+            writer,
+            "  cache hits={} misses={} evictions={} capacity={} owner={}",
+            entry.cache_hits,
+            entry.cache_misses,
+            entry.cache_evictions,
+            entry.cache_capacity,
+            cache_owner
+        )?;
+        writeln!(
+            writer,
+            "  queue depth: {} / {}",
+            entry.queue_depth, entry.max_queue_depth
+        )?;
+    }
+
+    Ok(())
 }
 
 async fn collect_health_summary(command: &HealthCommand) -> Result<HealthSummary> {
@@ -1912,6 +2076,46 @@ mod tests {
         shutdown_tx.send(()).ok();
     }
 
+    #[tokio::test]
+    async fn renders_backend_status_human_and_json() {
+        let (addr, shutdown_tx) = spawn_health_server(false).await;
+        let command = BackendStatusCommand {
+            rpc_url: format!("http://{}", addr),
+            auth_token: None,
+            json: false,
+        };
+
+        let status = collect_backend_status(&command)
+            .await
+            .expect("backend status to succeed");
+
+        assert_eq!(status.backends.len(), 2);
+        let stwo = status
+            .backends
+            .iter()
+            .find(|entry| entry.name == "stwo")
+            .expect("stwo entry");
+        assert_eq!(stwo.accepted, 9);
+        assert_eq!(stwo.rejected, 1);
+        assert_eq!(stwo.queue_depth, 2);
+        assert_eq!(stwo.max_queue_depth, 8);
+        assert_eq!(stwo.error_rate, Some(0.1));
+
+        let mut rendered = Vec::new();
+        render_backend_status_to(&status, &mut rendered).expect("render to succeed");
+        let output = String::from_utf8(rendered).expect("valid utf8");
+        assert!(output.contains("Backend status:"));
+        assert!(output.contains("- stwo"));
+        assert!(output.contains("error_rate=10.00%"));
+        assert!(output.contains("queue depth: 2 / 8"));
+
+        let json = serde_json::to_string_pretty(&status).expect("json to succeed");
+        assert!(json.contains("\"rpp-stark\""));
+        assert!(json.contains("\"queue_depth\": 2"));
+
+        shutdown_tx.send(()).ok();
+    }
+
     fn test_connection_args(
         http_proxy: Option<String>,
         https_proxy: Option<String>,
@@ -2061,10 +2265,17 @@ mod tests {
             "\"pruning\":null"
         };
 
+        let verifier_metrics = if degraded {
+            "\"verifier_metrics\":{\"per_backend\":{\"stwo\":{\"accepted\":8,\"rejected\":2,\"bypassed\":1,\"total_duration_ms\":100},\"rpp-stark\":{\"accepted\":2,\"rejected\":1,\"bypassed\":0,\"total_duration_ms\":60}},\"cache\":{\"hits\":3,\"misses\":2,\"evictions\":1,\"capacity\":8,\"backend\":\"rpp-stark\",\"queue_depth\":9,\"max_queue_depth\":16}}"
+        } else {
+            "\"verifier_metrics\":{\"per_backend\":{\"stwo\":{\"accepted\":9,\"rejected\":1,\"bypassed\":0,\"total_duration_ms\":90},\"rpp-stark\":{\"accepted\":3,\"rejected\":0,\"bypassed\":1,\"total_duration_ms\":45}},\"cache\":{\"hits\":5,\"misses\":1,\"evictions\":0,\"capacity\":16,\"backend\":\"stwo\",\"queue_depth\":2,\"max_queue_depth\":8}}"
+        };
+
         let body = format!(
-            "{{\"mempool\":{{\"uptime_proofs\":{uptime}}},\"timetoke_params\":{{\"minimum_window_secs\":3600,\"accrual_cap_hours\":720,\"decay_interval_secs\":86400,\"decay_step_hours\":1,\"sync_interval_secs\":600}},{pruning}}}",
+            "{{\"mempool\":{{\"uptime_proofs\":{uptime}}},\"timetoke_params\":{{\"minimum_window_secs\":3600,\"accrual_cap_hours\":720,\"decay_interval_secs\":86400,\"decay_step_hours\":1,\"sync_interval_secs\":600}},{pruning},{verifier_metrics}}}",
             uptime = if degraded { 3 } else { 0 },
-            pruning = pruning
+            pruning = pruning,
+            verifier_metrics = verifier_metrics
         );
         (StatusCode::OK, Body::from(body))
     }

@@ -153,8 +153,8 @@ und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die
   - Counter `rpp_stark_stage_checks_total` mit Labels `proof_backend`, `proof_kind`, `stage` (`params`, `public`, `merkle`, `fri`, `composition`) und `result` (`ok`/`fail`).
   - Fehlerpfade aktualisieren dieselben Byte-Histogramme, sodass Ausreißer sichtbar bleiben.
 - Gossip-Proof-Caches werden per Backend-Fingerprint namespacet; sobald ein Node mit einem anderen aktiven Backend startet, loggt er `p2p.proof.cache` mit `expected`/`previous` und leert die persistierten Digests, damit eingehende Proofs erneut gegen das frische Backend verifiziert werden.【F:rpp/p2p/src/pipeline.rs†L356-L425】【F:rpp/runtime/node_runtime/tests/gossip_bridge.rs†L100-L161】
-- `TelemetrySnapshot` (`rpp/runtime/node_runtime/node.rs`) trägt die `verifier_metrics.per_backend`-Aggregationen weiter, womit Exporter den aktuellen Stand der Backend-Verifikationen ohne zusätzlichen RPC abrufen können.
-- Beispiel-`scrape_config` für Prometheus (wenn `rollout.telemetry.metrics.listen = "127.0.0.1:9797"` konfiguriert ist):
+  - `TelemetrySnapshot` (`rpp/runtime/node_runtime/node.rs`) trägt die `verifier_metrics.per_backend`-Aggregationen weiter, womit Exporter den aktuellen Stand der Backend-Verifikationen ohne zusätzlichen RPC abrufen können.
+  - Beispiel-`scrape_config` für Prometheus (wenn `rollout.telemetry.metrics.listen = "127.0.0.1:9797"` konfiguriert ist):
 
   ```yaml
   scrape_configs:
@@ -170,6 +170,13 @@ und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die
         - source_labels: [__address__]
           target_label: instance
   ```
+
+#### CLI: Backend-Status der Verifier
+
+- `cargo run -p rpp-node -- validator backend-status --rpc-url http://<host>:7070` fasst die Verifier-Metriken für STWO und
+  RPP-STARK zusammen. Die Ausgabe kombiniert Cache-Hits/-Misses, Evictions, aktuelle/Maximal-Queue-Tiefe sowie die Error-Rate pro
+  Backend. Mit `--json` lassen sich dieselben Felder automatisiert abgreifen (z. B. für On-Call-Probes). Die Werte stammen aus
+  `/validator/telemetry` und spiegeln sowohl das Cache-Backend als auch `verifier_metrics.per_backend` wider.【F:rpp/chain-cli/src/lib.rs†L720-L828】【F:rpp/chain-cli/src/lib.rs†L1838-L1876】
 
 ### Crash-Reports & RCA-Schritte
 
