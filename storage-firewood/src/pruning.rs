@@ -414,6 +414,7 @@ impl FirewoodPruner {
             .map(|record| PersistedPrunerSnapshot {
                 block_height: record.block_height.as_u64(),
                 state_commitment: *record.state_commitment.digest(),
+                cross_references: Vec::new(),
             })
             .collect();
 

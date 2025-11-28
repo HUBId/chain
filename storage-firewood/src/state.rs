@@ -3,6 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hex::encode;
 use parking_lot::{Mutex, RwLock};
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
@@ -32,6 +33,8 @@ pub enum StateError {
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("snapshot manifest at height {height} diverges from committed state: {reason}")]
+    PruningInvariantViolation { height: u64, reason: String },
     #[error("storage layout requires migration from {from} to {to}")]
     MigrationRequired { from: u32, to: u32 },
     #[error("storage layout {stored} is newer than supported {current}")]
@@ -155,6 +158,8 @@ impl FirewoodState {
         let proof = Arc::new(pruner.prune_block(block_id, root));
         let proof_bytes = bincode::serialize(proof.as_ref())?;
         let proof_name = format!("{block_id:020}.bin");
+        let schema_digest = pruner.schema_digest();
+        let parameter_digest = pruner.parameter_digest();
         self.proofs_cf.put_bytes(
             &proof_name,
             &proof_bytes,
@@ -169,6 +174,16 @@ impl FirewoodState {
             &proof_bytes,
         );
         let manifest_name = format!("{block_id:020}.json");
+        validate_manifest_alignment(
+            &self.snapshots_cf,
+            &self.proofs_cf,
+            &manifest_name,
+            &manifest,
+            &proof_bytes,
+            &root,
+            &schema_digest,
+            &parameter_digest,
+        )?;
         self.snapshots_cf.put_json(
             &manifest_name,
             &manifest,
@@ -287,6 +302,94 @@ impl From<bincode::Error> for StateError {
 
 fn read_layout_version(meta_cf: &ColumnFamily) -> Result<u32, StateError> {
     Ok(meta_cf.get_json::<u32>(META_LAYOUT_KEY)?.unwrap_or(0))
+}
+
+fn validate_manifest_alignment(
+    snapshots_cf: &ColumnFamily,
+    proofs_cf: &ColumnFamily,
+    manifest_name: &str,
+    manifest: &SnapshotManifest,
+    proof_bytes: &[u8],
+    expected_root: &Hash,
+    expected_schema_digest: &Hash,
+    expected_parameter_digest: &Hash,
+) -> Result<(), StateError> {
+    if manifest.block_height == 0 {
+        return Err(StateError::PruningInvariantViolation {
+            height: manifest.block_height,
+            reason: "snapshot height must be non-zero".to_string(),
+        });
+    }
+
+    let expected_root_hex = encode(expected_root);
+    if manifest.state_root != expected_root_hex {
+        return Err(StateError::PruningInvariantViolation {
+            height: manifest.block_height,
+            reason: "state root mismatch".to_string(),
+        });
+    }
+
+    if manifest.schema_digest != encode(expected_schema_digest) {
+        return Err(StateError::PruningInvariantViolation {
+            height: manifest.block_height,
+            reason: "schema digest mismatch".to_string(),
+        });
+    }
+
+    if manifest.parameter_digest != encode(expected_parameter_digest) {
+        return Err(StateError::PruningInvariantViolation {
+            height: manifest.block_height,
+            reason: "parameter digest mismatch".to_string(),
+        });
+    }
+
+    if !manifest.checksum_matches(proof_bytes) {
+        return Err(StateError::PruningInvariantViolation {
+            height: manifest.block_height,
+            reason: "manifest checksum does not match freshly generated proof".to_string(),
+        });
+    }
+
+    if let Some(existing) = snapshots_cf.get_json::<SnapshotManifest>(manifest_name)? {
+        if existing.state_root != manifest.state_root {
+            return Err(StateError::PruningInvariantViolation {
+                height: manifest.block_height,
+                reason: "existing manifest state root diverges".to_string(),
+            });
+        }
+
+        if existing.schema_digest != manifest.schema_digest
+            || existing.parameter_digest != manifest.parameter_digest
+        {
+            return Err(StateError::PruningInvariantViolation {
+                height: manifest.block_height,
+                reason: "existing manifest digests diverge".to_string(),
+            });
+        }
+
+        let Some(proof_file) = proofs_cf.get_bytes(&existing.proof_file)? else {
+            return Err(StateError::PruningInvariantViolation {
+                height: manifest.block_height,
+                reason: "manifest proof file missing".to_string(),
+            });
+        };
+
+        if !existing.checksum_matches(&proof_file) {
+            return Err(StateError::PruningInvariantViolation {
+                height: manifest.block_height,
+                reason: "existing manifest checksum rejected stored proof".to_string(),
+            });
+        }
+
+        if existing.proof_file != manifest.proof_file {
+            return Err(StateError::PruningInvariantViolation {
+                height: manifest.block_height,
+                reason: "existing manifest references unexpected proof name".to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn write_layout_version(
