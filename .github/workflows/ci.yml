@@ -1163,12 +1163,30 @@ PY
         run: |
           set -euo pipefail
           export RPP_PROVER_DETERMINISTIC=1
+          mkdir -p artifacts/pruning-checkpoints/default artifacts/pruning-checkpoints/rpp-stark
           cargo test -p rpp-chain --locked --features prover-stwo --test pruning_cross_backend -- \
             pruning_checkpoint_round_trip_default_backend \
-            wallet_snapshot_round_trip_default_backend
+            wallet_snapshot_round_trip_default_backend \
+            2>&1 | tee artifacts/pruning-checkpoints/default/pruning-checkpoints.log
+          cargo test -p rpp-chain --locked --features prover-stwo --test recovery_pruning -- \
+            pruning_checkpoint_signature_rejects_tampered_payload \
+            pruning_checkpoint_signature_rejects_tampered_signature \
+            2>&1 | tee -a artifacts/pruning-checkpoints/default/pruning-checkpoints.log
           cargo test -p rpp-chain --locked --features backend-rpp-stark --test pruning_cross_backend -- \
             pruning_checkpoint_round_trip_rpp_stark_backend \
-            wallet_snapshot_round_trip_rpp_stark_backend
+            wallet_snapshot_round_trip_rpp_stark_backend \
+            2>&1 | tee artifacts/pruning-checkpoints/rpp-stark/pruning-checkpoints.log
+          cargo test -p rpp-chain --locked --features backend-rpp-stark --test recovery_pruning -- \
+            pruning_checkpoint_signature_rejects_tampered_payload \
+            pruning_checkpoint_signature_rejects_tampered_signature \
+            2>&1 | tee -a artifacts/pruning-checkpoints/rpp-stark/pruning-checkpoints.log
+
+      - name: Upload pruning checkpoint artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pruning-checkpoints
+          path: artifacts/pruning-checkpoints
 
   wallet-state-sync-reconciliation:
     name: Wallet state-sync reconciliation (${{ matrix.backend }})

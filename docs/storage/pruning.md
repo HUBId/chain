@@ -70,3 +70,51 @@ The scenarios:
 These steps now run in the integration matrix (default and `backend-rpp-stark`)
 so regressions in pruning, proof verification, or WAL handling are surfaced
 before release.
+
+## Rotating pruning and consensus checkpoint signing keys
+
+1. **Generate a fresh signing keypair.** Point
+   `pruning.checkpoint_signatures.signing_key_path` at a new file and bump
+   `signature_version` so consumers can distinguish the rollover. The runtime
+   creates the path on startup when it does not exist, storing both the secret
+   and derived public key for distribution.【F:rpp/runtime/config.rs†L2699-L2847】
+2. **Extract and distribute the verifying key.** After the node writes the new
+   key file, export the `public_key` field and share it with downstream
+   validators and consensus checkpoint verifiers:
+
+   ```bash
+   python - <<'PY'
+import tomllib
+from pathlib import Path
+
+key = tomllib.loads(Path("/var/lib/rpp/keys/pruning-checkpoint.toml").read_text())
+print(key["public_key"])
+PY
+   ```
+
+   Set `pruning.checkpoint_signatures.verifying_key` (and the matching
+   consensus checkpoint verifier entry) to the exported value so both pruning
+   recovery and consensus snapshot validation refuse unsigned or stale
+   signatures.【F:rpp/runtime/config.rs†L2793-L2842】
+3. **Update configs and restart validators.** Roll the new signing key path and
+   verifying key through the deployment’s `config/node.toml` (or templated
+   equivalent) and restart nodes. Environments requiring strict enforcement
+   should keep `require_signatures=true` so startup fails if a rotated key is
+   missing.【F:rpp/runtime/config.rs†L2793-L2842】
+4. **Verify signatures after rotation.** Run the mixed-backend signature tests
+   locally or in CI to prove the new key signs checkpoints and that tampering is
+   rejected across both prover stacks:
+
+   ```bash
+   # Default backend (STWO)
+   RPP_PROVER_DETERMINISTIC=1 cargo test -p rpp-chain --locked --features prover-stwo --test recovery_pruning -- \
+     pruning_checkpoint_signature_rejects_tampered_payload pruning_checkpoint_signature_rejects_tampered_signature
+
+   # RPP-STARK backend
+   RPP_PROVER_DETERMINISTIC=1 cargo test -p rpp-chain --locked --features backend-rpp-stark --test recovery_pruning -- \
+     pruning_checkpoint_signature_rejects_tampered_payload pruning_checkpoint_signature_rejects_tampered_signature
+   ```
+
+   The `pruning-checkpoints` CI job records per-backend logs under
+   `artifacts/pruning-checkpoints/<backend>/` so operators can confirm mixed-
+   backend coverage after each rotation.
