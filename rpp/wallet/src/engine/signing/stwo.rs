@@ -12,7 +12,7 @@ use prover_stwo_backend::reputation::{ReputationProfile, ReputationWeights, Tier
 use prover_stwo_backend::types::{Account, SignedTransaction, Stake, Transaction};
 use zeroize::Zeroize;
 
-use super::prover::ProverJobManager;
+use super::prover::{ProverJobManager, STWO_WALLET_CIRCUIT};
 use super::{ProverError, WitnessPlan};
 
 /// Helper translating wallet drafts into STWO witnesses.
@@ -33,7 +33,11 @@ impl StwoWitnessAdapter {
         let (witness_bytes, witness_len) = build_stwo_witness(draft)?;
         manager.ensure_witness_capacity("stwo", witness_len, Some(self.witness_cap))?;
         counter!("wallet.prover.stwo.witness.prepared").increment(1);
-        Ok(WitnessPlan::with_parts(witness_bytes, std::time::Instant::now()).with_backend("stwo"))
+        Ok(
+            WitnessPlan::with_parts(witness_bytes, std::time::Instant::now())
+                .with_backend("stwo")
+                .with_circuit(STWO_WALLET_CIRCUIT),
+        )
     }
 }
 

@@ -39,6 +39,7 @@ pub struct WitnessPlan {
     witness_bytes: usize,
     prepared_at: Instant,
     backend: &'static str,
+    circuit: &'static str,
 }
 
 impl WitnessPlan {
@@ -48,6 +49,7 @@ impl WitnessPlan {
             witness_bytes: 0,
             prepared_at: Instant::now(),
             backend: "unknown",
+            circuit: "unknown",
         }
     }
 
@@ -58,6 +60,7 @@ impl WitnessPlan {
             witness_bytes: bytes,
             prepared_at: Instant::now(),
             backend: "unknown",
+            circuit: "unknown",
         }
     }
 
@@ -68,6 +71,7 @@ impl WitnessPlan {
             witness_bytes: bytes,
             prepared_at,
             backend: "unknown",
+            circuit: "unknown",
         }
     }
 
@@ -83,8 +87,17 @@ impl WitnessPlan {
         self.backend
     }
 
+    pub fn circuit(&self) -> &'static str {
+        self.circuit
+    }
+
     pub fn with_backend(mut self, backend: &'static str) -> Self {
         self.backend = backend;
+        self
+    }
+
+    pub fn with_circuit(mut self, circuit: &'static str) -> Self {
+        self.circuit = circuit;
         self
     }
 
