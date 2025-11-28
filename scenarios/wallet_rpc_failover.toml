@@ -1,0 +1,85 @@
+[sim]
+seed = 94011
+duration_ms = 96000
+mode = "wallet-rpc-failover"
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.15
+
+[regions]
+assignments = [
+  "EAST", "EAST", "EAST", "EAST",
+  "WEST", "WEST", "WEST", "WEST",
+  "EU", "EU", "EU", "EU",
+  "EAST", "EAST", "WEST", "WEST",
+  "EU", "EU", "EAST", "WEST",
+  "EU", "EAST", "WEST", "EU",
+]
+
+[links]
+default = { delay_ms = 26, jitter_ms = 6, loss = 0.004 }
+intra = { delay_ms = 12, jitter_ms = 3, loss = 0.0 }
+EAST-WEST = { delay_ms = 88, jitter_ms = 18, loss = 0.014 }
+EAST-EU = { delay_ms = 72, jitter_ms = 14, loss = 0.011 }
+WEST-EU = { delay_ms = 94, jitter_ms = 20, loss = 0.017 }
+post_failover = { delay_ms = 140, jitter_ms = 34, loss = 0.028 }
+
+[latency_profile]
+trusted = { extra_delay_ms = 6, jitter_ms = 2 }
+untrusted = { extra_delay_ms = 30, jitter_ms = 11 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.12 }
+
+[traffic.tx.payload]
+min_bytes = 896
+max_bytes = 6144
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 12000
+model = "poisson"
+lambda_per_sec = 18.0
+
+[[traffic.tx.phases]]
+name = "steady-rpc"
+duration_ms = 24000
+model = "poisson"
+lambda_per_sec = 34.0
+
+[[traffic.tx.phases]]
+name = "regional-failover"
+duration_ms = 18000
+model = "on_off_bursty"
+on_lambda_per_sec = 48.0
+on_duration_ms = 2800
+off_duration_ms = 1200
+
+[[traffic.tx.phases]]
+name = "recovery"
+duration_ms = 24000
+model = "poisson"
+lambda_per_sec = 28.0
+
+[faults.partition]
+start_ms = 18000
+duration_ms = 8000
+group_a = "EAST"
+group_b = "WEST"
+
+[faults.churn]
+start_ms = 52000
+rate_per_min = 14.0
+restart_after_ms = 4500
+
+[faults.byzantine]
+start_ms = 56000
+spam_factor = 3
+publishers = [2, 9, 15]
+
+[metrics]
+json = "target/simnet/wallet-rpc-failover/summaries/wallet_rpc_failover.json"
+csv = "target/simnet/wallet-rpc-failover/summaries/wallet_rpc_failover.csv"

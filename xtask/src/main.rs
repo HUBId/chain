@@ -764,6 +764,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             scenario_path: "tools/simnet/scenarios/uptime_soak.ron",
             description: "Run the multi-hour uptime/finality soak drill",
         },
+        SimnetPreset {
+            slug: "wallet-rpc-failover",
+            scenario_path: "tools/simnet/scenarios/wallet_rpc_failover.ron",
+            description: "Drive wallet RPC regional failover and zk backend fallback while measuring uptime/latency",
+        },
     ]
 }
 

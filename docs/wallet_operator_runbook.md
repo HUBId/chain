@@ -217,7 +217,14 @@ output showing `enabled = false` under `[electrs.cache.telemetry]` and
 `[electrs.tracker]`. Attach the logs from a wallet launch proving no telemetry
 listener was bound (absence of `Listening on …telemetry…` messages).
 
-## 9. Reorg handling playbook
+## 9. Regional RPC failover drills
+
+1. **Rehearse the simnet profile** – Run `cargo xtask simnet --profile wallet-rpc-failover --artifacts-dir target/simnet/wallet-rpc-failover-local` before rollout windows. The profile pins regional link delays, induces an EAST↔WEST partition, and restarts peers to force prover/verifier fallback so wallet RPC traffic exercises cross-region routing and zk backend failover while uptime/latency are recorded.【F:scenarios/wallet_rpc_failover.toml†L1-L87】 Nightly CI executes the same profile under the `simnet-wallet-rpc-failover` job, and artifacts land under `artifacts/simnet/wallet-rpc-failover-<feature-matrix>/` for postmortems.【F:.github/workflows/nightly.yml†L121-L176】
+2. **Validate alert wiring** – After the simnet run, call `python3 tools/alerts/validate_alerts.py --artifacts target/simnet/wallet-rpc-failover-local/alerts` to ensure the wallet latency/uptime alerts fire and clear against the synthetic probes used by CI.【F:.github/workflows/nightly.yml†L149-L158】 Pair the results with Grafana panels for `rpp.runtime.wallet.rpc.latency_ms` and `rpp.runtime.wallet.uptime_*` to confirm alert thresholds align with production dashboards.【F:rpp/runtime/telemetry/metrics.rs†L69-L188】【F:rpp/runtime/telemetry/metrics.rs†L524-L530】
+3. **Check balance/nonce stability** – Rerun the wallet tracker API acceptance test (`cargo test --locked --package wallet-integration-tests --test wallet_electrs_api -- --ignored --exact wallet_tracker_history_surfaces_via_api`) after the failover drill to confirm deposits, proof envelopes, and nonces match the pre-failover state. The test asserts the account nonce increments once a transaction is drafted and that digest/VRF metadata remain intact, giving confidence the rerouted RPCs did not corrupt wallet state.【F:rpp/wallet-integration-tests/tests/wallet_electrs_api.rs†L155-L202】
+4. **Runbook response** – When alerts fire in production, follow the same steps as the simnet drill: confirm active backend health in `/status/node`, compare `wallet_rpc_latency` p95 against Grafana, and only restart the wallet if RPC latency remains elevated after regional routes heal. Record which backend handled the fallback and whether nonces advanced in the incident ticket so the next drill can target the slowest path.
+
+## 10. Reorg handling playbook
 
 1. **Detect divergence quickly** – Keep the wallet RPC `sync_status` panel on the
    dashboard during deployments. A sudden drop in `latest_height` paired with a
@@ -238,7 +245,7 @@ listener was bound (absence of `Listening on …telemetry…` messages).
    responses from `sync_status`, `pending_locks`, and the node head to speed up
    incident triage.
 
-## 10. Regression automation hook
+## 11. Regression automation hook
 
 The repository ships a lightweight regression target for wallet operators:
 

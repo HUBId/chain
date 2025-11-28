@@ -30,6 +30,7 @@ back to `--scenario` for ad-hoc RON files.
 | `epoch-drift` | `tools/simnet/scenarios/consensus_epoch_drift.ron` | Injects skewed latency and slow peers to fuzz epoch transitions and fork-choice stability. | `10` cores / `20 GiB` |
 | `validator-set-rotation` | `tools/simnet/scenarios/validator_set_rotation.ron` | Restarts and rotates validators while checking timetoke alignment and finality continuity. | `12` cores / `24 GiB` |
 | `uptime-soak` | `tools/simnet/scenarios/uptime_soak.ron` | Multi-hour soak with induced pauses to track uptime/finality health. | `12` cores / `24 GiB` |
+| `wallet-rpc-failover` | `tools/simnet/scenarios/wallet_rpc_failover.ron` | Routes wallet RPC traffic through regional nodes while forcing prover/verifier failover and tracking uptime/latency. | `12` cores / `24 GiB` |
 
 Pass a custom path to execute ad-hoc scenarios:
 

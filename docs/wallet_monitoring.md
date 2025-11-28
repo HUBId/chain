@@ -58,6 +58,22 @@ Combine alert definitions with existing dashboard annotations so incidents link
 back to the correct panels in Grafana (`pipeline-wallet-intake`,
 `pipeline-proof-validation`, etc.).【F:docs/performance_dashboards.json†L1-L26】
 
+## Regional RPC failover metrics
+
+- **Nightly coverage** – The `simnet-wallet-rpc-failover` workflow exercises
+  regional partitions, backend restarts, and wallet RPC bursts so dashboards
+  capture latency and uptime regressions before production. The run publishes
+  summaries and alert probe artifacts under
+  `artifacts/simnet/wallet-rpc-failover-<feature-matrix>/` for review.【F:.github/workflows/nightly.yml†L121-L176】
+- **Latency and uptime panels** – Track `rpp.runtime.wallet.rpc.latency_ms` by
+  method and the `rpp.runtime.wallet.uptime_*` counters from the scheduler and
+  proof submission pipelines to confirm failover does not stall proofs or RPC
+  responsiveness.【F:rpp/runtime/telemetry/metrics.rs†L69-L188】【F:rpp/runtime/telemetry/metrics.rs†L524-L530】
+- **Alert validation** – Use `python3 tools/alerts/validate_alerts.py --artifacts
+  <dir>` against the simnet artifacts to confirm wallet latency and uptime alerts
+  fire/clear with the same thresholds wired in production dashboards before
+  promoting the change.【F:tools/alerts/validate_alerts.py†L1-L77】
+
 ## Signer latency and failures
 
 The `wallet_signer` alert manifest covers spikes in signing latency and failures
