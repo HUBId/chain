@@ -908,6 +908,14 @@ struct ProofCacheMetricsSnapshot {
     capacity: usize,
     #[serde(default)]
     backend: Option<String>,
+    #[serde(default)]
+    last_persist_latency_ms: Option<u64>,
+    #[serde(default)]
+    last_load_latency_ms: Option<u64>,
+    #[serde(default)]
+    queue_depth: usize,
+    #[serde(default)]
+    max_queue_depth: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

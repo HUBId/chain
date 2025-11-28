@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use rpp_p2p::{
     GossipTopic, PeerId, PipelineError, ProofCacheMetrics, ProofMempool, ProofRecord, ProofStorage,
@@ -56,6 +57,47 @@ impl ProofStorage for BoundedProofStorage {
     }
 
     fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
+        Ok(self.records.lock().clone())
+    }
+
+    fn capacity(&self) -> Option<usize> {
+        Some(self.capacity)
+    }
+}
+
+#[derive(Debug)]
+struct SlowProofStorage {
+    delay: Duration,
+    capacity: usize,
+    records: parking_lot::Mutex<Vec<ProofRecord>>,
+}
+
+impl SlowProofStorage {
+    fn new(delay: Duration, capacity: usize) -> Self {
+        Self {
+            delay,
+            capacity,
+            records: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ProofStorage for SlowProofStorage {
+    fn persist(&self, record: &ProofRecord) -> Result<usize, PipelineError> {
+        std::thread::sleep(self.delay);
+        let mut guard = self.records.lock();
+        guard.push(record.clone());
+        if guard.len() > self.capacity {
+            let evicted = guard.len() - self.capacity;
+            guard.drain(0..evicted);
+            Ok(evicted)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn load(&self) -> Result<Vec<ProofRecord>, PipelineError> {
+        std::thread::sleep(self.delay);
         Ok(self.records.lock().clone())
     }
 
@@ -148,6 +190,8 @@ fn cache_metrics_snapshot_preserves_export_format() {
         "misses": 0,
         "evictions": 0,
         "capacity": 0,
+        "queue_depth": 0,
+        "max_queue_depth": 0,
     });
     assert_eq!(
         serde_json::to_value(metrics.snapshot()).expect("serializable"),
@@ -270,4 +314,74 @@ fn eviction_hit_rate_stays_stable_under_pressure() {
         snapshot.evictions >= 12,
         "stress burst should evict earlier records"
     );
+}
+
+#[test]
+fn slow_storage_latency_and_queue_depth_are_reported() {
+    let metrics = ProofCacheMetrics::default();
+    metrics.configure("rpp-stark", 8);
+    let validator = Arc::new(AcceptAllValidator::default());
+    let storage = Arc::new(SlowProofStorage::new(Duration::from_millis(25), 8));
+
+    let mut mempool =
+        ProofMempool::new_with_metrics(validator, storage, metrics.clone()).expect("mempool");
+
+    let snapshot = metrics.snapshot();
+    assert!(
+        snapshot
+            .last_load_latency_ms
+            .expect("load latency recorded")
+            >= 20,
+        "initial cache load latency should be captured",
+    );
+
+    let peer = PeerId::random();
+    ingest_many(
+        &mut mempool,
+        peer,
+        GossipTopic::Proofs,
+        ["alpha", "beta", "gamma"].into_iter().map(String::from),
+    );
+
+    let snapshot = metrics.snapshot();
+    assert!(
+        snapshot
+            .last_persist_latency_ms
+            .expect("persist latency recorded")
+            >= 20,
+        "persist latency should reflect storage delay",
+    );
+    assert_eq!(
+        snapshot.queue_depth, 3,
+        "queue depth should follow ingest count"
+    );
+    assert_eq!(snapshot.max_queue_depth, 3, "max queue depth tracks spikes");
+}
+
+#[test]
+fn queue_depth_recovers_when_work_drains() {
+    let metrics = ProofCacheMetrics::default();
+    let validator = Arc::new(AcceptAllValidator::default());
+    let storage = Arc::new(SlowProofStorage::new(Duration::from_millis(5), 4));
+    let mut mempool =
+        ProofMempool::new_with_metrics(validator, storage, metrics.clone()).expect("mempool");
+
+    let peer = PeerId::random();
+    ingest_many(
+        &mut mempool,
+        peer,
+        GossipTopic::WitnessProofs,
+        ["one", "two", "three", "four"]
+            .into_iter()
+            .map(String::from),
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.queue_depth, 4, "depth grows with enqueued work");
+    assert_eq!(snapshot.max_queue_depth, 4, "max depth tracks peak load");
+
+    let _ = mempool.pop();
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.queue_depth, 3, "depth shrinks as work drains");
+    assert_eq!(snapshot.max_queue_depth, 4, "peak depth should not reset");
 }

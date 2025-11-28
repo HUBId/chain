@@ -67,6 +67,22 @@ metrics:
     labels:
       - cache
       - backend
+  - name: rpp.runtime.proof.cache.queue_depth
+    labels:
+      - cache
+      - backend
+  - name: rpp.runtime.proof.cache.max_queue_depth
+    labels:
+      - cache
+      - backend
+  - name: rpp.runtime.proof.cache.persist_latency
+    labels:
+      - cache
+      - backend
+  - name: rpp.runtime.proof.cache.load_latency
+    labels:
+      - cache
+      - backend
   - name: rpp.runtime.reputation.penalties
     labels:
       - label

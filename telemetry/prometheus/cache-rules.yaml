@@ -28,6 +28,50 @@ groups:
         labels:
           component: proofs
 
+      - record: proof_cache:queue_depth:p95:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, cache, backend) (
+              rate(rpp_runtime_proof_cache_queue_depth_bucket[5m])
+            )
+          )
+        labels:
+          component: proofs
+
+      - record: proof_cache:max_queue_depth:p95:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, cache, backend) (
+              rate(rpp_runtime_proof_cache_max_queue_depth_bucket[5m])
+            )
+          )
+        labels:
+          component: proofs
+
+      - record: proof_cache:persist_latency:p95:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, cache, backend) (
+              rate(rpp_runtime_proof_cache_persist_latency_bucket[5m])
+            )
+          )
+        labels:
+          component: proofs
+
+      - record: proof_cache:load_latency:p95:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, cache, backend) (
+              rate(rpp_runtime_proof_cache_load_latency_bucket[5m])
+            )
+          )
+        labels:
+          component: proofs
+
       - alert: CacheMissSpike
         expr: cache:hit_ratio:5m < 0.7
         for: 10m
@@ -64,6 +108,32 @@ groups:
             Proof cache hit ratio stayed below 50% for 15 minutes while evictions
             exceeded 30 per minute. Investigate gossip spam, cache sizing, or
             backend mismatches before hit rates collapse further.
+
+      - alert: ProofCacheQueueSaturation
+        expr: proof_cache:queue_depth:p95:5m > 500 or proof_cache:max_queue_depth:p95:5m > 800
+        for: 10m
+        labels:
+          severity: warning
+          component: proofs
+        annotations:
+          summary: "Proof cache queue depth breaching back-pressure budget"
+          description: |
+            The gossip proof cache queue depth p95 exceeded the configured envelope
+            for 10 minutes, indicating verifier back-pressure or stalled I/O. Check
+            disk throughput and cache retention before proofs start timing out.
+
+      - alert: ProofCacheIoStall
+        expr: proof_cache:persist_latency:p95:5m > 250 or proof_cache:load_latency:p95:5m > 250
+        for: 5m
+        labels:
+          severity: critical
+          component: proofs
+        annotations:
+          summary: "Proof cache storage latency spiking above 250ms"
+          description: |
+            Persist or load latency for gossip proofs has exceeded 250ms at the
+            5-minute p95. Investigate database pressure, disk saturation, or
+            resource throttling in the prover/verifier nodes.
 
   - name: zk-proof-footprint
     interval: 30s
