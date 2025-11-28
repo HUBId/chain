@@ -1246,6 +1246,68 @@ EOF
           path: artifacts/simnet/${{ env.SIMNET_LABEL }}
           if-no-files-found: ignore
 
+  simnet-wallet-rpc-failover:
+    name: Simnet wallet RPC regional failover (prod, stwo/plonky3)
+    runs-on: ubuntu-latest
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
+      RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: "wallet-rpc-failover"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          label_base="${SIMNET_LABEL:-wallet-rpc-failover}"
+          features="${XTASK_FEATURES:-default}"
+          features=$(printf '%s' "$features" | tr ', ' '-' | tr -s '-' '-')
+          label="${label_base}-${features}"
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
+
+      - name: Run wallet RPC failover scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/wallet-rpc-failover-nightly
+          cargo xtask simnet --profile wallet-rpc-failover --artifacts-dir target/simnet/wallet-rpc-failover-nightly
+
+      - name: Analyze wallet RPC failover summaries
+        run: |
+          set -euo pipefail
+          python3 scripts/analyze_simnet.py \
+            target/simnet/wallet-rpc-failover-nightly/summaries/wallet_rpc_failover.json
+
+      - name: Validate alert probes
+        run: |
+          set -euo pipefail
+          python3 tools/alerts/validate_alerts.py --artifacts target/simnet/wallet-rpc-failover-nightly/alerts
+
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target/simnet wallet-rpc-failover-nightly
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
+
   simnet-leader-rotation:
     name: Simnet rapid leader rotation under prover load
     runs-on: ubuntu-latest
