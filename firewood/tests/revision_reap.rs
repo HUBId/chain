@@ -106,3 +106,52 @@ fn commit_skips_corrupt_free_list_entry() {
         b"value-1",
     );
 }
+
+#[test]
+fn commit_rejects_leaked_allocator_after_pruning() {
+    let tmpdir = tempfile::tempdir().expect("create tempdir");
+    let db_path = tmpdir.path().join("allocator_leak.firewood");
+
+    let manager_cfg = RevisionManagerConfig::builder().max_revisions(1).build();
+    let db_cfg = DbConfig::builder().manager(manager_cfg).build();
+    let db = Db::new(&db_path, db_cfg, noop_storage_metrics()).expect("create db");
+
+    db.propose(vec![BatchOp::Put {
+        key: b"key-0",
+        value: b"value-0",
+    }])
+    .expect("create proposal")
+    .commit()
+    .expect("commit baseline revision");
+
+    let mut header_block = vec![0u8; firewood_storage::NodeStoreHeader::SIZE as usize];
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&db_path)
+        .expect("open db for leak injection");
+    file.read_exact(&mut header_block)
+        .expect("read existing header");
+    let header_slice = &mut header_block[..std::mem::size_of::<NodeStoreHeader>()];
+    let mut header = *NodeStoreHeader::from_bytes(header_slice);
+    header.set_size(header.size() + AreaIndex::MIN.size());
+    header_slice.copy_from_slice(bytes_of(&header));
+    file.seek(SeekFrom::Start(0)).expect("rewind header");
+    file.write_all(&header_block)
+        .expect("persist leaked size");
+    file.sync_data().expect("flush leaked size");
+
+    let err = db
+        .propose(vec![BatchOp::Put {
+            key: b"key-1",
+            value: b"value-1",
+        }])
+        .expect("create proposal after leak")
+        .commit()
+        .expect_err("allocator check should reject leaked space");
+
+    assert!(
+        err.to_string().contains("allocator integrity check failed"),
+        "unexpected error: {err}"
+    );
+}
