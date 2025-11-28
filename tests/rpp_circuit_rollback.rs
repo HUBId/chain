@@ -60,6 +60,81 @@ fn future_circuit_proofs_are_rejected_after_rollback() -> Result<()> {
 }
 
 #[test]
+fn mixed_circuit_versions_reject_incompatible_proofs() -> Result<()> {
+    log_vector_checksums()?;
+
+    let params = load_bytes("params.bin")?;
+    let public_inputs = load_bytes("public_inputs.bin")?;
+    let proof_bytes = load_bytes("proof.bin")?;
+
+    let stark_params = deserialize_params(&params)?;
+    let node_limit = params_limit_to_node_bytes(&stark_params)?;
+    let verifier = RppStarkVerifier::new();
+
+    // Old node verifying a future proof version.
+    let mut future_proof = Proof::from_bytes(&proof_bytes)?;
+    *future_proof.version_mut() = PROOF_VERSION + 1;
+    let future_bytes = future_proof.to_bytes()?;
+    let future_error = verifier
+        .verify(&params, &public_inputs, &future_bytes, node_limit)
+        .expect_err("rolled-back verifier should reject future proof versions");
+
+    match future_error {
+        RppStarkVerifierError::VerificationFailed { failure, report } => {
+            assert!(matches!(
+                failure,
+                RppStarkVerifyFailure::VersionMismatch {
+                    expected,
+                    actual
+                } if expected == PROOF_VERSION && actual == PROOF_VERSION + 1
+            ));
+            assert_eq!(
+                report.error,
+                Some(VerifyError::VersionMismatch {
+                    expected: PROOF_VERSION,
+                    actual: PROOF_VERSION + 1,
+                })
+            );
+            assert!(!report.params_ok);
+            assert!(!report.public_ok);
+        }
+        other => panic!("unexpected verifier error: {other:?}"),
+    }
+
+    // Upgraded node rejecting stale proofs that advertise an older PROOF_VERSION.
+    let mut stale_proof = Proof::from_bytes(&proof_bytes)?;
+    *stale_proof.version_mut() = PROOF_VERSION.saturating_sub(1);
+    let stale_bytes = stale_proof.to_bytes()?;
+    let stale_error = verifier
+        .verify(&params, &public_inputs, &stale_bytes, node_limit)
+        .expect_err("upgraded verifier should reject stale proof versions");
+
+    match stale_error {
+        RppStarkVerifierError::VerificationFailed { failure, report } => {
+            assert!(matches!(
+                failure,
+                RppStarkVerifyFailure::VersionMismatch {
+                    expected,
+                    actual
+                } if expected == PROOF_VERSION && actual == PROOF_VERSION.saturating_sub(1)
+            ));
+            assert_eq!(
+                report.error,
+                Some(VerifyError::VersionMismatch {
+                    expected: PROOF_VERSION,
+                    actual: PROOF_VERSION.saturating_sub(1),
+                })
+            );
+            assert!(!report.params_ok);
+            assert!(!report.public_ok);
+        }
+        other => panic!("unexpected verifier error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn circuit_digest_drift_surfaces_as_rollback_warning() -> Result<()> {
     log_vector_checksums()?;
 

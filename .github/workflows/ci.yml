@@ -330,6 +330,11 @@ PY
         run: |
           set -euo pipefail
           cargo xtask proof-version-metadata
+      - name: Exercise mixed-circuit upgrade guardrails
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --locked --features backend-rpp-stark --test rpp_circuit_rollback -- \
+            mixed_circuit_versions_reject_incompatible_proofs
 
   clippy:
     name: Clippy (all targets, all features)

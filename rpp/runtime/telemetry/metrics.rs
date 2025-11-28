@@ -1106,6 +1106,7 @@ pub struct ProofMetrics {
     verification_duration: Histogram<f64>,
     verification_outcomes: Counter<u64>,
     verification_success_ratio: Histogram<f64>,
+    incompatible_proofs: Counter<u64>,
     verification_total_bytes: Histogram<u64>,
     verification_total_bytes_by_result: Histogram<u64>,
     verification_params_bytes: Histogram<u64>,
@@ -1165,6 +1166,13 @@ impl ProofMetrics {
                 .f64_histogram("rpp.runtime.proof.verification.success_ratio")
                 .with_description(
                     "Success ratio for proof verification grouped by backend, circuit, and proof kind",
+                )
+                .with_unit("1")
+                .build(),
+            incompatible_proofs: meter
+                .u64_counter("rpp.runtime.proof.incompatible")
+                .with_description(
+                    "Submissions rejected due to incompatible circuits or proof versions",
                 )
                 .with_unit("1")
                 .build(),
@@ -1415,6 +1423,17 @@ impl ProofMetrics {
         self.verification_success_ratio
             .record(ratio, &ratio_attributes);
     }
+
+    pub fn record_incompatible_proof(
+        &self,
+        backend: ProofVerificationBackend,
+        kind: ProofVerificationKind,
+        circuit: &str,
+        reason: &str,
+    ) {
+        let attributes = verification_attributes_with_reason(backend, kind, circuit, reason);
+        self.incompatible_proofs.add(1, &attributes);
+    }
 }
 
 fn verification_attributes(
@@ -1460,6 +1479,20 @@ fn verification_attributes_with_outcome(
         KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
         KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
         KeyValue::new(ProofVerificationOutcome::KEY, outcome.as_str()),
+    ]
+}
+
+fn verification_attributes_with_reason(
+    backend: ProofVerificationBackend,
+    kind: ProofVerificationKind,
+    circuit: &str,
+    reason: &str,
+) -> [KeyValue; 4] {
+    [
+        KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        KeyValue::new(ProofVerificationKind::KEY, kind.as_str()),
+        KeyValue::new(PROOF_CIRCUIT_KEY, circuit.to_string()),
+        KeyValue::new(PROOF_INCOMPATIBILITY_REASON_KEY, reason.to_string()),
     ]
 }
 
@@ -2231,6 +2264,7 @@ pub enum ProofVerificationBackend {
 }
 
 const PROOF_CIRCUIT_KEY: &str = "proof_circuit";
+const PROOF_INCOMPATIBILITY_REASON_KEY: &str = "incompatibility_reason";
 
 impl ProofVerificationBackend {
     pub const KEY: &'static str = "proof_backend";

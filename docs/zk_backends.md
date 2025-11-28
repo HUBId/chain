@@ -76,6 +76,10 @@
 - Änderungen an Circuit-Artefakten (`prover/plonky3_backend/params/`, `prover/prover_stwo_backend/params/`) verlangen neben dem
   Versionssprung auch einen CHANGELOG-Eintrag mit explizitem PROOF_VERSION-Hinweis; der Guard schlägt fehl, sobald Circuit-Diffs
   ohne Versionserhöhung oder Changelog-Anker auftreten.
+- Mixed-rollout-Absicherung: `mixed_circuit_versions_reject_incompatible_proofs` zwingt in Tests, dass Nodes mit alten und neuen
+  Circuits Proofs mit abweichendem `PROOF_VERSION` explizit ablehnen. Der CI-Job `proof-version-policy` führt den Check unter
+  `cargo test --test rpp_circuit_rollback --features backend-rpp-stark` bei jedem PR aus, sodass Rollbacks/Future-Proofs keine
+  stillen Fallbacks mehr triggern.【F:tests/rpp_circuit_rollback.rs†L36-L110】【F:.github/workflows/ci.yml†L309-L337】
 - Der Befehl `cargo xtask proof-version-guard --base origin/main` prüft diese Pfade und bricht ab, wenn die Konstanten nicht
   angepasst wurden. Nutze `--base <ref>`, wenn der Release-/Feature-Branch von einem anderen Stand als `origin/main` abzweigt.
   Der Guard liest beide Stände aus Git und gleicht die Werte aus `vendor/rpp-stark/src/proof/types.rs` und `firewood/src/proofs.rs`
@@ -141,7 +145,8 @@ und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die
 
 - `NodeInner::verify_rpp_stark_with_metrics` (implementiert in `rpp/runtime/node.rs`) ruft den Registry-Helper auf und emittiert strukturierte Logs (`valid`, `proof_bytes`, `verify_duration_ms`, Stage-Flags) mit Label `proof_backend="rpp-stark"` und `proof_kind` (z. B. `"transaction"`).
 - Zusätzlich landen die Kennzahlen auf dem `telemetry`-Target. Erfolgreiche Prüfungen loggen `params_ok`, `public_ok`, `merkle_ok`, `fri_ok`, `composition_ok` sowie `params_bytes`, `public_inputs_bytes` und `payload_bytes`.
-- Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt. Oversize- und Limit-Mismatch-Fälle tragen dieselben Byte-Felder und Buckets, wodurch Alerting-Regeln auf `result="fail"` aufsetzen können.【F:rpp/runtime/node.rs†L4526-L4720】【F:rpp/runtime/node.rs†L4649-L4720】
+- Fehlerpfade nutzen `emit_rpp_stark_failure_metrics` (`rpp/runtime/node.rs`), das Byte-Größen sowie den Fehlertext protokolliert und `valid=false` setzt. Oversize- und Limit-Mismatch-Fälle tragen dieselben Byte-Felder und Buckets, wodurch Alerting-Regeln auf `result="fail"` aufsetzen können.【F:rpp/runtime/node.rs†L5583-L5863】
+- Inkompatible Proofs (Version-/Digest-Diskrepanzen) werden zusätzlich mit `incompatible_proof=true` und `incompatibility_reason` geloggt; der Counter `rpp.runtime.proof.incompatible` zählt dieselben Ereignisse für Prometheus und dokumentiert missglückte Mixed-Rollouts ohne Fallback auf eine andere Circuit-Version.【F:rpp/runtime/node.rs†L5583-L5863】【F:rpp/runtime/telemetry/metrics.rs†L1108-L1165】
 - Beispielausgaben:
 
   ```text

@@ -5664,6 +5664,7 @@ impl NodeInner {
         match error {
             RppStarkVerifierError::VerificationFailed { failure, report } => {
                 let flags = report.flags();
+                let incompatibility_reason = rpp_stark_incompatibility_reason(failure);
                 if let Some(stage_timings) = report.stage_timings() {
                     proof_metrics.observe_verification_stage_duration(
                         backend,
@@ -5702,6 +5703,14 @@ impl NodeInner {
                     labels.circuit,
                     flags,
                 );
+                if let Some(reason) = incompatibility_reason {
+                    proof_metrics.record_incompatible_proof(
+                        backend,
+                        proof_kind,
+                        labels.circuit,
+                        reason,
+                    );
+                }
                 let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
                 if let Some(snapshot) = snapshot {
                     warn!(
@@ -5721,6 +5730,8 @@ impl NodeInner {
                         public_inputs_bytes = snapshot.public_inputs_bytes,
                         payload_bytes = snapshot.payload_bytes,
                         verify_duration_ms,
+                        incompatible_proof = incompatibility_reason.is_some(),
+                        incompatibility_reason = incompatibility_reason.unwrap_or("n/a"),
                         error = %failure,
                         "rpp-stark proof verification failed"
                     );
@@ -5741,6 +5752,8 @@ impl NodeInner {
                         public_inputs_bytes = snapshot.public_inputs_bytes,
                         payload_bytes = snapshot.payload_bytes,
                         verify_duration_ms,
+                        incompatible_proof = incompatibility_reason.is_some(),
+                        incompatibility_reason = incompatibility_reason.unwrap_or("n/a"),
                         error = %failure,
                         "rpp-stark proof verification failed"
                     );
@@ -5759,6 +5772,8 @@ impl NodeInner {
                         proof_bytes = report.total_bytes(),
                         size_bucket = proof_size_bucket(report.total_bytes()),
                         verify_duration_ms,
+                        incompatible_proof = incompatibility_reason.is_some(),
+                        incompatibility_reason = incompatibility_reason.unwrap_or("n/a"),
                         error = %failure,
                         "rpp-stark proof verification failed"
                     );
@@ -5776,6 +5791,8 @@ impl NodeInner {
                         proof_bytes = report.total_bytes(),
                         size_bucket = proof_size_bucket(report.total_bytes()),
                         verify_duration_ms,
+                        incompatible_proof = incompatibility_reason.is_some(),
+                        incompatibility_reason = incompatibility_reason.unwrap_or("n/a"),
                         error = %failure,
                         "rpp-stark proof verification failed"
                     );
@@ -5881,6 +5898,14 @@ impl NodeInner {
             ProofVerificationStage::Composition,
             ProofVerificationOutcome::from_bool(flags.composition()),
         );
+    }
+
+    fn rpp_stark_incompatibility_reason(failure: &RppStarkVerifyFailure) -> Option<&'static str> {
+        match failure {
+            RppStarkVerifyFailure::VersionMismatch { .. } => Some("proof_version"),
+            RppStarkVerifyFailure::ParamsHashMismatch => Some("circuit_digest"),
+            _ => None,
+        }
     }
 
     fn classify_rpp_stark_error_stage(error: &RppStarkVerifierError) -> ProofVerificationStage {
