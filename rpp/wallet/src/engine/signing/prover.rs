@@ -34,9 +34,11 @@ use prover_backend_interface::{ProvingKey, TxCircuitDef};
 #[cfg(feature = "prover-stwo")]
 use prover_stwo_backend::backend::StwoBackend;
 
-const MOCK_CIRCUIT_ID: &str = "wallet.tx";
+pub(crate) const MOCK_CIRCUIT_ID: &str = "wallet.tx";
 #[cfg(feature = "prover-stwo")]
-const STWO_CIRCUIT_ID: &str = "transaction";
+pub(crate) const STWO_CIRCUIT_ID: &str = "transaction";
+#[cfg(feature = "prover-stwo")]
+pub(crate) const STWO_WALLET_CIRCUIT: &str = "tx";
 
 fn prover_audit_log() -> &'static Option<AuditLog> {
     static LOG: OnceLock<Option<AuditLog>> = OnceLock::new();
@@ -430,7 +432,9 @@ impl WalletProver for MockWalletProver {
 
         result
             .map(|(witness, _)| {
-                let plan = WitnessPlan::with_parts(witness, Instant::now()).with_backend(backend);
+                let plan = WitnessPlan::with_parts(witness, Instant::now())
+                    .with_backend(backend)
+                    .with_circuit(MOCK_CIRCUIT_ID);
                 record_prepare_success(backend, plan.witness_bytes());
                 plan
             })
@@ -615,7 +619,12 @@ struct QueueTelemetry {
 }
 
 impl QueueTelemetry {
-    fn record_enqueue(&self, priority: ProverPriority, backend: &'static str) {
+    fn record_enqueue(
+        &self,
+        priority: ProverPriority,
+        backend: &'static str,
+        circuit: &'static str,
+    ) {
         match priority {
             ProverPriority::ConsensusCritical => {
                 self.waiting_consensus.fetch_add(1, Ordering::Relaxed);
@@ -627,19 +636,27 @@ impl QueueTelemetry {
         counter!(
             "wallet.prover.queue.enqueued",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .increment(1);
         gauge!(
             "wallet.prover.queue.pending",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .increment(1.0);
     }
 
-    fn record_start(&self, priority: ProverPriority, backend: &'static str) {
-        self.record_waiting_delta(priority, backend, -1.0);
+    fn record_start(
+        &self,
+        priority: ProverPriority,
+        backend: &'static str,
+        circuit: &'static str,
+        enqueued_at: Instant,
+    ) {
+        self.record_waiting_delta(priority, backend, circuit, -1.0);
         match priority {
             ProverPriority::ConsensusCritical => {
                 self.inflight_consensus.fetch_add(1, Ordering::Relaxed);
@@ -651,12 +668,29 @@ impl QueueTelemetry {
         gauge!(
             "wallet.prover.queue.depth",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .increment(1.0);
+        let wait_ms = Instant::now()
+            .saturating_duration_since(enqueued_at)
+            .as_secs_f64()
+            * 1000.0;
+        histogram!(
+            "wallet.prover.queue.latency_ms",
+            wait_ms,
+            "backend" => backend,
+            "circuit" => circuit,
+            "class" => priority.as_label()
+        );
     }
 
-    fn record_finish(&self, priority: ProverPriority, backend: &'static str) {
+    fn record_finish(
+        &self,
+        priority: ProverPriority,
+        backend: &'static str,
+        circuit: &'static str,
+    ) {
         match priority {
             ProverPriority::ConsensusCritical => {
                 self.inflight_consensus
@@ -676,22 +710,30 @@ impl QueueTelemetry {
         gauge!(
             "wallet.prover.queue.depth",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .decrement(1.0);
     }
 
-    fn record_drop(&self, priority: ProverPriority, backend: &'static str) {
-        self.record_waiting_delta(priority, backend, -1.0);
+    fn record_drop(&self, priority: ProverPriority, backend: &'static str, circuit: &'static str) {
+        self.record_waiting_delta(priority, backend, circuit, -1.0);
         counter!(
             "wallet.prover.queue.dropped",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .increment(1);
     }
 
-    fn record_waiting_delta(&self, priority: ProverPriority, backend: &'static str, delta: f64) {
+    fn record_waiting_delta(
+        &self,
+        priority: ProverPriority,
+        backend: &'static str,
+        circuit: &'static str,
+        delta: f64,
+    ) {
         match priority {
             ProverPriority::ConsensusCritical => {
                 if delta.is_sign_positive() {
@@ -721,6 +763,7 @@ impl QueueTelemetry {
         gauge!(
             "wallet.prover.queue.pending",
             "backend" => backend,
+            "circuit" => circuit,
             "class" => priority.as_label()
         )
         .increment(delta);
@@ -795,25 +838,28 @@ impl ProverJobManager {
     fn acquire(
         &self,
         backend: &'static str,
+        circuit: &'static str,
+        enqueued_at: Instant,
         priority: ProverPriority,
     ) -> Result<ProverJobPermit, ProverError> {
         if let Some(delay) = self.limiter.throttle_if_needed(backend)? {
             std::thread::sleep(delay);
         }
-        self.queue.record_enqueue(priority, backend);
+        self.queue.record_enqueue(priority, backend, circuit);
         if matches!(priority, ProverPriority::Background)
             && self.queue.inflight_background() >= self.available_background_capacity()
         {
-            self.queue.record_drop(priority, backend);
+            self.queue.record_drop(priority, backend, circuit);
             return Err(ProverError::Busy);
         }
         let permit = if let Some(semaphore) = &self.semaphore {
             Some(semaphore.try_acquire_owned().map_err(|_| {
-                self.queue.record_drop(priority, backend);
+                self.queue.record_drop(priority, backend, circuit);
                 if matches!(priority, ProverPriority::ConsensusCritical) {
                     counter!(
                         "wallet.prover.queue.backpressure",
                         "backend" => backend,
+                        "circuit" => circuit,
                         "class" => priority.as_label()
                     )
                     .increment(1);
@@ -827,17 +873,19 @@ impl ProverJobManager {
                 ProverError::Busy
             })?)
         } else {
-            self.queue.record_enqueue(priority, backend);
+            self.queue.record_enqueue(priority, backend, circuit);
             None
         };
         let deadline = self.timeout.map(|timeout| Instant::now() + timeout);
-        self.queue.record_start(priority, backend);
+        self.queue
+            .record_start(priority, backend, circuit, enqueued_at);
         Ok(ProverJobPermit {
             _permit: permit,
             deadline,
             timeout: self.timeout,
             token: CancellationToken::new(),
             backend,
+            circuit,
             priority,
             queue: Arc::clone(&self.queue),
         })
@@ -854,6 +902,7 @@ struct ProverJobPermit {
     timeout: Option<Duration>,
     token: CancellationToken,
     backend: &'static str,
+    circuit: &'static str,
     priority: ProverPriority,
     queue: Arc<QueueTelemetry>,
 }
@@ -889,7 +938,8 @@ impl ProverJobPermit {
 
 impl Drop for ProverJobPermit {
     fn drop(&mut self) {
-        self.queue.record_finish(self.priority, self.backend);
+        self.queue
+            .record_finish(self.priority, self.backend, self.circuit);
     }
 }
 
@@ -957,10 +1007,17 @@ where
     F: FnOnce(WitnessBytes) -> Result<ProofBytes, ProverError> + Send + 'static,
 {
     let witness_bytes = plan.witness_bytes();
+    let circuit = plan.circuit();
+    let prepared_at = plan.prepared_at();
     let witness = plan.into_witness().ok_or_else(|| {
         ProverError::Runtime(format!("{backend} witness unavailable during proving"))
     })?;
-    let permit = jobs.acquire(backend, ProverPriority::ConsensusCritical)?;
+    let permit = jobs.acquire(
+        backend,
+        circuit,
+        prepared_at,
+        ProverPriority::ConsensusCritical,
+    )?;
     let handle = Handle::try_current().map_err(|err| {
         ProverError::Runtime(format!("tokio runtime handle not available: {err}"))
     })?;
@@ -1179,6 +1236,7 @@ mod tests {
             self.map_mode(self.prepare_mode, || {
                 WitnessPlan::with_parts(WitnessBytes(vec![1, 2, 3]), Instant::now())
                     .with_backend(self.backend)
+                    .with_circuit(self.backend)
             })
         }
 
@@ -1220,7 +1278,12 @@ mod tests {
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
         let permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("permit");
 
         let result = runtime.block_on(async move {
@@ -1252,7 +1315,12 @@ mod tests {
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
         let permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("permit");
         let cancel_token = permit.cancellation_token();
         let worker_token = cancel_token.clone();
@@ -1294,7 +1362,12 @@ mod tests {
         let manager = ProverJobManager::with_probe(&config, probe);
 
         let permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("permit");
         drop(permit);
     }
@@ -1312,7 +1385,12 @@ mod tests {
         ]));
         let manager = ProverJobManager::with_probe(&config, probe);
 
-        let result = manager.acquire("mock", ProverPriority::ConsensusCritical);
+        let result = manager.acquire(
+            "mock",
+            MOCK_CIRCUIT_ID,
+            Instant::now(),
+            ProverPriority::ConsensusCritical,
+        );
         assert!(matches!(result, Err(ProverError::Busy)));
     }
 
@@ -1357,10 +1435,20 @@ mod tests {
         config.max_concurrency = 1;
         let manager = ProverJobManager::new(&config);
         let _permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("first permit");
         let err = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect_err("second permit should fail");
         assert!(matches!(err, ProverError::Busy));
     }
@@ -1376,20 +1464,35 @@ mod tests {
         let manager = ProverJobManager::new(&config);
 
         let background = manager
-            .acquire("mock", ProverPriority::Background)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::Background,
+            )
             .expect("background slot available");
         let critical = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("priority slot available");
         let err = manager
-            .acquire("mock", ProverPriority::Background)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::Background,
+            )
             .expect_err("background should respect reserved capacity");
         assert!(matches!(err, ProverError::Busy));
 
         assert_eq!(
             TestRecorder::counter_value(
                 &metrics,
-                "wallet.prover.queue.dropped{backend=mock,class=background}",
+                "wallet.prover.queue.dropped{backend=mock,circuit=wallet.tx,class=background}",
             ),
             Some(1),
         );
@@ -1409,17 +1512,27 @@ mod tests {
         let manager = ProverJobManager::new(&config);
 
         let _permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("first permit");
         let err = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect_err("second permit should fail");
         assert!(matches!(err, ProverError::Busy));
 
         assert_eq!(
             TestRecorder::counter_value(
                 &metrics,
-                "wallet.prover.queue.backpressure{backend=mock,class=consensus}",
+                "wallet.prover.queue.backpressure{backend=mock,circuit=wallet.tx,class=consensus}",
             ),
             Some(1),
         );
@@ -1518,18 +1631,28 @@ mod tests {
         let manager = ProverJobManager::new(&config);
 
         let permit = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect("first permit");
         assert_eq!(
             TestRecorder::gauge_value(
                 &metrics,
-                "wallet.prover.queue.depth{backend=mock,class=consensus}",
+                "wallet.prover.queue.depth{backend=mock,circuit=wallet.tx,class=consensus}",
             ),
             Some(1.0)
         );
 
         let err = manager
-            .acquire("mock", ProverPriority::ConsensusCritical)
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                Instant::now(),
+                ProverPriority::ConsensusCritical,
+            )
             .expect_err("second permit should be rejected while backlog active");
         assert!(matches!(err, ProverError::Busy));
 
@@ -1537,10 +1660,42 @@ mod tests {
         assert_eq!(
             TestRecorder::gauge_value(
                 &metrics,
-                "wallet.prover.queue.depth{backend=mock,class=consensus}",
+                "wallet.prover.queue.depth{backend=mock,circuit=wallet.tx,class=consensus}",
             ),
             Some(0.0)
         );
+    }
+
+    #[test]
+    fn queue_latency_histogram_records_wait_times_per_circuit() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let mut config = WalletProverConfig::default();
+        config.max_concurrency = 1;
+        let manager = ProverJobManager::new(&config);
+
+        let enqueued_at = Instant::now() - Duration::from_millis(25);
+        let permit = manager
+            .acquire(
+                "mock",
+                MOCK_CIRCUIT_ID,
+                enqueued_at,
+                ProverPriority::ConsensusCritical,
+            )
+            .expect("permit");
+
+        let values = TestRecorder::histogram_values(
+            &metrics,
+            "wallet.prover.queue.latency_ms{backend=mock,circuit=wallet.tx,class=consensus}",
+        );
+        assert_eq!(values.len(), 1);
+        assert!(
+            values[0] >= 25.0,
+            "latency histogram should capture queue wait"
+        );
+
+        drop(permit);
     }
 
     #[cfg(feature = "prover-mock")]

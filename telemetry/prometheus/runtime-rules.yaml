@@ -339,6 +339,33 @@ groups:
         labels:
           component: wallet
 
+      - record: wallet:prover_queue_latency:p50_seconds:10m
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum(rate(wallet_prover_queue_latency_ms_bucket[10m])) by (le, backend, circuit, environment)
+          ) / 1000
+        labels:
+          component: wallet
+
+      - record: wallet:prover_queue_latency:p95_seconds:10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(wallet_prover_queue_latency_ms_bucket[10m])) by (le, backend, circuit, environment)
+          ) / 1000
+        labels:
+          component: wallet
+
+      - record: wallet:prover_queue_latency:p99_seconds:10m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(wallet_prover_queue_latency_ms_bucket[10m])) by (le, backend, circuit, environment)
+          ) / 1000
+        labels:
+          component: wallet
+
       - record: wallet:prover_job_latency:p95_seconds:10m
         expr: |
           histogram_quantile(

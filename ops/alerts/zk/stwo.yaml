@@ -46,6 +46,22 @@ groups:
             for ten minutes. Investigate stuck drafts, reduce concurrency limits,
             or temporarily drain the queue to keep proof generation responsive.
           runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
+
+      - alert: ZkStwoProverQueueTailCritical
+        expr: wallet:prover_queue_latency:p99_seconds:10m{backend="stwo",circuit="tx"} > 30
+        for: 10m
+        labels:
+          severity: critical
+          team: zk
+          backend: stwo
+        annotations:
+          summary: STWO prover p99 queue latency above 30s
+          description: >-
+            The STWO wallet prover queue reported a 99th percentile wait time
+            above 30 seconds for ten minutes. Expect drafts to pile up; consider
+            lowering background concurrency, draining the queue, or failing over
+            to a secondary backend until the backlog clears.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/operations/zk_backends.md#backend-specific-alerts
       - alert: ZkStwoProverLatencyCritical
         expr: histogram_quantile(0.95, sum(rate(rpp_runtime_wallet_prover_job_duration_ms_bucket{backend="stwo"}[10m])) by (le, backend)) > 180000
         for: 15m

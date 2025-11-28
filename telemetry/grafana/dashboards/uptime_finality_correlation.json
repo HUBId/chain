@@ -202,7 +202,7 @@
         },
         {
           "expr": "wallet:prover_queue_depth:max:10m{environment=~\"$environment\"}",
-          "legendFormat": "{{environment}} {{backend}} prover queue",
+          "legendFormat": "{{environment}} {{backend}} {{circuit}} prover queue",
           "refId": "B"
         }
       ],
@@ -242,6 +242,46 @@
         }
       ],
       "title": "Uptime Observation Gap & Prover Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tracks prover queue wait-time percentiles by backend and circuit so operators can spot tail regressions.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "wallet:prover_queue_latency:p50_seconds:10m{environment=~\"$environment\"}",
+          "legendFormat": "{{environment}} {{backend}} {{circuit}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "wallet:prover_queue_latency:p95_seconds:10m{environment=~\"$environment\"}",
+          "legendFormat": "{{environment}} {{backend}} {{circuit}} p95",
+          "refId": "B"
+        },
+        {
+          "expr": "wallet:prover_queue_latency:p99_seconds:10m{environment=~\"$environment\"}",
+          "legendFormat": "{{environment}} {{backend}} {{circuit}} p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Prover Queue Latency by Circuit",
       "type": "timeseries"
     }
   ]
