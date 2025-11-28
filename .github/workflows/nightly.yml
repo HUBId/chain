@@ -287,6 +287,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture
+          cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load_memory -- --nocapture
       - name: Upload zk crash reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -294,6 +295,13 @@ jobs:
           name: zk-crash-reports-load-harness
           path: logs/zk-crash-reports/*.json
           if-no-files-found: ignore
+      - name: Upload zk heap profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zk-heap-profiles
+          path: logs/zk-heap/*.json
+          if-no-files-found: warn
 
   rpp-stark-conflict-drill:
     name: RPP-STARK conflict handling

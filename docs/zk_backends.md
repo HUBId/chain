@@ -94,11 +94,21 @@
 
 - `cargo test -p rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load -- --nocapture` erzeugt parallelisierte
   Proof-Batches über STWO- und RPP-STARK-Artefakte, misst Latenzen/Throughput und erzwingt die erwarteten Size-Gate-Fehler bei
-  übergroßen Beweisen (`RppStarkVerifyFailure::ProofTooLarge`). Die Suite nutzt einen STWO-Prover-Semaphor mit zwei gleichzeitigen
-  Jobs sowie drei parallele RPP-Verifier-Läufe; der minimale Durchsatz-Floor liegt bei 0,1 Proofs/Sekunde und wird als Test-Assert
-  geprüft.【F:tests/zk_load.rs†L1-L204】
+  übergroßen Beweisen (`RppStarkVerifyFailure::ProofTooLarge`). Die Suite nutzt einen STWO-Prover-Semaphor mit zwei gleichzeitig
+en
+  Jobs sowie drei parallele RPP-Verifier-Läufe; der minimale Durchsatz-Floor liegt bei 0,1 Proofs/Sekunde und wird als Test-Asse
+rt
+  geprüft.【F:tests/zk_load.rs†L1-L47】【F:tests/zk_load_common.rs†L1-L127】
 - Nightly-CI führt die Suite automatisch im Job `zk-load-harness` aus, damit Größe- und Parallelitäts-Grenzen regressionssicher
-  bleiben.【F:.github/workflows/nightly.yml†L168-L201】
+  bleiben.【F:.github/workflows/nightly.yml†L273-L303】
+- Der ergänzende Memory-Drift-Check `zk_load_memory` hält dieselben Lastprofile über vier Runden aufrecht, zeichnet einen DHAT-
+  Heap-Trace unter `logs/zk-heap/zk-load-heap.json` auf und bricht bei RSS-Wachstum über 50 MiB ab. Der Test verwendet den
+  globalen DHAT-Allocator für das Profiling, prüft weiterhin Throughput- und Oversize-Gates und stellt den Heap-Dump für spätere
+  Regression-Analysen bereit.【F:tests/zk_load_memory.rs†L1-L83】
+- Der Nightly-Job lädt die erzeugten Heap-Profile als Artefakt `zk-heap-profiles` hoch; schlägt die Drift-Grenze fehl, ist die
+  CI-Pipeline rot und die Datei im Artefakt-Archiv dient als RCA-Einstieg. Für lokale Reproduktion einfach `cargo test -p
+  rpp-chain --features "prover-stwo backend-rpp-stark" --test zk_load_memory -- --nocapture` ausführen und den DHAT-Dump mit
+  `dhview` oder dem JSON-Viewer der Wahl untersuchen.【F:.github/workflows/nightly.yml†L273-L303】【F:tests/zk_load_memory.rs†L6-L83】
 - Wallet-Prover-Failover: Setze optional `wallet.prover.fallback_backend = "mock"` (oder einen anderen aktivierten Backendnamen)
   in der Wallet-Konfiguration, um Überlastungen des Primärbackends transparent auf einen sekundären Pfad umzulenken. Fallbacks
   werden nur bei Überlast-Signalen (`busy`, `timeout`) aktiviert und lassen Witness-Size-Grenzen unangetastet; Telemetrie
@@ -106,7 +116,9 @@
   Fallback-Tests unter `rpp/wallet/src/engine/signing/prover.rs` simulieren Überlast auf `prepare`- und `prove`-Pfaden und
   verifizieren, dass die Sekundär-Backends greifen, während Size-Gates weiter enforced bleiben
   (`cargo test -p rpp-wallet --features prover-mock fallback_router_ -- --nocapture`).【F:rpp/wallet/src/engine/signing/prover.rs†L996-L1060】
-- Prover-Queue-Prioritäten: `wallet.prover.priority_slots` reserviert einen Anteil der `max_concurrency`-Permits für konsenskritische Jobs; Hintergrundproving wird verworfen, sobald diese Reserven benötigt werden. Die Queue-Metriken `wallet.prover.queue.{enqueued,pending,dropped}` und `wallet.prover.queue.backpressure` tragen das Label `{backend,class}` (z. B. `class="consensus"`) und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die neuen Lasttests im Prover-Modul decken die Reservierung und Backpressure-Signale ab und verhindern Regressionen im Prioritätsmodell (`cargo test -p rpp-wallet background_jobs_respect_reserved_capacity -- --nocapture`).【F:rpp/wallet/src/config/wallet.rs†L267-L380】【F:rpp/wallet/src/engine/signing/prover.rs†L574-L1520】
+- Prover-Queue-Prioritäten: `wallet.prover.priority_slots` reserviert einen Anteil der `max_concurrency`-Permits für konsenskrit
+ische Jobs; Hintergrundproving wird verworfen, sobald diese Reserven benötigt werden. Die Queue-Metriken `wallet.prover.queue.{enqueued,pending,dropped}` und `wallet.prover.queue.backpressure` tragen das Label `{backend,class}` (z. B. `class="consensus"`)
+und signalisieren Backpressure, sobald alle High-Priority-Slots belegt sind. Die neuen Lasttests im Prover-Modul decken die Reservierung und Backpressure-Signale ab und verhindern Regressionen im Prioritätsmodell (`cargo test -p rpp-wallet background_jobs_respect_reserved_capacity -- --nocapture`).【F:rpp/wallet/src/config/wallet.rs†L267-L380】【F:rpp/wallet/src/engine/signing/prover.rs†L574-L1520】
 - Die Drill `zk-penalty-guardrails` lässt sowohl RPP-STARK- als auch STWO-Backends eine verpasste Slot- und Double-Sign-Sequenz
    durchlaufen, verifiziert die Proofs und prüft, dass die Konsensus-Logs `applied slashing penalty` mit dem aktiven Backend labeln.
    Alarme müssen nach dem nächsten Blockabschluss wieder auf Grün springen; schlagen sie fehl, folge den unterstehenden
