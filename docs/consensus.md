@@ -75,6 +75,63 @@ shared view:
 5. Document the timeline, Grafana snapshots, and mitigations in the incident log
    and attach them to the alert ticket.
 
+### Proposer distribution fairness and troubleshooting
+
+Operators should also watch proposer selection and production fairness to keep
+reward weighting aligned with stake:
+
+* **Targets:** Over 180 slots (the window used by the regression suite), observed
+  proposer selections and produced blocks should stay within ±2–3 percentage
+  points of the stake-derived expectation for each validator. Treat a
+  chi-square score above ~16 or a Kolmogorov–Smirnov distance above 0.12 as a
+  sign that selection is diverging from stake weight in the sampled window and
+  investigate before widening the window.【F:tests/proposer_fairness.rs†L19-L220】
+* **Observation window:** Align dashboards with the 180-slot sampling cadence so
+  tolerances match the regression artifacts. Use shorter 30–60 slot drills only
+  as early smoke tests; they have wider variance and should not be used for
+  paging.
+* **Telemetry to watch:**
+  * `rpp.runtime.consensus.block_schedule.slots` exposes expected proposer slots
+    per epoch; compare it to height growth (`chain.block_height`) and the
+    `consensus:block_production_ratio:5m` recording rule to verify that produced
+    blocks track the schedule.【F:rpp/runtime/telemetry/metrics.rs†L426-L452】【F:telemetry/prometheus/runtime-rules.yaml†L18-L76】
+  * Break down `rpp.runtime.consensus.vote.latency{backend=*}` to correlate
+    backend-specific processing delays with skewed proposer outcomes (for
+    example, a backend that consistently finalizes late tends to miss its slot
+    in the fairness window).【F:rpp/runtime/telemetry/metrics.rs†L426-L434】
+
+**Common root causes**
+
+* **Proving backpressure:** Slow proof production delays proposal assembly and
+  causes selected proposers to miss slots. Check per-backend vote latency and
+  prover host load, then trim queue depth before widening the fairness window.
+* **Backend-specific latency spread:** One backend consistently lagging finality
+  will under-produce even if selections are unbiased. Compare backend labels on
+  vote latency and block duration histograms to confirm the skew.
+* **VRF key skew or stale stake maps:** Out-of-date validator stake or a mis-set
+  VRF key reduces the effective election weight. Confirm stake snapshots match
+  on all nodes and rotate keys if a validator’s address or VRF key recently
+  changed.
+
+**Troubleshooting steps**
+
+1. Pull the fairness artifacts. Run `cargo test -p rpp-chain --locked --test
+   proposer_fairness` (and repeat with `--features backend-rpp-stark` when that
+   backend is enabled) or invoke `cargo xtask integration-workflows` to
+   regenerate the 180-slot reports and histograms under
+   `tests/artifacts/` for both backends.【F:xtask/src/main.rs†L584-L714】
+2. Inspect the JSON and histogram outputs to see which addresses diverge from
+   the expected counts. For occasional outliers, rerun the test to separate
+   randomness from systemic bias; sustained deviations above the thresholds
+   warrant paging.
+3. Compare the failing backend’s `consensus:block_production_ratio:5m` and
+   vote-latency panels. If ratios drop while schedule slots continue climbing,
+   pause new deployments and drain traffic from the lagging backend until ratios
+   recover.【F:telemetry/prometheus/runtime-rules.yaml†L18-L76】
+4. If divergence persists, collect VRF selection logs and confirm stake/VRF key
+   distribution. Rebuild the validator set state if any node reports stale
+   stakes, then rerun the fairness probes.
+
 ## Missed slots and stalled block production
 
 Consensus alerts also guard against missed proposer slots and prolonged blocks
