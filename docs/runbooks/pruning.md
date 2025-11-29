@@ -74,6 +74,14 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    or send `POST /snapshots/cancel` with the bearer token to receive a cancellation receipt.
    The worker logs the request, bumps `rpp.node.pruning.cancellations_total`, and marks the
    cycle as `result="cancelled"` while keeping persisted plans intact for the next run.【F:rpp/chain-cli/src/lib.rs†L255-L265】【F:rpp/rpc/src/routes/state.rs†L1-L26】【F:rpp/node/src/services/pruning.rs†L321-L370】【F:rpp/node/src/telemetry/pruning.rs†L25-L124】
+4. **Resume from a persisted checkpoint.** After a cancellation (or a deliberate pause), the
+   pruning job keeps its checkpoint JSON on disk. When you re-run `POST /snapshots/snapshot`
+   or `POST /snapshots/rebuild`, the worker logs include `resume_from_checkpoint=true` in both
+   the start and finish events so operators can confirm the resume path was used instead of
+   scheduling a fresh plan.【F:rpp/runtime/node.rs†L816-L841】【F:rpp/runtime/node.rs†L6189-L6235】
+   The resumed run reloads the original `missing_heights` list and continues persisting pruning
+   proofs until the checkpoint is complete, matching the behaviour exercised by the
+   `pruning_resume_recovers_checkpoint_with_*_backend` regression tests.【F:tests/recovery_pruning.rs†L116-L192】【F:tests/recovery_pruning.rs†L343-L361】
 3. **Authenticated tooling.** Automation or wrapper CLIs must include the RPC bearer token described
    in the [`rpp-node` operator guide](../rpp_node_operator_guide.md) so that the POST requests above pass
    gateway authentication and rate limiting. Reuse the guide’s credential rotation and diagnostics

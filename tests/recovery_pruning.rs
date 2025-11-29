@@ -2,6 +2,8 @@ mod support;
 
 use std::fs;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::errors::ChainError;
@@ -13,7 +15,9 @@ use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
 use tempfile::TempDir;
 
-use support::{install_pruned_chain, make_dummy_block, seeded_rng};
+use support::{
+    install_pruned_chain, make_dummy_block_with_backend, seeded_rng, TestProofBackend,
+};
 
 fn prepare_config() -> (NodeConfig, TempDir) {
     let temp = TempDir::new().expect("temp dir");
@@ -64,7 +68,11 @@ fn checkpoint_signing_config(config: &NodeConfig) -> CheckpointSignatureConfig {
     }
 }
 
-fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> {
+fn build_chain(
+    handle: &rpp_chain::node::NodeHandle,
+    length: u64,
+    backend: TestProofBackend,
+) -> Vec<Block> {
     let genesis = handle
         .latest_block()
         .expect("latest block")
@@ -73,11 +81,102 @@ fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> 
     blocks.push(genesis.clone());
     let mut previous = Some(genesis);
     for height in 1..=length {
-        let block = make_dummy_block(height, previous.as_ref());
+        let block = make_dummy_block_with_backend(height, previous.as_ref(), backend);
         previous = Some(block.clone());
         blocks.push(block);
     }
     blocks
+}
+
+fn pruning_resume_flow(backend: TestProofBackend, seed: &str) {
+    let mut _rng = seeded_rng(seed);
+
+    let (config, temp) = prepare_config();
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let blocks = build_chain(&handle, 6, backend);
+    install_pruned_chain(&storage, &blocks).expect("install pruned chain");
+
+    let cancellation_handle = handle.clone();
+    let pruning_thread = thread::spawn(move || {
+        cancellation_handle.run_pruning_cycle(1, DEFAULT_PRUNING_RETENTION_DEPTH)
+    });
+
+    thread::sleep(Duration::from_millis(25));
+    handle.request_pruning_cancellation();
+
+    let cancelled = pruning_thread
+        .join()
+        .expect("pruning thread should join")
+        .expect("pruning summary");
+    let cancelled_status = cancelled.status.as_ref().expect("cancelled status");
+
+    assert!(cancelled.cancelled, "cycle should report cancellation");
+    assert!(
+        cancelled_status.persisted_path.is_some(),
+        "checkpoint path should be recorded before cancellation",
+    );
+    assert!(
+        !cancelled_status.stored_proofs.is_empty(),
+        "partial run should persist at least one pruning proof",
+    );
+    assert!(
+        cancelled_status.stored_proofs.len() < cancelled_status.missing_heights.len(),
+        "cancellation should occur before all proofs are written",
+    );
+
+    let persisted_path = cancelled_status
+        .persisted_path
+        .as_ref()
+        .expect("persisted path")
+        .clone();
+    assert!(
+        Path::new(&persisted_path).exists(),
+        "checkpoint file should remain on disk after cancellation",
+    );
+
+    let resumed = handle
+        .run_pruning_cycle(1, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("resume pruning");
+    let resumed_status = resumed.status.as_ref().expect("resumed status");
+
+    assert!(
+        !resumed.cancelled,
+        "resume run should complete without cancellation",
+    );
+    assert_eq!(
+        resumed_status.missing_heights,
+        cancelled_status.missing_heights,
+        "resume should reload the prior checkpoint plan",
+    );
+    assert_eq!(
+        resumed_status.stored_proofs.len(),
+        cancelled_status.missing_heights.len(),
+        "resume should finish persisting all pruning proofs",
+    );
+    assert_eq!(
+        resumed_status.persisted_path.as_deref(),
+        Some(persisted_path.as_str()),
+        "checkpoint path should be reused across runs",
+    );
+
+    for height in &resumed_status.missing_heights {
+        let proof = storage
+            .load_pruning_proof(*height)
+            .expect("load pruning proof")
+            .expect("pruning proof persisted");
+        assert_eq!(
+            proof.binding_digest(),
+            blocks[*height as usize].pruning_proof.binding_digest(),
+            "persisted proof binding should match block pruning proof",
+        );
+    }
+
+    drop(handle);
+    drop(node);
+    drop(temp);
 }
 
 #[test]
@@ -90,7 +189,7 @@ fn pruning_recovery_is_atomic_across_restart() {
     let handle = node.handle();
     let storage = handle.storage();
 
-    let blocks = build_chain(&handle, 4);
+    let blocks = build_chain(&handle, 4, TestProofBackend::Stwo);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let summary = handle
@@ -200,7 +299,7 @@ fn pruning_checkpoint_recovery_rejects_partial_files() {
     let handle = node.handle();
     let storage = handle.storage();
 
-    let blocks = build_chain(&handle, 3);
+    let blocks = build_chain(&handle, 3, TestProofBackend::Stwo);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let status = handle
@@ -272,7 +371,7 @@ fn pruning_checkpoint_signature_rejects_tampered_payload() {
     let handle = node.handle();
     let storage = handle.storage();
 
-    let blocks = build_chain(&handle, 3);
+    let blocks = build_chain(&handle, 3, TestProofBackend::Stwo);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let status = handle
@@ -320,7 +419,7 @@ fn pruning_checkpoint_signature_rejects_tampered_signature() {
     let handle = node.handle();
     let storage = handle.storage();
 
-    let blocks = build_chain(&handle, 3);
+    let blocks = build_chain(&handle, 3, TestProofBackend::Stwo);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let status = handle
@@ -357,4 +456,21 @@ fn pruning_checkpoint_signature_rejects_tampered_signature() {
     drop(handle);
     drop(node);
     drop(temp);
+}
+
+#[test]
+fn pruning_resume_recovers_checkpoint_with_stwo_backend() {
+    pruning_resume_flow(
+        TestProofBackend::Stwo,
+        "pruning_resume_recovers_checkpoint_with_stwo_backend",
+    );
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[test]
+fn pruning_resume_recovers_checkpoint_with_rpp_stark_backend() {
+    pruning_resume_flow(
+        TestProofBackend::RppStark,
+        "pruning_resume_recovers_checkpoint_with_rpp_stark_backend",
+    );
 }
