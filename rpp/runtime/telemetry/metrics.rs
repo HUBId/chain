@@ -11,7 +11,7 @@ use http::StatusCode;
 use log::warn;
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
-use opentelemetry::metrics::{Counter, Histogram, Meter};
+use opentelemetry::metrics::{CallbackRegistration, Counter, Histogram, Meter, ObservableGauge};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
@@ -19,6 +19,7 @@ use parking_lot::Mutex;
 
 use super::exporter::{ExporterBuildOutcome, TelemetryExporterBuilder};
 use crate::config::TelemetryConfig;
+use crate::types::Address;
 use rpp_wallet_interface::runtime_telemetry::RuntimeMetrics as WalletRuntimeMetrics;
 pub use rpp_wallet_interface::runtime_telemetry::{
     WalletAccountType, WalletAction, WalletActionResult, WalletSignMode,
@@ -26,6 +27,13 @@ pub use rpp_wallet_interface::runtime_telemetry::{
 
 const METER_NAME: &str = "rpp-runtime";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
+
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+struct ProposerGaugeKey {
+    validator: String,
+    backend: String,
+    epoch: u64,
+}
 
 /// Initialise the runtime metrics provider using the OTLP exporter configured via `TelemetryConfig`.
 ///
@@ -67,8 +75,9 @@ pub fn init_runtime_metrics(
     global::set_meter_provider(provider.clone());
 
     let meter = provider.meter(METER_NAME);
-    let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
-    let guard = RuntimeMetricsGuard::new(provider);
+    let (metrics, callbacks) = RuntimeMetrics::from_meter(&meter)?;
+    let metrics = Arc::new(metrics);
+    let guard = RuntimeMetricsGuard::new(provider, callbacks);
 
     Ok((metrics, guard, used_failover))
 }
@@ -133,6 +142,11 @@ pub struct RuntimeMetrics {
     consensus_witness_events: Counter<u64>,
     consensus_slashing_events: Counter<u64>,
     consensus_failed_votes: Counter<u64>,
+    consensus_proposer_slots_total: Counter<u64>,
+    consensus_proposer_expected_weight: Histogram<f64>,
+    consensus_proposer_observed_share: Histogram<f64>,
+    consensus_proposer_share_deviation: ObservableGauge<f64>,
+    proposer_deviation_values: Arc<Mutex<BTreeMap<ProposerGaugeKey, f64>>>,
     validator_set_changes: Counter<u64>,
     validator_set_change_height: Histogram<u64>,
     validator_set_quorum_delay: Histogram<f64>,
@@ -162,8 +176,28 @@ pub struct WalletSyncSnapshot {
 }
 
 impl RuntimeMetrics {
-    fn from_meter(meter: &Meter) -> Self {
-        Self {
+    fn from_meter(meter: &Meter) -> Result<(Self, Vec<CallbackRegistration>)> {
+        let proposer_deviation_values = Arc::new(Mutex::new(BTreeMap::new()));
+        let consensus_proposer_share_deviation = meter
+            .f64_observable_gauge("rpp.runtime.consensus.proposer.deviation_pct")
+            .with_description(
+                "Percent deviation between expected proposer weight and observed slot share",
+            )
+            .with_unit("percent")
+            .init();
+        let gauge_values = proposer_deviation_values.clone();
+        let proposer_callback = meter.register_callback(move |ctx| {
+            for (key, value) in gauge_values.lock().iter() {
+                let attributes = [
+                    KeyValue::new("validator", key.validator.clone()),
+                    KeyValue::new(ProofVerificationBackend::KEY, key.backend.clone()),
+                    KeyValue::new("epoch", key.epoch as i64),
+                ];
+                ctx.observe_gauge(&consensus_proposer_share_deviation, *value, &attributes);
+            }
+        })?;
+
+        let metrics = Self {
             proofs: ProofMetrics::new(meter),
             consensus_block_duration: EnumF64Histogram::new(
                 meter
@@ -399,6 +433,23 @@ impl RuntimeMetrics {
                 .with_description("Total failed consensus vote registrations")
                 .with_unit("1")
                 .build(),
+            consensus_proposer_slots_total: meter
+                .u64_counter("rpp.runtime.consensus.proposer.slots")
+                .with_description("Observed proposer slots grouped by validator, backend, and epoch")
+                .with_unit("1")
+                .build(),
+            consensus_proposer_expected_weight: meter
+                .f64_histogram("rpp.runtime.consensus.proposer.expected_weight")
+                .with_description("Expected slot weight share for the selected proposer")
+                .with_unit("ratio")
+                .build(),
+            consensus_proposer_observed_share: meter
+                .f64_histogram("rpp.runtime.consensus.proposer.observed_share")
+                .with_description("Observed proposer slot share by validator and backend")
+                .with_unit("ratio")
+                .build(),
+            consensus_proposer_share_deviation,
+            proposer_deviation_values,
             validator_set_changes: meter
                 .u64_counter("validator_set_changes_total")
                 .with_description("Count of validator set/epoch transitions observed locally")
@@ -492,7 +543,9 @@ impl RuntimeMetrics {
                 .with_description("Elapsed seconds between consecutive state sync chunks")
                 .with_unit("s")
                 .build(),
-        }
+        };
+
+        Ok((metrics, vec![proposer_callback]))
     }
 
     /// Construct a new metrics handle from the provided meter.
@@ -500,7 +553,8 @@ impl RuntimeMetrics {
     /// This helper primarily exists to support integration tests that need to
     /// attach `RuntimeMetrics` to custom in-memory exporters.
     pub fn from_meter_for_testing(meter: &Meter) -> Self {
-        Self::from_meter(meter)
+        let (metrics, _) = Self::from_meter(meter).expect("failed to build runtime metrics");
+        metrics
     }
 
     pub fn proofs(&self) -> &ProofMetrics {
@@ -510,7 +564,8 @@ impl RuntimeMetrics {
     /// Returns a no-op metrics handle backed by a [`NoopMeterProvider`].
     pub fn noop() -> Arc<Self> {
         let meter = NoopMeterProvider::new().meter(METER_NAME);
-        Arc::new(Self::from_meter(&meter))
+        let (metrics, _) = Self::from_meter(&meter).expect("failed to build noop runtime metrics");
+        Arc::new(metrics)
     }
 
     /// Record the duration of a consensus stage.
@@ -999,6 +1054,46 @@ impl RuntimeMetrics {
         let attributes = [KeyValue::new("epoch", epoch as i64)];
         self.consensus_block_schedule_slots_total
             .add(1, &attributes);
+    }
+
+    pub fn record_proposer_slot_share(
+        &self,
+        expected_validator: &Address,
+        observed_validator: &Address,
+        backend: ProofVerificationBackend,
+        epoch: u64,
+        expected_weight: f64,
+        observed_share: f64,
+        deviation_pct: f64,
+    ) {
+        let attributes = [
+            KeyValue::new("expected_validator", expected_validator.to_string()),
+            KeyValue::new("validator", observed_validator.to_string()),
+            KeyValue::new("epoch", epoch as i64),
+            KeyValue::new(ProofVerificationBackend::KEY, backend.as_str()),
+        ];
+        self.consensus_proposer_slots_total.add(1, &attributes);
+        self.consensus_proposer_expected_weight
+            .record(expected_weight, &attributes);
+        self.consensus_proposer_observed_share
+            .record(observed_share, &attributes);
+        self.record_proposer_deviation_value(observed_validator, backend, epoch, deviation_pct);
+    }
+
+    fn record_proposer_deviation_value(
+        &self,
+        validator: &str,
+        backend: ProofVerificationBackend,
+        epoch: u64,
+        deviation_pct: f64,
+    ) {
+        let mut values = self.proposer_deviation_values.lock();
+        let key = ProposerGaugeKey {
+            validator: validator.to_string(),
+            backend: backend.as_str().to_string(),
+            epoch,
+        };
+        values.insert(key, deviation_pct);
     }
 
     /// Record the latest observed block height.
@@ -1529,12 +1624,14 @@ fn verification_attributes_with_stage_and_outcome(
 /// Guard that shuts down the underlying meter provider when dropped.
 pub struct RuntimeMetricsGuard {
     provider: Option<SdkMeterProvider>,
+    _callbacks: Vec<CallbackRegistration>,
 }
 
 impl RuntimeMetricsGuard {
-    fn new(provider: SdkMeterProvider) -> Self {
+    fn new(provider: SdkMeterProvider, callbacks: Vec<CallbackRegistration>) -> Self {
         Self {
             provider: Some(provider),
+            _callbacks: callbacks,
         }
     }
 
@@ -2594,7 +2691,7 @@ mod tests {
         let reader = PeriodicReader::builder(exporter.clone()).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
         let meter = provider.meter("runtime-test");
-        let metrics = RuntimeMetrics::from_meter(&meter);
+        let (metrics, _callbacks) = RuntimeMetrics::from_meter(&meter)?;
 
         metrics
             .record_consensus_stage_duration(ConsensusStage::Proposal, Duration::from_millis(10));
@@ -2837,7 +2934,8 @@ mod tests {
         let reader = PeriodicReader::builder(exporter.clone()).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
         let meter = provider.meter("runtime-storage-handle-test");
-        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+        let (metrics, _callbacks) = RuntimeMetrics::from_meter(&meter)?;
+        let metrics = Arc::new(metrics);
 
         let handle: firewood_storage::StorageMetricsHandle = metrics.clone();
         handle.increment_header_flushes();
@@ -2872,7 +2970,7 @@ mod tests {
         let reader = PeriodicReader::builder(exporter.clone()).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
         let meter = provider.meter("proof-outcome-metrics");
-        let metrics = RuntimeMetrics::from_meter(&meter);
+        let (metrics, _callbacks) = RuntimeMetrics::from_meter(&meter)?;
         let proof_metrics = metrics.proofs();
 
         proof_metrics.record_verification_outcome(

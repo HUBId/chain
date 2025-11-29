@@ -234,3 +234,19 @@ profile via the dedicated `simnet-mixed-backend` job, uploads the annotated
 summaries under `target/simnet/mixed-backend-interop-nightly/`, and keeps the
 artifacts available for regression triage.【F:.github/workflows/nightly.yml†L120-L155】
 
+## Proposer-share deviation
+
+The `ConsensusProposerShareDrift*` alerts surface when a validator's observed
+slot share deviates from its expected weight for a given proof backend. When
+the warning (5%) or critical (10%) thresholds fire for ten minutes:
+
+1. Identify the offending `validator` and `backend` labels on the alert.
+2. Check recent VRF submission volumes and failures for that validator to
+   confirm randomness inputs are still flowing.
+3. Compare prover queue depth and proof verification latency for the backend
+   to spot capacity drops or retries that could suppress blocks.
+4. Review validator churn or reputation changes in the epoch; if a validator's
+   stake dropped, validate that the expected weight aligns with ledger state.
+5. If the backend is unhealthy, quarantine it in the rollout config and rotate
+   the validator onto a healthy backend before reintroducing load.
+

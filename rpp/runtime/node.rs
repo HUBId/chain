@@ -28,6 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Keypair, Signature, SigningKey, Verifier};
+use malachite::num::conversion::traits::ToPrimitive;
 use malachite::Natural;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
@@ -1132,6 +1133,33 @@ struct ConsensusTelemetryState {
     slashing_events: u64,
     failed_votes: u64,
     pending_validator_change: Option<ValidatorChangeMarker>,
+    proposer_share: Option<ProposerShareState>,
+}
+
+#[derive(Clone, Default)]
+struct ProposerShareState {
+    epoch: u64,
+    total_slots: u64,
+    backend_totals: HashMap<String, u64>,
+    validator_shares: HashMap<(Address, String), ProposerShareStats>,
+}
+
+impl ProposerShareState {
+    fn new(epoch: u64) -> Self {
+        Self {
+            epoch,
+            total_slots: 0,
+            backend_totals: HashMap::new(),
+            validator_shares: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct ProposerShareStats {
+    observed_slots: u64,
+    expected_weight: f64,
+    last_deviation_pct: f64,
 }
 
 pub struct ConsensusTelemetry {
@@ -1237,6 +1265,56 @@ impl ConsensusTelemetry {
                 return;
             }
         }
+    }
+
+    pub fn record_proposer_observation(
+        &self,
+        epoch: u64,
+        expected_proposer: &Address,
+        observed_proposer: &Address,
+        backend: ProofVerificationBackend,
+        expected_weight: f64,
+    ) {
+        let mut state = self.state.lock();
+        let mut share_state = state
+            .proposer_share
+            .take()
+            .unwrap_or_else(|| ProposerShareState::new(epoch));
+        if share_state.epoch != epoch {
+            share_state = ProposerShareState::new(epoch);
+        }
+        share_state.total_slots = share_state.total_slots.saturating_add(1);
+        let backend_label = backend.as_str().to_string();
+        let backend_total = share_state
+            .backend_totals
+            .entry(backend_label.clone())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+        let stats = share_state
+            .validator_shares
+            .entry((observed_proposer.clone(), backend_label))
+            .or_insert_with(ProposerShareStats::default);
+        stats.expected_weight = expected_weight;
+        stats.observed_slots = stats.observed_slots.saturating_add(1);
+        let observed_share = stats.observed_slots as f64 / (*backend_total as f64).max(1.0);
+        let deviation_pct = if expected_weight > 0.0 {
+            ((observed_share - expected_weight) / expected_weight) * 100.0
+        } else {
+            0.0
+        };
+        stats.last_deviation_pct = deviation_pct;
+        state.proposer_share = Some(share_state);
+        drop(state);
+
+        self.metrics.record_proposer_slot_share(
+            expected_proposer,
+            observed_proposer,
+            backend,
+            epoch,
+            expected_weight,
+            observed_share,
+            deviation_pct,
+        );
     }
 
     pub fn record_witness_event<S: Into<String>>(&self, topic: S) {
@@ -1996,6 +2074,9 @@ struct LocalFinalizationContext {
     timetoke_updates: Vec<TimetokeUpdate>,
     reputation_updates: Vec<ReputationUpdate>,
     recorded_votes: Vec<SignedBftVote>,
+    expected_proposer: Address,
+    expected_weight: f64,
+    epoch: u64,
 }
 
 #[allow(dead_code)]
@@ -2005,6 +2086,9 @@ pub struct ExternalFinalizationContext {
     previous_block: Option<Block>,
     archived_votes: Vec<SignedBftVote>,
     peer_id: Option<NetworkPeerId>,
+    expected_proposer: Address,
+    expected_weight: f64,
+    epoch: u64,
 }
 
 pub enum FinalizationOutcome {
@@ -4278,6 +4362,9 @@ mod tests {
                 previous_block,
                 archived_votes: block.bft_votes.clone(),
                 peer_id: None,
+                expected_proposer: block.header.proposer.clone(),
+                expected_weight: 0.0,
+                epoch: 0,
             }))
             .expect("finalize external");
 
@@ -4484,6 +4571,9 @@ mod tests {
                 previous_block,
                 archived_votes: tampered_block.bft_votes.clone(),
                 peer_id: None,
+                expected_proposer: tampered_block.header.proposer.clone(),
+                expected_weight: 0.0,
+                epoch: epoch_before,
             },
         ));
 
@@ -8859,6 +8949,20 @@ impl NodeInner {
                 return Ok(());
             }
         };
+        let expected_weight = {
+            let proposer_power = round
+                .validators()
+                .iter()
+                .find(|profile| profile.address == selection.proposer)
+                .and_then(|profile| profile.voting_power().to_f64())
+                .unwrap_or(0.0);
+            let total_power = round.total_power().to_f64().unwrap_or(0.0);
+            if total_power > 0.0 {
+                (proposer_power / total_power).min(1.0)
+            } else {
+                0.0
+            }
+        };
         let round_id = round.round();
         self.consensus_telemetry
             .record_round_start(height, round_id, &selection.proposer);
@@ -8947,6 +9051,9 @@ impl NodeInner {
                     timetoke_updates: Vec::new(),
                     reputation_updates: Vec::new(),
                     recorded_votes,
+                    expected_proposer: selection.proposer.clone(),
+                    expected_weight,
+                    epoch,
                 });
                 match self.finalize_block(finalization_ctx)? {
                     FinalizationOutcome::Sealed { block, tip_height } => {
@@ -9250,6 +9357,9 @@ impl NodeInner {
             timetoke_updates,
             reputation_updates,
             recorded_votes,
+            expected_proposer: selection.proposer.clone(),
+            expected_weight,
+            epoch,
         });
 
         match self.finalize_block(finalization_ctx)? {
@@ -9308,6 +9418,9 @@ impl NodeInner {
             timetoke_updates,
             reputation_updates,
             recorded_votes,
+            expected_proposer,
+            expected_weight,
+            epoch,
         } = ctx;
 
         if !round.commit_reached() {
@@ -9642,6 +9755,15 @@ impl NodeInner {
             .prune_below(block.header.height.saturating_add(1));
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
+        let backend = proof_backend(&block.stark.recursive_proof);
+        self.consensus_telemetry.record_proposer_observation(
+            epoch,
+            &expected_proposer,
+            &block.header.proposer,
+            backend,
+            expected_weight,
+        );
+
         self.update_runtime_metrics();
 
         let block_hash = block.hash.clone();
@@ -9681,6 +9803,9 @@ impl NodeInner {
             mut previous_block,
             archived_votes,
             peer_id,
+            expected_proposer,
+            expected_weight,
+            epoch,
         } = ctx;
 
         if !round.commit_reached() {
@@ -10061,6 +10186,15 @@ impl NodeInner {
             .write()
             .prune_below(block.header.height.saturating_add(1));
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
+
+        let backend = proof_backend(&block.stark.recursive_proof);
+        self.consensus_telemetry.record_proposer_observation(
+            epoch,
+            &expected_proposer,
+            &block.header.proposer,
+            backend,
+            expected_weight,
+        );
 
         self.update_runtime_metrics();
 

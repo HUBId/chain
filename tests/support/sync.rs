@@ -10,13 +10,13 @@ use rpp_chain::rpp::{ModuleWitnessBundle, ProofArtifact};
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionEngine, ReconstructionRequest, StateSyncPlan,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_chain::runtime::types::RppStarkProof;
 use rpp_chain::runtime::types::{
     pruning_from_previous, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata,
     BlockPayload, BlockProofBundle, ChainProof, PruningProof, PruningProofExt, RecursiveProof,
     ReputationUpdate, SignedBftVote, SignedTransaction, TimetokeUpdate, UptimeProof,
 };
-#[cfg(feature = "backend-rpp-stark")]
-use rpp_chain::runtime::types::RppStarkProof;
 use rpp_chain::state::merkle::compute_merkle_root;
 use rpp_chain::storage::Storage;
 use rpp_chain::stwo::aggregation::StateCommitmentSnapshot;
@@ -238,12 +238,8 @@ pub fn make_dummy_block_with_backend(
     };
     let module_witnesses = ModuleWitnessBundle::default();
     let proof_artifacts = Vec::<ProofArtifact>::new();
-    let stark_bundle = BlockProofBundle::new(
-        Vec::new(),
-        state_proof,
-        pruning_chain,
-        recursive_chain,
-    );
+    let stark_bundle =
+        BlockProofBundle::new(Vec::new(), state_proof, pruning_chain, recursive_chain);
     let signature = ed25519_dalek::Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
     let mut consensus = ConsensusCertificate::genesis();
     consensus.round = height;

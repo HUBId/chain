@@ -15,9 +15,7 @@ use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
 use tempfile::TempDir;
 
-use support::{
-    install_pruned_chain, make_dummy_block_with_backend, seeded_rng, TestProofBackend,
-};
+use support::{install_pruned_chain, make_dummy_block_with_backend, seeded_rng, TestProofBackend};
 
 fn prepare_config() -> (NodeConfig, TempDir) {
     let temp = TempDir::new().expect("temp dir");
@@ -147,8 +145,7 @@ fn pruning_resume_flow(backend: TestProofBackend, seed: &str) {
         "resume run should complete without cancellation",
     );
     assert_eq!(
-        resumed_status.missing_heights,
-        cancelled_status.missing_heights,
+        resumed_status.missing_heights, cancelled_status.missing_heights,
         "resume should reload the prior checkpoint plan",
     );
     assert_eq!(
