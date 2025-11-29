@@ -982,6 +982,95 @@ EOF
           fi
           cargo xtask test-all
 
+  subscription-resilience:
+    name: RPC subscription resilience (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: stwo
+            features: "prod,prover-stwo"
+            no_default_features: "1"
+          - backend: plonky3
+            features: "prod,prover-stwo,backend-plonky3"
+            no_default_features: "1"
+    env:
+      RUST_BACKTRACE: full
+      RPP_PROCESS_CLUSTER_LOG_ROOT: logs/subscription/${{ matrix.backend }}/nodes
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run subscription resilience tests
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${RPP_PROCESS_CLUSTER_LOG_ROOT}"
+
+          attempts=0
+          status=0
+          until [ "$attempts" -ge 2 ]; do
+            attempts=$((attempts + 1))
+            echo "Starting subscription probe attempt ${attempts} for backend ${{ matrix.backend }}"
+
+            cmd=(cargo test -p rpp-chain)
+            if [ -n "${{ matrix.no_default_features }}" ]; then
+              cmd+=("--no-default-features")
+            fi
+            if [ -n "${{ matrix.features }}" ]; then
+              cmd+=("--features" "${{ matrix.features }}")
+            fi
+            cmd+=("--test" "rpc_subscription_resilience" "--" "--nocapture")
+
+            if "${cmd[@]}"; then
+              status=0
+              break
+            fi
+
+            status=$?
+            echo "Attempt ${attempts} failed with exit code ${status}; retrying after cooldown..." >&2
+            sleep 45
+          done
+
+          exit "$status"
+
+      - name: Collect subscription diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          base="artifacts/subscription/${{ matrix.backend }}"
+          mkdir -p "$base/streams" "$base/metrics"
+
+          if compgen -G "logs/stream-*.log" >/dev/null; then
+            cp logs/stream-*.log "$base/streams/"
+          fi
+
+          shopt -s nullglob globstar
+          if compgen -G "target/**/metrics*.prom" >/dev/null; then
+            rsync -av --prune-empty-dirs --include '*/' --include 'metrics*.prom' --exclude '*' target/ "$base/metrics/"
+          fi
+
+          if [ -d "$RPP_PROCESS_CLUSTER_LOG_ROOT" ]; then
+            mkdir -p "$base/nodes"
+            rsync -av "$RPP_PROCESS_CLUSTER_LOG_ROOT"/ "$base/nodes/" || true
+          fi
+
+      - name: Upload subscription artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscription-resilience-${{ matrix.backend }}
+          path: artifacts/subscription/${{ matrix.backend }}
+          retention-days: 14
+          if-no-files-found: warn
+
   plonky3-gpu:
     name: Plonky3 GPU smoke
     runs-on: ubuntu-latest
