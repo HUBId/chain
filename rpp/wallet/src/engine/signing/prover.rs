@@ -39,6 +39,8 @@ pub(crate) const MOCK_CIRCUIT_ID: &str = "wallet.tx";
 pub(crate) const STWO_CIRCUIT_ID: &str = "transaction";
 #[cfg(feature = "prover-stwo")]
 pub(crate) const STWO_WALLET_CIRCUIT: &str = "tx";
+const WARMUP_CIRCUIT_ALERT_MS: u64 = 5_000;
+const WARMUP_KEYGEN_ALERT_MS: u64 = 30_000;
 
 fn prover_audit_log() -> &'static Option<AuditLog> {
     static LOG: OnceLock<Option<AuditLog>> = OnceLock::new();
@@ -236,6 +238,49 @@ fn read_cgroup_limit(path: &str) -> Option<u64> {
     trimmed.parse::<u64>().ok()
 }
 
+fn record_warmup_duration(
+    backend: &'static str,
+    stage: &'static str,
+    duration: Duration,
+    threshold_ms: u64,
+) {
+    let duration_ms = duration.as_millis() as u64;
+    histogram!(
+        "wallet.prover.warmup_ms",
+        "backend" => backend,
+        "stage" => stage
+    )
+    .record(duration_ms as f64);
+
+    if duration_ms >= threshold_ms {
+        counter!(
+            "wallet.prover.warmup.alerts",
+            "backend" => backend,
+            "stage" => stage
+        )
+        .increment(1);
+        warn!(
+            backend,
+            stage, duration_ms, threshold_ms, "wallet prover warmup exceeded threshold"
+        );
+    }
+}
+
+fn observe_warmup_stage<T, E, F>(
+    backend: &'static str,
+    stage: &'static str,
+    threshold_ms: u64,
+    action: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+{
+    let started_at = Instant::now();
+    let result = action();
+    record_warmup_duration(backend, stage, started_at.elapsed(), threshold_ms);
+    result
+}
+
 fn build_backend(
     config: &WalletProverConfig,
     backend: WalletProverBackend,
@@ -244,7 +289,9 @@ fn build_backend(
         WalletProverBackend::Mock => {
             #[cfg(feature = "prover-mock")]
             {
-                Ok(Arc::new(MockWalletProver::new(config)))
+                observe_warmup_stage("mock", "circuit_load", WARMUP_CIRCUIT_ALERT_MS, || {
+                    Ok(Arc::new(MockWalletProver::new(config)))
+                })
             }
             #[cfg(not(feature = "prover-mock"))]
             {
@@ -490,9 +537,15 @@ struct StwoWalletProver {
 #[cfg(feature = "prover-stwo")]
 impl StwoWalletProver {
     fn new(config: &WalletProverConfig) -> Result<Self, ProverError> {
-        let backend = StwoBackend::new();
+        let backend =
+            observe_warmup_stage("stwo", "circuit_load", WARMUP_CIRCUIT_ALERT_MS, || {
+                Ok(StwoBackend::new())
+            })?;
         let circuit = TxCircuitDef::new(STWO_CIRCUIT_ID);
-        let (proving_key, _verifying_key) = backend.keygen_tx(&circuit)?;
+        let (proving_key, _verifying_key) =
+            observe_warmup_stage("stwo", "keygen", WARMUP_KEYGEN_ALERT_MS, || {
+                backend.keygen_tx(&circuit)
+            })?;
         Ok(Self {
             backend: Arc::new(backend),
             proving_key: Arc::new(proving_key),
@@ -1696,6 +1749,55 @@ mod tests {
         );
 
         drop(permit);
+    }
+
+    #[test]
+    fn warmup_alerts_fire_for_slow_stages() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let duration = Duration::from_millis(WARMUP_CIRCUIT_ALERT_MS + 25);
+        record_warmup_duration(
+            "slow-backend",
+            "circuit_load",
+            duration,
+            WARMUP_CIRCUIT_ALERT_MS,
+        );
+
+        let values = TestRecorder::histogram_values(
+            &metrics,
+            "wallet.prover.warmup_ms{backend=slow-backend,stage=circuit_load}",
+        );
+        assert_eq!(values.len(), 1);
+        assert!(values[0] >= duration.as_millis() as f64);
+        assert_eq!(
+            TestRecorder::counter_value(
+                &metrics,
+                "wallet.prover.warmup.alerts{backend=slow-backend,stage=circuit_load}",
+            ),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn mock_backend_warmup_records_metrics() {
+        let metrics = TestRecorder::install();
+        TestRecorder::reset(&metrics);
+
+        let config = WalletProverConfig::default();
+        let backend = build_backend(&config, WalletProverBackend::Mock).expect("mock backend");
+        assert_eq!(backend.identity().backend, "mock");
+
+        let values = TestRecorder::histogram_values(
+            &metrics,
+            "wallet.prover.warmup_ms{backend=mock,stage=circuit_load}",
+        );
+        assert_eq!(values.len(), 1);
+        assert!(TestRecorder::counter_value(
+            &metrics,
+            "wallet.prover.warmup.alerts{backend=mock,stage=circuit_load}",
+        )
+        .is_none());
     }
 
     #[cfg(feature = "prover-mock")]
