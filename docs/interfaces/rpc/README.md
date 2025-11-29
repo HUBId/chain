@@ -87,6 +87,61 @@ SDK-oriented helpers that parse the headers and clamp backoff are documented in
 [`rpp/chain-cli/SDK.md`](../../../rpp/chain-cli/SDK.md); the code samples are
 doctested so they stay aligned with the server’s token-bucket semantics.
 
+## Subscription-Recovery
+
+Event-stream clients must treat long-lived connections as lossy and implement
+replay-friendly recovery. RPC servers expose consistent signals across SSE and
+WebSocket transports so wallet pipelines, indexers, and monitoring agents react
+the same way regardless of transport.
+
+### Heartbeats and disconnect expectations
+
+* **SSE** – Idle connections emit comment heartbeats every 15 s (`:\n` or
+  `: <ts>`). Missing two consecutive heartbeats indicates either gateway
+  buffering or a dead connection; clients should reconnect with backoff and
+  resume using the last seen cursor/token.
+* **WebSocket** – Servers send `ping` frames at the same 15 s cadence and expect
+  a `pong` reply within 10 s. Two missed pings will be logged and the server may
+  close the socket with `1008` (policy violation) or `1002` (protocol error).
+  Clients should pro-actively reconnect after a single missed ping to avoid
+  being culled by intermediaries.
+
+### Error codes and reorg indicators
+
+* **`410 Gone` (`sse.reorg`)** – Emitted on SSE streams when the advertised
+  cursor falls outside the retained window because of pruning or a deep reorg.
+  The response body includes the latest stable cursor; clients must restart from
+  that cursor and reapply idempotent handlers.
+* **`409 Conflict` (`stream.reorg_in_progress`)** – WebSocket servers send this
+  close frame when a reorg rewinds past the active subscription. Clients should
+  reconnect after a short backoff and request history from the provided
+  `rollback_to` height in the close reason payload.
+* **`429` with `X-RateLimit-*` headers** – Treat as transient congestion; wait
+  for the `Reset` window then retry with exponential backoff. The stream should
+  reuse the previous cursor/token.
+
+### Reconnect and backoff guidance
+
+* Use **exponential backoff with jitter** for both SSE and WebSocket reconnects
+  (for example, `1s, 2s, 4s, capped at 30s`), resetting the backoff after five
+  minutes of stability.
+* **Replay on reconnect** by sending the last durable cursor (SSE `Last-Event-ID`
+  or WebSocket subscribe request payload). If the server replies with a reorg
+  hint, restart from the provided checkpoint rather than the stale cursor.
+* **Surface churn** – After three reconnects in five minutes, emit a user-facing
+  banner and write structured logs so operators can correlate with uptime
+  probes. The probes treat reconnect+resume as healthy; loops that restart
+  without progressing the cursor are considered degraded.
+
+### Detecting prunes and replay gaps
+
+Reorg-aware streams include a `pruned=true` or `rollback_height=<n>` metadata
+field when emitting rollbacks. Clients should persist the highest finalized
+height processed and compare it to these signals to trigger a rescan. Wallet
+pipelines must re-request historical batches if a gap larger than their in-memory
+buffer is detected, preferring bounded range queries over full history to reduce
+load after pruning.
+
 ### Wallet history pagination and rate limits
 
 Wallet history endpoints (`/wallet/history` and the `history.page` JSON-RPC

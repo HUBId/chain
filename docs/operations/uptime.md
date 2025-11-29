@@ -73,6 +73,11 @@ run to confirm alerts fire and then clear:
   `RpcSubscriptionDisconnect*` alerts fire when keep-alives or connections are
   lost, and return both metrics to stable values to prove the probes clear after
   reconnection.【F:tools/alerts/validation.py†L903-L977】【F:tools/alerts/validation.py†L1887-L2075】【F:ops/alerts/rpc/streams.yaml†L1-L35】
+  Operator runbooks should treat reconnect+cursor replay as **healthy** behavior;
+  repeated reconnects without cursor advancement are not. See the RPC
+  subscription recovery guidance for expected heartbeats, error codes, and
+  client backoff patterns so probe results can be compared against client
+  implementations.【F:docs/interfaces/rpc/README.md†L52-L114】
 - **Join and removal churn** – `uptime-join` keeps `uptime_participation_ratio`,
   `uptime_observation_age_seconds`, and `timetoke_accrual_hours_total`
   progressing through node joins, while `uptime-departure` forces those
