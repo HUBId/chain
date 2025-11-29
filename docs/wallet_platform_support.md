@@ -102,6 +102,37 @@ operators share the same expectations for deployment targets.【F:docs/wallet_su
   back to `./data/wallet/wallet-gui-settings.toml`), simplifying cross-platform
   backup/restore and making clipboard or telemetry settings portable.【F:rpp/wallet/src/ui/preferences.rs†L60-L120】
 
+## Stream recovery after reorgs or pruning
+
+Wallet clients subscribe to pipeline streams for mempool, balance, and
+checkpoint updates. Deep reorgs or pruning may invalidate the active cursor;
+the runtime surfaces consistent hints so GUI and CLI builds resynchronize
+without user confusion:
+
+* **Detection** – Subscription payloads include `rollback_height` when the node
+  rewinds past the in-memory buffer, and `pruned=true` when historical entries
+  are dropped. The wallet stores the highest finalized height and compares it to
+  these hints to decide whether to replay from the advertised rollback point or
+  trigger a bounded history fetch.
+* **Replay** – On reconnect, the wallet reuses the last durable cursor. If the
+  server responds with `410` (`sse.reorg`) or a WebSocket close reason that
+  contains `stream.reorg_in_progress`, the wallet re-issues a history request
+  from `rollback_height` to close gaps before reattaching to the stream.
+* **User messaging (GUI)** – The GUI surfaces a non-dismissable banner stating
+  “Chain rewound to height <n>; resyncing recent activity” while the replay runs
+  and clears it once the live cursor advances past the rollback point. If the
+  stream fails three times within five minutes, the banner escalates to “Live
+  updates unstable—continuing in retry mode” with a link to the log file.
+* **User messaging (CLI)** – CLI commands print `stream desynced, retrying from
+  <cursor>` and keep progress bars in “resync” mode until the replay finishes.
+  After three retries the CLI emits a warning suggesting `rpp-wallet resync` to
+  force a bounded catch-up.
+* **Pruning fallback** – When the server marks the cursor as pruned, the wallet
+  bypasses incremental replay and issues a compact history range request capped
+  to the last 5 000 blocks (configurable via `wallet.resync.max_blocks`). GUI and
+  CLI both show “Pruned history detected; fetching recent blocks only” so users
+  understand the limited replay scope.
+
 ## Smoke-test checklist
 
 1. **Init & unlock** – Run `rpp-wallet init` plus GUI unlock on each platform to
