@@ -608,6 +608,8 @@ fn run_integration_workflows() -> Result<()> {
     apply_integration_feature_flags(&mut mempool);
     run_command(mempool, "mempool fee-pressure probes")?;
 
+    run_proposer_fairness_matrix()?;
+
     let mut pruning = Command::new("cargo");
     pruning
         .current_dir(&root)
@@ -679,6 +681,39 @@ fn run_integration_workflows() -> Result<()> {
         .arg("snapshot_checksum_restart");
     apply_integration_feature_flags(&mut restart);
     run_command(restart, "snapshot checksum restart")
+}
+
+fn run_proposer_fairness_matrix() -> Result<()> {
+    let root = workspace_root();
+
+    let mut default = Command::new("cargo");
+    default
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("proposer_fairness");
+    apply_integration_feature_flags(&mut default);
+    run_command(default, "proposer fairness (stwo)")?;
+
+    if has_feature_flag("backend-rpp-stark") {
+        let mut backend = Command::new("cargo");
+        backend
+            .current_dir(&root)
+            .arg("test")
+            .arg("-p")
+            .arg("rpp-chain")
+            .arg("--locked")
+            .arg("--test")
+            .arg("proposer_fairness");
+        apply_integration_feature_flags(&mut backend);
+        backend.arg("--features").arg("backend-rpp-stark");
+        run_command(backend, "proposer fairness (backend-rpp-stark)")?;
+    }
+
+    Ok(())
 }
 
 fn run_observability_suite() -> Result<()> {

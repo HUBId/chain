@@ -284,6 +284,11 @@ name = "integration"
 path = "../../tests/integration/mod.rs"
 
 [[test]]
+name = "proposer_fairness"
+path = "../../tests/proposer_fairness.rs"
+required-features = ["wallet-ui"]
+
+[[test]]
 name = "end_to_end_pipeline"
 path = "../../tests/end_to_end_pipeline.rs"
 required-features = ["wallet-ui"]
