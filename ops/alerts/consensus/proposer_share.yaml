@@ -1,0 +1,40 @@
+groups:
+  - name: consensus-proposer-share
+    interval: 30s
+    rules:
+      - record: consensus:proposer_deviation_pct:10m
+        expr: avg_over_time(consensus_proposer_deviation_pct[10m])
+        labels:
+          component: consensus
+
+      - alert: ConsensusProposerShareDriftWarning
+        expr: abs(consensus:proposer_deviation_pct:10m) > 5
+        for: 10m
+        labels:
+          severity: warning
+          team: consensus
+          environment: "{{ $labels.environment }}"
+          backend: "{{ $labels.backend }}"
+        annotations:
+          summary: Proposer slot share deviating more than 5%
+          description: >-
+            The observed proposer slot share diverged from the validator's expected weight by more than
+            five percent over the last ten minutes. Inspect VRF submissions, prover backend health, and
+            recent validator churn for the affected backend.
+        runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#proposer-share-deviation
+
+      - alert: ConsensusProposerShareDriftCritical
+        expr: abs(consensus:proposer_deviation_pct:10m) > 10
+        for: 10m
+        labels:
+          severity: critical
+          team: consensus
+          environment: "{{ $labels.environment }}"
+          backend: "{{ $labels.backend }}"
+        annotations:
+          summary: Proposer slot share deviating more than 10%
+          description: >-
+            The observed proposer slot share diverged from the validator's expected weight by more than
+            ten percent for at least ten minutes. Quarantine the backend, validate randomness inputs, and
+            reassign impacted validators before finality confidence degrades.
+        runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#proposer-share-deviation
