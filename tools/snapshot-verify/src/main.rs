@@ -3,12 +3,13 @@
 
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use clap::Parser;
 
 use snapshot_verify::{
-    record_verification_outcome, run_verification, write_report, ChecksumAlgorithm, DataSource,
-    Execution, VerificationReport, VerifyArgs,
+    record_verification_outcome, run_verification, write_report, AlertHooks, ChecksumAlgorithm,
+    DataSource, Execution, VerificationReport, VerifyArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -44,10 +45,19 @@ struct Args {
     /// Optional path to write the JSON verification report to. Defaults to stdout.
     #[arg(long)]
     output: Option<PathBuf>,
+
+    /// Optional webhook endpoint that receives a JSON alert on completion or failure
+    #[arg(long, value_name = "URL", env = "SNAPSHOT_VERIFY_ALERT_WEBHOOK")]
+    alert_webhook: Option<String>,
+
+    /// Optional label added to alert metrics emitted on completion or failure
+    #[arg(long, value_name = "LABEL", env = "SNAPSHOT_VERIFY_ALERT_METRIC")]
+    alert_metric_label: Option<String>,
 }
 
 fn main() {
     let args = Args::parse();
+    let started_at = Instant::now();
     let verify_args = VerifyArgs {
         manifest: args.manifest.clone(),
         signature: args.signature.clone(),
@@ -67,7 +77,16 @@ fn main() {
         }
     };
 
-    record_verification_outcome(exit_code, &args.manifest);
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    record_verification_outcome(
+        exit_code,
+        &args.manifest,
+        AlertHooks {
+            webhook: args.alert_webhook.as_deref(),
+            metric_label: args.alert_metric_label.as_deref(),
+            duration_ms: Some(duration_ms),
+        },
+    );
 
     if let Err(err) = write_report(&report, args.output.as_deref()) {
         eprintln!("error: {err:?}");

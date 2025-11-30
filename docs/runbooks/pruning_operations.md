@@ -145,6 +145,15 @@ raise incidents when three consecutive scheduled runs fail.
    `FIREWOOD_PRUNING_BASELINE` to compare against a freshly generated file when
    refreshing expectations.【F:benchmark/src/pruning.rs†L16-L124】【F:benchmark/src/pruning_baseline.rs†L9-L117】【F:benchmark/baselines/pruning.json†L1-L20】
 
+### Alert pruning verification runs
+
+- When running `snapshot-verify` or the `validator snapshot verify` wrapper in
+  CI, export `SNAPSHOT_VERIFY_ALERT_WEBHOOK` so the CLI POSTs a completion
+  payload (manifest path, result, exit code, and runtime) to your alert router.
+  Use `SNAPSHOT_VERIFY_ALERT_METRIC` (or the `--alert-metric-label` flag) to
+  stamp `snapshot_verify_alert_hooks_total` with the workflow/channel label so
+  dashboards can track verification coverage per environment.【F:tools/snapshot-verify/src/main.rs†L22-L61】【F:tools/snapshot-verify/src/lib.rs†L270-L342】
+
 ## 6. Failure scenarios
 
 ### A. Repeated cycle failures
