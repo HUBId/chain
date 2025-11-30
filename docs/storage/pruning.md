@@ -68,6 +68,12 @@ The scenarios:
 * Reconstructed blocks must hash to the same value they held before pruning and
   pass `verify_pruning` against their predecessor. The persisted pruning proof
   for the finalized head must validate via `ValidatedPruningEnvelope`.
+* The runtime now scrubs mempool metadata during pruning. Expect
+  `rpp.runtime.mempool.metadata.rehydrated` to tick up when missing witness
+  payloads are rebuilt, and `rpp.runtime.mempool.metadata.orphans` plus a
+  `mempool_metadata_reconciled` warning when stale metadata is dropped. Wallet
+  submissions queued during the prune should retain their proof payloads in
+  `/status/mempool` after reconciliation.【F:rpp/runtime/node.rs†L735-L762】【F:rpp/runtime/telemetry/metrics.rs†L153-L208】【F:tests/mempool/pruning_orphans.rs†L1-L82】
 * WAL replay should resurrect the queued transactions so the mempool count after
   restart equals the recovered WAL length.
 * The STWO and RPP-STARK verifiers must accept their respective reference

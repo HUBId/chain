@@ -4764,6 +4764,31 @@ impl NodeHandle {
         self.inner.mempool_latency_ms()
     }
 
+    #[cfg(feature = "integration")]
+    pub fn drop_pending_transaction_metadata(&self, hash: &str) {
+        self.inner.pending_transaction_metadata.write().remove(hash);
+    }
+
+    #[cfg(feature = "integration")]
+    pub fn seed_orphaned_transaction_metadata(&self, bundle: TransactionProofBundle) {
+        let hash = bundle.hash();
+        let metadata = PendingTransactionMetadata::from_bundle(&bundle);
+        self.inner
+            .pending_transaction_metadata
+            .write()
+            .insert(hash, metadata);
+    }
+
+    #[cfg(feature = "integration")]
+    pub fn pending_transaction_metadata_hashes(&self) -> Vec<String> {
+        self.inner
+            .pending_transaction_metadata
+            .read()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub fn queue_weights(&self) -> QueueWeightsConfig {
         self.inner.queue_weights()
     }
@@ -6435,6 +6460,29 @@ impl NodeInner {
                 );
             }
 
+            let (rehydrated, orphaned) = self.reconcile_mempool_metadata();
+            if rehydrated > 0 || orphaned > 0 {
+                self.runtime_metrics
+                    .record_mempool_metadata_reconciliation(rehydrated, orphaned);
+                if orphaned > 0 {
+                    warn!(
+                        target = "pruning",
+                        event = "mempool_metadata_reconciled",
+                        rehydrated,
+                        orphaned,
+                        "pruning cleared orphaned mempool entries",
+                    );
+                } else {
+                    info!(
+                        target = "pruning",
+                        event = "mempool_metadata_reconciled",
+                        rehydrated,
+                        orphaned,
+                        "pruning revalidated mempool entries",
+                    );
+                }
+            }
+
             let summary = if cancelled {
                 PruningCycleSummary::cancelled(Some(status.clone()))
             } else {
@@ -7410,6 +7458,28 @@ impl NodeInner {
         for bundle in bundles {
             metadata.remove(&bundle.hash());
         }
+    }
+
+    fn reconcile_mempool_metadata(&self) -> (usize, usize) {
+        let mempool = self.mempool.read();
+        let mut metadata = self.pending_transaction_metadata.write();
+
+        let mut rehydrated = 0usize;
+        let queued_hashes: HashSet<_> = mempool.iter().map(|bundle| bundle.hash()).collect();
+        for bundle in mempool.iter() {
+            let hash = bundle.hash();
+            if metadata.contains_key(&hash) {
+                continue;
+            }
+            metadata.insert(hash, PendingTransactionMetadata::from_bundle(bundle));
+            rehydrated += 1;
+        }
+
+        let before = metadata.len();
+        metadata.retain(|hash, _| queued_hashes.contains(hash));
+        let orphaned = before.saturating_sub(metadata.len());
+
+        (rehydrated, orphaned)
     }
 
     fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {

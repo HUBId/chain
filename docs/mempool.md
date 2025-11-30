@@ -108,6 +108,18 @@ demonstrates the happy-path behaviour that operators can rely on for incident re
   floor while replaying a known spam scenario. The probe should flip to `Unhealthy`, the backlog
   panels should turn red, and the runtime backlog alerts should fire until the queues drain.
 
+### Pruning and wallet metadata hygiene
+
+* Pruning cycles now reconcile the in-memory wallet transaction metadata with the queued mempool
+  entries, rebuilding missing proof/witness payloads and dropping metadata records that no longer
+  correspond to queued hashes. The node emits `rpp.runtime.mempool.metadata.rehydrated` and
+  `rpp.runtime.mempool.metadata.orphans` counters for telemetry and logs a
+  `mempool_metadata_reconciled` event (warning if orphans are removed) so operators can confirm the
+  cleanup ran after a prune.【F:rpp/runtime/node.rs†L735-L762】【F:rpp/runtime/telemetry/metrics.rs†L153-L208】【F:rpp/runtime/node.rs†L634-L654】
+* The integration suite exercises this path while pruning across every enabled proof backend,
+  ensuring wallet submissions survive the reconciliation and that orphaned metadata is cleared
+  before the next block production loop resumes.【F:tests/mempool/pruning_orphans.rs†L1-L82】
+
 ## Configuration and tuning controls
 
 Align tuning changes with the [mempool cleanup runbook](./mempool_cleanup.md) and the on-call
