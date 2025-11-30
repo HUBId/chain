@@ -1,0 +1,44 @@
+groups:
+  - name: pruning-recovery
+    interval: 30s
+    rules:
+      - alert: PruningRecoveryBlockRate
+        expr: |
+          increase(rpp_node_pruning_cycle_total{result="success"}[15m]) > 0
+            and on(environment)
+              consensus:block_production_ratio:5m < 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: storage
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Block production lagged after pruning completion
+          description: >-
+            Block production remained below 90% of scheduled slots within fifteen minutes of the last pruning run.
+            Inspect pruning pacing decisions, mempool backlog, and recent pruning logs before resuming traffic.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/pruning_operations.md#post-pruning-recovery
+
+      - alert: PruningRecoveryFinality
+        expr: |
+          (
+            increase(rpp_node_pruning_cycle_total{result="success"}[15m]) > 0
+              and on(environment)
+                max_over_time(finality_lag_slots[5m]) > 12
+          )
+            or (
+              increase(rpp_node_pruning_cycle_total{result="success"}[15m]) > 0
+                and on(environment)
+                  max_over_time(finalized_height_gap[5m]) > 4
+            )
+        for: 3m
+        labels:
+          severity: warning
+          team: storage
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Finality lag persisted after pruning completion
+          description: >-
+            Finality lag or finalized height gaps stayed above the warning budget within fifteen minutes of the last pruning run.
+            Validate snapshot health, peer catch-up, and proposer rotation before scheduling the next pruning window.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/runbooks/pruning_operations.md#post-pruning-recovery

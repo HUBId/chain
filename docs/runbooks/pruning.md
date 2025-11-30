@@ -132,3 +132,8 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
 2. Record the receipt details and job-status output in the shift hand-off log for traceability.
 3. If the service reports repeated failures, escalate using the observability runbook and collect the
    relevant logs and receipts for investigation.
+4. Verify block production and finality recover after pruning: the block production ratio should rise
+   above 0.9 within five minutes of a successful cycle, and finality lag/gaps should fall below the
+   warning budgets (12 slots / 4 blocks) within three minutes. Investigate
+   `PruningRecoveryBlockRate` or `PruningRecoveryFinality` alerts by capturing the pruning status
+   payload plus block/finality panels around the cycle boundary.
