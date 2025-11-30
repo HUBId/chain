@@ -25,6 +25,8 @@ pub struct PruningMetrics {
     cancellations_total: Counter<u64>,
     pacing_decisions: Counter<u64>,
     pacing_delay_ms: Histogram<f64>,
+    mempool_backlog: Histogram<u64>,
+    mempool_latency_ms: Histogram<f64>,
     shard_label: KeyValue,
     partition_label: KeyValue,
 }
@@ -111,6 +113,20 @@ impl PruningMetrics {
             .with_description("Backoff applied by pruning pacing in milliseconds")
             .with_unit("ms")
             .build();
+        let mempool_backlog = meter
+            .u64_histogram("rpp.node.pruning.mempool_backlog")
+            .with_description(
+                "Mempool backlog sampled at pruning cycle boundaries grouped by phase and trigger",
+            )
+            .with_unit("1")
+            .build();
+        let mempool_latency_ms = meter
+            .f64_histogram("rpp.node.pruning.mempool_latency_ms")
+            .with_description(
+                "Age in milliseconds of the oldest transaction when pruning starts or stops",
+            )
+            .with_unit("ms")
+            .build();
 
         let shard_label = KeyValue::new(
             "shard",
@@ -136,6 +152,8 @@ impl PruningMetrics {
             cancellations_total,
             pacing_decisions,
             pacing_delay_ms,
+            mempool_backlog,
+            mempool_latency_ms,
             shard_label,
             partition_label,
         }
@@ -261,6 +279,24 @@ impl PruningMetrics {
         self.pacing_decisions.add(1, &attrs);
     }
 
+    pub fn record_mempool_checkpoint(
+        &self,
+        reason: CycleReason,
+        phase: PruningPhase,
+        backlog: u64,
+        latency_ms: Option<u128>,
+    ) {
+        let attrs = self.with_base_labels([
+            KeyValue::new("reason", reason.as_str()),
+            KeyValue::new("phase", phase.as_str()),
+        ]);
+
+        self.mempool_backlog.record(backlog, &attrs);
+        if let Some(latency_ms) = latency_ms {
+            self.mempool_latency_ms.record(latency_ms as f64, &attrs);
+        }
+    }
+
     fn base_labels(&self) -> Vec<KeyValue> {
         vec![self.shard_label.clone(), self.partition_label.clone()]
     }
@@ -283,6 +319,21 @@ impl CycleReason {
         match self {
             CycleReason::Manual => "manual",
             CycleReason::Scheduled => "scheduled",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PruningPhase {
+    Start,
+    Stop,
+}
+
+impl PruningPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PruningPhase::Start => "start",
+            PruningPhase::Stop => "stop",
         }
     }
 }

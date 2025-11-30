@@ -116,6 +116,14 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    pace by the remaining backlog (`missing_heights - stored_proofs`), and drops
    the estimate when no proofs were produced so dashboards do not render stale
    values.【F:rpp/node/src/services/pruning.rs†L135-L191】【F:rpp/runtime/node.rs†L720-L789】【F:rpp/node/src/telemetry/pruning.rs†L102-L180】
+6. **Correlate pruning with mempool pressure.** The `Pruning vs Mempool`
+   dashboard plots `rpp.node.pruning.mempool_backlog` and
+   `rpp.node.pruning.mempool_latency_ms` alongside `window_events_total`. Use it
+   to confirm that pruning starts when the mempool is shallow and ages remain
+   under a few seconds. If the backlog climbs toward the configured limit or
+   latency spikes after a pruning start marker, reduce ingestion (RPC rate
+   limits) or pause pruning with `--pruning-pause` until the mempool clears,
+   then resume and recheck the markers.【F:telemetry/grafana/dashboards/pruning_mempool.json†L1-L109】【F:rpp/node/src/services/pruning.rs†L343-L419】
 
 ## 5. Post-change verification
 

@@ -19,7 +19,7 @@ use rpp_chain::node::{
 };
 
 use crate::telemetry::pruning::{
-    CycleOutcome, CycleReason, PacingAction, PacingReason, PruningMetrics,
+    CycleOutcome, CycleReason, PacingAction, PacingReason, PruningMetrics, PruningPhase,
 };
 use rpp_chain::storage::pruner::receipt::{
     SnapshotCancelReceipt, SnapshotRebuildReceipt, SnapshotTriggerReceipt,
@@ -693,6 +693,27 @@ async fn run_worker(
         let cycle_reason: CycleReason = reason.into();
         let started_at = Instant::now();
         metrics.record_window_start(cycle_reason);
+        if let Ok(status) = node.node_status() {
+            let backlog = status.pending_transactions
+                + status.pending_identities
+                + status.pending_votes
+                + status.pending_uptime_proofs;
+            let latency_ms = node.mempool_latency_ms().ok().flatten();
+            metrics.record_mempool_checkpoint(
+                cycle_reason,
+                PruningPhase::Start,
+                backlog as u64,
+                latency_ms,
+            );
+            info!(
+                target = "pruning",
+                cycle = cycle_reason.as_str(),
+                phase = "start",
+                mempool_backlog = backlog,
+                mempool_latency_ms = latency_ms,
+                "pruning cycle starting",
+            );
+        }
         running_cycle = true;
         match run_pruning_cycle(&node, chunk_size, retention_depth) {
             Ok(mut summary) => {
@@ -718,6 +739,27 @@ async fn run_worker(
 
                 metrics.record_cycle(cycle_reason, outcome, elapsed, summary.status.as_ref());
                 metrics.record_window_end(cycle_reason, outcome);
+                if let Ok(status) = node.node_status() {
+                    let backlog = status.pending_transactions
+                        + status.pending_identities
+                        + status.pending_votes
+                        + status.pending_uptime_proofs;
+                    let latency_ms = node.mempool_latency_ms().ok().flatten();
+                    metrics.record_mempool_checkpoint(
+                        cycle_reason,
+                        PruningPhase::Stop,
+                        backlog as u64,
+                        latency_ms,
+                    );
+                    info!(
+                        target = "pruning",
+                        cycle = cycle_reason.as_str(),
+                        phase = "stop",
+                        mempool_backlog = backlog,
+                        mempool_latency_ms = latency_ms,
+                        "pruning cycle finished",
+                    );
+                }
 
                 if summary.cancelled {
                     info!(target = "pruning", "pruning cycle cancelled");
@@ -733,6 +775,19 @@ async fn run_worker(
                 );
                 metrics.record_failure(cycle_reason, error_label);
                 metrics.record_window_end(cycle_reason, CycleOutcome::Failure);
+                if let Ok(status) = node.node_status() {
+                    let backlog = status.pending_transactions
+                        + status.pending_identities
+                        + status.pending_votes
+                        + status.pending_uptime_proofs;
+                    let latency_ms = node.mempool_latency_ms().ok().flatten();
+                    metrics.record_mempool_checkpoint(
+                        cycle_reason,
+                        PruningPhase::Stop,
+                        backlog as u64,
+                        latency_ms,
+                    );
+                }
                 warn!(?err, error = error_label, "pruning cycle failed");
             }
         }
