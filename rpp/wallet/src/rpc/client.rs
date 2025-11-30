@@ -4,7 +4,7 @@ use reqwest::{Client, Identity, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::time::{sleep, Duration};
+use tokio::time::sleep;
 
 #[cfg(feature = "wallet_rpc_mtls")]
 use super::dto::WalletRoleDto;
@@ -93,14 +93,27 @@ impl WalletRpcClient {
                 .map_err(WalletRpcClientError::from)?,
         };
 
+        const MAX_ATTEMPTS: u8 = 3;
+        const BACKOFF_MS: u64 = 50;
+
         let mut attempts = 0u8;
+        let mut backoff = Duration::from_millis(BACKOFF_MS);
         loop {
             let mut request = self.inner.post(self.url.clone()).json(&payload);
             if let Some(token) = &self.auth_token {
                 request = request.bearer_auth(token);
             }
 
-            let response = request.send().await?;
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) if attempts < MAX_ATTEMPTS && retryable_transport(&error) => {
+                    sleep(backoff).await;
+                    attempts += 1;
+                    backoff = backoff.saturating_mul(2);
+                    continue;
+                }
+                Err(error) => return Err(WalletRpcClientError::from(error)),
+            };
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
                 let window = RateLimitWindow::from_headers(response.headers());
                 if attempts == 0 {
@@ -111,6 +124,13 @@ impl WalletRpcClient {
                     }
                 }
                 return Err(WalletRpcClientError::RateLimited(window));
+            }
+
+            if retryable_status(response.status()) && attempts < MAX_ATTEMPTS {
+                sleep(backoff).await;
+                attempts += 1;
+                backoff = backoff.saturating_mul(2);
+                continue;
             }
 
             if !response.status().is_success() {
@@ -596,6 +616,17 @@ impl WalletRpcClient {
     }
 }
 
+fn retryable_transport(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
+fn retryable_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
 #[cfg(not(feature = "wallet_rpc_mtls"))]
 fn mtls_rpc_disabled(method: &'static str) -> WalletRpcClientError {
     WalletRpcClientError::UnsupportedFeature {
@@ -692,7 +723,11 @@ mod tests {
     use httpmock::prelude::*;
     use reqwest::StatusCode;
     use serde_json::json;
-    use tokio::time::Duration;
+    use std::net::SocketAddr;
+    use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn retries_after_reset_header() {
@@ -767,5 +802,85 @@ mod tests {
             }
         );
         assert_eq!(throttled.hits_async().await, 2);
+    }
+
+    #[tokio::test]
+    async fn retries_connect_errors_before_surface() {
+        let addr: SocketAddr = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe port");
+            let addr = probe.local_addr().expect("probe addr");
+            drop(probe);
+            addr
+        };
+
+        let endpoint = format!("http://{addr}");
+        let client = WalletRpcClient::from_endpoint(&endpoint, None, None, Duration::from_secs(1))
+            .expect("client");
+
+        let server = tokio::spawn(async move {
+            sleep(Duration::from_millis(120)).await;
+            let listener = TcpListener::bind(addr).await.expect("bind delayed listener");
+            let (mut stream, _) = listener.accept().await.expect("accept connection");
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf).await;
+            let body = json!({
+                "jsonrpc": JSONRPC_VERSION,
+                "id": 1,
+                "result": {"ok": true}
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.as_bytes().len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        let started = Instant::now();
+        let value = client
+            .request::<serde_json::Value>("health", Option::<serde_json::Value>::None)
+            .await
+            .expect("eventual success after retries");
+        server.await.expect("server task");
+
+        assert_eq!(value, json!({"ok": true}));
+        assert!(started.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn retries_transient_http_statuses() {
+        let server = MockServer::start_async().await;
+        let transient = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/rpc");
+                then.status(StatusCode::SERVICE_UNAVAILABLE.as_u16());
+            })
+            .expect(1)
+            .await;
+
+        let recovered = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/rpc");
+                then.status(StatusCode::OK.as_u16())
+                    .header("content-type", "application/json")
+                    .json_body(
+                        json!({ "jsonrpc": JSONRPC_VERSION, "id": 1, "result": {"ok": true}}),
+                    );
+            })
+            .await;
+
+        let client =
+            WalletRpcClient::from_endpoint(&server.base_url(), None, None, Duration::from_secs(5))
+                .expect("client");
+
+        let value = client
+            .request::<serde_json::Value>("health", Option::<serde_json::Value>::None)
+            .await
+            .expect("eventual recovery");
+
+        assert_eq!(value, json!({"ok": true}));
+        assert_eq!(transient.hits_async().await, 1);
+        assert_eq!(recovered.hits_async().await, 1);
     }
 }
