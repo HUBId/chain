@@ -1309,6 +1309,76 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
 
+    #[cfg(feature = "backend-rpp-stark")]
+    fn oversized_rpp_stark_proof()
+        -> (ProofVerifierRegistry, ChainProof, u32, u32)
+    {
+        use rpp_stark::backend::params_limit_to_node_bytes;
+        use rpp_stark::params::deserialize_params;
+        use std::path::Path;
+
+        let vectors_dir = Path::new("vendor/rpp-stark/vectors/stwo/mini");
+        let params = std::fs::read(vectors_dir.join("params.bin"))
+            .expect("read RPP-STARK params vector");
+        let public_inputs = std::fs::read(vectors_dir.join("public_inputs.bin"))
+            .expect("read RPP-STARK public inputs vector");
+        let mut proof_bytes = std::fs::read(vectors_dir.join("proof.bin"))
+            .expect("read RPP-STARK proof vector");
+
+        let stark_params = deserialize_params(&params).expect("deserialize params");
+        let node_limit = params_limit_to_node_bytes(&stark_params)
+            .expect("params encode a valid proof limit");
+        let max_kib = node_limit.div_ceil(1024);
+
+        proof_bytes.extend(std::iter::repeat(0u8).take(node_limit as usize / 2 + 1));
+        let got_kib = u64::try_from(proof_bytes.len())
+            .expect("proof length fits in u64")
+            .div_ceil(1024);
+        let got_kib = u32::try_from(got_kib).expect("proof length fits in u32 kibibytes");
+
+        let registry = ProofVerifierRegistry::with_max_proof_size_bytes(node_limit as usize)
+            .expect("custom proof limit should fit in registry");
+        let chain_proof = ChainProof::RppStark(RppStarkProof::new(
+            params,
+            public_inputs,
+            proof_bytes,
+        ));
+
+        (registry, chain_proof, max_kib, got_kib)
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn assert_rpp_size_gate(
+        result: ChainResult<()>,
+        circuit: &'static str,
+        max_kib: u32,
+        got_kib: u32,
+    ) {
+        let message = result
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+
+        match result {
+            Err(ChainError::ProofSizeGate {
+                backend,
+                circuit: actual_circuit,
+                error: ProofSizeGateError::ProofTooLarge {
+                    max_kib: actual_max,
+                    got_kib: actual_got,
+                },
+            }) => {
+                assert_eq!(backend, ProofSystemKind::RppStark);
+                assert_eq!(actual_circuit, circuit);
+                assert_eq!(actual_max, max_kib);
+                assert_eq!(actual_got, got_kib);
+                assert!(message.contains(circuit));
+            }
+            other => panic!("expected proof-size gate for {circuit}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn verify_state_emits_runtime_span() {
         let recorder = RecordingLayer::default();
@@ -1381,6 +1451,60 @@ mod tests {
             }
             other => panic!("unexpected mapping for oversize: {other:?}"),
         }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_transaction_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_transaction(&proof);
+        assert_rpp_size_gate(result, "transaction", max_kib, got_kib);
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_identity_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_identity(&proof);
+        assert_rpp_size_gate(result, "identity", max_kib, got_kib);
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_state_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_state(&proof);
+        assert_rpp_size_gate(result, "state", max_kib, got_kib);
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_pruning_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_pruning(&proof);
+        assert_rpp_size_gate(result, "pruning", max_kib, got_kib);
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_recursive_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_recursive(&proof);
+        assert_rpp_size_gate(result, "recursive", max_kib, got_kib);
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn rpp_stark_uptime_size_gate_reports_circuit() {
+        let (registry, proof, max_kib, got_kib) = oversized_rpp_stark_proof();
+
+        let result = registry.verify_uptime(&proof);
+        assert_rpp_size_gate(result, "uptime", max_kib, got_kib);
     }
 }
 
