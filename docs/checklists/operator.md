@@ -34,6 +34,8 @@ and the [runbooks](../runbooks/startup.md). Update it after each deployment.
 - [ ] During documentation reviews, confirm the [startup validation failures table](../operator-guide.md#startup-validation-failures)
       captures any new configuration, backend, or snapshot boot issues observed since the last deployment.
       Update the table and linked runbooks as needed so on-call handoffs stay accurate.【F:docs/operator-guide.md†L25-L49】
+- [ ] Keep the [consensus/verifier/pruning quick triage](../operator-guide.md#consensus-verifier-and-pruning-quick-triage) table
+      aligned with current alerts, dashboards, and escalation contacts whenever backend or pruning changes ship.
 - [ ] Keep the [incident response runbook](../operations/incidents.md) aligned with fork-handling, verifier
       failover, and pruning changes shipped in new releases so future incidents reuse the current commands
       and escalation timelines.

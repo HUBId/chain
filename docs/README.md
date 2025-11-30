@@ -30,6 +30,7 @@ frequently consulted references.
 - [Checklist: Phase-1 Guard Verification](runbooks/startup.md#phase-1-guard-verification)
 - [Deployment staged rollout playbook](deployment/staged_rollout.md)
 - [Wallet release checklist](release_checklist.md)
+- [Consensus/verifier/pruning quick triage](operator-guide.md#consensus-verifier-and-pruning-quick-triage)
 
 ## Runbooks
 

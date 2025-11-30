@@ -101,6 +101,23 @@ or pruning stalls should be handled with the [incident response runbook](./opera
 which sets the same acknowledgement and stabilisation timelines and captures
 the commands/metrics to apply during on-call mitigation.
 
+## Consensus, verifier, and pruning quick triage
+
+Use this condensed checklist when alerts fire before diving into full runbooks.
+Each row lists the fastest verification commands, dashboards, and handoff
+targets. Escalate directly to the contacts noted in the final column if the
+problem persists for more than **15 minutes** after mitigation begins.
+
+| Scenario | Immediate commands | Dashboards & alerts | Escalation & deep dives |
+| --- | --- | --- | --- |
+| Consensus stall | `curl -s http://<node>/status/consensus | jq '.accepted_height, .finalized_height'`; compare at least three validators for divergence. Check `consensus_finality_lag_slots` and `finalized_height_gap` in Prometheus or with `promtool query range`. | Grafana: `consensus_finality` panel in `docs/dashboards/consensus_grafana.json`; alerts: `consensus_finality_lag_slots` or `finalized_height_gap` firing. | Page **rpp-sre** and **rpp-releng**. Follow the [incident response runbook](./operations/incidents.md#fork-handling-playbook) if finality does not advance for two evaluation windows. |
+| Verifier failure | `curl -s http://<node>/status/node | jq '.backend_health["rpp-stark"].verifier'` for accepted/rejected counts; `rppctl proofs clear --backend rpp-stark --reason outage` to flush stuck items. Validate `rpp.runtime.verifier.accepted_total{backend="plonky3"}` or equivalent increasing after any backend swap. | Grafana: verifier SLA panels in `docs/dashboards/consensus_grafana.json`; alerts: `rpp_stark_stage_checks_total{result="fail"}` and verifier latency SLOs. | Page **rpp-proofs** with **rpp-sre**; loop in **rpp-releng** if backend toggles are required. Use the [verifier outage playbook](./operations/incidents.md#verifier-outage-and-failover) and [backend procedures](./zk_backends.md). |
+| Pruning errors | `curl -s http://<node>/status/storage | jq '.pruning.head, .snapshot.head'`; pause if lag > 64 slots: `rppctl pruning pause`. Rebuild snapshots via `curl -X POST http://<node>/snapshots/rebuild` then `rppctl pruning resume`. | Grafana: pruning lag widgets in `docs/dashboards/snapshot_resilience.json`; alerts: `pruning_checkpoint_lag_slots`, `storage_firewood_pruning_errors_total`. | Page **rpp-storage** with **rpp-sre**. Follow the [pruning runbook](./runbooks/pruning.md) or [pruning operations guide](./runbooks/pruning_operations.md); escalate to [snapshot recovery](./runbooks/snapshot_restore_and_wallet_recovery.md) if rebuilds fail. |
+
+Cross-incident expectations remain unchanged: acknowledge PagerDuty pages within
+**five minutes**, post hypotheses and silences in the incident log, and hand off
+after **20 minutes** of stalled progress to the rotations listed above.
+
 ## Mempool incident response
 
 High-volume spam or DoS incidents should follow the
