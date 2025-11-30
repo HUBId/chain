@@ -60,7 +60,14 @@ impl Mutation {
 
 #[derive(Debug, Default)]
 struct InflightTransaction {
+    begin_seq: SequenceNumber,
     mutations: Vec<Mutation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CommitBoundary {
+    begin: SequenceNumber,
+    commit: SequenceNumber,
 }
 
 /// Binary log record encoded into the WAL.
@@ -94,7 +101,8 @@ pub struct FirewoodKv {
     wal: FileWal,
     state: BTreeMap<Vec<u8>, Vec<u8>>,
     pending: Vec<Mutation>,
-    commit_boundaries: VecDeque<SequenceNumber>,
+    commit_boundaries: VecDeque<CommitBoundary>,
+    pending_wal_gc: Option<CommitBoundary>,
     replay_inflight: Option<InflightTransaction>,
     next_tx_id: u64,
     directory: PathBuf,
@@ -112,6 +120,7 @@ impl FirewoodKv {
             state: BTreeMap::new(),
             pending: Vec::new(),
             commit_boundaries: VecDeque::new(),
+            pending_wal_gc: None,
             replay_inflight: None,
             next_tx_id: 0,
             directory: directory.to_path_buf(),
@@ -182,7 +191,7 @@ impl FirewoodKv {
                 }
             }
             LogRecord::Commit { root } => {
-                if let Some(inflight) = self.replay_inflight.take() {
+                let begin_seq = if let Some(inflight) = self.replay_inflight.take() {
                     for mutation in inflight.mutations {
                         mutation.apply(&mut self.state);
                     }
@@ -191,14 +200,15 @@ impl FirewoodKv {
                         root,
                         "replayed state hash diverged from WAL commit"
                     );
-                }
-                self.commit_boundaries.push_back(sequence);
-                if self.commit_boundaries.len() > WAL_RETENTION_WINDOW {
-                    self.commit_boundaries.pop_front();
-                }
+                    inflight.begin_seq
+                } else {
+                    sequence
+                };
+                self.record_commit_boundary(sequence, begin_seq);
             }
             LogRecord::Begin { id } => {
                 self.replay_inflight = Some(InflightTransaction {
+                    begin_seq: sequence,
                     mutations: Vec::new(),
                 });
                 self.next_tx_id = self.next_tx_id.max(id + 1);
@@ -233,19 +243,27 @@ impl FirewoodKv {
     }
 
     fn retain_recent(&mut self) -> Result<(), KvError> {
-        if self.commit_boundaries.len() < WAL_RETENTION_WINDOW {
-            return Ok(());
-        }
-        if self.commit_boundaries.len() > WAL_RETENTION_WINDOW {
-            let keep_index = self.commit_boundaries.len() - WAL_RETENTION_WINDOW;
-            if let Some(&sequence) = self.commit_boundaries.get(keep_index) {
-                self.wal.truncate(sequence)?;
-            }
-            while self.commit_boundaries.len() > WAL_RETENTION_WINDOW {
-                self.commit_boundaries.pop_front();
-            }
+        if let Some(boundary) = self.pending_wal_gc {
+            self.wal.truncate(boundary.begin)?;
+            self.pending_wal_gc = None;
         }
         Ok(())
+    }
+
+    fn record_commit_boundary(
+        &mut self,
+        commit_sequence: SequenceNumber,
+        begin_sequence: SequenceNumber,
+    ) {
+        let boundary = CommitBoundary {
+            begin: begin_sequence,
+            commit: commit_sequence,
+        };
+        self.commit_boundaries.push_back(boundary);
+        if self.commit_boundaries.len() > WAL_RETENTION_WINDOW {
+            self.commit_boundaries.pop_front();
+            self.pending_wal_gc = self.commit_boundaries.front().copied();
+        }
     }
 
     fn commit_pause_path() -> Option<PathBuf> {
@@ -284,7 +302,7 @@ impl FirewoodKv {
 
         let begin_record = LogRecord::Begin { id: tx_id };
         let begin_raw = bincode::serialize(&begin_record).expect("serialize begin record");
-        self.wal.append(&begin_raw)?;
+        let begin_seq = self.wal.append(&begin_raw)?;
 
         for mutation in &mutations {
             let record = mutation.clone().into_record();
@@ -302,10 +320,9 @@ impl FirewoodKv {
         let commit_record = LogRecord::Commit { root };
         let commit_raw = bincode::serialize(&commit_record).expect("serialize commit record");
         let commit_seq = self.wal.append(&commit_raw)?;
-        self.commit_boundaries.push_back(commit_seq);
+        self.record_commit_boundary(commit_seq, begin_seq);
 
         self.wal.sync()?;
-        self.retain_recent()?;
 
         self.pending.clear();
 
@@ -318,6 +335,14 @@ impl FirewoodKv {
         Ok(root)
     }
 
+    /// Garbage-collect WAL segments that have fallen out of the retention window.
+    ///
+    /// This should be invoked after a durable checkpoint or pruning cycle has
+    /// completed so only fully replayable commit ranges remain in the log.
+    pub fn gc_wal(&mut self) -> Result<(), KvError> {
+        self.retain_recent()
+    }
+
     /// Iterate over the in-memory state for a specific prefix.
     pub fn scan_prefix<'a>(
         &'a self,
@@ -328,5 +353,109 @@ impl FirewoodKv {
             .range(start..)
             .take_while(move |(key, _)| key.starts_with(prefix))
             .map(|(key, value)| (key.clone(), value.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn wal_gc_truncates_only_full_commits() {
+        let temp_dir = TempDir::new().expect("create wal gc temp dir");
+        let data_dir = temp_dir.path().join("kv");
+
+        let mut kv = FirewoodKv::open(&data_dir).expect("open kv for gc probe");
+        kv.put(b"key-0".to_vec(), b"value-0".to_vec());
+        kv.commit().expect("commit checkpoint baseline");
+        let checkpoint_state = kv.state.clone();
+
+        for index in 1..4 {
+            kv.put(
+                format!("key-{index}").into_bytes(),
+                format!("value-{index}").into_bytes(),
+            );
+            kv.commit().expect("commit staged mutation");
+        }
+
+        assert!(
+            kv.pending_wal_gc.is_some(),
+            "expected pending wal gc after exceeding window",
+        );
+        let pre_gc = kv
+            .wal
+            .replay_from(0)
+            .expect("replay wal before gc");
+
+        kv.gc_wal().expect("run wal gc");
+
+        let post_gc = kv
+            .wal
+            .replay_from(0)
+            .expect("replay wal after gc");
+        assert!(post_gc.len() < pre_gc.len(), "gc should drop stale wal prefix");
+        let expected_start = kv
+            .commit_boundaries
+            .front()
+            .expect("retain window boundary")
+            .begin;
+        assert_eq!(post_gc.first().map(|(seq, _)| *seq), Some(expected_start));
+
+        drop(kv);
+
+        let wal = FileWal::open(&data_dir).expect("open wal after gc");
+        let mut reopened = FirewoodKv {
+            wal,
+            state: checkpoint_state,
+            pending: Vec::new(),
+            commit_boundaries: VecDeque::new(),
+            pending_wal_gc: None,
+            replay_inflight: None,
+            next_tx_id: 0,
+            directory: data_dir.clone(),
+        };
+        let (records, _) = reopened.replay().expect("replay truncated wal");
+        for (sequence, record) in records {
+            reopened.apply_record(sequence, record);
+        }
+
+        for retained in 0..4 {
+            let key = format!("key-{retained}").into_bytes();
+            let value = format!("value-{retained}").into_bytes();
+            assert_eq!(
+                reopened.get(&key),
+                Some(value),
+                "checkpoint + wal replay should retain committed keys",
+            );
+        }
+    }
+
+    #[test]
+    fn wal_gc_noops_without_pending_window() {
+        let temp_dir = TempDir::new().expect("create wal gc noop dir");
+        let data_dir = temp_dir.path().join("kv");
+
+        let mut kv = FirewoodKv::open(&data_dir).expect("open kv for noop gc");
+        kv.put(b"only".to_vec(), b"value".to_vec());
+        kv.commit().expect("commit single entry");
+
+        let pre_gc_len = kv
+            .wal
+            .replay_from(0)
+            .expect("replay wal before noop gc")
+            .len();
+        kv.gc_wal().expect("noop gc call should succeed");
+        let post_gc_len = kv
+            .wal
+            .replay_from(0)
+            .expect("replay wal after noop gc")
+            .len();
+
+        assert_eq!(
+            pre_gc_len, post_gc_len,
+            "noop gc must not truncate within retention window",
+        );
+        assert_eq!(kv.pending_wal_gc, None, "noop gc should not enqueue pending work");
     }
 }
