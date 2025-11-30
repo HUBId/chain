@@ -156,6 +156,8 @@ pub struct RuntimeMetrics {
     chain_block_height: Histogram<u64>,
     backlog_block_queue: Histogram<u64>,
     backlog_transaction_queue: Histogram<u64>,
+    mempool_metadata_rehydrated: Counter<u64>,
+    mempool_metadata_orphans: Counter<u64>,
     network_peer_counts: Histogram<u64>,
     reputation_penalties: Counter<u64>,
     state_sync_stream_starts: Counter<u64>,
@@ -499,6 +501,20 @@ impl RuntimeMetrics {
             backlog_transaction_queue: meter
                 .u64_histogram("rpp.runtime.backlog.transactions")
                 .with_description("Queued transactions awaiting block inclusion")
+                .with_unit("1")
+                .build(),
+            mempool_metadata_rehydrated: meter
+                .u64_counter("rpp.runtime.mempool.metadata.rehydrated")
+                .with_description(
+                    "Total mempool entries whose metadata was reconstructed after pruning",
+                )
+                .with_unit("1")
+                .build(),
+            mempool_metadata_orphans: meter
+                .u64_counter("rpp.runtime.mempool.metadata.orphans")
+                .with_description(
+                    "Total orphaned mempool metadata records removed after pruning",
+                )
                 .with_unit("1")
                 .build(),
             network_peer_counts: meter
@@ -1106,6 +1122,16 @@ impl RuntimeMetrics {
         self.backlog_block_queue.record(block_backlog as u64, &[]);
         self.backlog_transaction_queue
             .record(transaction_backlog as u64, &[]);
+    }
+
+    /// Record metadata reconciliation for mempool entries during pruning cycles.
+    pub fn record_mempool_metadata_reconciliation(&self, rehydrated: usize, orphaned: usize) {
+        if rehydrated > 0 {
+            self.mempool_metadata_rehydrated.add(rehydrated as u64, &[]);
+        }
+        if orphaned > 0 {
+            self.mempool_metadata_orphans.add(orphaned as u64, &[]);
+        }
     }
 
     /// Record the latest observed peer count on the networking layer.
