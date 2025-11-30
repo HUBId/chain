@@ -122,7 +122,23 @@ raise incidents when three consecutive scheduled runs fail.
    Keep the outputs with the pruning receipts to document which prover stack
    validated the wallet index for the snapshot.
 
-## 5. Benchmark pruning throughput
+## 5. Post-pruning recovery
+
+1. **Return to baseline block production.** Within five minutes of a successful pruning cycle the
+   block production ratio should climb back above the scheduled slot budget (>=0.9). The
+   `PruningRecoveryBlockRate` alert fires when production stays depressed after a recent pruning
+   run; review pruning pacing decisions, mempool backlog samples, and the cycle logs before
+   resuming heavy ingestion.
+2. **Finality clears backlog quickly.** Finality lag and finalized height gaps should drop under
+   their warning budgets (12 slots / 4 blocks) within three minutes of pruning completion.
+   `PruningRecoveryFinality` fires when lag persists after a pruning run; check the uptime/finality
+   dashboards and peer catch-up status before scheduling the next pruning window.
+3. **Archive incident artifacts.** When either alert fires in CI or staging, save the pruning status
+   payload, the block production/finality panels around the cycle boundary, and the alert webhook
+   payload produced by the alert-validation harness so regressions can be compared against the
+   baseline.
+
+## 6. Benchmark pruning throughput
 
 1. **Scheduled CI coverage.** The performance workflow now runs the pruning
    benchmark every day across both storage backends (standard and io-uring) and
@@ -154,7 +170,7 @@ raise incidents when three consecutive scheduled runs fail.
   stamp `snapshot_verify_alert_hooks_total` with the workflow/channel label so
   dashboards can track verification coverage per environment.【F:tools/snapshot-verify/src/main.rs†L22-L61】【F:tools/snapshot-verify/src/lib.rs†L270-L342】
 
-## 6. Failure scenarios
+## 7. Failure scenarios
 
 ### A. Repeated cycle failures
 

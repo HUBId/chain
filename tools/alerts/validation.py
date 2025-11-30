@@ -716,6 +716,102 @@ def _evaluate_restart_finality_correlation(
     return AlertComputation(starts_at=start_ts, value=peak, details=detail)
 
 
+def _evaluate_pruning_block_recovery(
+    store: MetricStore,
+    ratio_threshold: float,
+    block_window: float,
+    duration: float,
+    pruning_window: float,
+) -> Optional[AlertComputation]:
+    cycles = store.series("rpp_node_pruning_cycle_total", {"result": "success"})
+    expected_series = store.series("consensus_block_schedule_slots_total")
+    produced_series = store.series("chain_block_height")
+
+    if cycles is None or expected_series is None or produced_series is None:
+        return None
+
+    timestamps = sorted(store.all_timestamps())
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        window = min(pruning_window, timestamp)
+        recent_cycles = cycles.delta_over_window(timestamp, window)
+        if recent_cycles is None or recent_cycles <= 0.0:
+            evaluations.append((timestamp, False))
+            continue
+
+        expected_delta = expected_series.delta_over_window(timestamp, block_window)
+        produced_delta = produced_series.delta_over_window(timestamp, block_window)
+        ratio = None
+        if (
+            expected_delta is not None
+            and expected_delta > 0.0
+            and produced_delta is not None
+        ):
+            ratio = produced_delta / expected_delta
+
+        degraded = ratio is not None and ratio < ratio_threshold
+        evaluations.append((timestamp, degraded))
+        if degraded and ratio is not None:
+            observed.append((timestamp, ratio))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    worst_ratio = min((ratio for ts, ratio in observed if ts >= start_ts), default=None)
+    detail = None
+    if worst_ratio is not None:
+        detail = f"block production ratio={worst_ratio:.2f} after pruning"
+    return AlertComputation(starts_at=start_ts, value=worst_ratio, details=detail)
+
+
+def _evaluate_pruning_finality_recovery(
+    store: MetricStore,
+    lag_threshold: float,
+    gap_threshold: float,
+    duration: float,
+    pruning_window: float,
+) -> Optional[AlertComputation]:
+    cycles = store.series("rpp_node_pruning_cycle_total", {"result": "success"})
+    lag_series = store.series("finality_lag_slots")
+    gap_series = store.series("finalized_height_gap")
+
+    if cycles is None or (lag_series is None and gap_series is None):
+        return None
+
+    timestamps = sorted(store.all_timestamps())
+    evaluations: List[Tuple[float, bool]] = []
+    observed: List[Tuple[float, float]] = []
+    for timestamp in timestamps:
+        window = min(pruning_window, timestamp)
+        recent_cycles = cycles.delta_over_window(timestamp, window)
+        if recent_cycles is None or recent_cycles <= 0.0:
+            evaluations.append((timestamp, False))
+            continue
+
+        lag_value = lag_series.value_at(timestamp) if lag_series is not None else None
+        gap_value = gap_series.value_at(timestamp) if gap_series is not None else None
+        degraded = (lag_value is not None and lag_value > lag_threshold) or (
+            gap_value is not None and gap_value > gap_threshold
+        )
+        evaluations.append((timestamp, degraded))
+        if degraded:
+            for value in (lag_value, gap_value):
+                if value is not None:
+                    observed.append((timestamp, value))
+
+    fired, start_ts = _sustained(evaluations, duration)
+    if not fired or start_ts is None:
+        return None
+
+    peak = max((value for ts, value in observed if ts >= start_ts), default=None)
+    detail = None
+    if peak is not None:
+        detail = f"finality backlog={peak:.0f} after pruning"
+    return AlertComputation(starts_at=start_ts, value=peak, details=detail)
+
+
 def _evaluate_metric_correlation(
     store: MetricStore,
     primary_metric: str,
@@ -1246,6 +1342,42 @@ def default_alert_rules() -> List[AlertRule]:
                 gap_threshold=FINALITY_SLA.gap_warning_blocks,
                 restart_window=900.0,
                 duration=300.0,
+            ),
+        ),
+        AlertRule(
+            name="PruningRecoveryBlockRate",
+            severity="warning",
+            service="storage",
+            summary="Block production lagged after pruning completion",
+            description=(
+                "Block production stayed below the documented slot coverage budget after a recent pruning run."
+                " Inspect pacing decisions, mempool pressure, and recent pruning logs before resuming traffic."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/runbooks/pruning_operations.md#post-pruning-recovery",
+            evaluator=lambda store: _evaluate_pruning_block_recovery(
+                store,
+                BLOCK_PRODUCTION_SLA.warning_ratio,
+                BLOCK_PRODUCTION_SLA.window_seconds,
+                300.0,
+                900.0,
+            ),
+        ),
+        AlertRule(
+            name="PruningRecoveryFinality",
+            severity="warning",
+            service="storage",
+            summary="Finality lag persisted after pruning completion",
+            description=(
+                "Finality lag or finalized height gaps remained above the warning budget after pruning completed."
+                " Validate snapshot health, peer catch-up, and proposer rotation before scheduling new pruning windows."
+            ),
+            runbook_url="https://github.com/ava-labs/chain/blob/main/docs/runbooks/pruning_operations.md#post-pruning-recovery",
+            evaluator=lambda store: _evaluate_pruning_finality_recovery(
+                store,
+                FINALITY_SLA.lag_warning_slots,
+                FINALITY_SLA.gap_warning_blocks,
+                180.0,
+                900.0,
             ),
         ),
         AlertRule(
@@ -3070,6 +3202,78 @@ def build_block_schedule_recovery_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_pruning_recovery_regression_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    schedule_increments = [12.0] * 18
+    produced_increments = [12.0] * 5 + [6.0] * 7 + [12.0] * 6
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_node_pruning_cycle_total", {"result": "success"}, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0] + [0.0] * 12
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "consensus_block_schedule_slots_total", {}, schedule_increments
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments("chain_block_height", {}, produced_increments)
+    )
+    lag_values = [2.0] * 5 + [20.0] * 4 + [4.0] * 9
+    gap_values = [1.0] * 5 + [6.0] * 4 + [2.0] * 9
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples([(idx * 60.0, value) for idx, value in enumerate(lag_values)]),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples([(idx * 60.0, value) for idx, value in enumerate(gap_values)]),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_pruning_recovery_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    schedule_increments = [12.0] * 18
+    produced_increments = [12.0] * 5 + [12.0, 10.0, 12.0, 12.0] + [12.0] * 8
+    definitions.append(
+        _build_counter_from_increments(
+            "rpp_node_pruning_cycle_total", {"result": "success"}, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0] + [0.0] * 12
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments(
+            "consensus_block_schedule_slots_total", {}, schedule_increments
+        )
+    )
+    definitions.append(
+        _build_counter_from_increments("chain_block_height", {}, produced_increments)
+    )
+    lag_values = [2.0] * 5 + [14.0, 10.0, 6.0, 4.0] + [3.0] * 8
+    gap_values = [1.0] * 5 + [5.0, 3.0, 2.0, 2.0] + [1.0] * 8
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples([(idx * 60.0, value) for idx, value in enumerate(lag_values)]),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples([(idx * 60.0, value) for idx, value in enumerate(gap_values)]),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_rpc_outage_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
 
@@ -3675,6 +3879,16 @@ def default_validation_cases() -> List[ValidationCase]:
                 "ConsensusFinalizedHeightGapWarning",
                 "ConsensusRestartFinalityCorrelation",
             },
+        ),
+        ValidationCase(
+            name="pruning-recovery-regression",
+            store=build_pruning_recovery_regression_store(),
+            expected_alerts={"PruningRecoveryBlockRate", "PruningRecoveryFinality"},
+        ),
+        ValidationCase(
+            name="pruning-recovery-recovery",
+            store=build_pruning_recovery_recovery_store(),
+            expected_alerts=set(),
         ),
         ValidationCase(
             name="timetoke-epoch-delay",
