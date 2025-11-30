@@ -213,6 +213,13 @@ cargo run --locked --package snapshot-verify -- \
   --output dist/artifacts/x86_64-unknown-linux-gnu/snapshots/manifest/chunks-verify.json
 ```
 
+Operational pipelines can now emit alerts directly from the CLI. Pass
+`--alert-webhook <url>` (or set `SNAPSHOT_VERIFY_ALERT_WEBHOOK`) to post a JSON
+payload containing the manifest path, result (`success`/`failure`), exit code,
+and runtime duration. Add `--alert-metric-label <channel>` (or
+`SNAPSHOT_VERIFY_ALERT_METRIC`) to bump `snapshot_verify_alert_hooks_total` with
+the channel and result labels for dashboards that track verification outcomes.
+
 The tool emits a machine-readable JSON report summarising the signature check,
 per-segment results, and aggregate counters. Exit codes indicate the failure
 mode:

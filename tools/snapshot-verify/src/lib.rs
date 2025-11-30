@@ -21,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
 use thiserror::Error;
+use ureq::Response;
 
 const SNAPSHOT_VERIFY_RESULTS_METRIC: &str = "snapshot_verify_results_total";
 const SNAPSHOT_VERIFY_FAILURE_METRIC: &str = "snapshot_verify_failures_total";
+const SNAPSHOT_VERIFY_ALERT_METRIC: &str = "snapshot_verify_alert_hooks_total";
 static SNAPSHOT_METRIC_REGISTER: Once = Once::new();
 
 #[derive(Clone, Debug)]
@@ -258,7 +260,18 @@ impl ExitCode {
     }
 }
 
-pub fn record_verification_outcome(exit_code: ExitCode, manifest: &Path) {
+#[derive(Clone, Debug, Default)]
+pub struct AlertHooks<'a> {
+    pub webhook: Option<&'a str>,
+    pub metric_label: Option<&'a str>,
+    pub duration_ms: Option<u64>,
+}
+
+pub fn record_verification_outcome(
+    exit_code: ExitCode,
+    manifest: &Path,
+    alert_hooks: AlertHooks<'_>,
+) {
     SNAPSHOT_METRIC_REGISTER.call_once(|| {
         metrics::describe_counter!(
             SNAPSHOT_VERIFY_RESULTS_METRIC,
@@ -268,15 +281,14 @@ pub fn record_verification_outcome(exit_code: ExitCode, manifest: &Path) {
             SNAPSHOT_VERIFY_FAILURE_METRIC,
             "Total number of snapshot verification failures observed while packaging release snapshots",
         );
+        metrics::describe_counter!(
+            SNAPSHOT_VERIFY_ALERT_METRIC,
+            "Total alert hooks emitted by the snapshot verifier grouped by channel and result",
+        );
     });
 
     let manifest_label = manifest.display().to_string();
-    let (result_label, error_label) = match exit_code {
-        ExitCode::Success => ("success", "none"),
-        ExitCode::SignatureInvalid => ("failure", "signature_invalid"),
-        ExitCode::ChunkMismatch => ("failure", "chunk_mismatch"),
-        ExitCode::Fatal => ("failure", "fatal"),
-    };
+    let (result_label, error_label) = alert_labels(exit_code);
 
     counter!(
         SNAPSHOT_VERIFY_RESULTS_METRIC,
@@ -289,11 +301,79 @@ pub fn record_verification_outcome(exit_code: ExitCode, manifest: &Path) {
     if result_label == "failure" {
         counter!(
             SNAPSHOT_VERIFY_FAILURE_METRIC,
-            "manifest" => manifest_label,
+            "manifest" => manifest_label.clone(),
             "exit_code" => error_label,
         )
         .increment(1);
     }
+
+    if let Some(channel) = alert_hooks.metric_label {
+        counter!(
+            SNAPSHOT_VERIFY_ALERT_METRIC,
+            "manifest" => manifest_label.clone(),
+            "channel" => channel.to_string(),
+            "result" => result_label,
+        )
+        .increment(1);
+    }
+
+    if let Some(webhook) = alert_hooks.webhook {
+        if let Err(err) = send_alert_webhook(
+            webhook,
+            &manifest_label,
+            result_label,
+            error_label,
+            exit_code.code(),
+            alert_hooks.duration_ms,
+        ) {
+            eprintln!("warning: failed to deliver alert webhook: {err}");
+        }
+    }
+}
+
+fn alert_labels(exit_code: ExitCode) -> (&'static str, &'static str) {
+    match exit_code {
+        ExitCode::Success => ("success", "none"),
+        ExitCode::SignatureInvalid => ("failure", "signature_invalid"),
+        ExitCode::ChunkMismatch => ("failure", "chunk_mismatch"),
+        ExitCode::Fatal => ("failure", "fatal"),
+    }
+}
+
+fn send_alert_webhook(
+    url: &str,
+    manifest: &str,
+    result: &str,
+    error: &str,
+    exit_code: i32,
+    duration_ms: Option<u64>,
+) -> Result<(), String> {
+    let payload = json!({
+        "manifest": manifest,
+        "result": result,
+        "error": error,
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+    });
+
+    let response = ureq::post(url)
+        .timeout(Duration::from_millis(5_000))
+        .send_json(payload)
+        .map_err(|err| err.to_string())?;
+
+    validate_webhook_response(response)
+}
+
+fn validate_webhook_response(response: Response) -> Result<(), String> {
+    if !(200..300).contains(&response.status()) {
+        return Err(format!(
+            "webhook responded with {} {}",
+            response.status(),
+            response.status_text()
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn run_verification(args: &VerifyArgs, report: &mut VerificationReport) -> Execution {
@@ -795,15 +875,17 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use ed25519_dalek::{Signer, SigningKey};
+    use httptest::{matchers::*, responders::*, Expectation, Server};
     use metrics_exporter_prometheus::PrometheusBuilder;
     use serde_json::{json, Value};
     use std::convert::TryFrom;
     use std::error::Error;
     use std::io::Cursor;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
 
     static PROMETHEUS: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+    static METRIC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn prometheus_handle() -> &'static metrics_exporter_prometheus::PrometheusHandle {
         PROMETHEUS.get_or_init(|| {
@@ -811,6 +893,13 @@ mod tests {
                 .install_recorder()
                 .expect("install prometheus recorder")
         })
+    }
+
+    fn metrics_guard() -> std::sync::MutexGuard<'static, ()> {
+        match METRIC_LOCK.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     fn deterministic_signing_key(seed: u8) -> SigningKey {
@@ -1108,7 +1197,7 @@ mod tests {
         }
     }
 
-    fn counter_value(metrics: &str, name: &str, key: &str, value: &str) -> f64 {
+    fn counter_value(metrics: &str, name: &str, labels: &[(&str, &str)]) -> f64 {
         metrics
             .lines()
             .find_map(|line| {
@@ -1116,8 +1205,10 @@ mod tests {
                     return None;
                 }
 
-                let matcher = format!("{key}=\"{value}\"");
-                if !line.contains(&matcher) {
+                let matches_all = labels
+                    .iter()
+                    .all(|(key, value)| line.contains(&format!("{key}=\"{value}\"")));
+                if !matches_all {
                     return None;
                 }
 
@@ -1137,6 +1228,7 @@ mod tests {
 
     #[test]
     fn tampered_signature_increments_failure_metrics() {
+        let _guard = metrics_guard();
         let handle = prometheus_handle();
         let baseline = handle.render();
 
@@ -1172,51 +1264,56 @@ mod tests {
         let mut success_report = VerificationReport::new(&args);
         let success_code = execution_exit_code(run_verification(&args, &mut success_report));
         assert_eq!(success_code, ExitCode::Success);
-        record_verification_outcome(success_code, &manifest_path);
+        record_verification_outcome(success_code, &manifest_path, AlertHooks::default());
 
         let tampered_signature = deterministic_signing_key(7).sign(&manifest_bytes);
         fs::write(&signature_path, hex::encode(tampered_signature.to_bytes())).unwrap();
 
+        let manifest_label = manifest_path.display().to_string();
         for _ in 0..2 {
             let mut report = VerificationReport::new(&args);
             let exit_code = execution_exit_code(run_verification(&args, &mut report));
             assert_eq!(exit_code, ExitCode::SignatureInvalid);
-            record_verification_outcome(exit_code, &manifest_path);
+            record_verification_outcome(exit_code, &manifest_path, AlertHooks::default());
         }
 
         let metrics = handle.render();
         let success_delta = counter_value(
             &metrics,
             SNAPSHOT_VERIFY_RESULTS_METRIC,
-            "result",
-            "success",
+            &[("manifest", &manifest_label), ("result", "success")],
         ) - counter_value(
             &baseline,
             SNAPSHOT_VERIFY_RESULTS_METRIC,
-            "result",
-            "success",
+            &[("manifest", &manifest_label), ("result", "success")],
         );
         let failure_delta = counter_value(
             &metrics,
             SNAPSHOT_VERIFY_RESULTS_METRIC,
-            "result",
-            "failure",
+            &[("manifest", &manifest_label), ("result", "failure")],
         ) - counter_value(
             &baseline,
             SNAPSHOT_VERIFY_RESULTS_METRIC,
-            "result",
-            "failure",
+            &[("manifest", &manifest_label), ("result", "failure")],
         );
         let signature_delta = counter_value(
             &metrics,
             SNAPSHOT_VERIFY_FAILURE_METRIC,
-            "exit_code",
-            "signature_invalid",
+            &[
+                ("manifest", &manifest_label),
+                ("exit_code", "signature_invalid"),
+            ],
         ) - counter_value(
             &baseline,
             SNAPSHOT_VERIFY_FAILURE_METRIC,
-            "exit_code",
-            "signature_invalid",
+            &[
+                ("manifest", &manifest_label),
+                ("exit_code", "signature_invalid"),
+            ],
+        );
+
+        println!(
+            "success_delta={success_delta} failure_delta={failure_delta} signature_delta={signature_delta}"
         );
 
         assert!(success_delta >= 1.0, "success outcomes should be counted");
@@ -1240,6 +1337,90 @@ mod tests {
             failure_rate > 0.5,
             "tampered signatures should push the failure ratio above alert thresholds"
         );
+    }
+
+    #[test]
+    fn alert_metric_tracks_result_channel() {
+        let _guard = metrics_guard();
+        let handle = prometheus_handle();
+        let baseline = handle.render();
+
+        let manifest_path = PathBuf::from("/tmp/alert-channel.json");
+        let manifest_label = manifest_path.display().to_string();
+        record_verification_outcome(
+            ExitCode::Success,
+            &manifest_path,
+            AlertHooks {
+                webhook: None,
+                metric_label: Some("ci"),
+                duration_ms: None,
+            },
+        );
+
+        let metrics = handle.render();
+        let delta = counter_value(
+            &metrics,
+            SNAPSHOT_VERIFY_ALERT_METRIC,
+            &[
+                ("manifest", &manifest_label),
+                ("channel", "ci"),
+                ("result", "success"),
+            ],
+        ) - counter_value(
+            &baseline,
+            SNAPSHOT_VERIFY_ALERT_METRIC,
+            &[
+                ("manifest", &manifest_label),
+                ("channel", "ci"),
+                ("result", "success"),
+            ],
+        );
+
+        assert!(
+            delta >= 1.0,
+            "alert metric should increment for channel label"
+        );
+        assert!(
+            metrics.contains("result=\"success\""),
+            "alert counter should retain result label"
+        );
+    }
+
+    #[test]
+    fn webhook_carries_outcome_payload() {
+        let _guard = metrics_guard();
+        let mut server = Server::run();
+        let manifest_path = PathBuf::from("/tmp/chunks.json");
+        let expected_payload = json!({
+            "manifest": manifest_path.display().to_string(),
+            "result": "failure",
+            "error": "chunk_mismatch",
+            "exit_code": ExitCode::ChunkMismatch.code(),
+            "duration_ms": 42u64,
+        });
+
+        let webhook_url = server.url("/alert").to_string();
+
+        server.expect(
+            Expectation::matching(all_of![
+                request::method_path("POST", "/alert"),
+                request::headers(contains(key("content-type"))),
+                request::body(json_decoded(eq(expected_payload.clone()))),
+            ])
+            .respond_with(status_code(200)),
+        );
+
+        record_verification_outcome(
+            ExitCode::ChunkMismatch,
+            &manifest_path,
+            AlertHooks {
+                webhook: Some(&webhook_url),
+                metric_label: None,
+                duration_ms: Some(42),
+            },
+        );
+
+        server.verify_and_clear();
     }
 
     #[test]
