@@ -391,6 +391,18 @@ metrics:
       - shard
       - partition
       - reason
+  - name: rpp.node.pruning.mempool_backlog
+    labels:
+      - shard
+      - partition
+      - reason
+      - phase
+  - name: rpp.node.pruning.mempool_latency_ms
+    labels:
+      - shard
+      - partition
+      - reason
+      - phase
   - name: rpp.node.snapshot_validator.scan_events_total
     labels:
       - phase

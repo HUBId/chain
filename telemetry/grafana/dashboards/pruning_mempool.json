@@ -1,0 +1,108 @@
+{
+  "title": "Pruning vs Mempool",
+  "description": "Correlates pruning cycle boundaries with mempool backlog depth and oldest transaction age.",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Mempool backlog at pruning start/stop",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "rpp_node_pruning_mempool_backlog{phase=\"start\"}",
+          "legendFormat": "start ({{reason}})",
+          "refId": "A"
+        },
+        {
+          "expr": "rpp_node_pruning_mempool_backlog{phase=\"stop\"}",
+          "legendFormat": "stop ({{reason}})",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 2048},
+              {"color": "red", "value": 4096}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"calcs": ["last"], "displayMode": "list", "placement": "right"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Oldest transaction age (ms)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "rpp_node_pruning_mempool_latency_ms{phase=\"start\"}",
+          "legendFormat": "start ({{reason}})",
+          "refId": "A"
+        },
+        {
+          "expr": "rpp_node_pruning_mempool_latency_ms{phase=\"stop\"}",
+          "legendFormat": "stop ({{reason}})",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 2000},
+              {"color": "red", "value": 5000}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"calcs": ["last"], "displayMode": "list", "placement": "right"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Pruning cycle markers (5m)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (phase) (rate(rpp_node_pruning_window_events_total[5m]))",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": ""},
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "blue", "value": 0.1}]},
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

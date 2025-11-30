@@ -386,6 +386,7 @@ struct PendingTransactionMetadata {
     proof_payload: Option<ProofPayload>,
     #[cfg(feature = "backend-rpp-stark")]
     public_inputs_digest: Option<String>,
+    enqueued_at: Instant,
 }
 
 impl PendingTransactionMetadata {
@@ -413,6 +414,7 @@ impl PendingTransactionMetadata {
             proof_payload,
             #[cfg(feature = "backend-rpp-stark")]
             public_inputs_digest,
+            enqueued_at: Instant::now(),
         }
     }
 
@@ -4758,6 +4760,10 @@ impl NodeHandle {
         self.inner.mempool_limit()
     }
 
+    pub fn mempool_latency_ms(&self) -> ChainResult<Option<u128>> {
+        self.inner.mempool_latency_ms()
+    }
+
     pub fn queue_weights(&self) -> QueueWeightsConfig {
         self.inner.queue_weights()
     }
@@ -5436,6 +5442,14 @@ impl NodeInner {
         }
         self.mempool_limit.store(limit, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn mempool_latency_ms(&self) -> ChainResult<Option<u128>> {
+        let metadata = self.pending_transaction_metadata.read();
+        Ok(metadata
+            .values()
+            .map(|entry| entry.enqueued_at.elapsed().as_millis())
+            .max())
     }
 
     fn queue_weights(&self) -> QueueWeightsConfig {
