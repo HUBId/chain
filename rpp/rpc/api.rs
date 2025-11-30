@@ -1262,6 +1262,7 @@ struct ValidatorTelemetryResponse {
 struct ValidatorPeerResponse {
     local_peer_id: String,
     peer_count: usize,
+    block_height: u64,
     peers: Vec<NetworkPeerTelemetry>,
 }
 
@@ -3512,6 +3513,7 @@ async fn validator_peers(
     Ok(Json(ValidatorPeerResponse {
         local_peer_id: snapshot.local_peer_id,
         peer_count: snapshot.peer_count,
+        block_height: snapshot.block_height,
         peers: snapshot.peers,
     }))
 }

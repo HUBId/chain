@@ -183,6 +183,7 @@ impl TryFrom<NetworkFeatureAnnouncement> for FeatureAnnouncement {
 pub struct MetaTelemetryReport {
     pub local_peer_id: PeerId,
     pub peer_count: usize,
+    pub block_height: u64,
     pub peers: Vec<PeerTelemetry>,
 }
 
@@ -280,6 +281,7 @@ impl From<&MetaTelemetryReport> for NetworkMetaTelemetryReport {
         Self {
             local_peer_id: report.local_peer_id.to_base58(),
             peer_count: report.peer_count,
+            block_height: report.block_height,
             peers: report
                 .peers
                 .iter()
@@ -297,6 +299,7 @@ impl TryFrom<NetworkMetaTelemetryReport> for MetaTelemetryReport {
             .local_peer_id
             .parse()
             .map_err(|err| format!("invalid peer id: {err}"))?;
+        let block_height = report.block_height;
         let peers = report
             .peers
             .into_iter()
@@ -305,6 +308,7 @@ impl TryFrom<NetworkMetaTelemetryReport> for MetaTelemetryReport {
         Ok(Self {
             local_peer_id,
             peer_count: report.peer_count,
+            block_height,
             peers,
         })
     }
@@ -1330,7 +1334,8 @@ impl NodeInner {
             }
             NodeCommand::MetaTelemetrySnapshot { response } => {
                 let peer_count = self.connected_peers.len();
-                let report = self.build_meta_report(peer_count);
+                let block_height = self.metrics.read().block_height;
+                let report = self.build_meta_report(peer_count, block_height);
                 let _ = response.send(Ok(report));
                 Ok(false)
             }
@@ -1807,6 +1812,14 @@ impl NodeInner {
                                             .get(&remote)
                                             .cloned()
                                             .unwrap_or_else(|| remote.to_base58());
+                                        let local_height = self.metrics.read().block_height;
+                                        let lag = local_height.saturating_sub(report.block_height);
+                                        if lag > 0 {
+                                            self.runtime_metrics.record_validator_height_lag(
+                                                &remote.to_base58(),
+                                                lag,
+                                            );
+                                        }
                                         if let Some(entry) = report.peers.iter().find(|telemetry| {
                                             telemetry.peer == self.identity.peer_id()
                                         }) {
@@ -2288,7 +2301,7 @@ impl NodeInner {
         };
         let _ = self.events.send(NodeEvent::Heartbeat(heartbeat));
 
-        let meta = self.build_meta_report(peer_count);
+        let meta = self.build_meta_report(peer_count, metrics.block_height);
         let _ = self.events.send(NodeEvent::MetaTelemetry(meta.clone()));
 
         if self.gossip_enabled {
@@ -2314,7 +2327,7 @@ impl NodeInner {
         }
     }
 
-    fn build_meta_report(&self, peer_count: usize) -> MetaTelemetryReport {
+    fn build_meta_report(&self, peer_count: usize, block_height: u64) -> MetaTelemetryReport {
         let mut peers = Vec::new();
         for peer in &self.connected_peers {
             if let Some(event) = self.meta_telemetry.latest(peer) {
@@ -2337,6 +2350,7 @@ impl NodeInner {
         MetaTelemetryReport {
             local_peer_id: self.identity.peer_id(),
             peer_count,
+            block_height,
             peers,
         }
     }
@@ -2733,6 +2747,7 @@ mod tests {
         let report = MetaTelemetryReport {
             local_peer_id: peer_a,
             peer_count: 1,
+            block_height: 42,
             peers: vec![PeerTelemetry {
                 peer: peer_b,
                 version: "v1.2.3".into(),
@@ -2746,10 +2761,12 @@ mod tests {
         let network = NetworkMetaTelemetryReport::from(&report);
         assert_eq!(network.peers[0].features, features);
         assert_eq!(network.peers[0].proof_backends, proof_backends);
+        assert_eq!(network.block_height, 42);
 
         let roundtrip = MetaTelemetryReport::try_from(network).expect("roundtrip");
         assert_eq!(roundtrip.peers[0].features, features);
         assert_eq!(roundtrip.peers[0].proof_backends, proof_backends);
+        assert_eq!(roundtrip.block_height, 42);
     }
 
     #[tokio::test(flavor = "current_thread")]

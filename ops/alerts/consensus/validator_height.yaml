@@ -1,0 +1,44 @@
+groups:
+  - name: consensus-validator-height
+    interval: 30s
+    rules:
+      - alert: ConsensusValidatorHeightLagWarning
+        expr: |
+          histogram_quantile(
+            0.9,
+            sum(rate(rpp_runtime_consensus_validator_height_lag_bucket[5m])) by (le, validator, environment)
+          ) > 8
+        for: 10m
+        labels:
+          severity: warning
+          team: consensus
+          sla: liveness
+          sla_target: max_validator_height_lag_blocks
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator height lag breached the 8-block budget
+          description: >-
+            At least one validator trails the local node by more than eight blocks
+            for ten minutes. Probe the lagging validator's gossip connectivity and
+            proposer schedule before the gap widens.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#validator-height-lag
+      - alert: ConsensusValidatorHeightLagCritical
+        expr: |
+          histogram_quantile(
+            0.9,
+            sum(rate(rpp_runtime_consensus_validator_height_lag_bucket[5m])) by (le, validator, environment)
+          ) > 16
+        for: 5m
+        labels:
+          severity: critical
+          team: consensus
+          sla: liveness
+          sla_target: max_validator_height_lag_blocks
+          environment: "{{ $labels.environment }}"
+        annotations:
+          summary: Validator height lag exceeded the 16-block ceiling
+          description: >-
+            Validators remain more than sixteen blocks behind the local head for
+            five minutes. Page the on-call, isolate the slow validator, and
+            backfill proofs once it rejoins the cluster.
+          runbook_url: https://github.com/ava-labs/chain/blob/main/docs/consensus.md#validator-height-lag

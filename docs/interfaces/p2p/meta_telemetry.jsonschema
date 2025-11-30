@@ -3,7 +3,7 @@
   "$id": "https://schemas.rpp.dev/p2p/meta_telemetry.json",
   "title": "MetaTelemetryReport",
   "type": "object",
-  "required": ["local_peer_id", "peer_count", "peers"],
+  "required": ["local_peer_id", "peer_count", "block_height", "peers"],
   "properties": {
     "local_peer_id": {
       "type": "string",
@@ -13,6 +13,11 @@
       "type": "integer",
       "minimum": 0,
       "description": "Number of peers currently connected to the reporting node."
+    },
+    "block_height": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Current block height reported by the node emitting telemetry."
     },
     "peers": {
       "type": "array",
@@ -38,6 +43,16 @@
             "type": "integer",
             "minimum": 0,
             "description": "UNIX timestamp in milliseconds when the observation was recorded."
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {"type": "boolean"},
+            "description": "Feature flags advertised by the observed peer."
+          },
+          "proof_backends": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Proof backends reported by the observed peer."
           }
         },
         "additionalProperties": false
