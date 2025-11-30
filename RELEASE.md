@@ -69,6 +69,16 @@ well as the dedicated runtime entry points (`node`, `wallet`, `hybrid`, and
 `validator`). SBOMs, SHA256 manifests, cosign signatures, and provenance
 attestations are published alongside the release assets.
 
+Prover dependency guardrails run near the top of the workflow: CI recomputes the
+hashes for the STWO vendor archive (`prover/prover_stwo_backend/stwo-dev.zip`)
+plus every staged file under `vendor/stwo-dev/0.1.1/manifest/final_file_list.txt`
+and cross-checks the Plonky3 offline mirror against
+`third_party/plonky3/manifest/checksums.json`. Any drift fails the release
+immediately. If those manifests changed relative to the previous SemVer tag, the
+workflow also halts until a maintainer provides the `prover_dep_reviewer`
+acknowledgement in the dispatch inputs so vendor refreshes get explicit review
+coverage.【F:scripts/ci/validate_prover_deps.py†L9-L123】【F:.github/workflows/release.yml†L18-L79】
+
 Before the platform builds begin, the release workflow now runs the
 uptime/timetoke alert probes (`python -m pytest tools/alerts/tests` and
 `python tools/alerts/validate_alerts.py`) and uploads the JSON results under the
