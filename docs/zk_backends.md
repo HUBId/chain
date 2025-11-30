@@ -44,6 +44,26 @@
   sichtbar werden. Hinterlegte Dashboards sollten dieselben Artefakte
   referenzieren, wenn GPU-Kapazität in Clustern bereitgestellt wird.
 
+## Warmup-Dauer und Kaltstarts
+
+- Wallet-Prover messen seit dem Start die Warmup-Dauer pro Backend: das Laden
+  der Circuit-Artefakte (Stage `stage="circuit_load"`) und den ersten
+  Keygen-Lauf (`stage="keygen"`). Die Histogramme liegen unter
+  `wallet.prover.warmup_ms{backend,stage}`, Alerts zählen unter
+  `wallet.prover.warmup.alerts{backend,stage}`. Schwellen: ≥5 s für Circuit-Load
+  und ≥30 s für Keygen triggern einen Alert sowie einen Warn-Logeintrag mit
+  Dauer/Threshold.【F:rpp/wallet/src/engine/signing/prover.rs†L41-L47】【F:rpp/wallet/src/engine/signing/prover.rs†L86-L117】
+- Kaltstarts (z. B. frische Container oder Nodes ohne Cache) sollten die
+  Warmup-Histogramme kurzzeitig füllen, aber keine wiederholten Alerts auslösen.
+  Wenn `wallet.prover.warmup.alerts` kontinuierlich wächst, Backend-Logs auf
+  Hardware-Engpässe (GPU disabled, IO-Limits) prüfen und ggf. die Warmup-Phase
+  durch Preloading-Skripte oder längere Liveness-Grace-Periods abfedern.
+- Für zweistufige Setups mit Fallback-Prover (Primary STWO, Secondary Mock)
+  erscheinen beide Backends im Warmup-Monitoring. Alerts auf dem Fallback
+  deuten meist auf CPU-Drossel oder fehlende Ressourcen im Primary hin; die
+  Warnung wird zusammen mit `primary`/`fallback` im Prover-Log ausgegeben und
+  sollte in der On-Call-Doku verlinkt werden.
+
 ## rpp-stark (stable)
 
 ### Aktivierung
