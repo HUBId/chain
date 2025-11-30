@@ -147,6 +147,7 @@ pub struct RuntimeMetrics {
     consensus_proposer_observed_share: Histogram<f64>,
     consensus_proposer_share_deviation: ObservableGauge<f64>,
     proposer_deviation_values: Arc<Mutex<BTreeMap<ProposerGaugeKey, f64>>>,
+    validator_height_lag: Histogram<u64>,
     validator_set_changes: Counter<u64>,
     validator_set_change_height: Histogram<u64>,
     validator_set_quorum_delay: Histogram<f64>,
@@ -452,6 +453,11 @@ impl RuntimeMetrics {
                 .build(),
             consensus_proposer_share_deviation,
             proposer_deviation_values,
+            validator_height_lag: meter
+                .u64_histogram("rpp.runtime.consensus.validator_height_lag")
+                .with_description("Block height lag between the local node and remote validators")
+                .with_unit("1")
+                .build(),
             validator_set_changes: meter
                 .u64_counter("validator_set_changes_total")
                 .with_description("Count of validator set/epoch transitions observed locally")
@@ -1115,6 +1121,16 @@ impl RuntimeMetrics {
     /// Record the latest observed block height.
     pub fn record_block_height(&self, height: u64) {
         self.chain_block_height.record(height, &[]);
+    }
+
+    /// Record the observed block height lag for a remote validator.
+    pub fn record_validator_height_lag(&self, validator: &str, lag: u64) {
+        if lag == 0 {
+            return;
+        }
+
+        self.validator_height_lag
+            .record(lag, &[KeyValue::new("validator", validator.to_string())]);
     }
 
     /// Record queued block proposals and transactions waiting to be included in blocks.

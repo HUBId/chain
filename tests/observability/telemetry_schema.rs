@@ -89,6 +89,7 @@ fn telemetry_metrics_match_allowlist() -> Result<()> {
     metrics.record_consensus_slashing_event("equivocation");
     metrics.record_consensus_failed_vote("timeout");
     metrics.record_block_height(128);
+    metrics.record_validator_height_lag("validator-1", 3);
     metrics.record_peer_count(21);
     metrics.record_reputation_penalty("gossip_spam");
 

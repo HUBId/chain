@@ -2163,6 +2163,7 @@ pub struct NetworkPeerTelemetry {
 pub struct NetworkMetaTelemetryReport {
     pub local_peer_id: String,
     pub peer_count: usize,
+    pub block_height: u64,
     pub peers: Vec<NetworkPeerTelemetry>,
 }
 

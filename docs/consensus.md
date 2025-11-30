@@ -42,6 +42,38 @@ would otherwise stall pipeline consumers.【F:ops/alerts/consensus/finality.yaml
 When they fire, correlate the panel with `finality_lag_slots` and prepare to
 execute the failover checklist.
 
+## Validator height lag signals {#validator-height-lag}
+
+### Metric primer
+
+* `rpp.runtime.consensus.validator_height_lag{validator=*}` samples the block
+  height difference between the local node and each remote validator that
+  advertises telemetry. Spikes indicate a validator is stuck rebuilding state or
+  gossiping too slowly to stay within a few blocks of the cluster tip.【F:rpp/runtime/node_runtime/node.rs†L1788-L1819】【F:rpp/runtime/telemetry/metrics.rs†L149-L181】
+
+### Alert expectations
+
+* **Warning (`ConsensusValidatorHeightLagWarning`):** pages when the 90th
+  percentile lag across validators stays above eight blocks for ten minutes.
+* **Critical (`ConsensusValidatorHeightLagCritical`):** escalates if the lag
+  remains above sixteen blocks for five minutes.
+
+Both alerts live in `ops/alerts/consensus/validator_height.yaml` and aggregate
+per-validator histograms with a `histogram_quantile` projection to smooth
+transient spikes.【F:ops/alerts/consensus/validator_height.yaml†L1-L34】 Use the
+`validator` label to spot which peer is stuck.
+
+### Remediation checklist
+
+1. Verify connectivity. Inspect peer counts and gossip queues on the lagging
+   validator; restart its libp2p runtime if pings or witness gossip are dropping.
+2. Check proposer duty. If the validator missed recent proposer slots, rebalance
+   traffic away from it and confirm its proof cache and ledger are healthy before
+   re-enabling block production.
+3. Resync if needed. Trigger state sync or fast-forward pruning on the lagging
+   node to close the height gap, then monitor the metric until it falls below
+   the warning threshold for two full evaluation windows.
+
 ### Example dashboards
 
 Embed the metrics in two Grafana rows so operators can jump from alerts to a

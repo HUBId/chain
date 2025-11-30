@@ -41,6 +41,9 @@ metrics:
   - name: rpp.runtime.consensus.slashing.events
     labels:
       - reason
+  - name: rpp.runtime.consensus.validator_height_lag
+    labels:
+      - validator
   - name: rpp.runtime.consensus.witness.events
     labels:
       - topic

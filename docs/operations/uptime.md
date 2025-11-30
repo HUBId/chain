@@ -38,6 +38,11 @@ run to confirm alerts fire and then clear:
   in `ConsensusFinalityLag*` and `ConsensusFinalizedHeightGap*` fire once the lag
   exceeds 12/24 slots or the gap grows past 4/8 blocks for the configured
   windows.【F:tools/alerts/validation.py†L680-L726】【F:tools/alerts/validation.py†L1342-L1375】
+- **Validator height lag** – synthetic peer snapshots drive the
+  `rpp.runtime.consensus.validator_height_lag` histogram above 8/16 blocks so
+  `ConsensusValidatorHeightLag*` pages catch nodes that fall behind while the
+  rest of the cluster advances.【F:ops/alerts/consensus/validator_height.yaml†L1-L34】 Pair the probe with gossip RTT
+  checks to distinguish isolation from slow block application.
 - **Liveness stall** – triggers `ConsensusLivenessStall` when block height
   remains flat for ten minutes, mirroring the soak’s induced pause and ensuring
   the alert clears when block production resumes.【F:tools/alerts/validation.py†L728-L737】【F:tools/alerts/validation.py†L1137-L1203】

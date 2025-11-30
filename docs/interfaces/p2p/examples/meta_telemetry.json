@@ -1,12 +1,18 @@
 {
-  "local_peer_id": "12D3KooWExampleLocalPeerid1111111111111111111111111",
-  "peer_count": 1,
+  "local_peer_id": "12D3KooWP5hbu9eybYd4jdA5fCF1JiHD6tWmVctCd5y5N5pMTeq6",
+  "peer_count": 2,
+  "block_height": 1024,
   "peers": [
     {
-      "peer": "12D3KooXExampleRemotePeerid2222222222222222222222222",
-      "version": "rpp-node/1.2.3",
-      "latency_ms": 42,
-      "last_seen": 1715443200000
+      "peer": "12D3KooWQdruQyXK7d9u67br5MTQnaoDEEnjXeqpMXCozfsPQJdH",
+      "version": "validator/2.1.0",
+      "latency_ms": 7,
+      "last_seen": 1700000000123,
+      "features": {
+        "pruning": true,
+        "witness_network": false
+      },
+      "proof_backends": ["plonky3", "stwo"]
     }
   ]
 }
