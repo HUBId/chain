@@ -1,0 +1,34 @@
+{
+  "name": "prover-acceleration-mix",
+  "description": "Run CPU-only and GPU-accelerated prover paths, recording latency and queue health",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "resources": {
+    "cpus": 8,
+    "memory_gb": 16
+  },
+  "nodes": [
+    {
+      "label": "plonky3-acceleration-regression",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--quiet",
+        "-p",
+        "rpp-proofs",
+        "--test",
+        "plonky3",
+        "--",
+        "--nocapture",
+        "cpu_gpu_proving_interop_emits_metrics_and_respects_fallbacks"
+      ],
+      "startup_timeout_ms": 240000,
+      "working_dir": "../.."
+    }
+  ],
+  "wallets": [],
+  "p2p": null,
+  "consensus": null
+}

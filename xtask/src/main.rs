@@ -765,6 +765,11 @@ fn simnet_presets() -> &'static [SimnetPreset] {
             description: "Validate mixed prover/verifier backends across consensus, mempool, and finality",
         },
         SimnetPreset {
+            slug: "prover-acceleration-mix",
+            scenario_path: "tools/simnet/scenarios/prover_acceleration_mix.ron",
+            description: "Exercise CPU-only and GPU-accelerated proving paths with fallback metrics",
+        },
+        SimnetPreset {
             slug: "partition",
             scenario_path: "tools/simnet/scenarios/snapshot_partition.ron",
             description: "Partition validators while exercising snapshot recovery",
