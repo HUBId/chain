@@ -5,6 +5,18 @@ use rpp_identity_tree::IdentityTreeError;
 use storage_firewood::kv::KvError;
 use thiserror::Error;
 
+use crate::rpp::ProofSystemKind;
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum ProofSizeGateError {
+    #[error("parameter limit mismatch: params={params_kib} KiB, node={expected_kib} KiB")]
+    LimitMismatch { params_kib: u32, expected_kib: u32 },
+    #[error("parameter limit overflow: max {max_kib} KiB cannot be mapped to bytes")]
+    LimitOverflow { max_kib: u32 },
+    #[error("proof too large: limit {max_kib} KiB, got {got_kib} KiB")]
+    ProofTooLarge { max_kib: u32, got_kib: u32 },
+}
+
 #[derive(Debug, Error)]
 pub enum ChainError {
     #[error("storage error: {0}")]
@@ -31,6 +43,12 @@ pub enum ChainError {
     SnapshotReplayFailed(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+    #[error("proof size gate failed for {backend:?}/{circuit}: {error}")]
+    ProofSizeGate {
+        backend: ProofSystemKind,
+        circuit: &'static str,
+        error: ProofSizeGateError,
+    },
 }
 
 pub type ChainResult<T> = Result<T, ChainError>;

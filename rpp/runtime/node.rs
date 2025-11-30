@@ -5553,6 +5553,7 @@ impl NodeInner {
             circuit = resolved.circuit,
             proposer = %proposer,
             ?err,
+            error = %err,
             backend = backend.as_str(),
             proof_backend = backend.as_str(),
             proof_kind = proof_kind.as_str(),

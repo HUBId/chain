@@ -7,7 +7,7 @@ use blake3::hash;
 use tracing::{info_span, warn};
 
 use crate::consensus::ConsensusCertificate;
-use crate::errors::{ChainError, ChainResult};
+use crate::errors::{ChainError, ChainResult, ProofSizeGateError};
 use crate::proof_backend::{ProofBytes, TxPublicInputs};
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
@@ -672,6 +672,32 @@ impl RppStarkProofVerifier {
 
     fn map_error(&self, kind: &'static str, error: RppStarkVerifierError) -> ChainError {
         match error {
+            RppStarkVerifierError::ProofSizeLimitMismatch {
+                params_kib,
+                expected_kib,
+            } => ChainError::ProofSizeGate {
+                backend: ProofSystemKind::RppStark,
+                circuit: kind,
+                error: ProofSizeGateError::LimitMismatch {
+                    params_kib,
+                    expected_kib,
+                },
+            },
+            RppStarkVerifierError::ProofSizeLimitOverflow { max_kib } => {
+                ChainError::ProofSizeGate {
+                    backend: ProofSystemKind::RppStark,
+                    circuit: kind,
+                    error: ProofSizeGateError::LimitOverflow { max_kib },
+                }
+            }
+            RppStarkVerifierError::VerificationFailed {
+                failure: RppStarkVerifyFailure::ProofTooLarge { max_kib, got_kib },
+                report: _,
+            } => ChainError::ProofSizeGate {
+                backend: ProofSystemKind::RppStark,
+                circuit: kind,
+                error: ProofSizeGateError::ProofTooLarge { max_kib, got_kib },
+            },
             RppStarkVerifierError::VerificationFailed { failure, report } => ChainError::Crypto(
                 format!("rpp-stark {kind} verification failed: {failure}; report={report}"),
             ),
@@ -1296,6 +1322,65 @@ mod tests {
             .names()
             .iter()
             .any(|name| name == "runtime.proof.verify"));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn maps_rpp_stark_size_gate_errors() {
+        use crate::errors::ProofSizeGateError;
+
+        let registry = ProofVerifierRegistry::default();
+
+        let mismatch = registry.map_rpp_stark_error(
+            "consensus",
+            RppStarkVerifierError::ProofSizeLimitMismatch {
+                params_kib: 128,
+                expected_kib: 256,
+            },
+        );
+
+        match mismatch {
+            ChainError::ProofSizeGate {
+                backend,
+                circuit,
+                error:
+                    ProofSizeGateError::LimitMismatch {
+                        params_kib,
+                        expected_kib,
+                    },
+            } => {
+                assert_eq!(backend, ProofSystemKind::RppStark);
+                assert_eq!(circuit, "consensus");
+                assert_eq!(params_kib, 128);
+                assert_eq!(expected_kib, 256);
+            }
+            other => panic!("unexpected mapping for mismatch: {other:?}"),
+        }
+
+        let oversize = registry.map_rpp_stark_error(
+            "uptime",
+            RppStarkVerifierError::VerificationFailed {
+                failure: RppStarkVerifyFailure::ProofTooLarge {
+                    max_kib: 4096,
+                    got_kib: 5120,
+                },
+                report: RppStarkVerificationReport::pending("test"),
+            },
+        );
+
+        match oversize {
+            ChainError::ProofSizeGate {
+                backend,
+                circuit,
+                error: ProofSizeGateError::ProofTooLarge { max_kib, got_kib },
+            } => {
+                assert_eq!(backend, ProofSystemKind::RppStark);
+                assert_eq!(circuit, "uptime");
+                assert_eq!(max_kib, 4096);
+                assert_eq!(got_kib, 5120);
+            }
+            other => panic!("unexpected mapping for oversize: {other:?}"),
+        }
     }
 }
 
