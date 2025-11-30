@@ -1938,6 +1938,202 @@ def build_snapshot_anomaly_store() -> MetricStore:
     return MetricStore.from_definitions(definitions)
 
 
+def build_disk_pressure_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 6.0),
+                    (300.0, 10.0),
+                    (600.0, 14.0),
+                    (900.0, 26.0),
+                    (1200.0, 30.0),
+                    (1500.0, 29.0),
+                    (1800.0, 18.0),
+                    (2100.0, 12.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (300.0, 2.0),
+                    (600.0, 5.0),
+                    (900.0, 9.0),
+                    (1200.0, 10.5),
+                    (1500.0, 10.0),
+                    (1800.0, 6.0),
+                    (2100.0, 3.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1_000.0),
+                    (300.0, 1_010.0),
+                    (600.0, 1_020.0),
+                    (900.0, 1_025.0),
+                    (1200.0, 1_025.0),
+                    (1500.0, 1_025.0),
+                    (1800.0, 1_025.0),
+                    (2100.0, 1_025.0),
+                    (2400.0, 1_040.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 400.0),
+                    (600.0, 1_100.0),
+                    (1200.0, 1_900.0),
+                    (1800.0, 2_000.0),
+                    (2400.0, 500.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_mempool_probe_success_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1.0),
+                    (600.0, 0.45),
+                    (1200.0, 0.2),
+                    (1800.0, 0.2),
+                    (2400.0, 0.95),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_stream_lag_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 5.0),
+                    (300.0, 40.0),
+                    (600.0, 140.0),
+                    (900.0, 160.0),
+                    (1200.0, 15.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
+def build_disk_pressure_recovery_store() -> MetricStore:
+    definitions: List[MetricDefinition] = []
+    definitions.append(
+        MetricDefinition(
+            metric="finality_lag_slots",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 10.0),
+                    (300.0, 8.0),
+                    (600.0, 6.0),
+                    (900.0, 4.0),
+                    (1200.0, 3.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="finalized_height_gap",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 3.0),
+                    (300.0, 2.0),
+                    (600.0, 1.5),
+                    (900.0, 1.0),
+                    (1200.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="chain_block_height",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 1_040.0),
+                    (300.0, 1_060.0),
+                    (600.0, 1_080.0),
+                    (900.0, 1_100.0),
+                    (1200.0, 1_125.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_observation_age_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 500.0),
+                    (600.0, 600.0),
+                    (1200.0, 450.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="uptime_mempool_probe_success_ratio",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 0.9),
+                    (600.0, 1.0),
+                    (1200.0, 1.0),
+                ]
+            ),
+        )
+    )
+    definitions.append(
+        MetricDefinition(
+            metric="snapshot_stream_lag_seconds",
+            labels={},
+            samples=_build_samples(
+                [
+                    (0.0, 20.0),
+                    (300.0, 18.0),
+                    (600.0, 12.0),
+                    (900.0, 8.0),
+                    (1200.0, 5.0),
+                ]
+            ),
+        )
+    )
+    return MetricStore.from_definitions(definitions)
+
+
 def build_snapshot_baseline_store() -> MetricStore:
     definitions: List[MetricDefinition] = []
     definitions.append(
@@ -3438,6 +3634,27 @@ def default_validation_cases() -> List[ValidationCase]:
         ValidationCase(
             name="rpc-subscription-recovery",
             store=build_rpc_subscription_recovery_store(),
+            expected_alerts=set(),
+        ),
+        ValidationCase(
+            name="disk-pressure-pruning",
+            store=build_disk_pressure_store(),
+            expected_alerts={
+                "ConsensusFinalityLagWarning",
+                "ConsensusFinalityLagCritical",
+                "ConsensusFinalizedHeightGapWarning",
+                "ConsensusFinalizedHeightGapCritical",
+                "ConsensusLivenessStall",
+                "SnapshotStreamLagWarning",
+                "SnapshotStreamLagCritical",
+                "UptimeMempoolProbeFailure",
+                "UptimeObservationGapWarning",
+                "UptimeObservationGapCritical",
+            },
+        ),
+        ValidationCase(
+            name="disk-pressure-recovery",
+            store=build_disk_pressure_recovery_store(),
             expected_alerts=set(),
         ),
         ValidationCase(

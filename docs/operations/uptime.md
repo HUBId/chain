@@ -84,6 +84,13 @@ run to confirm alerts fire and then clear:
   metrics below the SLA to prove `UptimeParticipationDrop*`,
   `UptimeObservationGap*`, and `TimetokeAccrualStall*` alerts fire on sustained
   drops.【F:tools/alerts/validation.py†L852-L1064】【F:tools/alerts/validation.py†L1318-L1428】【F:tools/alerts/tests/test_alert_validation.py†L19-L88】
+- **Disk pressure during pruning/snapshot writes** – the `disk-pressure-pruning`
+  probe pins block height, widens finality lag/gaps, and drives snapshot stream
+  lag while uptime observation age and the mempool readiness probe decay. The
+  paired recovery store clears the alerts once height and proof cadences
+  recover; run `python -m tools.alerts.validate_alerts --artifacts
+  target/alert-probes` to archive JSON outputs when tuning thresholds or
+  reproducing IO contention.【F:tools/alerts/validation.py†L1960-L2043】【F:tools/alerts/validation.py†L2046-L2134】【F:tools/alerts/validation.py†L3640-L3659】【F:tools/alerts/tests/test_alert_validation.py†L19-L118】
 
 ## Missed slots under prover load
 
@@ -115,6 +122,28 @@ the probe clears on recovery.【F:tools/alerts/validation.py†L120-L184】【F:
 a canary for client-facing impact: if it fires in production, pause bulk
 submissions, restart or drain stuck validators, and follow the mempool cleanup
 playbook before reopening traffic.【F:docs/mempool.md†L7-L74】
+
+### Disk pressure mitigation
+
+Pruning snapshots and Firewood manifests amplify disk IO; under pressure,
+snapshot lag and WAL commits can stall finality while uptime proofs age out.
+When `ConsensusLivenessStall`, `ConsensusFinalityLag*`, `SnapshotStreamLag*`,
+`UptimeObservationGap*`, and `UptimeMempoolProbeFailure` page together:
+
+1. **Throttle writers.** Pause pruning exports and reduce snapshot
+   concurrency until `snapshot_stream_lag_seconds` drops under the warning
+   threshold. If WAL queues grow, switch to slower commit cadences before
+   resuming proofs.
+2. **Drain backlog.** Keep block production running while the IO backlog
+   clears; finality and uptime alerts should fall back to green once
+   `chain_block_height` advances and observation age returns below 15/30 minute
+   buffers.
+3. **Capture artifacts.** Re-run the alert probes with
+   `--artifacts target/alert-probes` to record before/after JSON and attach
+   them to the incident ticket alongside Grafana panels for future tuning.
+
+If the stall persists after throttling, follow the snapshot failover runbook
+to move consumers to a healthy host before re-enabling pruning.【F:ops/alerts/storage/firewood.yaml†L1-L68】
 
 ### Transaction latency probes
 
