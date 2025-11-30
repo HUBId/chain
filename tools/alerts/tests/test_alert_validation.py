@@ -34,7 +34,7 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     with AlertWebhookServer() as server:
         client = RecordedWebhookClient(server)
         results = validator.run(cases, client)
-    assert len(results) == 25
+    assert len(results) == 27
 
     results_by_case = {result.case.name: result for result in results}
     expected_case_names = {
@@ -56,6 +56,8 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
         "rpc-subscription-drop-load",
         "rpc-subscription-drop-maintenance",
         "rpc-subscription-recovery",
+        "disk-pressure-pruning",
+        "disk-pressure-recovery",
         "prover-backlog-correlation",
         "restart-finality-correlation",
         "timetoke-epoch-delay",
@@ -115,6 +117,14 @@ def test_alert_validation_triggers_expected_alerts(validator: AlertValidator) ->
     rpc_recovery = results_by_case["rpc-availability-recovery"]
     assert rpc_recovery.fired_events == []
     assert rpc_recovery.webhook_payloads == []
+
+    disk_pressure = results_by_case["disk-pressure-pruning"]
+    assert {event.name for event in disk_pressure.fired_events} == disk_pressure.case.expected_alerts
+    assert len(disk_pressure.webhook_payloads) == len(disk_pressure.fired_events)
+
+    disk_recovery = results_by_case["disk-pressure-recovery"]
+    assert disk_recovery.fired_events == []
+    assert disk_recovery.webhook_payloads == []
 
     restart_correlation = results_by_case["restart-finality-correlation"]
     assert {event.name for event in restart_correlation.fired_events} == restart_correlation.case.expected_alerts
