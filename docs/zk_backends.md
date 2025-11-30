@@ -40,6 +40,20 @@
   GPU/L2-Skalierungsfragen gelten weiterhin die separaten `zk-load-harness`-
   und `uptime`-Drills.
 
+- Das zusätzliche Profil `prover-acceleration-mix` fährt zwei Plonky3-Proof-
+  Läufe hintereinander: einmal mit explizit deaktiviertem GPU-Path
+  (`PLONKY3_GPU_DISABLE=1`, `use_gpu_acceleration=false`) und einmal mit
+  angefordertem GPU-Path (`use_gpu_acceleration=true`). Die Tests schreiben die
+  Latenzen, Proof-Größen und Cache-/Queue-Health unter
+  `cpu_gpu_prover_mix.json` und brechen ab, sobald CPU-Beweise GPU-Metadaten
+  tragen oder Proof-Größen fehlen.【F:tools/simnet/scenarios/prover_acceleration_mix.ron†L1-L37】【F:rpp/proofs/plonky3/tests.rs†L105-L207】【F:.github/workflows/nightly.yml†L1338-L1397】
+
+- Nightly-CI startet das Profil im Job `simnet-prover-acceleration` mit den
+  Features `backend-plonky3-gpu`, sammelt die Summaries unter
+  `target/simnet/prover-acceleration-mix-nightly/summaries/` und verifiziert
+  CPU/GPU-Interop über den Python-Validator im Workflow. Artefakte werden als
+  `simnet-prover-acceleration-mix-…` hochgeladen.【F:.github/workflows/nightly.yml†L1338-L1397】
+
 ## Beschleunigte Prover-Läufe
 
 - Der Nightly-Workflow enthält einen optionalen Accelerator-Lauf
@@ -61,6 +75,25 @@
   Sekunden, sodass Abweichungen zwischen GPU-Typen oder Treiber-Versionen
   sichtbar werden. Hinterlegte Dashboards sollten dieselben Artefakte
   referenzieren, wenn GPU-Kapazität in Clustern bereitgestellt wird.
+
+### Gemischte Hardware-Deployments (CPU + GPU)
+
+- Für Validator-/Prover-Fleets mit heterogener Hardware sollte
+  `plonky3.use_gpu_acceleration` pro Node gemäß Hardware-Inventar gesetzt
+  werden; GPU-Hosts verwenden `true`, CPU-Only-Hosts `false` oder
+  `PLONKY3_GPU_DISABLE=1` als env-Override. Beide Pfade bleiben interoperabel,
+  solange `proof_version` konsistent bleibt.【F:rpp/proofs/plonky3/tests.rs†L105-L207】
+- Queue- und Latenzmetriken lassen sich pro Pfad getrennt beobachten: die
+  Summaries aus `prover-acceleration-mix` liefern Prove/Verify-Zeiten und
+  Proof-Größen pro Modus (`cpu`/`gpu`), während die produktiven Queue-Metriken
+  (`wallet.prover.queue.*`, `wallet.prover.priority_slots`) weiterhin nach
+  Backend/Classe labeln. Bei GPU-Drain sollte `PLONKY3_GPU_DISABLE=1` gesetzt
+  und die Priority-Slots erhöht werden, bis die P95-Wartezeiten wieder unter
+  10 s fallen.【F:rpp/proofs/plonky3/tests.rs†L105-L207】【F:telemetry/prometheus/runtime-rules.yaml†L335-L360】
+- Rollouts im Mischbetrieb: zuerst GPU-fähige Validatoren aktualisieren, dann
+  CPU-Knoten. Bleiben GPU-Knoten leer oder melden niedrige `proofs_generated`
+  im `cpu_gpu_prover_mix.json`, Logs auf `GPU_DISABLE_ENV` und fehlende Treiber
+  prüfen, bevor die GPU-Features wieder aktiviert werden.【F:rpp/proofs/plonky3/tests.rs†L105-L207】【F:.github/workflows/nightly.yml†L1338-L1397】
 
 ## Warmup-Dauer und Kaltstarts
 

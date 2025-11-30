@@ -1335,6 +1335,92 @@ EOF
           path: artifacts/simnet/${{ env.SIMNET_LABEL }}
           if-no-files-found: ignore
 
+  simnet-prover-acceleration:
+    name: Simnet prover CPU/GPU interoperability and fallback
+    runs-on: ubuntu-latest
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-plonky3,backend-plonky3-gpu"
+      RUSTFLAGS: "-C debuginfo=0"
+      SIMNET_LABEL: "prover-acceleration-mix"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute artifact label
+        run: |
+          set -euo pipefail
+          label_base="${SIMNET_LABEL:-prover-acceleration-mix}"
+          features="${XTASK_FEATURES:-default}"
+          features=$(printf '%s' "$features" | tr ', ' '-' | tr -s '-' '-')
+          label="${label_base}-${features}";
+          echo "SIMNET_LABEL=${label}" >>"$GITHUB_ENV"
+          echo "SIMNET_ARCHIVE=simnet-${label}.tar.gz" >>"$GITHUB_ENV"
+
+      - name: Run CPU/GPU acceleration scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/prover-acceleration-mix-nightly
+          SIMNET_SUMMARY_DIR=target/simnet/prover-acceleration-mix-nightly/summaries \
+            cargo xtask simnet --profile prover-acceleration-mix --artifacts-dir target/simnet/prover-acceleration-mix-nightly
+
+      - name: Validate acceleration metrics
+        run: |
+          set -euo pipefail
+          summary=target/simnet/prover-acceleration-mix-nightly/summaries/cpu_gpu_prover_mix.json
+          python3 - <<'PY'
+import json
+from pathlib import Path
+
+summary = Path("target/simnet/prover-acceleration-mix-nightly/summaries/cpu_gpu_prover_mix.json")
+data = json.loads(summary.read_text())
+if len(data) != 2:
+    raise SystemExit(f"expected two metric entries, found {len(data)}")
+
+modes = {record["mode"]: record for record in data}
+for required in ("cpu", "gpu"):
+    if required not in modes:
+        raise SystemExit(f"missing metrics for {required} mode")
+
+cpu = modes["cpu"]
+gpu = modes["gpu"]
+
+if cpu.get("use_gpu_recorded"):
+    raise SystemExit("CPU metrics recorded use_gpu=true")
+
+if not isinstance(gpu.get("use_gpu_recorded"), bool):
+    raise SystemExit("GPU metrics missing use_gpu flag")
+
+if cpu.get("proof_bytes", 0) == 0 or gpu.get("proof_bytes", 0) == 0:
+    raise SystemExit("proof byte sizes missing from metrics")
+
+if cpu.get("proofs_generated", 0) == gpu.get("proofs_generated", 0) == 0:
+    raise SystemExit("proof generation counters not populated")
+PY
+
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          scripts/ci/collect_test_artifacts.sh "artifacts/simnet/${SIMNET_LABEL}/logs" target/simnet
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "artifacts/simnet/${SIMNET_LABEL}"
+          tar -czf "artifacts/simnet/${SIMNET_LABEL}/${SIMNET_ARCHIVE}" -C target/simnet prover-acceleration-mix-nightly
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-${{ env.SIMNET_LABEL }}
+          path: artifacts/simnet/${{ env.SIMNET_LABEL }}
+          if-no-files-found: ignore
+
   simnet-wallet-rpc-failover:
     name: Simnet wallet RPC regional failover (prod, stwo/plonky3)
     runs-on: ubuntu-latest

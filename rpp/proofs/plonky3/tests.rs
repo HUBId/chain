@@ -7,9 +7,14 @@
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 use std::convert::TryInto;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::aggregation::MAX_BATCHED_PROOFS;
@@ -29,6 +34,7 @@ use crate::types::{
 };
 use plonky3_backend::{
     BackendError, CircuitStarkConfig, HashFormat, ProverContext as BackendProverContext,
+    GPU_DISABLE_ENV,
 };
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
@@ -422,6 +428,128 @@ fn consensus_witness_rejects_missing_metadata() {
         err.to_string().contains("missing VRF entries"),
         "unexpected error: {err}"
     );
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AccelerationMetrics {
+    mode: &'static str,
+    use_gpu_requested: bool,
+    use_gpu_recorded: bool,
+    prove_ms: f64,
+    verify_ms: f64,
+    proof_bytes: usize,
+    cached_circuits: usize,
+    proofs_generated: usize,
+}
+
+fn write_acceleration_summary(path: &PathBuf, records: &[AccelerationMetrics]) {
+    if let Some(parent) = path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            panic!("failed to create metrics dir {}: {err}", parent.display());
+        }
+    }
+
+    let payload =
+        serde_json::to_vec_pretty(records).expect("serialize prover acceleration metrics to JSON");
+    fs::write(path, payload).expect("persist prover acceleration metrics");
+}
+
+fn proof_metadata_use_gpu(proof: &ChainProof) -> (bool, usize) {
+    match proof {
+        ChainProof::Plonky3(value) => {
+            let parsed = Plonky3Proof::from_value(value).expect("parse proof");
+            (parsed.metadata.use_gpu, parsed.serialized_proof().len())
+        }
+        ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
+    }
+}
+
+#[test]
+fn cpu_gpu_proving_interop_emits_metrics_and_respects_fallbacks() {
+    let summary_path = env::var("SIMNET_SUMMARY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("target/simnet/prover-acceleration-mix/summaries"))
+        .join("cpu_gpu_prover_mix.json");
+    let original_gpu_env = env::var(GPU_DISABLE_ENV).ok();
+
+    let mut cpu_only_prover = test_prover();
+    cpu_only_prover.params.use_gpu_acceleration = false;
+    env::set_var(GPU_DISABLE_ENV, "1");
+
+    let tx_cpu = sample_transaction();
+    let cpu_witness = cpu_only_prover
+        .build_transaction_witness(&tx_cpu)
+        .expect("cpu witness");
+    let cpu_prove_start = Instant::now();
+    let cpu_proof = cpu_only_prover
+        .prove_transaction(cpu_witness)
+        .expect("cpu proof");
+    let cpu_prove_ms = cpu_prove_start.elapsed().as_secs_f64() * 1_000.0;
+    let cpu_verify_start = Instant::now();
+    test_verifier()
+        .verify_transaction(&cpu_proof)
+        .expect("cpu proof verifies");
+    let cpu_verify_ms = cpu_verify_start.elapsed().as_secs_f64() * 1_000.0;
+    let (cpu_use_gpu, cpu_bytes) = proof_metadata_use_gpu(&cpu_proof);
+
+    let cpu_telemetry = telemetry_snapshot();
+
+    let mut gpu_prover = test_prover();
+    gpu_prover.params.use_gpu_acceleration = true;
+    if let Some(original) = &original_gpu_env {
+        env::set_var(GPU_DISABLE_ENV, original);
+    } else {
+        env::remove_var(GPU_DISABLE_ENV);
+    }
+
+    let tx_gpu = sample_transaction_with_seed(SECOND_TRANSACTION_SEED);
+    let gpu_witness = gpu_prover
+        .build_transaction_witness(&tx_gpu)
+        .expect("gpu witness");
+    let gpu_prove_start = Instant::now();
+    let gpu_proof = gpu_prover
+        .prove_transaction(gpu_witness)
+        .expect("gpu proof");
+    let gpu_prove_ms = gpu_prove_start.elapsed().as_secs_f64() * 1_000.0;
+    let gpu_verify_start = Instant::now();
+    test_verifier()
+        .verify_transaction(&gpu_proof)
+        .expect("gpu proof verifies");
+    let gpu_verify_ms = gpu_verify_start.elapsed().as_secs_f64() * 1_000.0;
+    let (gpu_use_gpu, gpu_bytes) = proof_metadata_use_gpu(&gpu_proof);
+
+    let gpu_telemetry = telemetry_snapshot();
+
+    assert!(!cpu_use_gpu, "CPU-only proof should mark use_gpu=false");
+    assert_eq!(
+        gpu_use_gpu, gpu_prover.params.use_gpu_acceleration,
+        "GPU run should preserve requested acceleration flag unless overridden",
+    );
+
+    let metrics = vec![
+        AccelerationMetrics {
+            mode: "cpu",
+            use_gpu_requested: cpu_only_prover.params.use_gpu_acceleration,
+            use_gpu_recorded: cpu_use_gpu,
+            prove_ms: cpu_prove_ms,
+            verify_ms: cpu_verify_ms,
+            proof_bytes: cpu_bytes,
+            cached_circuits: cpu_telemetry.cached_circuits,
+            proofs_generated: cpu_telemetry.proofs_generated,
+        },
+        AccelerationMetrics {
+            mode: "gpu",
+            use_gpu_requested: gpu_prover.params.use_gpu_acceleration,
+            use_gpu_recorded: gpu_use_gpu,
+            prove_ms: gpu_prove_ms,
+            verify_ms: gpu_verify_ms,
+            proof_bytes: gpu_bytes,
+            cached_circuits: gpu_telemetry.cached_circuits,
+            proofs_generated: gpu_telemetry.proofs_generated,
+        },
+    ];
+
+    write_acceleration_summary(&summary_path, &metrics);
 }
 
 #[test]
