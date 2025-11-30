@@ -113,8 +113,8 @@ use crate::vrf::{PoseidonVrfInput, VrfProof, VrfSubmission};
 use crate::wallet::ScriptStatusMetadata;
 #[cfg(feature = "wallet-integration")]
 use crate::wallet::{
-    ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet,
-    WalletAccountSummary,
+    ConsensusReceipt, FinalitySnapshot, HistoryEntry, NodeTabMetrics, ReceiveTabAddress,
+    SendPreview, Wallet, WalletAccountSummary,
 };
 #[cfg(all(feature = "wallet-integration", feature = "vendor_electrs"))]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
@@ -1387,6 +1387,7 @@ struct StateRootResponse {
 #[derive(Serialize)]
 struct WalletAccountResponse {
     summary: WalletAccountSummary,
+    pipeline_finality: FinalitySnapshot,
 }
 
 #[derive(Serialize)]
@@ -3981,7 +3982,15 @@ async fn wallet_account(
     let wallet = state.require_wallet()?;
     wallet
         .account_summary()
-        .map(|summary| Json(WalletAccountResponse { summary }))
+        .and_then(|summary| {
+            wallet
+                .pipeline_finality_overview()
+                .map(|pipeline_finality| WalletAccountResponse {
+                    summary,
+                    pipeline_finality,
+                })
+        })
+        .map(Json)
         .map_err(to_http_error)
 }
 

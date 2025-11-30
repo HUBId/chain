@@ -102,6 +102,14 @@ pub struct PipelineFeedState {
     pub slashing_events: Vec<SlashingEvent>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct FinalitySnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_finalized_height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finality_lag_blocks: Option<u64>,
+}
+
 fn publish_pipeline_state<F>(
     state: &Arc<RwLock<PipelineFeedState>>,
     tx: &watch::Sender<PipelineFeedState>,
@@ -263,6 +271,26 @@ fn detect_finality_update(
             false
         }
         (None, None) => false,
+    }
+}
+
+fn finality_snapshot(
+    flows: &[FlowSnapshot],
+    chain_height: Option<u64>,
+    origin_filter: Option<&Address>,
+) -> FinalitySnapshot {
+    let last_finalized_height = flows
+        .iter()
+        .filter(|flow| origin_filter.map_or(true, |origin| &flow.origin == origin))
+        .filter_map(|flow| flow.commit_height)
+        .max();
+
+    let finality_lag_blocks = last_finalized_height
+        .and_then(|height| chain_height.map(|chain| chain.saturating_sub(height)));
+
+    FinalitySnapshot {
+        last_finalized_height,
+        finality_lag_blocks,
     }
 }
 
@@ -474,6 +502,7 @@ pub struct WalletAccountSummary {
     pub reputation_score: f64,
     pub tier: Tier,
     pub uptime_hours: u64,
+    pub finality: FinalitySnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mempool_delta: Option<i64>,
 }
@@ -1391,7 +1420,7 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
-        Ok(self.summarize_account(&account))
+        self.summarize_account(&account)
     }
 
     pub fn account_by_address(&self, address: &Address) -> ChainResult<Option<Account>> {
@@ -1406,7 +1435,7 @@ impl Wallet {
             Some(account) => account,
             None => return Ok(None),
         };
-        Ok(Some(self.summarize_account(&account)))
+        Ok(Some(self.summarize_account(&account)?))
     }
 
     pub fn accounts_snapshot(&self) -> ChainResult<Vec<Account>> {
@@ -1590,7 +1619,7 @@ impl Wallet {
         Ok(history)
     }
 
-    fn summarize_account(&self, account: &Account) -> WalletAccountSummary {
+    fn summarize_account(&self, account: &Account) -> ChainResult<WalletAccountSummary> {
         let mut summary = WalletAccountSummary {
             address: account.address.clone(),
             balance: account.balance,
@@ -1598,6 +1627,7 @@ impl Wallet {
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
             uptime_hours: account.reputation.timetokes.hours_online,
+            finality: self.pipeline_finality_for(Some(&account.address))?,
             mempool_delta: None,
         };
 
@@ -1611,7 +1641,7 @@ impl Wallet {
             });
         }
 
-        summary
+        Ok(summary)
     }
 
     fn estimate_reputation_delta(&self, tx: &SignedTransaction) -> i64 {
@@ -1641,14 +1671,9 @@ impl Wallet {
         }
     }
 
-    pub fn node_metrics(&self) -> ChainResult<NodeTabMetrics> {
-        let account = self
-            .storage
-            .read_account(&self.address)?
-            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
-        let feed_state = self.pipeline_feed.read().clone();
+    fn chain_progress(&self) -> ChainResult<(Option<u64>, Option<String>, u64)> {
         #[cfg(feature = "vendor_electrs")]
-        let tracker_metrics = {
+        if let Some(metrics) = {
             let guard = self.electrs_handles.lock();
             guard
                 .as_ref()
@@ -1656,22 +1681,41 @@ impl Wallet {
                 .map(|tracker| {
                     let height = tracker.chain().height() as u64;
                     let hash = hex::encode(tracker.chain().tip().as_bytes());
-                    (height, Some(hash), height.saturating_add(1))
+                    (Some(height), Some(hash), height.saturating_add(1))
                 })
-        };
-        #[cfg(not(feature = "vendor_electrs"))]
-        let tracker_metrics: Option<(u64, Option<String>, u64)> = None;
+        } {
+            return Ok(metrics);
+        }
 
-        let (latest_block_height, latest_block_hash, total_blocks) =
-            if let Some(metrics) = tracker_metrics {
-                metrics
-            } else {
-                let tip = self.storage.tip()?;
-                let latest_height = tip.as_ref().map(|meta| meta.height).unwrap_or(0);
-                let latest_hash = tip.as_ref().map(|meta| meta.hash.clone());
-                let total = self.storage.load_blockchain()?.len() as u64;
-                (latest_height, latest_hash, total)
-            };
+        let tip = self.storage.tip()?;
+        let latest_height = tip.as_ref().map(|meta| meta.height);
+        let latest_hash = tip.as_ref().map(|meta| meta.hash.clone());
+        let total = self.storage.load_blockchain()?.len() as u64;
+        Ok((latest_height, latest_hash, total))
+    }
+
+    fn pipeline_finality_for(&self, address: Option<&Address>) -> ChainResult<FinalitySnapshot> {
+        let (latest_height, _, _) = self.chain_progress()?;
+        let feed_state = self.pipeline_feed.read().clone();
+        Ok(finality_snapshot(
+            &feed_state.dashboard.flows,
+            latest_height,
+            address,
+        ))
+    }
+
+    pub fn pipeline_finality_overview(&self) -> ChainResult<FinalitySnapshot> {
+        self.pipeline_finality_for(None)
+    }
+
+    pub fn node_metrics(&self) -> ChainResult<NodeTabMetrics> {
+        let account = self
+            .storage
+            .read_account(&self.address)?
+            .ok_or_else(|| ChainError::Config(ui_messages().text("ui.identity.account_missing")))?;
+        let feed_state = self.pipeline_feed.read().clone();
+        let (chain_height, latest_block_hash, total_blocks) = self.chain_progress()?;
+        let latest_block_height = chain_height.unwrap_or(0);
         Ok(NodeTabMetrics {
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
@@ -1679,6 +1723,7 @@ impl Wallet {
             latest_block_height,
             latest_block_hash,
             total_blocks,
+            pipeline_finality: finality_snapshot(&feed_state.dashboard.flows, chain_height, None),
             slashing_alerts: feed_state.slashing_events,
             pipeline_errors: feed_state.errors,
         })
@@ -1890,7 +1935,7 @@ mod tests {
     };
     use rand::rngs::OsRng;
     use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
-    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use std::{collections::HashMap, collections::HashSet, sync::Arc, time::Duration};
     use tempfile::tempdir;
 
     fn setup_metrics() -> (
@@ -1969,5 +2014,41 @@ mod tests {
         assert!(names.contains("rpp.runtime.proof.generation.size"));
 
         Ok(())
+    }
+
+    fn flow_snapshot(origin: &str, commit_height: Option<u64>) -> FlowSnapshot {
+        FlowSnapshot {
+            hash: "deadbeef".into(),
+            origin: origin.into(),
+            target_nonce: 0,
+            expected_balance: 0,
+            stages: HashMap::new(),
+            commit_height,
+        }
+    }
+
+    #[test]
+    fn finality_snapshot_tracks_delayed_and_recovery() {
+        let address: Address = "rpp_finality".into();
+        let delayed = vec![flow_snapshot(&address, Some(90))];
+
+        let lagging = finality_snapshot(&delayed, Some(100), Some(&address));
+        assert_eq!(lagging.last_finalized_height, Some(90));
+        assert_eq!(lagging.finality_lag_blocks, Some(10));
+
+        let recovered = vec![flow_snapshot(&address, Some(120))];
+        let snapshot = finality_snapshot(&recovered, Some(125), Some(&address));
+        assert_eq!(snapshot.last_finalized_height, Some(120));
+        assert_eq!(snapshot.finality_lag_blocks, Some(5));
+    }
+
+    #[test]
+    fn finality_snapshot_handles_missing_chain_height() {
+        let address: Address = "rpp_finality".into();
+        let flows = vec![flow_snapshot(&address, Some(30))];
+
+        let snapshot = finality_snapshot(&flows, None, Some(&address));
+        assert_eq!(snapshot.last_finalized_height, Some(30));
+        assert_eq!(snapshot.finality_lag_blocks, None);
     }
 }

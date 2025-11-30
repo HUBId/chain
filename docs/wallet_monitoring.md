@@ -22,6 +22,16 @@ RBAC, GUI workflows, hardware signing, etc.) remain observable.
 These expressions work in Prometheus-compatible systems. Adjust labels or OTLP
 selectors to match your scrape pipeline.
 
+## Finality awareness via wallet APIs
+
+- The wallet account response now embeds `finality.last_finalized_height` and
+  `finality.finality_lag_blocks` so operators can see how far each account lags
+  behind the latest committed block when finality slows down.【F:rpp/wallet/ui/wallet.rs†L491-L514】
+- The node tab contract (`/wallet/ui/node`) mirrors the aggregated pipeline
+  finality snapshot under `metrics.pipeline_finality`, giving UI clients the
+  same view that Grafana panels use to correlate API-reported lag with
+  Prometheus series on the Pipeline Consensus Finality dashboard.【F:rpp/wallet/ui/tabs/node.rs†L8-L25】【F:docs/dashboards/pipeline_consensus_finality.json†L72-L112】
+
 ```promql
 # Stalled sync driver
 (avg_over_time(rpp_runtime_wallet_sync_active[5m]) < 0.5)

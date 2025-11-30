@@ -86,6 +86,66 @@
           }
         }
       ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Finality Lag (slots)",
+      "description": "Maximum finalized lag over a 5m window to highlight stalled certificates.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "slot"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max_over_time(finality_lag_slots[5m])",
+          "legendFormat": "lag slots"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Finalized Height Gap",
+      "description": "Block height delta between the chain tip and last finalized certificate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max_over_time(finalized_height_gap[5m])",
+          "legendFormat": "height gap"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
     }
   ]
 }
