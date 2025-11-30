@@ -29,6 +29,17 @@ detected (e.g., missing quorum or wallet signer not ready), and `21` if any
 probe cannot be reached. Use `--json` for automation workflows that need to
 ingest the summarized payloads directly.
 
+## API schema guardrails
+
+Node and wallet RPC schemas are snapshotted under `docs/interfaces/snapshots`.
+Whenever you change an RPC payload or introduce a new endpoint, run `python
+scripts/generate_api_schemas.py` and commit the refreshed snapshots so
+downstream operators can diff expected responses. Breaking payload changes also
+require bumping the appropriate entry in `docs/interfaces/schema_versions.toml`
+(use `node` for operator/node endpoints and `wallet` for wallet JSON-RPC). CI
+enforces this with the `api-schema-guard` job, which fails if regenerated
+snapshots differ or if a schema change ships without a matching version bump.
+
 Configuration changes are exercised by
 `tests/node_lifecycle.rs::node_restart_applies_feature_gate_changes`. The workflow
 persists updated feature gates and storage backend policies, respawns the

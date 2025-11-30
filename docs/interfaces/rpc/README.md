@@ -61,6 +61,23 @@ Contract tests in `tests/rpc/` validate that representative request and response
 examples remain compatible with the published JSON Schemas. CI executes these
 checks on every PR so any incompatible change is caught before landing.
 
+## Schema snapshots and update workflow
+
+OpenAPI/JSON Schema snapshots live in `docs/interfaces/snapshots` and are
+generated from the curated contracts in this directory. Run
+`python scripts/generate_api_schemas.py` after touching any
+`docs/interfaces/rpc/*.jsonschema` file or adding a new contract; commit the
+refreshed snapshots alongside your change. The job `api-schema-guard` exercises
+`python scripts/generate_api_schemas.py --check` in CI and fails when the
+committed snapshots fall behind the source schemas.
+
+Incompatible payload changes must also bump `docs/interfaces/schema_versions.toml`.
+Use the `node` version when altering operator/node-facing endpoints and the
+`wallet` version for wallet JSON-RPC contracts. Regenerate the snapshots after
+the bump so the new version is captured in the generated metadata. CI will
+refuse schema diffs that are missing a corresponding version increment to keep
+breaking changes auditable.
+
 ## Rate Limiting Semantics
 
 The public RPC is protected by per-IP token buckets split into **read**

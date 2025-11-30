@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "definitions": {
+    "error_response": {
+      "$id": "https://schemas.rpp.dev/rpc/error_response.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "consensus_verifier_failed",
+            "consensus_finality_unavailable",
+            "state_sync_plan_invalid",
+            "state_sync_proof_encoding_invalid",
+            "state_sync_metadata_mismatch",
+            "state_sync_verification_incomplete",
+            "state_sync_verifier_io",
+            "state_sync_pipeline_error",
+            "state_sync_pruner_state_error"
+          ],
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "pipeline_wait_request": {
+      "$id": "https://schemas.rpp.dev/rpc/pipeline_wait_request.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "gossip_received",
+            "mempool_accepted",
+            "leader_elected",
+            "bft_finalised",
+            "rewards_distributed"
+          ],
+          "type": "string"
+        },
+        "timeout_ms": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hash",
+        "stage"
+      ],
+      "title": "PipelineWaitRequest",
+      "type": "object"
+    },
+    "pipeline_wait_response": {
+      "$id": "https://schemas.rpp.dev/rpc/pipeline_wait_response.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "gossip_received",
+            "mempool_accepted",
+            "leader_elected",
+            "bft_finalised",
+            "rewards_distributed"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "hash",
+        "stage",
+        "completed"
+      ],
+      "title": "PipelineWaitResponse",
+      "type": "object"
+    },
+    "sign_tx_request": {
+      "$id": "https://schemas.rpp.dev/rpc/sign_tx_request.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "transaction": {
+          "$ref": "../runtime/transaction.jsonschema"
+        }
+      },
+      "required": [
+        "transaction"
+      ],
+      "title": "SignTxRequest",
+      "type": "object"
+    },
+    "sign_tx_response": {
+      "$id": "https://schemas.rpp.dev/rpc/sign_tx_response.json",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "signed": {
+          "$ref": "../runtime/signed_transaction.jsonschema"
+        }
+      },
+      "required": [
+        "signed"
+      ],
+      "title": "SignTxResponse",
+      "type": "object"
+    }
+  },
+  "description": "Snapshot of wallet JSON-RPC contracts derived from docs/interfaces/rpc JSON Schemas.",
+  "title": "RPP Wallet RPC",
+  "version": "1.0.0",
+  "x-generated-by": {
+    "command": "python scripts/generate_api_schemas.py",
+    "source": "docs/interfaces/rpc"
+  }
+}

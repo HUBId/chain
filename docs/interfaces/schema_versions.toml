@@ -1,0 +1,3 @@
+# Semantic versions tracked for generated API schemas.
+node = "1.0.0"
+wallet = "1.0.0"

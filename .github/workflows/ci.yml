@@ -346,6 +346,18 @@ PY
           cargo test -p rpp-chain --locked --features backend-rpp-stark --test rpp_circuit_rollback -- \
             mixed_circuit_versions_reject_incompatible_proofs
 
+  api-schema-guard:
+    name: API schema snapshots
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Validate node and wallet schema snapshots
+        run: |
+          set -euo pipefail
+          python scripts/generate_api_schemas.py --check
+
   clippy:
     name: Clippy (all targets, all features)
     runs-on: ubuntu-latest

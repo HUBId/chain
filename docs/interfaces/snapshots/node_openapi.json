@@ -1,0 +1,2053 @@
+{
+  "components": {
+    "schemas": {
+      "consensus_proof_status_response": {
+        "$id": "https://schemas.rpp.dev/rpc/consensus_proof_status_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "version": {
+                  "enum": [
+                    1
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "vrf_outputs",
+                "vrf_proofs"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "version": {
+                  "enum": [
+                    2
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "vrf_outputs",
+                "vrf_proofs",
+                "vrf_output",
+                "vrf_proof",
+                "witness_commitment_root",
+                "reputation_root",
+                "quorum_bitmap",
+                "quorum_signature"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "version": {
+                  "enum": [
+                    3
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "vrf_entries",
+                "witness_commitments",
+                "reputation_roots",
+                "quorum_bitmap_root",
+                "quorum_signature_root"
+              ]
+            }
+          }
+        ],
+        "dependentRequired": {
+          "vrf_output": [
+            "vrf_entries"
+          ],
+          "vrf_outputs": [
+            "vrf_entries"
+          ],
+          "vrf_proof": [
+            "vrf_entries"
+          ],
+          "vrf_proofs": [
+            "vrf_entries"
+          ]
+        },
+        "description": "Versioned consensus proof metadata exported by `/consensus/proof/status`.",
+        "properties": {
+          "block_hash": {
+            "description": "Hex-encoded block hash associated with the certificate.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "commit_power": {
+            "type": "string"
+          },
+          "epoch": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "height": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "precommit_power": {
+            "type": "string"
+          },
+          "prevote_power": {
+            "type": "string"
+          },
+          "quorum_bitmap": {
+            "description": "Poseidon binding digest tying the prevote bitmap root to the block hash. Present for version \u2265 2.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "quorum_bitmap_root": {
+            "description": "Poseidon commitment to the prevote bitmap root embedded in the proof.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "quorum_signature": {
+            "description": "Poseidon binding digest tying the aggregated quorum signature root to the block hash. Present for version \u2265 2.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "quorum_signature_root": {
+            "description": "Poseidon commitment to the aggregated quorum signature root embedded in the proof.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "quorum_threshold": {
+            "type": "string"
+          },
+          "reputation_root": {
+            "description": "Poseidon binding digest for reputation tree roots relative to the block hash. Present for version \u2265 2.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "reputation_roots": {
+            "description": "Merkle roots for validator reputation trees tracked during the round.",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{64}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "round": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slot": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_power": {
+            "type": "string"
+          },
+          "version": {
+            "description": "Response schema version. Version 3 introduces structured VRF entries that include Poseidon bindings and validator public keys.",
+            "enum": [
+              1,
+              2,
+              3
+            ],
+            "type": "integer"
+          },
+          "vrf_entries": {
+            "description": "VRF transcripts contributed by the validator set. Each entry now bundles the randomness transcript, pre-output commitment, proof transcript, validator public key, and the Poseidon inputs enforced by the proof circuits so callers can reconstruct the full validator tuple without consulting legacy vectors.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bindings": {
+                  "additionalProperties": false,
+                  "description": "Derived Poseidon binding digests obtained by folding each VRF randomness and proof transcript into the block hash accumulator.",
+                  "properties": {
+                    "proof": {
+                      "description": "Intermediate Poseidon binding digest covering the block hash and VRF proof transcript up to this entry.",
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": "string"
+                    },
+                    "randomness": {
+                      "description": "Intermediate Poseidon binding digest covering the block hash and VRF randomness transcript up to this entry.",
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "randomness",
+                    "proof"
+                  ],
+                  "type": "object"
+                },
+                "poseidon": {
+                  "additionalProperties": false,
+                  "description": "Poseidon transcript inputs that bind the validator metadata to the advertised block hash. The `last_block_header` field mirrors `block_hash` and every entry's `epoch` string MUST match the top-level `epoch` counter exported with the certificate.",
+                  "properties": {
+                    "digest": {
+                      "description": "Poseidon digest emitted by the VRF circuit for the validator transcript.",
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": "string"
+                    },
+                    "epoch": {
+                      "description": "Decimal-encoded epoch folded into the VRF Poseidon transcript (matches the top-level `epoch`).",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    "last_block_header": {
+                      "description": "Poseidon commitment to the previous block header mixed into the VRF transcript (expected to equal the response `block_hash`).",
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": "string"
+                    },
+                    "tier_seed": {
+                      "description": "Poseidon commitment to the validator's tier seed used for reputation weighting.",
+                      "pattern": "^[0-9a-fA-F]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "digest",
+                    "last_block_header",
+                    "epoch",
+                    "tier_seed"
+                  ],
+                  "type": "object"
+                },
+                "pre_output": {
+                  "description": "Hex-encoded VRF pre-output digest produced prior to revealing the randomness.",
+                  "pattern": "^[0-9a-fA-F]{64}$",
+                  "type": "string"
+                },
+                "proof": {
+                  "description": "Hex-encoded Schnorrkel VRF proof blob for the randomness/pre-output pair.",
+                  "pattern": "^[0-9a-fA-F]+$",
+                  "type": "string"
+                },
+                "public_key": {
+                  "description": "Hex-encoded VRF public key for the validator that produced the transcript.",
+                  "pattern": "^[0-9a-fA-F]{64}$",
+                  "type": "string"
+                },
+                "randomness": {
+                  "description": "Hex-encoded Schnorrkel VRF randomness element (32 bytes).",
+                  "pattern": "^[0-9a-fA-F]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "randomness",
+                "pre_output",
+                "proof",
+                "public_key",
+                "poseidon"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "vrf_output": {
+            "description": "Poseidon binding digest folding the block hash with every VRF randomness element. Present for version \u2265 2 and derivable from `vrf_entries[].randomness`.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "vrf_outputs": {
+            "description": "Legacy VRF output digests derived from `vrf_entries[].pre_output`. Present for compatibility with schema versions \u2264 2 or when clients request derived vectors.",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{64}$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "vrf_proof": {
+            "description": "Poseidon binding digest folding the block hash with every VRF proof blob. Present for version \u2265 2 and derivable from `vrf_entries[].proof`.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "vrf_proofs": {
+            "description": "Legacy VRF proofs derived from `vrf_entries[].proof`. Present for compatibility with schema versions \u2264 2 or when clients request derived vectors.",
+            "items": {
+              "pattern": "^[0-9a-fA-F]+$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "witness_commitment_root": {
+            "description": "Poseidon binding digest for witness commitments relative to the block hash. Present for version \u2265 2.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "witness_commitments": {
+            "description": "Witness commitment digests provided by assigned witnesses.",
+            "items": {
+              "pattern": "^[0-9a-fA-F]{64}$",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "height",
+          "round",
+          "block_hash",
+          "total_power",
+          "quorum_threshold",
+          "prevote_power",
+          "precommit_power",
+          "commit_power",
+          "epoch",
+          "slot",
+          "witness_commitments",
+          "reputation_roots",
+          "quorum_bitmap_root",
+          "quorum_signature_root"
+        ],
+        "title": "ConsensusProofStatusResponse",
+        "type": "object"
+      },
+      "error_response": {
+        "$id": "https://schemas.rpp.dev/rpc/error_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "consensus_verifier_failed",
+              "consensus_finality_unavailable",
+              "state_sync_plan_invalid",
+              "state_sync_proof_encoding_invalid",
+              "state_sync_metadata_mismatch",
+              "state_sync_verification_incomplete",
+              "state_sync_verifier_io",
+              "state_sync_pipeline_error",
+              "state_sync_pruner_state_error"
+            ],
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "runtime_mode_response": {
+        "$id": "https://schemas.rpp.dev/rpc/runtime_mode_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "node",
+              "wallet",
+              "hybrid",
+              "validator"
+            ],
+            "type": "string"
+          },
+          "node_available": {
+            "type": "boolean"
+          },
+          "node_enabled": {
+            "type": "boolean"
+          },
+          "orchestrator_available": {
+            "type": "boolean"
+          },
+          "orchestrator_enabled": {
+            "type": "boolean"
+          },
+          "wallet_available": {
+            "type": "boolean"
+          },
+          "wallet_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "node_available",
+          "wallet_available",
+          "node_enabled",
+          "wallet_enabled",
+          "orchestrator_available",
+          "orchestrator_enabled"
+        ],
+        "title": "RuntimeModeResponse",
+        "type": "object"
+      },
+      "state_sync_chunk_response": {
+        "$id": "https://schemas.rpp.dev/rpc/state_sync_chunk_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Snapshot chunk payload plus verification status returned by the `/state-sync/chunk/:id` RPC endpoint.",
+        "properties": {
+          "chunk": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "description": "Zero-based chunk index within the session.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "length": {
+                "description": "Length in bytes of the decoded payload.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "payload": {
+                "contentEncoding": "base64",
+                "description": "Base64-encoded chunk payload.",
+                "type": "string"
+              },
+              "root": {
+                "description": "Hex-encoded snapshot root commitment shared by all chunks in the session.",
+                "pattern": "^0x[0-9a-fA-F]+$",
+                "type": "string"
+              },
+              "sha256": {
+                "description": "Hex-encoded SHA-256 digest of the decoded chunk payload.",
+                "pattern": "^0x[0-9a-fA-F]+$",
+                "type": "string"
+              },
+              "total": {
+                "description": "Total number of chunks required to reconstruct the snapshot.",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "root",
+              "index",
+              "total",
+              "length",
+              "payload",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "$ref": "./state_sync_status_response.jsonschema"
+          }
+        },
+        "required": [
+          "chunk",
+          "status"
+        ],
+        "title": "StateSyncChunkResponse",
+        "type": "object"
+      },
+      "state_sync_head_response": {
+        "$id": "https://schemas.rpp.dev/rpc/state_sync_head_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Latest verified light-client head returned by the state-sync RPC endpoint.",
+        "properties": {
+          "finalized": {
+            "description": "Whether the head corresponds to a finalized block.",
+            "type": "boolean"
+          },
+          "hash": {
+            "description": "Hex-encoded block hash for the reported head.",
+            "pattern": "^0x[0-9a-fA-F]+$",
+            "type": "string"
+          },
+          "height": {
+            "description": "Block height corresponding to the light-client head.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proof_commitment": {
+            "description": "Hex-encoded recursive proof commitment associated with the head.",
+            "pattern": "^0x[0-9a-fA-F]+$",
+            "type": "string"
+          },
+          "state_root": {
+            "description": "Hex-encoded state root commitment for the head.",
+            "pattern": "^0x[0-9a-fA-F]+$",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Unix timestamp (seconds) when the head was observed.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height",
+          "hash",
+          "state_root",
+          "proof_commitment",
+          "timestamp",
+          "finalized"
+        ],
+        "title": "StateSyncHeadResponse",
+        "type": "object"
+      },
+      "state_sync_status_response": {
+        "$id": "https://schemas.rpp.dev/rpc/state_sync_status_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "Aggregated verification status returned by the `/state-sync/session` RPC endpoint and embedded within `/state-sync/chunk/:id` responses.",
+        "properties": {
+          "completed_chunks": {
+            "description": "Number of chunks that have been requested at least once during the session.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_completed_step": {
+            "description": "Human-readable description of the most recent verification event.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "description": "Last verification error emitted by the runtime, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_log": {
+            "description": "Chronological log entries summarizing verification milestones.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "remaining_chunks": {
+            "description": "Remaining chunk count derived from the total and completed values.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "Correlation identifier for the current verification run exposed in logs and metrics.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "description": "Hex-encoded snapshot root commitment currently being served.",
+            "pattern": "^0x[0-9a-fA-F]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "served_chunks": {
+            "description": "Chunk indexes that have been served to clients during the current session.",
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "total_chunks": {
+            "description": "Total chunk count advertised by the active state-sync session.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verified": {
+            "description": "Indicates whether all verification stages have completed successfully.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "completed_chunks",
+          "verified",
+          "served_chunks",
+          "progress_log"
+        ],
+        "title": "StateSyncStatusResponse",
+        "type": "object"
+      },
+      "validator_peer_response": {
+        "$id": "https://schemas.rpp.dev/rpc/validator_peer_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "local_peer_id": {
+            "type": "string"
+          },
+          "peer_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peers": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "last_seen": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "latency_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "peer": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "peer",
+                "version",
+                "latency_ms",
+                "last_seen"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "local_peer_id",
+          "peer_count",
+          "peers"
+        ],
+        "title": "ValidatorPeerResponse",
+        "type": "object"
+      },
+      "validator_proof_queue_response": {
+        "$id": "https://schemas.rpp.dev/rpc/validator_proof_queue_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "totals": {
+            "additionalProperties": false,
+            "properties": {
+              "identities": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "transactions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "uptime_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "votes": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "transactions",
+              "identities",
+              "votes",
+              "uptime_proofs"
+            ],
+            "type": "object"
+          },
+          "uptime_proofs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "credited_hours": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "identity": {
+                  "type": "string"
+                },
+                "window_end": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "window_start": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "identity",
+                "window_start",
+                "window_end",
+                "credited_hours"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "uptime_proofs",
+          "totals"
+        ],
+        "title": "ValidatorProofQueueResponse",
+        "type": "object"
+      },
+      "validator_status_response": {
+        "$defs": {
+          "BackendHealthReport": {
+            "additionalProperties": false,
+            "properties": {
+              "prover": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/Plonky3BackendHealth"
+                  }
+                ],
+                "description": "Health information for the prover backend, when available"
+              },
+              "prover_sla": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/BackendSlaStatus"
+                  }
+                ]
+              },
+              "verifier": {
+                "$ref": "#/$defs/BackendVerificationMetrics"
+              },
+              "verifier_sla": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/BackendSlaStatus"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "verifier"
+            ],
+            "type": "object"
+          },
+          "BackendSlaStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "error_budget": {
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "error_rate": {
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "healthy": {
+                "type": "boolean"
+              },
+              "latency_budget_ms": {
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "latency_ms": {
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "healthy"
+            ],
+            "type": "object"
+          },
+          "BackendVerificationMetrics": {
+            "additionalProperties": false,
+            "properties": {
+              "accepted": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "bypassed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rejected": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total_duration_ms": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "accepted",
+              "rejected",
+              "bypassed",
+              "total_duration_ms"
+            ],
+            "type": "object"
+          },
+          "Plonky3BackendError": {
+            "additionalProperties": false,
+            "properties": {
+              "at_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "at_ms"
+            ],
+            "type": "object"
+          },
+          "Plonky3BackendHealth": {
+            "additionalProperties": false,
+            "properties": {
+              "cached_circuits": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "failed_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_error": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/Plonky3BackendError"
+                  }
+                ],
+                "description": "Most recent prover error, if any"
+              },
+              "last_success_ms": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "proofs_generated": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cached_circuits",
+              "proofs_generated",
+              "failed_proofs"
+            ],
+            "type": "object"
+          },
+          "PruningCommitmentMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregate_commitment": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "aggregate_commitment"
+            ],
+            "type": "object"
+          },
+          "PruningEnvelopeMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "binding_digest": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "commitment": {
+                "$ref": "#/$defs/PruningCommitmentMetadata"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/PruningSegmentMetadata"
+                },
+                "type": "array"
+              },
+              "snapshot": {
+                "$ref": "#/$defs/PruningSnapshotMetadata"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "snapshot",
+              "segments",
+              "commitment",
+              "binding_digest"
+            ],
+            "type": "object"
+          },
+          "PruningMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregate_commitment": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "commitment": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "envelope": {
+                "$ref": "#/$defs/PruningEnvelopeMetadata"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "root": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "envelope"
+            ],
+            "type": "object"
+          },
+          "PruningSegmentMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "end_height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segment_commitment": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              },
+              "segment_index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start_height": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "segment_index",
+              "start_height",
+              "end_height",
+              "segment_commitment"
+            ],
+            "type": "object"
+          },
+          "PruningSnapshotMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "block_height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state_commitment": {
+                "$ref": "#/$defs/TaggedDigestHex"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "block_height",
+              "state_commitment"
+            ],
+            "type": "object"
+          },
+          "TaggedDigestHex": {
+            "pattern": "^[0-9a-fA-F]{96}$",
+            "type": "string"
+          }
+        },
+        "$id": "https://schemas.rpp.dev/rpc/validator_status_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "consensus": {
+            "additionalProperties": false,
+            "properties": {
+              "block_hash": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "commit_power": {
+                "type": "string"
+              },
+              "epoch": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "epoch_nonce": {
+                "type": "string"
+              },
+              "failed_votes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "leader_changes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "observers": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_votes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pre_commit_power": {
+                "type": "string"
+              },
+              "pre_vote_power": {
+                "type": "string"
+              },
+              "proposer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quorum_latency_ms": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "quorum_reached": {
+                "type": "boolean"
+              },
+              "quorum_threshold": {
+                "type": "string"
+              },
+              "round": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "round_latencies_ms": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "slashing_events": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total_power": {
+                "type": "string"
+              },
+              "witness_events": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "height",
+              "round",
+              "total_power",
+              "quorum_threshold",
+              "pre_vote_power",
+              "pre_commit_power",
+              "commit_power",
+              "quorum_reached",
+              "observers",
+              "epoch",
+              "epoch_nonce",
+              "pending_votes",
+              "round_latencies_ms",
+              "leader_changes",
+              "witness_events",
+              "slashing_events",
+              "failed_votes"
+            ],
+            "type": "object"
+          },
+          "node": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "backend_health": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/BackendHealthReport"
+                },
+                "default": {},
+                "description": "Per-backend verifier and prover health metrics",
+                "type": "object"
+              },
+              "epoch": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "epoch_nonce": {
+                "type": "string"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "last_hash": {
+                "type": "string"
+              },
+              "pending_identities": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_transactions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_uptime_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_votes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tip": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "hash": {
+                        "type": "string"
+                      },
+                      "height": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "new_state_root": {
+                        "type": "string"
+                      },
+                      "previous_state_root": {
+                        "type": "string"
+                      },
+                      "proof_hash": {
+                        "type": "string"
+                      },
+                      "pruning": {
+                        "default": null,
+                        "oneOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "$ref": "#/$defs/PruningMetadata"
+                          }
+                        ]
+                      },
+                      "recursive_anchor": {
+                        "type": "string"
+                      },
+                      "recursive_commitment": {
+                        "type": "string"
+                      },
+                      "recursive_previous_commitment": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "recursive_system": {
+                        "type": "string"
+                      },
+                      "timestamp": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "height",
+                      "hash",
+                      "timestamp",
+                      "previous_state_root",
+                      "new_state_root",
+                      "proof_hash",
+                      "pruning",
+                      "recursive_commitment",
+                      "recursive_system",
+                      "recursive_anchor"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "vrf_metrics": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "address",
+              "height",
+              "last_hash",
+              "epoch",
+              "epoch_nonce",
+              "pending_transactions",
+              "pending_identities",
+              "pending_votes",
+              "pending_uptime_proofs",
+              "vrf_metrics"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "consensus",
+          "node"
+        ],
+        "title": "ValidatorStatusResponse",
+        "type": "object"
+      },
+      "validator_telemetry_response": {
+        "$defs": {
+          "BlockMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new_state_root": {
+                "type": "string"
+              },
+              "previous_state_root": {
+                "type": "string"
+              },
+              "proof_hash": {
+                "type": "string"
+              },
+              "pruning": {
+                "default": null,
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/PruningEnvelopeMetadata"
+                  }
+                ]
+              },
+              "recursive_anchor": {
+                "type": "string"
+              },
+              "recursive_commitment": {
+                "type": "string"
+              },
+              "recursive_previous_commitment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recursive_system": {
+                "type": "string"
+              },
+              "timestamp": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "height",
+              "hash",
+              "timestamp",
+              "previous_state_root",
+              "new_state_root",
+              "proof_hash",
+              "pruning",
+              "recursive_commitment",
+              "recursive_system",
+              "recursive_anchor"
+            ],
+            "type": "object"
+          },
+          "ChainProof": {
+            "additionalProperties": true,
+            "description": "Proof artifact keyed by backend identifier (e.g. stwo, plonky3).",
+            "minProperties": 1,
+            "type": "object"
+          },
+          "GlobalStateCommitments": {
+            "additionalProperties": false,
+            "properties": {
+              "global_state_root": {
+                "type": "string"
+              },
+              "proof_root": {
+                "type": "string"
+              },
+              "reputation_root": {
+                "type": "string"
+              },
+              "timetoke_root": {
+                "type": "string"
+              },
+              "utxo_root": {
+                "type": "string"
+              },
+              "zsi_root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "global_state_root",
+              "utxo_root",
+              "reputation_root",
+              "timetoke_root",
+              "zsi_root",
+              "proof_root"
+            ],
+            "type": "object"
+          },
+          "LightClientUpdate": {
+            "additionalProperties": false,
+            "properties": {
+              "block_hash": {
+                "type": "string"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "previous_commitment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "proof_commitment": {
+                "type": "string"
+              },
+              "recursive_proof": {
+                "$ref": "#/$defs/ChainProof"
+              },
+              "state_root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "height",
+              "block_hash",
+              "state_root",
+              "proof_commitment",
+              "recursive_proof"
+            ],
+            "type": "object"
+          },
+          "PayloadExpectations": {
+            "additionalProperties": false,
+            "properties": {
+              "consensus_witnesses": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reputation_witnesses": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "timetoke_witnesses": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "transaction_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "transaction_witnesses": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "zsi_witnesses": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "transaction_proofs",
+              "transaction_witnesses",
+              "timetoke_witnesses",
+              "reputation_witnesses",
+              "zsi_witnesses",
+              "consensus_witnesses"
+            ],
+            "type": "object"
+          },
+          "PruningCommitmentMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregate_commitment": {
+                "type": "string"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "aggregate_commitment"
+            ],
+            "type": "object"
+          },
+          "PruningEnvelopeMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "binding_digest": {
+                "type": "string"
+              },
+              "commitment": {
+                "$ref": "#/$defs/PruningCommitmentMetadata"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segments": {
+                "items": {
+                  "$ref": "#/$defs/PruningSegmentMetadata"
+                },
+                "type": "array"
+              },
+              "snapshot": {
+                "$ref": "#/$defs/PruningSnapshotMetadata"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "snapshot",
+              "segments",
+              "commitment",
+              "binding_digest"
+            ],
+            "type": "object"
+          },
+          "PruningJobStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "last_updated": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "missing_heights": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "persisted_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "plan": {
+                "$ref": "#/$defs/StateSyncPlan"
+              },
+              "stored_proofs": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "plan",
+              "missing_heights",
+              "stored_proofs",
+              "last_updated"
+            ],
+            "type": "object"
+          },
+          "PruningSegmentMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "end_height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "segment_commitment": {
+                "type": "string"
+              },
+              "segment_index": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start_height": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "segment_index",
+              "start_height",
+              "end_height",
+              "segment_commitment"
+            ],
+            "type": "object"
+          },
+          "PruningSnapshotMetadata": {
+            "additionalProperties": false,
+            "properties": {
+              "block_height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "parameter_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state_commitment": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "parameter_version",
+              "block_height",
+              "state_commitment"
+            ],
+            "type": "object"
+          },
+          "ReconstructionRequest": {
+            "additionalProperties": false,
+            "properties": {
+              "block_hash": {
+                "type": "string"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "payload_expectations": {
+                "$ref": "#/$defs/PayloadExpectations"
+              },
+              "previous_commitment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "proof_root": {
+                "type": "string"
+              },
+              "pruning": {
+                "$ref": "#/$defs/PruningEnvelopeMetadata"
+              },
+              "reputation_root": {
+                "type": "string"
+              },
+              "state_root": {
+                "type": "string"
+              },
+              "timetoke_root": {
+                "type": "string"
+              },
+              "tx_root": {
+                "type": "string"
+              },
+              "utxo_root": {
+                "type": "string"
+              },
+              "zsi_root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "height",
+              "block_hash",
+              "tx_root",
+              "state_root",
+              "utxo_root",
+              "reputation_root",
+              "timetoke_root",
+              "zsi_root",
+              "proof_root",
+              "pruning",
+              "payload_expectations"
+            ],
+            "type": "object"
+          },
+          "SnapshotSummary": {
+            "additionalProperties": false,
+            "properties": {
+              "block_hash": {
+                "type": "string"
+              },
+              "chain_commitment": {
+                "type": "string"
+              },
+              "commitments": {
+                "$ref": "#/$defs/GlobalStateCommitments"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "height",
+              "block_hash",
+              "commitments",
+              "chain_commitment"
+            ],
+            "type": "object"
+          },
+          "StateSyncChunk": {
+            "additionalProperties": false,
+            "properties": {
+              "end_height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "proofs": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "requests": {
+                "items": {
+                  "$ref": "#/$defs/ReconstructionRequest"
+                },
+                "type": "array"
+              },
+              "start_height": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start_height",
+              "end_height",
+              "requests"
+            ],
+            "type": "object"
+          },
+          "StateSyncPlan": {
+            "additionalProperties": false,
+            "properties": {
+              "chunks": {
+                "items": {
+                  "$ref": "#/$defs/StateSyncChunk"
+                },
+                "type": "array"
+              },
+              "light_client_updates": {
+                "items": {
+                  "$ref": "#/$defs/LightClientUpdate"
+                },
+                "type": "array"
+              },
+              "snapshot": {
+                "$ref": "#/$defs/SnapshotSummary"
+              },
+              "tip": {
+                "$ref": "#/$defs/BlockMetadata"
+              }
+            },
+            "required": [
+              "snapshot",
+              "tip",
+              "chunks",
+              "light_client_updates"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.rpp.dev/rpc/validator_telemetry_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "consensus": {
+            "additionalProperties": false,
+            "description": "Aggregated consensus telemetry",
+            "properties": {
+              "failed_votes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "leader_changes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_votes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "quorum_latency_ms": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "quorum_reached": {
+                "type": "boolean"
+              },
+              "round": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "round_latencies_ms": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "slashing_events": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "witness_events": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "height",
+              "round",
+              "pending_votes",
+              "quorum_reached",
+              "leader_changes",
+              "round_latencies_ms",
+              "witness_events",
+              "slashing_events",
+              "failed_votes"
+            ],
+            "type": "object"
+          },
+          "mempool": {
+            "additionalProperties": false,
+            "description": "Summary of queued items per mempool",
+            "properties": {
+              "identities": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "transactions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "uptime_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "votes": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "transactions",
+              "identities",
+              "votes",
+              "uptime_proofs"
+            ],
+            "type": "object"
+          },
+          "node": {
+            "additionalProperties": true,
+            "description": "Latest node status snapshot",
+            "properties": {
+              "height": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_transactions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_uptime_proofs": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "height",
+              "pending_transactions",
+              "pending_uptime_proofs"
+            ],
+            "type": "object"
+          },
+          "pruning": {
+            "default": null,
+            "description": "Status of an active pruning job, if any",
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/PruningJobStatus"
+              }
+            ]
+          },
+          "rollout": {
+            "additionalProperties": true,
+            "description": "Rollout channel, feature gates and telemetry runtime configuration",
+            "properties": {
+              "feature_gates": {
+                "type": "object"
+              },
+              "release_channel": {
+                "type": "string"
+              },
+              "telemetry": {
+                "additionalProperties": true,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "endpoint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "last_observed_height": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "sample_interval_secs": {
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "sample_interval_secs"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "release_channel",
+              "feature_gates",
+              "telemetry"
+            ],
+            "type": "object"
+          },
+          "timetoke_params": {
+            "additionalProperties": true,
+            "description": "Configured timetoke accrual parameters",
+            "type": "object"
+          },
+          "verifier_metrics": {
+            "additionalProperties": true,
+            "description": "Snapshot of verifier metrics grouped by backend",
+            "type": "object"
+          },
+          "vrf_threshold": {
+            "additionalProperties": true,
+            "description": "Latest VRF threshold evaluation",
+            "type": "object"
+          }
+        },
+        "required": [
+          "rollout",
+          "node",
+          "consensus",
+          "mempool",
+          "timetoke_params",
+          "verifier_metrics",
+          "vrf_threshold"
+        ],
+        "title": "ValidatorTelemetryResponse",
+        "type": "object"
+      },
+      "validator_vrf_response": {
+        "$id": "https://schemas.rpp.dev/rpc/validator_vrf_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "Whether the VRF keypair is present in the store",
+            "type": "boolean"
+          },
+          "backend": {
+            "description": "Secrets backend handling the VRF keypair",
+            "type": "string"
+          },
+          "identifier": {
+            "description": "Backend-specific location for the VRF keypair",
+            "type": "string"
+          },
+          "public_key": {
+            "description": "Hex-encoded VRF public key",
+            "pattern": "^[0-9a-fA-F]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "identifier",
+          "available"
+        ],
+        "title": "ValidatorVrfResponse",
+        "type": "object"
+      },
+      "validator_vrf_rotate_response": {
+        "$id": "https://schemas.rpp.dev/rpc/validator_vrf_rotate_response.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "Whether the VRF keypair is present in the store",
+            "type": "boolean"
+          },
+          "backend": {
+            "description": "Secrets backend handling the VRF keypair",
+            "type": "string"
+          },
+          "identifier": {
+            "description": "Backend-specific location for the VRF keypair",
+            "type": "string"
+          },
+          "public_key": {
+            "description": "Hex-encoded VRF public key",
+            "pattern": "^[0-9a-fA-F]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "identifier",
+          "available"
+        ],
+        "title": "ValidatorVrfRotateResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Snapshot generated from docs/interfaces/rpc JSON Schemas.",
+    "title": "RPP Node RPC",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {},
+  "x-generated-by": {
+    "command": "python scripts/generate_api_schemas.py",
+    "source": "docs/interfaces/rpc"
+  }
+}
