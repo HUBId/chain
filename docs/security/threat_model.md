@@ -53,6 +53,14 @@ engineering backlog.
   written back to disk after each change so subsequent restarts retain the same
   policy view that produced the audit entry.【F:rpp/p2p/src/peerstore.rs†L1121-L1138】
 
+## Wallet audit logging controls
+- **Hash-chained wallet RPC audit trail:** Wallet audit entries store the
+  previous entry hash and a SHA-256 digest to detect tampering across rotated
+  JSONL segments. Rotation occurs on both elapsed time and segment size, and
+  retention prunes by time and total byte budget; when old segments are removed
+  the runtime writes a `wallet-audit.anchor` checkpoint so the remaining chain
+  can still be verified.【F:rpp/runtime/wallet/rpc/audit.rs†L17-L365】
+
 ## Known gaps and future work
 - **External snapshot verification:** Operators today rely on the runtime’s
   built-in validation path described above; there is no standalone

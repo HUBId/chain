@@ -533,6 +533,12 @@ pub struct WalletAuditConfig {
     pub enabled: bool,
     /// Number of days to retain audit logs on disk.
     pub retention_days: u64,
+    /// Maximum seconds before rotating the current audit segment.
+    pub rotation_seconds: u64,
+    /// Maximum size of a single audit log segment in bytes.
+    pub max_segment_bytes: u64,
+    /// Optional cap on total retained audit log bytes (oldest segments pruned first).
+    pub retention_bytes: Option<u64>,
 }
 
 impl Default for WalletAuditConfig {
@@ -540,6 +546,9 @@ impl Default for WalletAuditConfig {
         Self {
             enabled: false,
             retention_days: 30,
+            rotation_seconds: 24 * 60 * 60,
+            max_segment_bytes: 16 * 1024 * 1024,
+            retention_bytes: Some(512 * 1024 * 1024),
         }
     }
 }

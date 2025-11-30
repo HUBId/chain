@@ -98,8 +98,15 @@ When alerts fire:
    metric corresponds to an actual process restart or probe failure.【F:scripts/run_wallet_mode.sh†L1-L57】
 2. **Audit logs** – Enabling `[wallet.audit]` provisions rotating JSONL files in
    `wallet/audit/`, recording timestamp, RPC method, identity, role set, and
-   result code for every call. Correlate RBAC alert spikes with these records to
-   distinguish legitimate denials from misconfigurations.【F:rpp/runtime/wallet/rpc/audit.rs†L15-L80】
+   result code for every call. Segments rotate after either
+   `wallet.audit.rotation_seconds` (default 24h) or
+   `wallet.audit.max_segment_bytes` (default 16MiB); retention prunes segments
+   past `wallet.audit.retention_days` and trims oldest files when
+   `wallet.audit.retention_bytes` (default 512MiB) is exceeded, writing a
+   `wallet-audit.anchor` checkpoint so the SHA-256 hash chain remains
+   verifiable across rotations.【F:rpp/runtime/wallet/rpc/audit.rs†L17-L365】
+   Correlate RBAC alert spikes with these records to distinguish legitimate
+   denials from misconfigurations.【F:rpp/runtime/wallet/rpc/audit.rs†L17-L365】
 3. **Action telemetry** – CLI and GUI flows expose opt-in counters (e.g.,
    `cli.action.events`, `ui.send.steps`, `ui.rpc.latency_ms`). When alerting on
    wallet action anomalies, include the counter snapshot from the GUI/CLI so the

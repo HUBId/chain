@@ -9,7 +9,8 @@ use tempfile::tempdir;
 #[path = "helpers.rs"]
 mod helpers;
 use helpers::{
-    backend_for_index, enabled_backends, sample_node_config, sample_transaction_bundle, ProofBackend,
+    backend_for_index, enabled_backends, sample_node_config, sample_transaction_bundle,
+    ProofBackend,
 };
 
 #[test]
