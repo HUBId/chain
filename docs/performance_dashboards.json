@@ -32,9 +32,9 @@
       "title": "Pipeline Consensus Finality",
       "output": "docs/dashboards/pipeline_consensus_finality.json",
       "min_schema": 39,
-      "version": 1,
-      "version_tag": "v2024-09-25",
-      "sha256": "f2a3c29bb2a7f6a01dbc5b357c8f31904f4407b7770b40c91c69140e9668e741"
+      "version": 2,
+      "version_tag": "v2025-02-20",
+      "sha256": "06dbe1befa9f2386ce7b6e4a6e002c43cda0296a5fd7d73ec2602e7b7efb31a7"
     },
     {
       "uid": "pipeline-storage-commit",

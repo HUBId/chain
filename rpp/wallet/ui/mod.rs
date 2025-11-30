@@ -22,7 +22,8 @@ pub use tabs::{
     SendPreview,
 };
 pub use wallet::{
-    ConsensusReceipt, PipelineFeedState, Wallet, WalletAccountSummary, WalletNodeRuntimeStatus,
+    ConsensusReceipt, FinalitySnapshot, PipelineFeedState, Wallet, WalletAccountSummary,
+    WalletNodeRuntimeStatus,
 };
 #[cfg(feature = "vendor_electrs")]
 pub use wallet::{

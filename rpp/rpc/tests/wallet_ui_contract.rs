@@ -18,7 +18,8 @@ use rpp_chain::interfaces::{
 use rpp_chain::reputation::Tier;
 use rpp_chain::types::Address;
 use rpp_chain::wallet::{
-    ConsensusReceipt, HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview,
+    ConsensusReceipt, FinalitySnapshot, HistoryEntry, HistoryStatus, NodeTabMetrics,
+    ReceiveTabAddress, SendPreview,
 };
 
 use parking_lot::RwLock;
@@ -228,6 +229,10 @@ fn node_contract_exposes_metrics() {
         latest_block_height: 1_024,
         latest_block_hash: Some("0xabc".into()),
         total_blocks: 10_240,
+        pipeline_finality: FinalitySnapshot {
+            last_finalized_height: Some(1_020),
+            finality_lag_blocks: Some(4),
+        },
         slashing_alerts: Vec::new(),
         pipeline_errors: Vec::new(),
     };
@@ -254,6 +259,10 @@ fn node_contract_exposes_metrics() {
     let value = to_value(&contract).expect("serialize node contract");
     assert_eq!(value["version"], WALLET_UI_NODE_CONTRACT);
     assert_eq!(value["metrics"]["tier"], "Tl4");
+    assert_eq!(
+        value["metrics"]["pipeline_finality"]["last_finalized_height"],
+        1020
+    );
     assert!(value["consensus"].is_object());
 }
 
@@ -266,6 +275,10 @@ fn node_contract_exposes_consensus_height() {
         latest_block_height: 512,
         latest_block_hash: Some("0xdef".into()),
         total_blocks: 6_144,
+        pipeline_finality: FinalitySnapshot {
+            last_finalized_height: Some(504),
+            finality_lag_blocks: Some(8),
+        },
         slashing_alerts: Vec::new(),
         pipeline_errors: Vec::new(),
     };
@@ -292,6 +305,10 @@ fn node_contract_exposes_consensus_height() {
     let value = to_value(&contract).expect("serialize node contract");
     assert_eq!(value["consensus"]["height"], 512);
     assert_eq!(value["metrics"]["latest_block_height"], 512);
+    assert_eq!(
+        value["metrics"]["pipeline_finality"]["finality_lag_blocks"],
+        8
+    );
 }
 
 #[tokio::test]
