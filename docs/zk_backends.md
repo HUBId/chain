@@ -7,6 +7,24 @@
 > [RPP vendor refresh procedure](./operations/rpp_vendor_update.md),
 > [Incident response runbook](./operations/incidents.md)
 
+## Dependency pinning and review
+
+- The STWO backend snapshot is distributed as `prover/prover_stwo_backend/stwo-dev.zip`
+  and unpacked into `vendor/stwo-dev/0.1.1/staging` with recorded hashes under
+  `vendor/stwo-dev/0.1.1/manifest/`. CI validates the archive digest and every
+  staged file against `manifest/final_file_list.txt` and the integrity summary
+  before builds proceed.【F:scripts/ci/validate_prover_deps.py†L9-L105】【F:vendor/stwo-dev/0.1.1/manifest/integrity_summary.json†L1-L27】
+- The Plonky3 offline mirror is pinned via `third_party/plonky3/manifest/checksums.json`;
+  the same CI check recomputes the SHA256 for each mirrored crate and fixture to
+  catch drift.【F:scripts/ci/validate_prover_deps.py†L107-L123】【F:third_party/plonky3/manifest/checksums.json†L1-L119】
+- Release builds refuse to continue when either manifest changes between tags
+  without an explicit `prover_dep_reviewer` acknowledgement in the dispatch
+  inputs, ensuring vendor refreshes receive manual sign-off.【F:.github/workflows/release.yml†L18-L44】【F:.github/workflows/release.yml†L46-L79】
+- When intentionally refreshing STWO, replace `prover/prover_stwo_backend/stwo-dev.zip`,
+  regenerate `vendor/stwo-dev/0.1.1/manifest/final_file_list.txt` via
+  `scripts/vendor_stwo/update_manifest.py`, and rerun the integrity check so the
+  manifest and recorded hash stay aligned.【F:scripts/vendor_stwo/update_manifest.py†L1-L140】【F:scripts/ci/validate_prover_deps.py†L9-L105】
+
 ## Backend-Interoperabilität im Simnet
 
 - Das Simnet-Profil `mixed-backend-interop` kombiniert STWO-, Plonky3- und

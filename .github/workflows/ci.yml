@@ -90,6 +90,16 @@ PY
           set -euo pipefail
           python3 scripts/ci/lint_secure_keystores.py
 
+  prover-dependency-integrity:
+    name: Prover dependency integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate prover dependency manifests
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/validate_prover_deps.py
+
   phasec-status-freshness:
     name: Phase‑C status freshness
     runs-on: ubuntu-latest

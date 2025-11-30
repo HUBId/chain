@@ -15,6 +15,9 @@ on:
       uptime_probe_exception_reason:
         description: 'Required rationale (ticket/link) when overriding failed uptime/timetoke probes'
         required: false
+      prover_dep_reviewer:
+        description: 'Required approver when prover dependency baselines change since the previous release'
+        required: false
 
 permissions:
   contents: write
@@ -50,6 +53,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Validate prover dependency integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/validate_prover_deps.py
       - name: Documentation review reminder
         shell: bash
         run: |
@@ -61,6 +69,37 @@ jobs:
 - Admission/RPC policy: docs/network/admission.md
 Record the sign-off in the release tracking issue or PR before publishing artifacts.
 EOF
+      - name: Enforce prover dependency review
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="${{ steps.determine_tag.outputs.release_tag }}"
+          prev_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${release_tag}^" 2>/dev/null || true)"
+          if [[ -z "${prev_tag}" ]]; then
+            echo "::notice::No previous SemVer tag found; skipping prover dependency diff gate." >&2
+            exit 0
+          fi
+
+          mapfile -t changed < <(git diff --name-only "${prev_tag}" "${release_tag}" -- \
+            third_party/plonky3 \
+            vendor/stwo-dev \
+            prover/prover_stwo_backend/stwo-dev.zip \
+            prover/prover_stwo_backend/vendor/stwo-dev || true)
+
+          if (( ${#changed[@]} == 0 )); then
+            echo "No prover dependency changes detected between ${prev_tag} and ${release_tag}."
+            exit 0
+          fi
+
+          echo "Detected prover dependency changes between ${prev_tag} and ${release_tag}:"
+          printf '  - %s\n' "${changed[@]}"
+          reviewer="${{ github.event.inputs.prover_dep_reviewer || '' }}"
+          if [[ -z "${reviewer}" ]]; then
+            echo "::error::Provide workflow_dispatch input 'prover_dep_reviewer' to acknowledge prover dependency changes or revert unexpected diffs." >&2
+            exit 1
+          fi
+
+          echo "::notice::Prover dependency changes acknowledged by ${reviewer}."
       - name: Enforce pinned nightly toolchain
         shell: bash
         run: |
