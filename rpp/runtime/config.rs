@@ -148,18 +148,44 @@ mod wallet_runtime_placeholders {
         }
     }
 
-    #[derive(Clone, Debug, Default)]
+    #[derive(Clone, Debug)]
     pub struct WalletAuditRuntimeConfig {
         enabled: bool,
         retention_days: u64,
+        rotation_seconds: u64,
+        max_segment_bytes: u64,
+        retention_bytes: Option<u64>,
         directory: Option<PathBuf>,
     }
 
+    impl Default for WalletAuditRuntimeConfig {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                retention_days: 30,
+                rotation_seconds: 24 * 60 * 60,
+                max_segment_bytes: 16 * 1024 * 1024,
+                retention_bytes: Some(512 * 1024 * 1024),
+                directory: None,
+            }
+        }
+    }
+
     impl WalletAuditRuntimeConfig {
-        pub fn new(enabled: bool, retention_days: u64, directory: Option<PathBuf>) -> Self {
+        pub fn new(
+            enabled: bool,
+            retention_days: u64,
+            rotation_seconds: u64,
+            max_segment_bytes: u64,
+            retention_bytes: Option<u64>,
+            directory: Option<PathBuf>,
+        ) -> Self {
             Self {
                 enabled,
                 retention_days,
+                rotation_seconds,
+                max_segment_bytes,
+                retention_bytes,
                 directory,
             }
         }
@@ -178,6 +204,30 @@ mod wallet_runtime_placeholders {
 
         pub fn set_retention_days(&mut self, days: u64) {
             self.retention_days = days;
+        }
+
+        pub fn rotation_interval(&self) -> Duration {
+            Duration::from_secs(self.rotation_seconds)
+        }
+
+        pub fn set_rotation_seconds(&mut self, seconds: u64) {
+            self.rotation_seconds = seconds;
+        }
+
+        pub fn max_segment_bytes(&self) -> u64 {
+            self.max_segment_bytes
+        }
+
+        pub fn set_max_segment_bytes(&mut self, bytes: u64) {
+            self.max_segment_bytes = bytes;
+        }
+
+        pub fn retention_bytes(&self) -> Option<u64> {
+            self.retention_bytes
+        }
+
+        pub fn set_retention_bytes(&mut self, bytes: Option<u64>) {
+            self.retention_bytes = bytes;
         }
 
         pub fn directory(&self) -> Option<&Path> {
@@ -4225,6 +4275,9 @@ impl WalletAuditConfigExt for WalletAuditConfig {
         let mut settings = WalletAuditRuntimeConfig::default();
         settings.set_enabled(self.enabled);
         settings.set_retention_days(self.retention_days);
+        settings.set_rotation_seconds(self.rotation_seconds);
+        settings.set_max_segment_bytes(self.max_segment_bytes);
+        settings.set_retention_bytes(self.retention_bytes);
         settings.set_directory(data_dir.join("wallet").join("audit"));
         settings
     }

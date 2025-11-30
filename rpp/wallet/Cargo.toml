@@ -38,11 +38,11 @@ prover-mock = [
     "rpp-wallet-interface/prover-mock",
 ]
 backend-rpp-stark = []
-vendor_electrs = ["dep:sha2", "dep:rpp_p2p", "dep:parking_lot"]
+vendor_electrs = ["dep:rpp_p2p", "dep:parking_lot"]
 vendor_electrs_telemetry = []
 vendor_electrs_test_support = ["vendor_electrs"]
 wallet_gui = ["dep:iced", "dep:arboard", "dep:qrcode"]
-backup = ["dep:sha2"]
+backup = []
 
 [dependencies]
 anyhow = "1"
@@ -51,7 +51,7 @@ base64 = "0.22"
 prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
 prover-stwo-circuits = { path = "../../prover/stwo", optional = true }
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.10" }
 storage-firewood = { path = "../../storage-firewood" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

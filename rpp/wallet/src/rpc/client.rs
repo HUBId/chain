@@ -819,7 +819,9 @@ mod tests {
 
         let server = tokio::spawn(async move {
             sleep(Duration::from_millis(120)).await;
-            let listener = TcpListener::bind(addr).await.expect("bind delayed listener");
+            let listener = TcpListener::bind(addr)
+                .await
+                .expect("bind delayed listener");
             let (mut stream, _) = listener.accept().await.expect("accept connection");
             let mut buf = [0u8; 512];
             let _ = stream.read(&mut buf).await;
